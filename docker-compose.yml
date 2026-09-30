@@ -1,0 +1,21 @@
+services:
+  db:
+    # Postgres major version — must match the managed Postgres version used in dev and prod (16, see docs/SPEC.md §2.4).
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ammari}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ammari}
+      POSTGRES_DB: ${POSTGRES_DB:-ammari}
+    volumes:
+      - ammari_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ammari} -d ${POSTGRES_DB:-ammari}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ammari_pgdata:

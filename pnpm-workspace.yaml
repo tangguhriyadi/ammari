@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm blocks dependency install/postinstall scripts by default. Only allow the
+# packages below to run them — each needs to download/compile a native binary
+# it can't function without; everything else stays blocked.
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true
