@@ -30,7 +30,7 @@ pnpm workspaces + Turborepo:
 ### 2.2 Stack
 
 - Next.js (App Router), strict TypeScript.
-- PostgreSQL + Drizzle ORM.
+- PostgreSQL **16** + Drizzle ORM. Local, dev, and prod all run the same major version (16).
 - The `pgvector` extension may be enabled on the database but is **not used in v1**.
 
 ### 2.3 Deployment
@@ -45,8 +45,13 @@ pnpm workspaces + Turborepo:
 
 ### 2.4 Hosting (Sumopod)
 
-- **Dev:** a VPS running a dev Postgres instance as a container.
-- **Prod:** a separate VPS, with a managed Postgres instance (not self-hosted in a container).
+- **Dev:** a managed Postgres 16 + pgvector instance on Sumopod (already created) — not
+  self-hosted in a container.
+- **Prod:** a separate managed Postgres 16 + pgvector instance. Dev and prod databases are
+  always separate.
+- **Local:** Postgres 16 + pgvector via the root `docker-compose.yml`, for local development and
+  automated tests only. A laptop never connects to the Sumopod dev database directly — local
+  work always talks to the local container.
 - **Object storage:** S3-compatible, with separate dev and prod buckets.
 - **DNS:** Cloudflare.
 - Dev domains (`ammari.my.id`, `admin.ammari.my.id`) sit behind a login and are marked `noindex`.
@@ -75,6 +80,7 @@ pnpm workspaces + Turborepo:
 
 - Ads & expenses
 - Customers & vouchers
+- Roles & staff — see §9
 
 ### 3.3 Main site — v1 (1 November 2026)
 
@@ -185,7 +191,7 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
 - `vouchers` — unique `card_id`; unique `used_order_id`; `status`
   (`active` / `used` / `expired` / `void`).
 - `resellers` — later (not v1).
-- `staff_users`
+- `staff_users` — full RBAC columns in §9.
 - `audit_log`
 
 ## 6. Overview dashboard metrics
@@ -224,3 +230,37 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
 - The shipping address is collected at **checkout**, not at claim time.
 - OTP delivery is via **email first**; WhatsApp delivery may be added later.
 - Payment gateway and shipping-rate provider are **not yet chosen**.
+
+## 9. Admin access control (RBAC)
+
+- Dynamic RBAC. Every person has their own admin account (no shared accounts). Each staff user
+  has exactly one role.
+- Permissions are constants defined in code (e.g. `orders.view`, `orders.import`,
+  `packing.print_cards`, `stock.view`, `stock.adjust`, `production.manage`, `products.manage`,
+  `finance.view_profit`, `settings.manage`, `customers.view`, `vouchers.void`, `staff.manage`,
+  `roles.manage`, `audit_log.view`). A startup/seed step syncs them into the `permissions`
+  table. Roles and role→permission mappings live in the database and are editable from the admin
+  UI.
+- System roles (seeded, `is_system = true`):
+  - `super_admin` (held by the husband): every permission, including `roles.manage`,
+    `staff.manage`, `audit_log.view`, and risky actions (data corrections, voiding vouchers).
+  - `owner` (held by the wife): all business permissions (orders, import, packing, stock,
+    production, products, `finance.view_profit`, targets and cost assumptions, customers and
+    vouchers), but not `roles.manage`, `staff.manage`, or `audit_log.view` by default.
+  - Additional roles for future staff are created from the admin UI.
+- Safety rules: `super_admin` cannot be deleted, cannot lose permissions, and can only be granted
+  by a `super_admin`. The system refuses to deactivate or demote the last active `super_admin`.
+  `owner` cannot be deleted; its permissions are editable by `super_admin` only.
+- Enforcement: permissions are checked on the server for every page, server action, and route
+  handler — never only by hiding UI. Cost, profit, and payout figures are only returned to roles
+  with `finance.view_profit`, including on Overview and Products.
+- Every change to roles, role permissions, and staff accounts is written to `audit_log`.
+- Schema additions:
+  - `roles` — `id`, `key` (unique), `name`, `description`, `is_system`.
+  - `permissions` — `id`, `key` (unique), `description`, `group`.
+  - `role_permissions` — `role_id`, `permission_id`, unique pair.
+  - `staff_users` — `id`, `name`, `email` (unique, `citext`), `role_id`, `is_active`,
+    `last_login_at`, timestamps.
+- Timeline: tables, seeding the two system roles, and server-side permission checks must be done
+  before 1 November 2026; the Roles & Staff management pages ship in the first week of November
+  2026 (see §3.2).

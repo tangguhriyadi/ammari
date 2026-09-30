@@ -7,6 +7,11 @@ operations — Orders, Packing, Stock, Production).
 Full spec, schema, business rules, and open decisions: **[docs/SPEC.md](docs/SPEC.md)**. If
 something here and SPEC.md disagree, SPEC.md wins — fix this file.
 
+Before changing Next.js or Turborepo code/config, follow AGENTS.md (root) and apps/*/AGENTS.md:
+read the docs bundled with the installed version, not memory.
+
+@AGENTS.md
+
 ## Monorepo layout
 
 pnpm workspaces + Turborepo:
@@ -31,6 +36,21 @@ pnpm workspaces + Turborepo:
   - Primary: gray red `#695A5A`, white `#FFFFFF`, black `#000000`.
   - Status colors are muted earth tones: olive green (on track), brick red (below target). Do
     not use saturated red/green.
+
+## Pinned tooling versions (apps/web, apps/admin)
+
+Both apps pin exact versions (no `^`/`~`) for two dev-tooling packages that trail the "latest"
+npm dist-tag, because their actual runtime/peer support lags behind:
+
+- **TypeScript `6.0.3`** — TypeScript 7 is a ground-up native (Go-based) rewrite;
+  `typescript-eslint` (pulled in by `eslint-config-next`) currently declares a peer range of
+  `>=4.8.4 <6.1.0` and does not support it yet. `6.0.3` is the newest release inside that range.
+  Do not bump past `6.0.x` until `typescript-eslint` publishes TypeScript 7 support.
+- **ESLint `9.39.5`** — `eslint-plugin-react` (pulled in by `eslint-config-next`) declares a
+  peer range of `^3 || ... || ^9.7` and throws at lint time under ESLint 10
+  (`contextOrFilename.getFilename is not a function` — it still calls the removed legacy
+  `context.getFilename()` API). `9.39.5` is ESLint's `maintenance`-tagged latest 9.x release.
+  Do not bump to ESLint 10 until `eslint-plugin-react` ships support for it.
 
 ## Database rules
 
@@ -57,6 +77,9 @@ pnpm workspaces + Turborepo:
 - Customer sessions (main site) can never reach admin endpoints — enforce this at the
   middleware/route level, not just in the UI.
 - Secrets live only in environment variables, never committed to the repo.
+- Admin access is dynamic RBAC (roles/permissions in the database, one role per staff user) —
+  checked on the **server** for every page, server action, and route handler, never only by
+  hiding UI. See [docs/SPEC.md §9](docs/SPEC.md#9-admin-access-control-rbac).
 
 ## Workflow
 
@@ -80,21 +103,31 @@ This repo has agents, skills, and commands preinstalled in `.claude/` — use th
 
 ## Commands
 
-To be filled in once the monorepo is scaffolded.
-
 ```bash
-# install
-# (placeholder — e.g. pnpm install)
+# install (from repo root)
+pnpm install
 
-# dev
-# (placeholder — e.g. pnpm dev, or per-app: pnpm --filter web dev / pnpm --filter admin dev)
+# local Postgres (pgvector/pgvector, Postgres 16 — matches dev/prod; local dev & tests only)
+cp .env.example .env         # once, then adjust if needed
+docker compose up -d db
+pnpm --filter @ammari/db db:check   # prints server version + citext/vector availability
 
-# build
-# (placeholder — e.g. pnpm build, or per-app via Turborepo)
+# dev (both apps via Turborepo; web on :3000, admin on :3001)
+pnpm dev
+# or one app at a time:
+pnpm --filter @ammari/web dev
+pnpm --filter @ammari/admin dev
+
+# build / lint / typecheck (all workspaces via Turborepo)
+pnpm build
+pnpm lint
+pnpm typecheck
+
+# migrations (packages/db) — always run generate, then READ the migration file
+pnpm --filter @ammari/db db:generate
+pnpm --filter @ammari/db db:migrate   # local only; dev/prod run through the deploy pipeline
+pnpm --filter @ammari/db db:studio
 
 # test
-# (placeholder)
-
-# migrate
-# (placeholder — e.g. pnpm --filter @ammari/db drizzle-kit generate / push)
+# (placeholder — no test runner wired up yet; added alongside the tdd-workflow skill)
 ```
