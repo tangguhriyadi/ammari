@@ -35,6 +35,13 @@ pnpm workspaces + Turborepo:
 
 ### 2.3 Deployment
 
+- Branch-based deploys via GitHub Actions:
+  - `dev` branch → auto-deploys to the dev environment (`ammari.my.id`, `admin.ammari.my.id`,
+    Sumopod dev database).
+  - `main` branch → auto-deploys to prod (`ammari.id`, `admin.ammari.id`, prod database).
+  - All work happens on `dev` (small features may use short-lived branches merged into `dev`).
+    A release is a merge from `dev` into `main`.
+  - `main` is protected on GitHub: no direct pushes.
 - Two separate Docker images, one per app, built in GitHub Actions and pushed to GHCR.
 - Runtime: a VPS running Docker Compose + Caddy.
 - Only the app whose code changed is rebuilt; a change to `packages/db` rebuilds **both** images.

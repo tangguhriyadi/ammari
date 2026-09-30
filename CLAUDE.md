@@ -81,6 +81,14 @@ npm dist-tag, because their actual runtime/peer support lags behind:
   checked on the **server** for every page, server action, and route handler, never only by
   hiding UI. See [docs/SPEC.md §9](docs/SPEC.md#9-admin-access-control-rbac).
 
+## Git
+
+- Branch model: `dev` auto-deploys to the dev environment; `main` auto-deploys to prod. All work
+  happens on `dev` (small features may use short-lived branches merged into `dev`). A release is
+  a merge from `dev` into `main`. `main` is protected on GitHub — no direct pushes.
+- The human commits and pushes. The agent never commits, pushes, merges, or creates branches
+  unless explicitly asked to do so in that prompt.
+
 ## Workflow
 
 This repo has agents, skills, and commands preinstalled in `.claude/` — use them:
@@ -99,7 +107,7 @@ This repo has agents, skills, and commands preinstalled in `.claude/` — use th
 5. Run `/checkpoint` after a feature passes verification.
 6. Run `/save-session` at the end of a session and `/resume-session` at the start of the next
    one.
-7. **One feature per session.** Keep changes small and commit often.
+7. **One feature per session.** Keep changes small so each can be committed separately.
 
 ## Commands
 
