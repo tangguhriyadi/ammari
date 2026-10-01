@@ -8,6 +8,11 @@ out/
 # turbo
 .turbo/
 
+# playwright
+playwright-report/
+test-results/
+blob-report/
+
 # env files
 .env*
 !.env.example

@@ -9,6 +9,7 @@ export interface PermissionDefinition {
 }
 
 export const PERMISSIONS: readonly PermissionDefinition[] = [
+  { key: "overview.view", group: "overview", description: "View the overview dashboard" },
   { key: "orders.view", group: "orders", description: "View orders" },
   { key: "orders.import", group: "orders", description: "Import Shopee/TikTok order and income exports" },
   { key: "packing.print_cards", group: "packing", description: "Print thank-you cards during packing" },
@@ -16,6 +17,11 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   { key: "stock.adjust", group: "stock", description: "Record manual stock adjustments" },
   { key: "production.manage", group: "production", description: "Manage production batches" },
   { key: "products.manage", group: "products", description: "Manage products, variants, and images" },
+  {
+    key: "ads_expenses.manage",
+    group: "ads_expenses",
+    description: "Record ad spend and expenses",
+  },
   { key: "finance.view_profit", group: "finance", description: "View cost, profit, and payout figures" },
   { key: "settings.manage", group: "settings", description: "Manage targets, cost assumptions, and settings" },
   { key: "customers.view", group: "customers", description: "View customers" },

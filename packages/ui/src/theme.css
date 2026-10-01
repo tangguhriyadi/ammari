@@ -1,0 +1,52 @@
+/* Design tokens shared by @ammari/admin and (later) @ammari/web. Consumers `@import` this file
+ * after `@import "tailwindcss"` in their own globals.css — it only defines the @theme block, it
+ * does not pull in Tailwind itself (each app's own stylesheet owns that single import).
+ *
+ * Neutral scale is derived from the brand color #695A5A by holding hue 0deg / saturation 6%
+ * and stepping lightness — neutral-700 IS the brand color (lightness ~38%, confirmed by the
+ * same formula). See docs/SPEC.md and the admin-shell plan for the full contrast-ratio table
+ * verified against WCAG 2.2 AA (4.5:1 text, 3:1 non-text UI boundaries). */
+@theme {
+  --font-sans: var(--font-inter);
+  --font-serif: var(--font-cormorant);
+
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  --color-brand: #695a5a;
+  --color-brand-foreground: #ffffff;
+
+  --color-neutral-50: #fafaf9;
+  --color-neutral-100: #f1efef;
+  --color-neutral-200: #e2dfdf;
+  --color-neutral-300: #cac4c4;
+  --color-neutral-400: #aba0a0;
+  --color-neutral-500: #8e8080;
+  --color-neutral-600: #726565;
+  --color-neutral-700: #695a5a;
+  --color-neutral-800: #4c4343;
+  --color-neutral-900: #2b2626;
+  --color-neutral-950: #181616;
+
+  /* Success (olive) — 700 verified 7.81:1 text-on-white, and (same token) white-text-on-solid. */
+  --color-success-50: #f1f4e8;
+  --color-success-200: #c9d4a0;
+  --color-success-700: #4b5726;
+
+  /* Warning (amber) — 700 verified 6.30:1 text-on-white / white-text-on-solid. */
+  --color-warning-50: #fbf3e2;
+  --color-warning-200: #e6c27a;
+  --color-warning-700: #7a5b12;
+
+  /* Danger (brick red) — 700 verified 8.14:1 text-on-white / white-text-on-solid. */
+  --color-danger-50: #f7e9e6;
+  --color-danger-200: #e0a89a;
+  --color-danger-700: #8a3324;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+}

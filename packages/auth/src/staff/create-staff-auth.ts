@@ -54,10 +54,16 @@ export interface CreateStaffAuthOptions {
    * "same response either way" design even though the response BODY is already identical. When
    * omitted (e.g. in this package's own tests), the send is simply awaited inline. */
   backgroundTaskHandler?: (promise: Promise<unknown>) => void;
+  /** Test-only escape hatch (same spirit as `GoogleProviderOverrides` above): hands a freshly
+   * generated sign-in OTP to the caller as a structured value, for a test harness that needs to
+   * capture it without parsing it back out of the rendered email body/subject (which couples the
+   * harness to free-text copy that's expected to change independently). Called right alongside
+   * `emailSender.send`, for the same `sign-in` OTPs only. Never set in production. */
+  onOtpGenerated?: (params: { email: string; otp: string }) => void;
 }
 
 export function createStaffAuth(options: CreateStaffAuthOptions) {
-  const { db, emailSender, baseURL, secret, google, extraPlugins = [], backgroundTaskHandler } = options;
+  const { db, emailSender, baseURL, secret, google, extraPlugins = [], backgroundTaskHandler, onOtpGenerated } = options;
 
   if (process.env.NODE_ENV === "production" && !secret) {
     throw new Error(
@@ -172,6 +178,7 @@ export function createStaffAuth(options: CreateStaffAuthOptions) {
             subject: "Kode masuk Ammari Admin",
             body: `Kode masuk kamu: ${otp}\n\nBerlaku 5 menit. Jangan bagikan kode ini ke siapa pun.`,
           });
+          onOtpGenerated?.({ email, otp });
         },
       }),
       ...extraPlugins,

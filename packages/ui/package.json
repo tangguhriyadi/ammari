@@ -1,0 +1,36 @@
+{
+  "name": "@ammari/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/components/index.ts",
+    "./fonts": "./src/fonts/index.ts",
+    "./lib": "./src/lib/format.ts",
+    "./theme.css": "./src/theme.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "next": "16.3.7",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "lucide-react": "1.49.0",
+    "tailwind-merge": "3.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "next": "16.3.7",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "6.0.3",
+    "vitest": "5.0.2"
+  }
+}

@@ -14,7 +14,10 @@ const PUBLIC_PATHS = ["/login"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (PUBLIC_PATHS.includes(pathname) || pathname.startsWith("/api/auth")) {
+  // "/api/test" is the e2e-only sign-in backdoor (app/api/test/login/route.ts) — proxy merely
+  // lets the request reach the handler; the real fail-closed gate (NODE_ENV, an explicit opt-in
+  // flag, an @e2e.ammari.test email suffix, and a localhost-only check) lives there, not here.
+  if (PUBLIC_PATHS.includes(pathname) || pathname.startsWith("/api/auth") || pathname.startsWith("/api/test")) {
     return NextResponse.next();
   }
 
