@@ -5,7 +5,11 @@
   "type": "module",
   "exports": {
     ".": "./src/client.ts",
-    "./schema": "./src/schema/index.ts"
+    "./schema": "./src/schema/index.ts",
+    "./rbac": "./src/rbac/permissions.ts",
+    "./test-utils": "./test/helpers.ts",
+    "./test-fixtures": "./test/fixtures.ts",
+    "./test-global-setup": "./test/global-setup.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",

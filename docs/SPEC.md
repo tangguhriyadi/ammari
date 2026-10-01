@@ -198,9 +198,9 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
 
 ### 5.3 Customers & vouchers
 
-- `customers` — unique `phone`; unique `email` (stored as `citext` for case-insensitive
-  matching); verification timestamps; `pdp_consent_at`; `promo_consent_at`; `type`
-  (`retail` / `reseller`).
+- `customers` — `phone` nullable (optional at account creation; see §10.3) but unique when
+  present; unique `email` (stored as `citext` for case-insensitive matching); verification
+  timestamps; `pdp_consent_at`; `promo_consent_at`; `type` (`retail` / `reseller`).
 - `customer_addresses` — not yet implemented, see the `payments` note in §5.2.
 - `otp_codes` — stores a hash of the code, `expires_at`, `attempts`, `consumed_at`.
 - `thank_you_cards` — unique `order_id`; unique `token_hash`; `claim_deadline`; `status`.
@@ -280,3 +280,138 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
 - Timeline: tables, seeding the two system roles, and server-side permission checks must be done
   before 1 November 2026; the Roles & Staff management pages ship in the first week of November
   2026 (see §3.2).
+
+## 10. Authentication
+
+Two separate [Better Auth](https://better-auth.com) instances, by design, never sharing tables,
+cookies, or secrets:
+
+- **Staff** (`apps/admin` only) — built this session, detailed in §10.1–§10.2.
+- **Customer** (`apps/web`, from the main site's OTP login / voucher claim flow onward) — **not
+  built yet**. §10.3 records the design so it can be added later without touching the staff
+  instance.
+
+Both live in `packages/auth` (`@ammari/auth`), which depends on `packages/db` for schema and the
+Drizzle client but owns all Better Auth configuration, hooks, and session/permission-loading
+logic. `packages/db` stays schema-only (tables, migrations, seed) — see `staff_auth_*` in §5.3's
+sibling schema files.
+
+### 10.1 Staff login (apps/admin)
+
+- **Methods:** email OTP and Google. No passwords, no self sign-up — login succeeds only for an
+  email matching an existing `staff_users` row with `is_active = true`.
+- **Identity model:** `staff_users` stays the sole source of truth for identity and role.
+  Better Auth's own tables (`staff_auth_users`, `staff_auth_accounts`, `staff_auth_sessions`,
+  `staff_auth_verifications`) are separate tables linked 1:1 via `staff_auth_users.staff_user_id`
+  (`NOT NULL`, `UNIQUE`, `ON DELETE RESTRICT` — enforced at the database level, not just by
+  Better Auth's own, more permissive, `additionalField` validation). `role_id`, `is_active`, and
+  all RBAC data live only in `staff_users`/`roles`/`role_permissions`, never in a Better Auth
+  table.
+- **Admission gate:** `user.validateUserInfo` (a Better Auth hook that runs before `create-user`,
+  `link-account`, and OAuth `sign-in`, across every authentication method) checks the incoming
+  email against `staff_users` and rejects anything that isn't an active match. This is the single
+  gate for both login methods — `disableSignUp`/`disableImplicitSignUp` are deliberately **not**
+  used, because both would block Better Auth from creating the row a legitimate staff member
+  needs on their very first login, before any hook of ours gets to run.
+  `databaseHooks.session.create.before` is a second, independent gate that re-checks
+  `staff_users.is_active` live on every session creation (not just new accounts) — this is what
+  makes a staff member deactivated between logins fail their very next login attempt, and what
+  `getStaffSession()` (below) re-derives on every request rather than trusting a cached session.
+- **No account enumeration:** the login UI shows one fixed, generic Indonesian error for every
+  failure — wrong code, expired code, too many attempts, unknown email, inactive staff, or a
+  rejected Google sign-in. The OTP-send step always returns the same response regardless of
+  whether the email belongs to an active staff member, an inactive one, or no one at all; the
+  actual email is only ever sent for a genuine match.
+- **OTP rules** (CLAUDE.md): 6 digits, expires in 5 minutes, max 5 verify attempts, stored
+  **hashed** (Better Auth's `storeOTP: "hashed"`, in `staff_auth_verifications`, which fully
+  replaces `otp_codes` for staff login — `otp_codes` is kept only for the voucher claim flow,
+  which isn't Better Auth-backed yet).
+- **Login UI calls real HTTP endpoints, not `staffAuth.api.*` from a server action:**
+  `app/login/login-form.tsx` is a client component using Better Auth's React client
+  (`lib/auth/client.ts`) against `/api/auth/*`. This is deliberate, not incidental: Better Auth's
+  rate limiter and origin/CSRF check are wired into its HTTP router, not into the `.api` object —
+  calling `.api.sendVerificationOTP()`/`.api.signInEmailOTP()`/`.api.signInSocial()` directly from
+  a server action would silently skip both. (A 429 from the per-IP limiter gets its own UI
+  message, not the generic one — that's a legitimate, non-enumerating signal.)
+- **Rate limiting — two independent mechanisms:**
+  - Per IP, via Better Auth's own limiter, backed by the database (`staff_auth_rate_limits`, so
+    limits survive restarts/deploys) and keyed off the `CF-Connecting-IP` header — not
+    `X-Forwarded-For` — so a client cannot spoof it. See the Pre-deploy checklist below for the
+    infrastructure half of this guarantee. Only reachable because the login UI goes through the
+    real HTTP endpoint (previous bullet).
+  - Per destination email, via a dedicated `auth_email_throttle` table: one atomic
+    `INSERT ... RETURNING (SELECT count(*) ...)` per send attempt (not a separate count-then-
+    insert — CLAUDE.md requires atomic handling for anything concurrent). This exists because
+    Better Auth's own `emailOTP` plugin deletes and recreates its single verification row per
+    `(type, email)` on every send, so counting rows in that table can never see more than one —
+    it cannot back a per-destination limit on its own.
+- **No timing side-channel on OTP-send:** `sendVerificationOTP`'s entire body (throttle check,
+  staff lookup, and the actual email send) runs via Next's `after()` — after the HTTP response is
+  already sent — so an unknown/inactive/throttled email and a real one are not just
+  body-identical but also time-identical from the caller's perspective. Without this, a real
+  email provider's network latency would make the valid-account path measurably slower than the
+  no-op paths, defeating the enumeration protection above via timing even with an identical
+  response body.
+- **Cookies:** prefix `ammari_staff`, scoped to the admin app's own origin only (no
+  `crossSubDomainCookies`, no parent-domain cookie), `Secure` when that origin is `https://`,
+  session `expiresIn` 7 days / `updateAge` 1 day (both set explicitly, not left to the library
+  default). `trustedOrigins` is exactly `[BETTER_AUTH_URL]` — never derived from a request
+  header.
+- **Secrets:** `STAFF_BETTER_AUTH_SECRET` (distinctly named — never the generic
+  `BETTER_AUTH_SECRET` — so it can't be confused with the customer instance's own secret once
+  that exists). Required at startup in production; the app refuses to start without it.
+- **Enforcement in apps/admin:** `proxy.ts` (Next 16's renamed `middleware.ts`) is a coarse gate
+  only — "is there any valid staff session" — redirecting to `/login` otherwise; it is never the
+  sole authorization boundary. `requirePermission(key)` is called in every page, server action,
+  and route handler individually: redirects to `/login` if unauthenticated, renders the 403 page
+  (`forbidden()`, `next.config.ts`'s `experimental.authInterrupts`) if the session's role lacks
+  the permission. Permission keys are typed from `packages/db/src/rbac/permissions.ts`.
+- `last_login_at` is updated on every successful login (`databaseHooks.session.create.after`).
+
+### 10.2 Email delivery
+
+An `EmailSender` interface (`packages/auth`) with two implementations: `ConsoleEmailSender`
+(local dev — prints the OTP to the server console) and `UnconfiguredEmailSender` (production
+without a provider configured — throws loudly rather than silently dropping the email). A real
+provider is not yet chosen; see the Pre-deploy checklist.
+
+### 10.3 Customer login (apps/web) — design only, not built
+
+- Self sign-up allowed (unlike staff), via Google or email OTP.
+- Profile completion is **optional**: after a first Google sign-in, a "Lengkapi profil" page
+  (phone, address, promo consent) with a "Lewati" (skip) button — skipping still creates the
+  account.
+- Privacy consent **cannot** be skipped: "Dengan melanjutkan, kamu menyetujui Kebijakan Privasi
+  Ammari" (linked) on the sign-up screen, with `pdp_consent_at` recorded at account creation.
+  Promo consent stays a separate, optional, unticked checkbox.
+- `customers.phone` is nullable (migration `0002`, done this session) but still **required**
+  where it matters operationally: the voucher claim form, and at checkout (December). Address is
+  collected at checkout, not account creation.
+- While phone is missing, a dismissible-per-session "Lengkapi profilmu" banner shows after login
+  and on the account page.
+- Account linking: a Google sign-in whose email already belongs to a customer (e.g. created via a
+  voucher claim) links to that customer instead of creating a duplicate — only on a
+  Google-**verified** email.
+- Schema: separate `customer_auth_*` tables (mirroring `staff_auth_*`), own cookie prefix
+  (reserved: `ammari_customer`), own secret (reserved: `CUSTOMER_BETTER_AUTH_SECRET`). Nothing in
+  the staff instance needs to change to add this.
+
+## 11. Pre-deploy checklist
+
+Items that must be satisfied before the **first** deploy to any real environment (dev or prod),
+beyond the per-feature work tracked elsewhere in this document:
+
+- **better-auth version:** pinned to `1.7.6` (the newest release that cleared pnpm's
+  `minimumReleaseAge` gate at the time it was added — `1.7.7` was ~4.6 hours old and was
+  rejected). Upgrade to `>= 1.7.7` once it passes the gate, re-run all auth tests
+  (`packages/auth`, `packages/db`), and check the better-auth GitHub security advisories first —
+  the `1.7.6` → `1.7.7` diff included what looks like a sign-up-gating fix. No deploy happens
+  before that upgrade.
+- **Cloudflare IP allowlisting:** the VPS must accept HTTP(S) only from Cloudflare (firewall
+  allowlist of Cloudflare IP ranges, or Authenticated Origin Pulls), and Caddy must not trust a
+  client-supplied `CF-Connecting-IP` on any request that didn't actually arrive through
+  Cloudflare. Otherwise the auth rate limit (§10.1) can be bypassed by spoofing that header on a
+  direct-to-origin request.
+- **Email provider:** `EmailSender` has no real implementation yet (§10.2) — production currently
+  refuses to start without one (`UnconfiguredEmailSender` throws rather than silently dropping
+  OTP emails), so this blocks any real deploy, not just a "nice to have."

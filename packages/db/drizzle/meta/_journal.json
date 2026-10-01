@@ -15,6 +15,20 @@
       "when": 1790818846327,
       "tag": "0001_rbac_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790821111887,
+      "tag": "0002_make_customer_phone_nullable",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790821155736,
+      "tag": "0003_staff_auth",
+      "breakpoints": true
     }
   ]
 }

@@ -1,11 +1,20 @@
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { seed } from "../src/seed";
 
-if (existsSync(".env")) {
-  process.loadEnvFile(".env");
+// Resolved relative to this file, not `process.cwd()` — a second package (e.g. @ammari/auth)
+// reuses this module via the `@ammari/db/test-global-setup` export while running with its own
+// package directory as cwd, so a cwd-relative path would silently look in the wrong place.
+const packageRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
+const envPath = path.join(packageRoot, ".env");
+const migrationsFolder = path.join(packageRoot, "drizzle");
+
+if (existsSync(envPath)) {
+  process.loadEnvFile(envPath);
 }
 
 function requireDatabaseUrl(): string {
@@ -51,7 +60,7 @@ export default async function setup() {
   const testClient = postgres(testUrl.toString(), { max: 5 });
   try {
     const testDb = drizzle(testClient);
-    await migrate(testDb, { migrationsFolder: "./drizzle" });
+    await migrate(testDb, { migrationsFolder });
     await seed(testDb);
   } finally {
     await testClient.end();

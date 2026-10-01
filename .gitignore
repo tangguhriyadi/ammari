@@ -16,3 +16,6 @@ out/
 .DS_Store
 *.log
 *.tsbuildinfo
+
+# scratch space for inspecting package tarballs, etc. (see AGENTS.md agent guidance)
+.tmp/

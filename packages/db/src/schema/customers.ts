@@ -9,7 +9,11 @@ export const customers = pgTable(
   "customers",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    phone: text("phone").notNull().unique(),
+    // Nullable: phone is optional at account creation (e.g. a Google sign-up with no voucher
+    // claim yet). Plain UNIQUE already allows multiple NULLs in Postgres (same reasoning as
+    // vouchers.usedOrderId below), so no partial index is needed to permit several phone-less
+    // customers.
+    phone: text("phone").unique(),
     email: citext("email").notNull().unique(),
     name: text("name").notNull(),
     type: text("type").notNull().default("retail"),
@@ -21,11 +25,15 @@ export const customers = pgTable(
   },
   (table) => [
     check("customers_type_check", checkIn(table.type, CUSTOMER_TYPES)),
-    // Normalized by the app before insert: +62 followed by 8-13 digits.
+    // Normalized by the app before insert: +62 followed by 8-13 digits. Only enforced when
+    // phone is present — it's optional at the account level (see column comment above).
     // Note the doubled backslash: this is a JS template literal, and `\+` is not a recognized
     // JS escape sequence, so a single backslash here would silently be dropped, leaving a
     // malformed `^+62...` regex in the generated SQL.
-    check("customers_phone_format_check", sql`${table.phone} ~ '^\\+62[0-9]{8,13}$'`),
+    check(
+      "customers_phone_format_check",
+      sql`${table.phone} is null or ${table.phone} ~ '^\\+62[0-9]{8,13}$'`,
+    ),
   ],
 );
 

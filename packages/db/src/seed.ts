@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { db as defaultDb } from "./client";
 import { channels, costAssumptions, permissions, rolePermissions, roles, staffUsers } from "./schema";
 import {
@@ -56,15 +56,28 @@ async function upsertSystemRole(
     .select({ id: permissions.id })
     .from(permissions)
     .where(inArray(permissions.key, [...permissionKeys]));
+  const desiredPermissionIds = permissionRows.map((p) => p.id);
 
-  // Replace the role's permission set wholesale rather than diffing: correct even if the
-  // catalog shrinks, and stays idempotent (same end state on every run).
-  await db.transaction(async (tx) => {
-    await tx.delete(rolePermissions).where(eq(rolePermissions.roleId, role.id));
-    if (permissionRows.length > 0) {
-      await tx.insert(rolePermissions).values(permissionRows.map((p) => ({ roleId: role.id, permissionId: p.id })));
-    }
-  });
+  // Insert-then-prune, not delete-then-insert: two packages' test suites (packages/db,
+  // packages/auth) each run this seed independently against the same shared `ammari_test`
+  // database, so this must be safe under concurrent invocation — the same "never check-then-
+  // write" rule CLAUDE.md states for voucher claim/redemption/order import applies here too.
+  // `onConflictDoNothing` makes the insert race-safe; the final DELETE's own WHERE clause (not
+  // a prior read) makes the prune race-safe, since a second concurrent run finding nothing left
+  // to delete is a no-op, not an error.
+  if (desiredPermissionIds.length > 0) {
+    await db
+      .insert(rolePermissions)
+      .values(desiredPermissionIds.map((permissionId) => ({ roleId: role.id, permissionId })))
+      .onConflictDoNothing({ target: [rolePermissions.roleId, rolePermissions.permissionId] });
+  }
+  await db
+    .delete(rolePermissions)
+    .where(
+      desiredPermissionIds.length > 0
+        ? and(eq(rolePermissions.roleId, role.id), notInArray(rolePermissions.permissionId, desiredPermissionIds))
+        : eq(rolePermissions.roleId, role.id),
+    );
 }
 
 async function seedSystemRoles(db: Database) {
