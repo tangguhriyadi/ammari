@@ -12,7 +12,9 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:check": "tsx --env-file=.env src/check.ts",
-    "typecheck": "tsc --noEmit"
+    "db:seed": "tsx --env-file=.env src/seed.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "drizzle-orm": "0.45.3",
@@ -22,6 +24,7 @@
     "@types/node": "26.6.3",
     "drizzle-kit": "0.31.11",
     "tsx": "4.23.15",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "vitest": "5.0.2"
   }
 }

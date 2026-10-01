@@ -76,7 +76,8 @@ pnpm workspaces + Turborepo:
 - Login (email OTP)
 - Overview (see §6 for metrics)
 - Orders
-- Import — upload Shopee/TikTok Shop order and income exports; preview before saving
+- Import — upload Shopee/TikTok Shop order and income exports; preview before saving; merges
+  duplicate SKU rows within one order before inserting (see `order_items` in §5.2)
 - Packing — queue view + print a QR thank-you card per order, or in bulk
 - Products & SKUs
 - Stock
@@ -139,7 +140,11 @@ purchases on the main site without violating marketplace policy.
 4. On success:
    - a new account is created automatically, **or**
    - the voucher is attached to an existing account matched by phone or email.
+   - In the **same transaction**: mark the card claimed (`claimed_by_customer_id`,
+     `claimed_at`), create the voucher, and set the source order's `customer_id` to the
+     claiming customer if it is still null.
 5. Login is passwordless (OTP-based) throughout — there is no password to set.
+6. The QR contains only the random token, never the order number.
 
 ### 4.4 Deadlines and validity
 
@@ -178,10 +183,14 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
 - `channels` — `shopee`, `tiktok`, `web`, `reseller`.
 - `orders` — unique on `(channel_id, channel_order_no)`.
 - `order_items` — `unit_cost` is **locked** at the moment the order is recorded (not recomputed
-  later if cost assumptions change).
+  later if cost assumptions change); unique on `(order_id, sku)`. If a marketplace export has
+  several rows for the same SKU in one order, the importer **merges them into one line** before
+  inserting: `qty` summed, `unit_price` the weighted average rounded to the nearest whole
+  rupiah.
 - `order_settlements` — actual payout data from the marketplace, arrives after `orders`.
 - `import_batches` — tracks each Shopee/TikTok export upload.
-- `payments` — unique on `provider_ref`.
+- `payments` — unique on `provider_ref`. Not yet implemented — part of the Dec 2026 cart/checkout
+  work (§3.4), same as `customer_addresses` below.
 - `ad_spend_daily` — unique on `(date, channel)`.
 - `expenses`
 - `targets` — one row per month.
@@ -192,7 +201,7 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
 - `customers` — unique `phone`; unique `email` (stored as `citext` for case-insensitive
   matching); verification timestamps; `pdp_consent_at`; `promo_consent_at`; `type`
   (`retail` / `reseller`).
-- `customer_addresses`
+- `customer_addresses` — not yet implemented, see the `payments` note in §5.2.
 - `otp_codes` — stores a hash of the code, `expires_at`, `attempts`, `consumed_at`.
 - `thank_you_cards` — unique `order_id`; unique `token_hash`; `claim_deadline`; `status`.
 - `vouchers` — unique `card_id`; unique `used_order_id`; `status`
