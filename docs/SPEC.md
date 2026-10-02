@@ -167,11 +167,41 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
 
 ### 5.1 Products & production
 
-- `fabrics`
-- `products`
-- `product_variants` — `sku` is the primary key; unique on `(product, color, size)`; sizes
-  XS–XL.
-- `product_images`
+- `fabrics` — deletable only while unused by any `products` row (`ON DELETE RESTRICT`).
+  `price_amount`/`price_unit` (`meter` / `yard`) store exactly what the owner entered and its
+  unit — never a silently-converted per-meter value (Pasar Baru shops often quote per yard; the
+  admin UI shows both, converting live, and marks the derived one with "≈"). Both null or both
+  set. `care_instructions` (shown on the fabric form, will appear on the main-site catalog later).
+- `fabric_colors` — a fabric's named colors (e.g. "Sage"), belonging to the fabric, not to any
+  one product: two products sharing a fabric share its color palette. `name` is `citext` and
+  unique per fabric (`(fabric_id, name)`), so "Sage"/"sage" collide. `supplier_color_code` is the
+  supplier's own code/name for the color (e.g. "No. 23"), distinct from Ammari's own name.
+  `hex` (optional, `^#[0-9A-F]{6}$`, normalized uppercase) — a variant with no hex shows a
+  neutral placeholder swatch. `is_active` (default true) replaces hard delete — a color
+  referenced by any variant (`ON DELETE RESTRICT`) can only be deactivated; a deactivated color
+  can't be picked for a *new* variant but stays visible on variants that already use it. Fabric
+  stock per color (meters on hand) can later attach here.
+- `products` — `code` (unique, uppercase, derived from name, immutable once set) feeds SKU
+  generation; `size_mode` (`sized` / `all_size`) is chosen at creation and not editable once the
+  product has variants. A product's `fabric_id` AND `closure` cannot change once it has a
+  variant — guaranteed at the DB level (not just the UI) via a composite FK from
+  `product_variants(product_id, fabric_id, closure)` to `products(id, fabric_id, closure)` with
+  `ON UPDATE RESTRICT` (closure is locked for the same reason fabric is: it's baked into every
+  SKU).
+- `product_variants` — `sku` is the primary key; unique on `(product, fabric_color_id, size)`;
+  sizes XS–XL, plus `ALLSIZE` for `size_mode = 'all_size'` products (a `sized` product may only
+  have XS–XL variants, an `all_size` product only an `ALLSIZE` variant — enforced in a DB trigger
+  and in application code). `is_active` (default true) replaces hard delete — a variant
+  referenced anywhere (stock, orders, production) can only be deactivated, never removed.
+  `fabric_color_id` must belong to the SAME fabric as the variant's own product — guaranteed at
+  the DB level via a second composite FK to `fabric_colors(id, fabric_id)` (both FKs share the
+  variant's own denormalized `fabric_id` column, which is what makes the cross-table "same
+  fabric" check possible at all). The SKU is built from the color's name and the product's
+  closure at the moment the variant is created and stays immutable even if the color is renamed
+  afterward. Creating variants for several colors at once is one atomic transaction
+  (all-or-nothing), with a single `audit_log` entry for the whole batch.
+- `product_images` — `fabric_color_id` (optional FK to `fabric_colors`; null = applies to all
+  colors).
 - `production_batches`
 - `production_batch_items`
 - `stock_movements` — an append-only ledger: signed `qty` (±), `type`
@@ -217,7 +247,9 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
 - 7-day average revenue — chart only, no status color.
 - Units sold per SKU.
 - Size mix vs. the cutting ratio per fabric roll: **XS2-S4-M4-L3-XL2**. A gap of more than 10
-  percentage points from the cutting ratio is flagged yellow.
+  percentage points from the cutting ratio is flagged yellow. `ALLSIZE` variants (one-size-fits-
+  all products, `products.size_mode = 'all_size'`) are excluded from this metric entirely — they
+  have no place in a cutting ratio.
 - Stock per SKU vs. its minimum threshold.
 - Profit per order, computed from the actual marketplace payout once available; until the payout
   arrives, use the 18% marketplace-fee assumption from `cost_assumptions`.

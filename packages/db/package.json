@@ -7,6 +7,7 @@
     ".": "./src/client.ts",
     "./schema": "./src/schema/index.ts",
     "./rbac": "./src/rbac/permissions.ts",
+    "./catalog": "./src/catalog/codes.ts",
     "./test-utils": "./test/helpers.ts",
     "./test-fixtures": "./test/fixtures.ts",
     "./test-global-setup": "./test/global-setup.ts"
@@ -17,6 +18,7 @@
     "db:studio": "drizzle-kit studio",
     "db:check": "tsx --env-file=.env src/check.ts",
     "db:seed": "tsx --env-file=.env src/seed.ts",
+    "db:seed:dev": "tsx --env-file=.env src/seed-dev.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

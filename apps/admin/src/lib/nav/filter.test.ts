@@ -31,6 +31,7 @@ describe("filterNavByPermissions", () => {
     expect(labels).not.toContain("Log Aktivitas");
     expect(labels).toContain("Ringkasan");
     expect(labels).toContain("Iklan & Biaya");
+    expect(labels).toContain("Bahan");
   });
 
   test("an item gated by multiple keys shows up if the session has just one of them", () => {

@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   pgTable,
@@ -12,12 +13,18 @@ import {
   uuid,
   bigint,
 } from "drizzle-orm/pg-core";
-import { checkIn, createdAtOnly, timestamps } from "./columns";
+import { checkIn, citext, createdAtOnly, timestamps } from "./columns";
 import {
+  FABRIC_PRICE_UNITS,
   PRODUCT_CLOSURES,
+  SIZE_MODES,
   SIZES,
   STOCK_MOVEMENT_REF_TYPES,
   STOCK_MOVEMENT_TYPES,
+  type FabricPriceUnit,
+  type ProductClosure,
+  type Size,
+  type SizeMode,
 } from "./constants";
 import { staffUsers } from "./rbac";
 
@@ -28,14 +35,55 @@ export const fabrics = pgTable(
     name: text("name").notNull(),
     supplier: text("supplier"),
     composition: text("composition"),
-    pricePerMeterAmount: bigint("price_per_meter_amount", { mode: "number" }),
-    rollLengthCm: integer("roll_length_cm"),
+    // Stores exactly what the user entered AND its unit — never a silently-converted per-meter
+    // value. Pasar Baru shops often quote per yard; converting at entry time and discarding the
+    // original unit would drift by rounding every time it's displayed back. Both null (price not
+    // yet known) or both set — never one without the other.
+    priceAmount: bigint("price_amount", { mode: "number" }),
+    priceUnit: text("price_unit").$type<FabricPriceUnit>(),
+    careInstructions: text("care_instructions"),
     notes: text("notes"),
     ...timestamps(),
   },
   (table) => [
-    check("fabrics_price_per_meter_amount_check", sql`${table.pricePerMeterAmount} >= 0`),
-    check("fabrics_roll_length_cm_check", sql`${table.rollLengthCm} >= 0`),
+    check("fabrics_price_amount_check", sql`${table.priceAmount} >= 0`),
+    check("fabrics_price_unit_check", checkIn(table.priceUnit, FABRIC_PRICE_UNITS)),
+    check(
+      "fabrics_price_amount_unit_pair_check",
+      sql`(${table.priceAmount} is null) = (${table.priceUnit} is null)`,
+    ),
+  ],
+);
+
+// A fabric's named colors (e.g. "Sage", "Mocca") — belongs to the fabric, not to any one
+// product: two products sharing a fabric share its color palette. `name` is citext so "Sage"
+// and "sage" collide as the same color on one fabric (the unique constraint below).
+export const fabricColors = pgTable(
+  "fabric_colors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    fabricId: uuid("fabric_id")
+      .notNull()
+      .references(() => fabrics.id, { onDelete: "restrict" }),
+    name: citext("name").notNull(),
+    // The supplier's own code/name for this color (e.g. "No. 23") — distinct from Ammari's own
+    // color name above.
+    supplierColorCode: text("supplier_color_code"),
+    hex: text("hex"),
+    // Never hard-deleted once referenced by a variant (ON DELETE RESTRICT below) — "delete" in
+    // the UI means setting this false. A deactivated color can't be picked for a NEW variant
+    // (application-level check) but stays visible on variants that already use it.
+    isActive: boolean("is_active").notNull().default(true),
+    ...timestamps(),
+  },
+  (table) => [
+    index("fabric_colors_fabric_id_idx").on(table.fabricId),
+    unique("fabric_colors_fabric_id_name_key").on(table.fabricId, table.name),
+    // Referenced by product_variants' composite FK below (fabric_color_id, fabric_id) ->
+    // (id, fabric_id) — Postgres requires an explicit unique constraint over that exact column
+    // pair, even though `id` alone is already unique.
+    unique("fabric_colors_id_fabric_id_key").on(table.id, table.fabricId),
+    check("fabric_colors_hex_check", sql`${table.hex} ~ '^#[0-9A-F]{6}$'`),
   ],
 );
 
@@ -44,12 +92,20 @@ export const products = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     name: text("name").notNull(),
+    // Uppercase, alnum-only, derived from `name` at creation (see catalog/codes.ts) — feeds
+    // SKU generation. Distinct from `slug` deliberately: `slug` stays editable after creation,
+    // but a SKU prefix must never drift just because the product's URL slug was later edited.
+    code: text("code").notNull().unique(),
     slug: text("slug").notNull().unique(),
     description: text("description"),
     fabricId: uuid("fabric_id")
       .notNull()
       .references(() => fabrics.id, { onDelete: "restrict" }),
-    closure: text("closure").notNull(),
+    closure: text("closure").$type<ProductClosure>().notNull(),
+    // Chosen at creation, not editable once the product has any variant (enforced in
+    // application code, not the DB — see enforce_variant_size_mode, migration 0004, for the
+    // DB-level guarantee this pairs with: which SIZES a variant of this product may use).
+    sizeMode: text("size_mode").$type<SizeMode>().notNull(),
     basePrice: bigint("base_price", { mode: "number" }).notNull(),
     isActive: boolean("is_active").notNull().default(true),
     ...timestamps(),
@@ -57,32 +113,79 @@ export const products = pgTable(
   (table) => [
     index("products_fabric_id_idx").on(table.fabricId),
     check("products_closure_check", checkIn(table.closure, PRODUCT_CLOSURES)),
+    check("products_size_mode_check", checkIn(table.sizeMode, SIZE_MODES)),
     check("products_base_price_check", sql`${table.basePrice} >= 0`),
+    // Referenced by product_variants' composite FK below (product_id, fabric_id, closure) ->
+    // (id, fabric_id, closure) — this is what makes "a product's fabric OR closure can't change
+    // once it has variants" a real DB guarantee (ON UPDATE RESTRICT), not just an app-level
+    // check: changing this row's fabric_id or closure while a variant still references the OLD
+    // (id, fabric_id, closure) triple via that FK is rejected by Postgres itself. closure is
+    // included because it's baked into every SKU (see codes.ts's CLOSURE_ABBREVIATIONS), exactly
+    // like fabric_id is baked in via the color name.
+    unique("products_id_fabric_id_closure_key").on(table.id, table.fabricId, table.closure),
   ],
 );
 
 // `sku` is a natural-key PK referenced by many FKs with the default ON UPDATE NO ACTION, so
 // once any child row exists (a movement, order item, production line) it is effectively
-// immutable — intentional: SKUs are assigned once and never renamed.
+// immutable — intentional: SKUs are assigned once and never renamed. The SKU is built from the
+// color's NAME at the moment the variant is created (see catalog/codes.ts) and stays
+// immutable even if fabric_colors.name is renamed afterward.
 export const productVariants = pgTable(
   "product_variants",
   {
     sku: text("sku").primaryKey(),
-    productId: uuid("product_id")
-      .notNull()
-      .references(() => products.id, { onDelete: "restrict" }),
-    color: text("color").notNull(),
-    size: text("size").notNull(),
+    productId: uuid("product_id").notNull(),
+    // Denormalized copy of products.fabric_id as of variant creation — required for the
+    // composite FKs below (Postgres needs the actual column values present to enforce a
+    // cross-table "same fabric" invariant; it cannot be derived through a join at constraint-
+    // check time). Both composite FKs make this column's own single-column FK to products(id)
+    // redundant, so it isn't declared separately.
+    fabricId: uuid("fabric_id").notNull(),
+    fabricColorId: uuid("fabric_color_id").notNull(),
+    // Denormalized copy of products.closure as of variant creation, same reasoning as fabric_id
+    // above — it's part of the product_variants_product_fabric_closure_fk composite FK, which is
+    // what makes a product's closure immutable once it has variants (closure is baked into every
+    // SKU, see codes.ts).
+    closure: text("closure").$type<ProductClosure>().notNull(),
+    size: text("size").$type<Size>().notNull(),
     priceOverrideAmount: bigint("price_override_amount", { mode: "number" }),
     minStockQty: integer("min_stock_qty").notNull().default(0),
+    // Never hard-deleted once referenced (stock/orders/production all ON DELETE RESTRICT this
+    // table) — "delete" in the UI always means setting this false instead.
+    isActive: boolean("is_active").notNull().default(true),
     ...timestamps(),
   },
   (table) => [
     index("product_variants_product_id_idx").on(table.productId),
-    unique("product_variants_product_color_size_key").on(table.productId, table.color, table.size),
+    // listProducts' active-variant count and bulkSetMinStock's active-only update both filter on
+    // this pair together — a composite index matches that query shape (packages/db reviewer
+    // finding, migration 0005).
+    index("product_variants_product_id_is_active_idx").on(table.productId, table.isActive),
+    index("product_variants_fabric_color_id_idx").on(table.fabricColorId),
+    unique("product_variants_product_color_size_key").on(table.productId, table.fabricColorId, table.size),
     check("product_variants_size_check", checkIn(table.size, SIZES)),
+    check("product_variants_closure_check", checkIn(table.closure, PRODUCT_CLOSURES)),
     check("product_variants_price_override_amount_check", sql`${table.priceOverrideAmount} >= 0`),
     check("product_variants_min_stock_qty_check", sql`${table.minStockQty} >= 0`),
+    // The two composite FKs together guarantee products.fabric_id === fabric_colors.fabric_id
+    // for every variant (a variant's color always belongs to its own product's fabric), AND that
+    // products.closure matches what's on the variant row (a product's closure can't change once
+    // it has variants, same reasoning as fabric_id — see products_id_fabric_id_closure_key).
+    foreignKey({
+      columns: [table.productId, table.fabricId, table.closure],
+      foreignColumns: [products.id, products.fabricId, products.closure],
+      name: "product_variants_product_fabric_closure_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    foreignKey({
+      columns: [table.fabricColorId, table.fabricId],
+      foreignColumns: [fabricColors.id, fabricColors.fabricId],
+      name: "product_variants_fabric_color_fabric_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
   ],
 );
 
@@ -94,11 +197,15 @@ export const productImages = pgTable(
       .notNull()
       .references(() => products.id, { onDelete: "cascade" }),
     storageKey: text("storage_key").notNull(),
-    color: text("color"),
+    // Null = applies to all colors of the product.
+    fabricColorId: uuid("fabric_color_id").references(() => fabricColors.id, { onDelete: "restrict" }),
     sortOrder: integer("sort_order").notNull().default(0),
     ...createdAtOnly(),
   },
-  (table) => [index("product_images_product_id_idx").on(table.productId)],
+  (table) => [
+    index("product_images_product_id_idx").on(table.productId),
+    index("product_images_fabric_color_id_idx").on(table.fabricColorId),
+  ],
 );
 
 export const productionBatches = pgTable(

@@ -10,4 +10,5 @@ export { PageHeader, type PageHeaderProps } from "./PageHeader";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Skeleton } from "./Skeleton";
 export { Dialog, type DialogProps } from "./Dialog";
+export { Pagination, type PaginationProps } from "./Pagination";
 export { cn } from "../lib/cn";

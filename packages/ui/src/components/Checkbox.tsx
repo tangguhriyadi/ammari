@@ -20,10 +20,7 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Che
     <div className="flex flex-col gap-1.5">
       {/* The label wraps the whole row so the padded area, not just the 20px box, is clickable —
           keeps a 44px tap target without inflating the visible checkbox. */}
-      <label
-        htmlFor={checkboxId}
-        className="flex min-h-11 cursor-pointer items-center gap-2 py-2 text-base text-neutral-900"
-      >
+      <label htmlFor={checkboxId} className="flex min-h-11 items-center gap-2 py-2 text-base text-neutral-900">
         <input
           ref={ref}
           id={checkboxId}

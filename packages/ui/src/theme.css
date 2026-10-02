@@ -50,3 +50,25 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
+
+/* Tailwind 4's preflight resets interactive elements to `cursor: default` (a deliberate v4
+ * change from v3, which left the browser default pointer). Set once here, globally, rather than
+ * per component — every clickable control in the app should feel clickable. */
+button,
+[role="button"],
+input[type="submit"],
+input[type="button"],
+input[type="reset"],
+summary,
+select,
+label:has(input[type="checkbox"]),
+label:has(input[type="radio"]) {
+  cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}

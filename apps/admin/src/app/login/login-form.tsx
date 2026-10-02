@@ -58,7 +58,14 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
       <h1 className="text-2xl font-semibold text-[#695A5A]">Ammari Admin</h1>
 
       {sendState.step === "email" ? (
-        <form action={sendAction} className="flex w-full max-w-sm flex-col gap-3">
+        // key="send"/"verify" below — without it, React reconciles these two <form>s as the
+        // SAME element across the step transition (both are a <form> at the same tree position),
+        // diffing their children instead of unmounting/remounting. The email <input> here (no
+        // `value`, uncontrolled) and the verify form's hidden "email" input (`value={...}`,
+        // controlled) then collide into one DOM node going from uncontrolled to controlled,
+        // which is exactly the "A component is changing an uncontrolled input to be controlled"
+        // warning. A `key` forces a real remount instead.
+        <form key="send" action={sendAction} className="flex w-full max-w-sm flex-col gap-3">
           <label htmlFor="email" className="text-sm font-medium text-black">
             Email
           </label>
@@ -71,7 +78,11 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
             className="h-12 w-full rounded-md border border-[#695A5A] px-3 text-base text-black"
             placeholder="nama@ammari.id"
           />
-          {sendState.error && <p className="text-sm text-[#8a3b3b]">{sendState.error}</p>}
+          {sendState.error && (
+            <p role="alert" className="text-sm text-[#8a3b3b]">
+              {sendState.error}
+            </p>
+          )}
           <button
             type="submit"
             disabled={sendPending}
@@ -91,8 +102,11 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
           )}
         </form>
       ) : (
-        <form action={verifyAction} className="flex w-full max-w-sm flex-col gap-3">
-          <p className="text-sm text-black">
+        <form key="verify" action={verifyAction} className="flex w-full max-w-sm flex-col gap-3">
+          {/* aria-live announces the step change itself; autoFocus below (fired once, on this
+              form's single mount from the key="verify" remount) moves keyboard focus into the
+              new form so users don't have to tab up from the top of the page to find it. */}
+          <p className="text-sm text-black" aria-live="polite">
             Kode telah dikirim ke <span className="font-medium">{sendState.email}</span>.
           </p>
           <input type="hidden" name="email" value={sendState.email} />
@@ -107,10 +121,15 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
             maxLength={6}
             required
             autoComplete="one-time-code"
+            autoFocus
             className="h-12 w-full rounded-md border border-[#695A5A] px-3 text-center text-xl tracking-[0.5em] text-black"
             placeholder="______"
           />
-          {verifyState.error && <p className="text-sm text-[#8a3b3b]">{verifyState.error}</p>}
+          {verifyState.error && (
+            <p role="alert" className="text-sm text-[#8a3b3b]">
+              {verifyState.error}
+            </p>
+          )}
           <button
             type="submit"
             disabled={verifyPending}

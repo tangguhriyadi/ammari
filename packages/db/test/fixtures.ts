@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
   customers,
+  fabricColors,
   fabrics,
   orders,
   products,
@@ -49,17 +50,34 @@ export async function insertStaffUser(tx: TestTx, roleKey = "owner") {
   return staffUser;
 }
 
+export async function insertFabricColor(
+  tx: TestTx,
+  fabricId: string,
+  overrides: Partial<typeof fabricColors.$inferInsert> = {},
+) {
+  const [color] = await tx
+    .insert(fabricColors)
+    .values({ fabricId, name: `Black ${randomUUID().slice(0, 8)}`, ...overrides })
+    .returning();
+  if (!color) throw new Error("failed to insert fabric color fixture");
+  return color;
+}
+
 export async function insertProductVariant(tx: TestTx) {
   const [fabric] = await tx.insert(fabrics).values({ name: "Katun Rayon" }).returning();
   if (!fabric) throw new Error("failed to insert fabric fixture");
+
+  const color = await insertFabricColor(tx, fabric.id, { name: "Black" });
 
   const [product] = await tx
     .insert(products)
     .values({
       name: "Gamis Basic",
+      code: `BASIC${randomUUID().slice(0, 8).toUpperCase()}`,
       slug: `gamis-basic-${randomUUID()}`,
       fabricId: fabric.id,
       closure: "front_zip",
+      sizeMode: "sized",
       basePrice: 259_000,
     })
     .returning();
@@ -70,13 +88,15 @@ export async function insertProductVariant(tx: TestTx) {
     .values({
       sku: `SKU-${randomUUID()}`,
       productId: product.id,
-      color: "Black",
+      fabricId: fabric.id,
+      fabricColorId: color.id,
+      closure: product.closure,
       size: "M",
     })
     .returning();
   if (!variant) throw new Error("failed to insert product variant fixture");
 
-  return { fabric, product, variant };
+  return { fabric, color, product, variant };
 }
 
 export async function insertOrder(

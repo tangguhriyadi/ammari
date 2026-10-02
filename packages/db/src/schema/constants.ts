@@ -2,11 +2,20 @@
 // database CHECK constraint (see the table definitions) AND is importable by application code —
 // never duplicate these lists elsewhere.
 
-export const SIZES = ["XS", "S", "M", "L", "XL"] as const;
+// "ALLSIZE" is a real size for a one-size-fits-all product (products.size_mode = 'all_size'),
+// not a cutting size — it is deliberately excluded from CUTTING_SIZES/CUTTING_RATIO below, and
+// from the Overview dashboard's size-mix-vs-cutting-ratio metric (docs/SPEC.md §6).
+export const SIZES = ["XS", "S", "M", "L", "XL", "ALLSIZE"] as const;
 export type Size = (typeof SIZES)[number];
+
+export const SIZE_MODES = ["sized", "all_size"] as const;
+export type SizeMode = (typeof SIZE_MODES)[number];
 
 export const PRODUCT_CLOSURES = ["front_zip", "back_zip"] as const;
 export type ProductClosure = (typeof PRODUCT_CLOSURES)[number];
+
+export const FABRIC_PRICE_UNITS = ["meter", "yard"] as const;
+export type FabricPriceUnit = (typeof FABRIC_PRICE_UNITS)[number];
 
 export const STOCK_MOVEMENT_TYPES = ["production", "sale", "return", "adjustment"] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
@@ -55,12 +64,18 @@ export type ThankYouCardStatus = (typeof THANK_YOU_CARD_STATUSES)[number];
 export const VOUCHER_STATUSES = ["active", "used", "expired", "void"] as const;
 export type VoucherStatus = (typeof VOUCHER_STATUSES)[number];
 
+/** The cutting sizes — every size except ALLSIZE, which has no place in a cutting ratio. */
+export const CUTTING_SIZES = ["XS", "S", "M", "L", "XL"] as const;
+export type CuttingSize = (typeof CUTTING_SIZES)[number];
+
 /**
  * The fixed cutting ratio per fabric roll (docs/SPEC.md §6): XS2-S4-M4-L3-XL2. A business
  * constant, not stored per fabric — used by the Overview dashboard to flag size-mix gaps
- * greater than 10 percentage points from this ratio.
+ * greater than 10 percentage points from this ratio. Typed by `CuttingSize`, not `Size`, so an
+ * ALLSIZE variant can never be looked up here — ALLSIZE products are excluded from this metric
+ * entirely (docs/SPEC.md §6).
  */
-export const CUTTING_RATIO: Record<Size, number> = {
+export const CUTTING_RATIO: Record<CuttingSize, number> = {
   XS: 2,
   S: 4,
   M: 4,

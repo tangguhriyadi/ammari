@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@ammari/ui";
+import { isNavItemActive } from "@/lib/nav/is-active";
 
 export interface NavLinkItem {
   href: string;
@@ -24,7 +25,7 @@ export function NavLink({
   onClick,
 }: NavLinkItem & { variant?: "sidebar" | "bottom"; onClick?: () => void }) {
   const pathname = usePathname();
-  const active = pathname === href;
+  const active = isNavItemActive(pathname, href);
 
   if (variant === "bottom") {
     return (

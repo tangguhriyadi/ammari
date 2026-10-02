@@ -6,7 +6,7 @@
   "exports": {
     ".": "./src/components/index.ts",
     "./fonts": "./src/fonts/index.ts",
-    "./lib": "./src/lib/format.ts",
+    "./lib": "./src/lib/index.ts",
     "./theme.css": "./src/theme.css"
   },
   "scripts": {
