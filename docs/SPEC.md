@@ -447,3 +447,10 @@ beyond the per-feature work tracked elsewhere in this document:
 - **Email provider:** `EmailSender` has no real implementation yet (§10.2) — production currently
   refuses to start without one (`UnconfiguredEmailSender` throws rather than silently dropping
   OTP emails), so this blocks any real deploy, not just a "nice to have."
+- **sharp platform binaries (product images):** `sharp` ships prebuilt native binaries per
+  platform/libc — the ones resolved into `node_modules` on a developer's Mac are NOT the ones
+  Linux/the Docker image needs. Verify in the actual Docker build/image (not just locally) that
+  `sharp` loads correctly for the base image's OS and libc (e.g. Alpine/musl vs Debian/glibc) —
+  a mismatch fails at require-time (`Could not load the "sharp" module`), not at build time, so a
+  green `pnpm build` locally proves nothing about the deployed image. Confirm pnpm's
+  `allowBuilds.sharp` (`pnpm-workspace.yaml`) carries through the image's own `pnpm install`.

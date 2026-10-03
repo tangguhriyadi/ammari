@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { loginAs } from "./helpers/login";
-import { E2E_OWNER_EMAIL, E2E_PAGINATION_PRODUCT_PREFIX, E2E_PRODUCTS_NO_FINANCE_EMAIL } from "./global-setup";
+import {
+  E2E_OWNER_EMAIL,
+  E2E_PAGINATION_PRODUCT_PREFIX,
+  E2E_PRODUCTS_NO_FINANCE_EMAIL,
+  E2E_SUPER_ADMIN_EMAIL,
+} from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
 // Mobile-first per the product spec — the whole flow below (forms, variant builder, SKU
@@ -39,6 +44,12 @@ test("owner creates a fabric, adds colors, creates a product with variants, and 
   await page.locator("#product-fabric").selectOption({ label: fabricName });
   await page.getByLabel("Harga dasar").fill("269.000");
   const code = await page.getByLabel("Kode produk").inputValue();
+  // Created INACTIVE — Sage has no photo yet, and an active product's new variants for a
+  // photo-less color are created inactive (collapsed into "Nonaktif" below) by design (product
+  // images feature); this test is about SKU generation and Batas HPP visibility, not that rule,
+  // so the product stays inactive and the variants come in active normally.
+  // Switch, not a checkbox — role="switch" has no check()/uncheck(), click to toggle it off.
+  await page.getByRole("switch", { name: "Aktif" }).click();
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page).toHaveURL(/\/produk\/[0-9a-f-]+$/);
 
@@ -52,8 +63,11 @@ test("owner creates a fabric, adds colors, creates a product with variants, and 
 
   const expectedSkuS = generateSku({ code, closure: "front_zip", color: "Sage", size: "S" });
   const expectedSkuM = generateSku({ code, closure: "front_zip", color: "Sage", size: "M" });
-  await expect(page.getByText(expectedSkuS, { exact: true })).toBeVisible();
-  await expect(page.getByText(expectedSkuM, { exact: true })).toBeVisible();
+  // :text-is()+:visible, not plain getByText — the SKU renders twice in the DOM (a desktop table
+  // row and a mobile card, one hidden via CSS per breakpoint; see variant-builder.tsx), and this
+  // test runs at the 390px mobile viewport set above.
+  await expect(page.locator(`:text-is("${expectedSkuS}"):visible`)).toBeVisible();
+  await expect(page.locator(`:text-is("${expectedSkuM}"):visible`)).toBeVisible();
 
   // 5. Batas HPP is visible for owner (holds finance.view_profit).
   await expect(page.getByText("Batas HPP")).toBeVisible();
@@ -115,6 +129,138 @@ test("a role without finance.view_profit does not receive Batas HPP in the HTML 
   // must not be present anywhere in the rendered HTML, proving the server never sent it.
   const html = await page.content();
   expect(html).not.toContain("Batas HPP");
+});
+
+test("editing two variant rows saves both in one atomic call; a validation error on one row leaves the other unsaved too, and leaving with unsaved changes warns", async ({
+  page,
+}) => {
+  // super_admin, not owner — this file already logs in as owner 4 times, and the OTP send
+  // throttle is 5 per 5 minutes per email (same reasoning as product-photos.spec.ts); super_admin
+  // also holds products.manage, so it works equally well here.
+  await loginAs(page, E2E_SUPER_ADMIN_EMAIL);
+  const unique = Date.now();
+
+  const fabricName = `E2E Bahan Varian ${unique}`;
+  await page.goto("/bahan/baru");
+  await page.getByLabel("Nama bahan").fill(fabricName);
+  await page.getByLabel("Nama warna").fill("Sage");
+  await page.getByRole("button", { name: "Simpan" }).click();
+  await expect(page).toHaveURL(/\/bahan\/[0-9a-f-]+$/);
+
+  // Created INACTIVE so the variants added below come in ACTIVE (addVariants only
+  // auto-deactivates new variants for a photo-less color on an ALREADY-active product).
+  const productName = `Contoh Gamis Varian E2E ${unique}`;
+  await page.goto("/produk/baru");
+  await page.getByLabel("Nama produk").fill(productName);
+  await page.locator("#product-fabric").selectOption({ label: fabricName });
+  await page.getByLabel("Harga dasar").fill("269.000");
+  await page.getByRole("switch", { name: "Aktif" }).click();
+  await page.getByRole("button", { name: "Simpan" }).click();
+  await expect(page).toHaveURL(/\/produk\/[0-9a-f-]+$/);
+
+  await page.getByRole("checkbox", { name: /Sage/ }).check();
+  await page.getByRole("checkbox", { name: "S", exact: true }).check();
+  await page.getByRole("checkbox", { name: "M", exact: true }).check();
+  await page.getByRole("checkbox", { name: "L", exact: true }).check();
+  await page.getByRole("button", { name: "Tambah varian" }).click();
+  await expect(page.getByRole("heading", { name: productName })).toBeVisible();
+
+  // Both the desktop table and mobile card render in the DOM at once (one hidden via CSS per
+  // breakpoint — see variant-builder.tsx), so getByLabel alone matches two elements at this
+  // 390px viewport; ":visible" picks the mobile card's input, the one actually on screen.
+  const stockS = page.locator('[aria-label="Stok minimum untuk ukuran S"]:visible');
+  const stockM = page.locator('[aria-label="Stok minimum untuk ukuran M"]:visible');
+  const stockL = page.locator('[aria-label="Stok minimum untuk ukuran L"]:visible');
+
+  // 1. Editing two rows surfaces the group's "Simpan perubahan"/"Batal" bar — not before.
+  await expect(page.getByRole("button", { name: "Simpan perubahan" })).toHaveCount(0);
+  await stockS.fill("3");
+  await stockM.fill("7");
+  await expect(page.getByRole("button", { name: "Simpan perubahan" })).toBeVisible();
+
+  // 2. Leaving the page with unsaved changes warns — dismiss the confirm and stay put. "Produk"
+  // itself lives in the mobile bottom nav's "Lainnya" overflow sheet at this viewport; dismissing
+  // the confirm cancels the navigation but leaves the sheet open exactly as the user left it, so
+  // close it (Escape) before continuing.
+  await page.getByRole("navigation", { name: "Navigasi utama" }).getByRole("button", { name: "Lainnya" }).click();
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page.getByRole("link", { name: "Produk", exact: true }).click();
+  await expect(page).toHaveURL(/\/produk\/[0-9a-f-]+$/);
+  await expect(page.getByRole("heading", { name: productName })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // 3. Saving both edited rows in one go — the bar disappears and both values stick.
+  await page.getByRole("button", { name: "Simpan perubahan" }).click();
+  await expect(page.getByRole("button", { name: "Simpan perubahan" })).toHaveCount(0, { timeout: 15_000 });
+  await expect(stockS).toHaveValue("3");
+  await expect(stockM).toHaveValue("7");
+
+  // 4. A validation error on ONE row (negative stock) blocks the whole save — M's otherwise-valid
+  // edit in the SAME batch must not be persisted either.
+  await stockM.fill("9");
+  await stockL.fill("-1");
+  await page.getByRole("button", { name: "Simpan perubahan" }).click();
+  // Same desktop-table-vs-mobile-card duplication as the stock inputs above — scope to the
+  // visible one.
+  await expect(page.locator(':text-is("Stok minimum tidak boleh negatif."):visible')).toBeVisible();
+  await expect(page.getByRole("button", { name: "Simpan perubahan" })).toBeVisible(); // still dirty — nothing saved
+
+  await page.reload();
+  await expect(stockM).toHaveValue("7"); // not "9" — rolled back with L's failure
+});
+
+test("toggling a row's Aktif switch while it has an unsaved price/stock edit does not break saving the rest of the group", async ({
+  page,
+}) => {
+  // products-no-finance, not owner/super_admin — across the whole e2e suite those two are
+  // already close to the 5-per-5-minutes OTP send throttle; this fixture also holds
+  // products.manage and is otherwise only used once in this file.
+  await loginAs(page, E2E_PRODUCTS_NO_FINANCE_EMAIL);
+  const unique = Date.now();
+
+  const fabricName = `E2E Bahan Varian Toggle ${unique}`;
+  await page.goto("/bahan/baru");
+  await page.getByLabel("Nama bahan").fill(fabricName);
+  await page.getByLabel("Nama warna").fill("Sage");
+  await page.getByRole("button", { name: "Simpan" }).click();
+  await expect(page).toHaveURL(/\/bahan\/[0-9a-f-]+$/);
+
+  const productName = `Contoh Gamis Varian Toggle E2E ${unique}`;
+  await page.goto("/produk/baru");
+  await page.getByLabel("Nama produk").fill(productName);
+  await page.locator("#product-fabric").selectOption({ label: fabricName });
+  await page.getByLabel("Harga dasar").fill("269.000");
+  await page.getByRole("switch", { name: "Aktif" }).click(); // inactive product → new variants come in active
+  await page.getByRole("button", { name: "Simpan" }).click();
+  await expect(page).toHaveURL(/\/produk\/[0-9a-f-]+$/);
+
+  await page.getByRole("checkbox", { name: /Sage/ }).check();
+  await page.getByRole("checkbox", { name: "S", exact: true }).check();
+  await page.getByRole("checkbox", { name: "M", exact: true }).check();
+  await page.getByRole("button", { name: "Tambah varian" }).click();
+  await expect(page.getByRole("heading", { name: productName })).toBeVisible();
+
+  // Stage edits on BOTH rows.
+  const stockS = page.locator('[aria-label="Stok minimum untuk ukuran S"]:visible');
+  const stockM = page.locator('[aria-label="Stok minimum untuk ukuran M"]:visible');
+  await stockS.fill("3");
+  await stockM.fill("7");
+  await expect(page.getByRole("button", { name: "Simpan perubahan" })).toBeVisible();
+
+  // Toggle S's OWN "Aktif" switch off — S moves to the "Nonaktif" bucket (a different
+  // VariantColorGroup instance), orphaning S's staged edit in THIS group.
+  const switchS = page.locator('[aria-label="Aktif untuk ukuran S"]:visible');
+  await switchS.click();
+  await expect(page.getByText(/Nonaktif \(/)).toBeVisible({ timeout: 15_000 });
+
+  // M's edit is still staged (the orphaned S edit must not block or crash the group) — saving
+  // must succeed normally, with no uncaught error.
+  await expect(page.getByRole("button", { name: "Simpan perubahan" })).toBeVisible();
+  await page.getByRole("button", { name: "Simpan perubahan" }).click();
+  await expect(page.getByRole("button", { name: "Simpan perubahan" })).toHaveCount(0, { timeout: 15_000 });
+
+  await page.reload();
+  await expect(stockM).toHaveValue("7");
 });
 
 test("product list pagination: page 2 shows different products than page 1", async ({ page }) => {

@@ -173,7 +173,9 @@ export interface FabricColorInput {
 
 function normalizeFabricColorInput(input: FabricColorInput): { name: string; supplierColorCode: string | null; hex: string | null } {
   const normalizedHex = input.hex ? normalizeColorHex(input.hex) : null;
-  if (input.hex && !normalizedHex) throw new FieldError("hex", "Kode warna tidak valid, gunakan format #RRGGBB.");
+  if (input.hex && !normalizedHex) {
+    throw new FieldError("hex", "Kode warna harus 6 digit, contoh #9CAF88. Untuk hitam: #000000.");
+  }
   return { name: input.name.trim(), supplierColorCode: input.supplierColorCode || null, hex: normalizedHex };
 }
 

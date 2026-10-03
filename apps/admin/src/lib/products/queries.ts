@@ -1,12 +1,13 @@
 import "server-only";
 import { and, count, desc, eq, ilike, lte } from "drizzle-orm";
-import { costAssumptions, fabricColors, fabrics, products, productVariants } from "@ammari/db/schema";
+import { costAssumptions, fabricColors, fabrics, productImages, products, productVariants } from "@ammari/db/schema";
 import type { ProductClosure, Size, SizeMode } from "@ammari/db/schema";
 import { generateSku } from "@ammari/db/catalog";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from "./errors";
+import { buildImageSizeUrl, getColorsMissingPhotos, getImageCountForColor } from "./image-queries";
 import { todayInJakarta } from "./jakarta-date";
-import { defaultDb, writeAuditLog, type Database } from "./db";
+import { defaultDb, lockProductForUpdate, writeAuditLog, type Database } from "./db";
 
 const PAGE_SIZE = 20;
 
@@ -43,7 +44,10 @@ export async function listProducts(
   q: string | undefined,
   rawPage: string | undefined,
   db: Database = defaultDb,
-): Promise<{ rows: Awaited<ReturnType<typeof queryProductsPage>>; pagination: Pagination }> {
+): Promise<{
+  rows: (Omit<Awaited<ReturnType<typeof queryProductsPage>>[number], "thumbnailStorageKey"> & { thumbnailUrl: string | null })[];
+  pagination: Pagination;
+}> {
   const where = q ? ilike(products.name, `%${q}%`) : undefined;
 
   const [totalCountRow] = await db
@@ -52,7 +56,14 @@ export async function listProducts(
     .where(where);
 
   const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
-  const rows = await queryProductsPage(db, where, pagination);
+  const rawRows = await queryProductsPage(db, where, pagination);
+  // Built from a plain column (storage_key), not a query — a thumbnail-less product's row is
+  // excluded from the join (LEFT JOIN), not merely an empty string, so `null` here always means
+  // "no thumbnail set", matching products.thumbnail_image_id's own null-ness exactly.
+  const rows = rawRows.map(({ thumbnailStorageKey, ...row }) => ({
+    ...row,
+    thumbnailUrl: thumbnailStorageKey ? buildImageSizeUrl(thumbnailStorageKey, 400) : null,
+  }));
   return { rows, pagination };
 }
 
@@ -67,12 +78,14 @@ function queryProductsPage(db: Database, where: ReturnType<typeof ilike> | undef
       isActive: products.isActive,
       fabricName: fabrics.name,
       activeVariantCount: count(productVariants.sku),
+      thumbnailStorageKey: productImages.storageKey,
     })
     .from(products)
     .innerJoin(fabrics, eq(fabrics.id, products.fabricId))
     .leftJoin(productVariants, and(eq(productVariants.productId, products.id), eq(productVariants.isActive, true)))
+    .leftJoin(productImages, eq(productImages.id, products.thumbnailImageId))
     .where(where)
-    .groupBy(products.id, fabrics.name)
+    .groupBy(products.id, fabrics.name, productImages.storageKey)
     .orderBy(products.name, products.id)
     .limit(pagination.limit)
     .offset(pagination.offset);
@@ -154,7 +167,10 @@ export async function updateProduct(
   db: Database = defaultDb,
 ) {
   return db.transaction(async (tx) => {
-    const before = await getProductById(id, tx);
+    // FOR UPDATE — serializes against any concurrent upload/delete/reorder/set-thumbnail or
+    // addVariants/setVariantActive call on this same product (see lockProductForUpdate's doc
+    // comment); all of them can affect whether the required-photo check below still holds.
+    const before = await lockProductForUpdate(tx, id);
     if (!before) throw new ActionError("Produk tidak ditemukan.");
 
     const fabricChanged = input.fabricId !== before.fabricId;
@@ -164,6 +180,19 @@ export async function updateProduct(
       if (variantCount > 0) {
         if (fabricChanged) throw new FieldError("fabricId", FABRIC_IMMUTABLE_MESSAGE);
         throw new FieldError("closure", CLOSURE_IMMUTABLE_MESSAGE);
+      }
+    }
+
+    // Required-photo invariant: an ACTIVE product must have at least one image for every color
+    // that has at least one active variant. Checked on every save where isActive is true (not
+    // only on the false->true transition) — re-saving an already-active product must keep
+    // holding the invariant too, e.g. if photos were deleted out from under it in another tab.
+    if (input.isActive) {
+      const missingColors = await getColorsMissingPhotos(id, tx);
+      if (missingColors.length > 0) {
+        throw new ActionError(
+          `Warna berikut belum punya foto: ${missingColors.map((color) => color.name).join(", ")}.`,
+        );
       }
     }
 
@@ -223,10 +252,17 @@ export interface AddVariantsInput {
 export async function addVariants(input: AddVariantsInput, actorStaffUserId: string | null, db: Database = defaultDb) {
   return db.transaction(async (tx) => {
     if (input.selections.length === 0) throw new FieldError("fabricColorId", "Pilih minimal satu warna.");
-    const product = await getProductById(input.productId, tx);
+    // FOR UPDATE — see lockProductForUpdate's doc comment; this call reads product.isActive to
+    // decide whether new variants come in active or not, so it must be serialized against a
+    // concurrent upload/delete that would change the answer.
+    const product = await lockProductForUpdate(tx, input.productId);
     if (!product) throw new ActionError("Produk tidak ditemukan.");
 
     const rows: (typeof productVariants.$inferInsert)[] = [];
+    // Colors whose new variants were created INACTIVE because the color has no photo yet on an
+    // active product — surfaced back to the caller so the UI can show "Varian warna ini belum
+    // aktif. Unggah foto warna ini lalu aktifkan." per color.
+    const inactiveColorNames: string[] = [];
     for (const selection of input.selections) {
       validateSizesForMode(product.sizeMode, selection.sizes);
 
@@ -250,6 +286,13 @@ export async function addVariants(input: AddVariantsInput, actorStaffUserId: str
         throw new FieldError("fabricColorId", `Warna "${color.name}" sudah dinonaktifkan dan tidak bisa dipakai untuk varian baru.`);
       }
 
+      // Required-photo invariant, from the create side: a NEW variant on an active product,
+      // for a color with no photo yet, is created inactive rather than refused outright — the
+      // operator can upload the photo and activate afterward, instead of losing the whole batch.
+      const imageCount = await getImageCountForColor(product.id, color.id, tx);
+      const variantIsActive = !(product.isActive && imageCount === 0);
+      if (!variantIsActive) inactiveColorNames.push(color.name);
+
       for (const size of selection.sizes) {
         rows.push({
           sku: generateSku({ code: product.code, closure: product.closure, color: color.name, size }),
@@ -258,6 +301,7 @@ export async function addVariants(input: AddVariantsInput, actorStaffUserId: str
           fabricColorId: color.id,
           closure: product.closure,
           size,
+          isActive: variantIsActive,
         });
       }
     }
@@ -295,13 +339,15 @@ export async function addVariants(input: AddVariantsInput, actorStaffUserId: str
         action: "create",
         entityType: "product_variant",
         entityId: product.id,
-        after: { skus: created.map((variant) => variant.sku) },
+        after: { skus: created.map((variant) => variant.sku), inactiveColorNames },
       });
-      return created;
+      return { created, inactiveColorNames };
     } catch (error) {
-      // 23503 here means the product's fabric or closure was changed concurrently, between the
-      // reads above and this INSERT (the mirror-image race of updateProduct's — the same
-      // composite FK catches it from the other side).
+      // Defensive, not an active race: lockProductForUpdate's FOR UPDATE above already
+      // serializes addVariants against updateProduct's own fabric/closure change on the same
+      // product row, so this 23503 shouldn't actually fire from that race anymore. Kept as a
+      // backstop (and for the friendly message) in case some other path ever updates
+      // products.fabric_id/closure without going through updateProduct's lock.
       if (isPostgresErrorCode(error, "23503")) {
         throw new FieldError("fabricColorId", "Bahan produk ini berubah sebelum varian disimpan. Muat ulang halaman dan coba lagi.");
       }
@@ -325,48 +371,45 @@ export interface UpdateVariantInput {
   minStockQty: number;
 }
 
-export async function updateVariant(input: UpdateVariantInput, actorStaffUserId: string | null, db: Database = defaultDb) {
-  return db.transaction(async (tx) => {
-    const [before] = await tx.select().from(productVariants).where(eq(productVariants.sku, input.sku)).limit(1);
-    if (!before) throw new ActionError("Varian tidak ditemukan.");
-    const [after] = await tx
-      .update(productVariants)
-      .set({ priceOverrideAmount: input.priceOverrideAmount ?? null, minStockQty: input.minStockQty })
-      .where(eq(productVariants.sku, input.sku))
-      .returning();
-    if (!after) throw new Error("failed to update variant");
-    await writeAuditLog(tx, {
-      actorStaffUserId,
-      action: "update",
-      entityType: "product_variant",
-      entityId: input.sku,
-      before,
-      after,
-    });
-    return after;
-  });
+export interface BulkUpdateVariantsInput {
+  productId: string;
+  updates: UpdateVariantInput[];
 }
 
-export async function bulkSetMinStock(
-  productId: string,
-  minStockQty: number,
-  actorStaffUserId: string | null,
-  db: Database = defaultDb,
-): Promise<number> {
+/** Saves every edited variant row of one color group in a single transaction with ONE
+ * audit_log entry (not one per row) — the group's "Simpan perubahan" button calls this exactly
+ * once per save, not once per dirty row. Any row that fails (not found, or doesn't belong to
+ * `productId`) rolls back every other update in the same call, so a save is all-or-nothing:
+ * there's no state where some rows of a group saved and others didn't. */
+export async function updateVariantsBulk(input: BulkUpdateVariantsInput, actorStaffUserId: string | null, db: Database = defaultDb) {
   return db.transaction(async (tx) => {
-    const updated = await tx
-      .update(productVariants)
-      .set({ minStockQty })
-      .where(and(eq(productVariants.productId, productId), eq(productVariants.isActive, true)))
-      .returning({ sku: productVariants.sku });
+    const befores: (typeof productVariants.$inferSelect)[] = [];
+    const afters: (typeof productVariants.$inferSelect)[] = [];
+    for (const update of input.updates) {
+      const [before] = await tx
+        .select()
+        .from(productVariants)
+        .where(and(eq(productVariants.sku, update.sku), eq(productVariants.productId, input.productId)))
+        .limit(1);
+      if (!before) throw new ActionError(`Varian ${update.sku} tidak ditemukan.`);
+      const [after] = await tx
+        .update(productVariants)
+        .set({ priceOverrideAmount: update.priceOverrideAmount ?? null, minStockQty: update.minStockQty })
+        .where(eq(productVariants.sku, update.sku))
+        .returning();
+      if (!after) throw new Error("failed to update variant");
+      befores.push(before);
+      afters.push(after);
+    }
     await writeAuditLog(tx, {
       actorStaffUserId,
       action: "bulk_update",
       entityType: "product_variant",
-      entityId: productId,
-      after: { minStockQty, affectedSkus: updated.map((row) => row.sku) },
+      entityId: input.productId,
+      before: befores,
+      after: afters,
     });
-    return updated.length;
+    return afters;
   });
 }
 
@@ -379,6 +422,22 @@ export async function setVariantActive(
   return db.transaction(async (tx) => {
     const [before] = await tx.select().from(productVariants).where(eq(productVariants.sku, sku)).limit(1);
     if (!before) throw new ActionError("Varian tidak ditemukan.");
+
+    // FOR UPDATE on the PRODUCT row (not just the variant) — see lockProductForUpdate's doc
+    // comment; this activation decision depends on the color's current image count, which a
+    // concurrent delete on the same product could be changing right now.
+    await lockProductForUpdate(tx, before.productId);
+
+    if (isActive) {
+      const imageCount = await getImageCountForColor(before.productId, before.fabricColorId, tx);
+      if (imageCount === 0) {
+        const [color] = await tx.select({ name: fabricColors.name }).from(fabricColors).where(eq(fabricColors.id, before.fabricColorId)).limit(1);
+        throw new ActionError(
+          `Tidak bisa mengaktifkan varian warna "${color?.name ?? ""}" sebelum foto warna ini diunggah.`,
+        );
+      }
+    }
+
     const [after] = await tx
       .update(productVariants)
       .set({ isActive })

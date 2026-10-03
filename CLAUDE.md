@@ -81,6 +81,20 @@ npm dist-tag, because their actual runtime/peer support lags behind:
   checked on the **server** for every page, server action, and route handler, never only by
   hiding UI. See [docs/SPEC.md §9](docs/SPEC.md#9-admin-access-control-rbac).
 
+## Local environment safety
+
+- Never run `docker compose down -v`, drop a database, `TRUNCATE`, or otherwise wipe local data
+  (including the owner's seeded dev data in the `ammari` database) without asking the owner
+  first, in that session — even for a throwaway investigation or a "clean slate" test run. This
+  happened once already (an agent session wiped the local Postgres volume mid-task to validate a
+  migration, silently losing the owner's dev-seeded data until it was manually reseeded).
+- Prefer a separate, disposable database for experiments (e.g. `createdb ammari_scratch`, or
+  `ammari_e2e` for e2e runs — see `packages/db/test/e2e-db.ts` and `apps/admin/e2e/global-setup.ts`)
+  over touching `ammari` itself. Reversible,
+  narrowly-scoped actions (inserting/deleting specific test rows you can name, wrapping a check
+  in `BEGIN; ... ROLLBACK;`) are fine without asking; anything that resets or deletes data beyond
+  rows you yourself just created in that session is not.
+
 ## Git
 
 - Branch model: `dev` auto-deploys to the dev environment; `main` auto-deploys to prod. All work

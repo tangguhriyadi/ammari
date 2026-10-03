@@ -22,9 +22,17 @@ function assertSafeTarget(): void {
   }
   const rawUrl = process.env.DATABASE_URL;
   if (!rawUrl) throw new Error("DATABASE_URL is not set");
-  const hostname = new URL(rawUrl).hostname;
-  if (hostname !== "localhost" && hostname !== "127.0.0.1") {
-    throw new Error(`Refusing to seed e2e staff fixtures against non-local host "${hostname}".`);
+  const url = new URL(rawUrl);
+  const isLocalHost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  const dbName = url.pathname.replace(/^\//, "");
+  // Exact name, not just "is local" — e2e fixtures must land in their own database
+  // (ammari_e2e), never the owner's real local `ammari` dev database (see CLAUDE.md's "Local
+  // environment safety" rule and docs/SPEC.md).
+  if (!isLocalHost || dbName !== "ammari_e2e") {
+    throw new Error(
+      `Refusing to seed e2e staff fixtures: derived target is "${url.hostname}${url.pathname}". ` +
+        `e2e only ever runs against host localhost/127.0.0.1, database "ammari_e2e". Check DATABASE_URL.`,
+    );
   }
 }
 
@@ -34,6 +42,35 @@ export default async function globalSetup(): Promise<void> {
   // (and throw) before this line ever ran, since ESM import declarations are hoisted ahead of
   // any other top-level code in this module.
   if (existsSync(".env")) process.loadEnvFile(".env");
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("Refusing to seed e2e staff fixtures: NODE_ENV is production.");
+  }
+  const baseUrl = process.env.DATABASE_URL;
+  if (!baseUrl) throw new Error("DATABASE_URL is not set");
+
+  // Repoints process.env.DATABASE_URL at ammari_e2e using ONLY plain URL math — no import of
+  // anything in @ammari/db yet. This has to happen BEFORE the very first import of
+  // @ammari/db/test-e2e-db below: that module transitively imports ../src/client.ts, which
+  // reads DATABASE_URL at module EVALUATION time (a top-level `const`) and gets cached by
+  // Node's module system — if that first evaluation saw the real dev database's URL, every
+  // later `@ammari/db` import in this same process (including the one further down, used to
+  // seed the staff fixtures) would keep returning that same wrongly-pointed, already-cached
+  // `db` singleton, silently writing e2e fixtures into the owner's real database. (This exact
+  // bug shipped once already — see the cleanup note in this session's final report.)
+  const e2eUrl = new URL(baseUrl);
+  e2eUrl.pathname = "/ammari_e2e";
+  const isLocalHost = e2eUrl.hostname === "localhost" || e2eUrl.hostname === "127.0.0.1";
+  if (!isLocalHost) {
+    throw new Error(`Refusing to seed e2e staff fixtures against non-local host "${e2eUrl.hostname}".`);
+  }
+  process.env.DATABASE_URL = e2eUrl.toString();
+
+  // Creates (if needed), migrates, and baseline-seeds ammari_e2e. `baseUrl` is passed explicitly
+  // (not read from process.env, which is already repointed above) so it can still connect to
+  // the original database to issue CREATE DATABASE.
+  const { ensureE2eDatabase } = await import("@ammari/db/test-e2e-db");
+  await ensureE2eDatabase(baseUrl);
   assertSafeTarget();
 
   const { and, eq, inArray, notInArray } = await import("drizzle-orm");

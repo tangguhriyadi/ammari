@@ -25,6 +25,9 @@ export default defineConfig({
     // filter, e2e-login-gate, sku/slug/money/batas-hpp) don't need it but pay the cost too,
     // consistent with how packages/auth's whole suite already does this.
     globalSetup: "@ammari/db/test-global-setup",
+    // Component tests opt into jsdom per-file via a `// @vitest-environment jsdom` pragma
+    // (mirrors packages/ui's convention) — the default above stays "node".
+    setupFiles: ["./test/setup.ts"],
     testTimeout: 20_000,
     hookTimeout: 20_000,
     fileParallelism: false,

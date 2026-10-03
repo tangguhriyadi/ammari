@@ -2,6 +2,7 @@ import Link from "next/link";
 import { formatRupiah } from "@ammari/ui/lib";
 import { Badge, Card } from "@ammari/ui";
 import type { listProducts } from "@/lib/products/queries";
+import { ProductThumbnail } from "./product-thumbnail";
 
 const CLOSURE_LABELS: Record<string, string> = {
   front_zip: "Resleting depan",
@@ -21,19 +22,22 @@ export function ProductList({ products }: { products: Product[] }) {
         {products.map((product) => (
           <li key={product.id}>
             <Link href={`/produk/${product.id}`}>
-              <Card className="flex flex-col gap-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-base font-semibold text-neutral-900">{product.name}</span>
-                  <Badge variant={product.isActive ? "success" : "neutral"}>
-                    {product.isActive ? "Aktif" : "Nonaktif"}
-                  </Badge>
+              <Card className="flex gap-3">
+                <ProductThumbnail url={product.thumbnailUrl} className="size-16 shrink-0" />
+                <div className="flex flex-1 flex-col gap-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-base font-semibold text-neutral-900">{product.name}</span>
+                    <Badge variant={product.isActive ? "success" : "neutral"}>
+                      {product.isActive ? "Aktif" : "Nonaktif"}
+                    </Badge>
+                  </div>
+                  <span className="text-sm text-neutral-600">
+                    {product.fabricName} · {CLOSURE_LABELS[product.closure] ?? product.closure}
+                  </span>
+                  <span className="text-sm text-neutral-600">
+                    {formatRupiah(product.basePrice)} · {product.activeVariantCount} varian aktif
+                  </span>
                 </div>
-                <span className="text-sm text-neutral-600">
-                  {product.fabricName} · {CLOSURE_LABELS[product.closure] ?? product.closure}
-                </span>
-                <span className="text-sm text-neutral-600">
-                  {formatRupiah(product.basePrice)} · {product.activeVariantCount} varian aktif
-                </span>
               </Card>
             </Link>
           </li>
@@ -44,6 +48,9 @@ export function ProductList({ products }: { products: Product[] }) {
         <table className="w-full text-left text-base">
           <thead className="border-b border-neutral-200 bg-neutral-50 text-sm text-neutral-600">
             <tr>
+              <th className="px-4 py-3 font-medium">
+                <span className="sr-only">Thumbnail</span>
+              </th>
               <th className="px-4 py-3 font-medium">Nama</th>
               <th className="px-4 py-3 font-medium">Bahan</th>
               <th className="px-4 py-3 font-medium">Model resleting</th>
@@ -55,6 +62,9 @@ export function ProductList({ products }: { products: Product[] }) {
           <tbody>
             {products.map((product) => (
               <tr key={product.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+                <td className="px-4 py-3">
+                  <ProductThumbnail url={product.thumbnailUrl} className="size-10" />
+                </td>
                 <td className="px-4 py-3">
                   <Link href={`/produk/${product.id}`} className="font-medium text-brand hover:underline">
                     {product.name}

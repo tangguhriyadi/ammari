@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Button, Checkbox, Input, Label, Select, Textarea } from "@ammari/ui";
+import { Button, Input, Label, Select, Switch, Textarea } from "@ammari/ui";
 import type { ProductClosure, SizeMode } from "@ammari/db/schema";
 import { generateProductCode, generateSlug } from "@ammari/db/catalog";
 import { createProductAction, updateProductAction } from "../actions";
@@ -91,6 +91,13 @@ export function ProductForm({
       if (!result.ok) {
         setFormError(result.error);
         setFieldErrors(result.fieldErrors ?? {});
+        // Nothing was saved (the whole update is one transaction, including on an unrelated
+        // field error like a duplicate slug) — revert to what the server actually still has,
+        // not unconditionally to OFF: an already-active product that fails to save for a
+        // reason unrelated to activation must keep showing as active, never a false "this
+        // product is now inactive" state. On create (no `initialValues`), there's no prior
+        // server truth to revert to, so the user's own attempt is left as they set it.
+        if (productId && initialValues) set("isActive", initialValues.isActive);
         return;
       }
       router.push(`/produk/${result.data.id}`);
@@ -247,11 +254,7 @@ export function ProductForm({
         />
       </div>
 
-      <Checkbox
-        label="Aktif"
-        checked={values.isActive}
-        onChange={(event) => set("isActive", event.target.checked)}
-      />
+      <Switch label="Aktif" checked={values.isActive} onCheckedChange={(checked) => set("isActive", checked)} />
 
       {formError && (
         <p role="alert" className="text-sm text-danger-700">

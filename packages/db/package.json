@@ -10,7 +10,8 @@
     "./catalog": "./src/catalog/codes.ts",
     "./test-utils": "./test/helpers.ts",
     "./test-fixtures": "./test/fixtures.ts",
-    "./test-global-setup": "./test/global-setup.ts"
+    "./test-global-setup": "./test/global-setup.ts",
+    "./test-e2e-db": "./test/e2e-db.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",

@@ -108,10 +108,34 @@ export const products = pgTable(
     sizeMode: text("size_mode").$type<SizeMode>().notNull(),
     basePrice: bigint("base_price", { mode: "number" }).notNull(),
     isActive: boolean("is_active").notNull().default(true),
+    // Exactly one image per product, chosen explicitly ("Jadikan thumbnail") from ANY of its
+    // images. The composite FK that guarantees "must belong to this same product" —
+    // (thumbnail_image_id, id) -> product_images(id, product_id) — is HAND-AUTHORED in
+    // migration 0005, not declared here: product_images is defined further down this same file,
+    // and drizzle-orm's `foreignKey()` helper evaluates `foreignColumns` eagerly (not via a
+    // thunk), so a forward reference to a `const` declared later in the module would throw at
+    // import time. Declared as plain `uuid` here for that reason; see migration 0005's
+    // hand-authored section for the real constraint, same category as 0004's triggers.
+    //
+    // ON DELETE RESTRICT, not SET NULL: a composite FK's SET NULL would null out `id` too
+    // (impossible — it's this table's own PK), and Postgres's column-scoped SET NULL (col)
+    // syntax isn't expressible via Drizzle's schema DSL either. Instead,
+    // lib/products/image-queries.ts's deleteProductImage computes the fallback thumbnail and
+    // updates this column BEFORE deleting the image row, in the same transaction — which the
+    // fallback rule (first general image, else first image of the first color, else null)
+    // requires anyway, since it's app-level business logic, not something a DB trigger should
+    // own. RESTRICT then becomes a free safety net against any future code path that forgets to
+    // null this first.
+    thumbnailImageId: uuid("thumbnail_image_id"),
     ...timestamps(),
   },
   (table) => [
     index("products_fabric_id_idx").on(table.fabricId),
+    // products_thumbnail_image_id_fk's RESTRICT check runs this column against product_images
+    // every time ANY image is deleted (including cascaded deletes when a product itself is
+    // removed) — without this index that check seq-scans all of `products` (database-reviewer
+    // finding, migration 0005; verified with EXPLAIN against a 20k-row table).
+    index("products_thumbnail_image_id_idx").on(table.thumbnailImageId),
     check("products_closure_check", checkIn(table.closure, PRODUCT_CLOSURES)),
     check("products_size_mode_check", checkIn(table.sizeMode, SIZE_MODES)),
     check("products_base_price_check", sql`${table.basePrice} >= 0`),
@@ -123,6 +147,11 @@ export const products = pgTable(
     // included because it's baked into every SKU (see codes.ts's CLOSURE_ABBREVIATIONS), exactly
     // like fabric_id is baked in via the color name.
     unique("products_id_fabric_id_closure_key").on(table.id, table.fabricId, table.closure),
+    // Referenced by product_images' composite FK below (product_id, fabric_id) ->
+    // (id, fabric_id) — same "denormalize + composite FK" technique as above, this time so an
+    // image's color is guaranteed to belong to the SAME fabric as its own product (migration
+    // 0005), mirroring product_variants_fabric_color_fabric_fk exactly.
+    unique("products_id_fabric_id_key").on(table.id, table.fabricId),
   ],
 );
 
@@ -193,18 +222,68 @@ export const productImages = pgTable(
   "product_images",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    productId: uuid("product_id")
-      .notNull()
-      .references(() => products.id, { onDelete: "cascade" }),
+    // No single-column FK here — superseded by the composite product_images_product_fabric_fk
+    // below (same consolidation migration 0004 did for product_variants.product_id), which also
+    // carries the ON DELETE CASCADE.
+    productId: uuid("product_id").notNull(),
+    // Denormalized copy of products.fabric_id as of image creation — exists ONLY so the two
+    // composite FKs below can enforce, at the DB level, that this image's product and this
+    // image's color always agree on the same fabric. Same technique as
+    // product_variants.fabric_id (see that column's doc comment).
+    fabricId: uuid("fabric_id").notNull(),
     storageKey: text("storage_key").notNull(),
-    // Null = applies to all colors of the product.
-    fabricColorId: uuid("fabric_color_id").references(() => fabricColors.id, { onDelete: "restrict" }),
+    // Null = general image (applies to all colors of the product). No single-column FK —
+    // superseded by product_images_fabric_color_fabric_fk below; MATCH SIMPLE (Postgres's
+    // default) means that composite FK is simply not checked while this column is null, which is
+    // exactly the "general image" case.
+    fabricColorId: uuid("fabric_color_id"),
+    altText: text("alt_text"),
+    // Recorded from the image AFTER EXIF auto-rotation (see lib/products/image-processing.ts) —
+    // so these numbers always match what's visually rendered, even for a 90°/270°-rotated photo
+    // whose rotation swaps width and height.
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
     sortOrder: integer("sort_order").notNull().default(0),
     ...createdAtOnly(),
   },
   (table) => [
-    index("product_images_product_id_idx").on(table.productId),
+    // No standalone product_id index — the composite index below has product_id as its leftmost
+    // column, so it already serves any product_id-only query (leftmost-prefix rule); the old
+    // single-column one (migration 0000) is dropped in migration 0005 as a strict subset with no
+    // remaining read benefit, just extra write overhead (database-reviewer finding).
     index("product_images_fabric_color_id_idx").on(table.fabricColorId),
+    // Matches the "Foto" section's own query shape: one group per (product, color), images
+    // ordered within the group. Leftmost column (product_id) also covers any product_id-only
+    // query — see note above.
+    index("product_images_product_id_fabric_color_id_sort_order_idx").on(
+      table.productId,
+      table.fabricColorId,
+      table.sortOrder,
+    ),
+    check("product_images_width_check", sql`${table.width} > 0`),
+    check("product_images_height_check", sql`${table.height} > 0`),
+    // Referenced by products.thumbnail_image_id's hand-authored composite FK (migration 0005) —
+    // see that column's doc comment in the products table above for why it can't be declared
+    // here via Drizzle's DSL.
+    unique("product_images_id_product_id_key").on(table.id, table.productId),
+    // The two composite FKs together guarantee products.fabric_id === fabric_colors.fabric_id
+    // for every image, mirroring product_variants' own pair exactly (see that table's doc
+    // comments): an image's color always belongs to its own product's fabric, and a product's
+    // fabric can't change while it still has images referencing the OLD (id, fabric_id) pair.
+    foreignKey({
+      columns: [table.productId, table.fabricId],
+      foreignColumns: [products.id, products.fabricId],
+      name: "product_images_product_fabric_fk",
+    })
+      .onDelete("cascade")
+      .onUpdate("restrict"),
+    foreignKey({
+      columns: [table.fabricColorId, table.fabricId],
+      foreignColumns: [fabricColors.id, fabricColors.fabricId],
+      name: "product_images_fabric_color_fabric_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
   ],
 );
 

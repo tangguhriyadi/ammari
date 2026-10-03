@@ -115,6 +115,11 @@ async function upsertProductWithVariants(
           closure: seed.closure,
           sizeMode: seed.sizeMode,
           basePrice: seed.basePrice,
+          // Inactive — these sample products have no photos yet, and an active product with an
+          // active variant but no color photo now violates the required-photo invariant
+          // (docs/SPEC.md, product images). Upload photos and activate manually if a dev
+          // session needs an active sample product.
+          isActive: false,
         })
         .returning({ id: products.id })
     )[0]?.id;

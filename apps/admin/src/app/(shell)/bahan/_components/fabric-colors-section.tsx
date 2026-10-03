@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Badge, Button, Dialog, Input, Label } from "@ammari/ui";
+import { Button, ColorSwatch, Dialog, Input, Label, Switch } from "@ammari/ui";
 import {
   createFabricColorAction,
   deleteFabricColorAction,
@@ -18,27 +18,21 @@ export interface FabricColorRow {
   isActive: boolean;
 }
 
-function Swatch({ hex }: { hex: string | null }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-block size-6 shrink-0 rounded-full border border-neutral-300"
-      style={{ backgroundColor: hex ?? undefined }}
-    />
-  );
-}
-
 function ColorRow({ color, usageCount }: { color: FabricColorRow; usageCount: number }) {
   const router = useRouter();
   const [name, setName] = useState(color.name);
   const [supplierColorCode, setSupplierColorCode] = useState(color.supplierColorCode ?? "");
   const [hex, setHex] = useState(color.hex ?? "#9CA3AF");
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Kept separate from the Switch's own error — a save or delete failure rendered via the
+  // Switch (the only place `error` used to be shown) looked like the "Aktif" toggle itself had
+  // failed, which it hadn't (react-review finding).
+  const [formError, setFormError] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   function save() {
-    setError(null);
+    setFormError(null);
     startTransition(async () => {
       const result = await updateFabricColorAction(color.id, {
         name,
@@ -46,7 +40,7 @@ function ColorRow({ color, usageCount }: { color: FabricColorRow; usageCount: nu
         hex,
       });
       if (!result.ok) {
-        setError(result.error);
+        setFormError(result.error);
         return;
       }
       router.refresh();
@@ -54,11 +48,11 @@ function ColorRow({ color, usageCount }: { color: FabricColorRow; usageCount: nu
   }
 
   function toggleActive() {
-    setError(null);
+    setToggleError(null);
     startTransition(async () => {
       const result = await setFabricColorActiveAction({ id: color.id, isActive: !color.isActive });
       if (!result.ok) {
-        setError(result.error);
+        setToggleError(result.error);
         return;
       }
       router.refresh();
@@ -66,11 +60,12 @@ function ColorRow({ color, usageCount }: { color: FabricColorRow; usageCount: nu
   }
 
   function handleDelete() {
+    setFormError(null);
     startTransition(async () => {
       const result = await deleteFabricColorAction(color.id);
       setConfirmDeleteOpen(false);
       if (!result.ok) {
-        setError(result.error);
+        setFormError(result.error);
         return;
       }
       router.refresh();
@@ -79,7 +74,7 @@ function ColorRow({ color, usageCount }: { color: FabricColorRow; usageCount: nu
 
   return (
     <li className="flex flex-col gap-2 border-b border-neutral-100 py-3 last:border-0 sm:flex-row sm:items-center sm:gap-3">
-      <Swatch hex={hex} />
+      <ColorSwatch hex={hex} className="size-6" />
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -110,22 +105,25 @@ function ColorRow({ color, usageCount }: { color: FabricColorRow; usageCount: nu
           disabled={pending}
           className="size-11 shrink-0 rounded border border-neutral-500"
         />
-        <Badge variant={color.isActive ? "success" : "neutral"}>{color.isActive ? "Aktif" : "Nonaktif"}</Badge>
         <Button type="submit" variant="secondary" loading={pending}>
           Simpan
-        </Button>
-        <Button type="button" variant={color.isActive ? "danger" : "secondary"} onClick={toggleActive} disabled={pending}>
-          {color.isActive ? "Nonaktifkan" : "Aktifkan"}
         </Button>
         <Button type="button" variant="danger" onClick={() => setConfirmDeleteOpen(true)} disabled={pending}>
           Hapus
         </Button>
+        {formError && (
+          <p role="alert" className="w-full text-sm text-danger-700">
+            {formError}
+          </p>
+        )}
       </form>
-      {error && (
-        <span role="alert" className="text-sm text-danger-700">
-          {error}
-        </span>
-      )}
+      <Switch
+        label="Aktif"
+        checked={color.isActive}
+        onCheckedChange={toggleActive}
+        pending={pending}
+        error={toggleError ?? undefined}
+      />
 
       <Dialog
         open={confirmDeleteOpen}

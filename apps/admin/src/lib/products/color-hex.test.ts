@@ -14,8 +14,24 @@ describe("normalizeColorHex", () => {
     expect(normalizeColorHex("#9CAF88")).toBe("#9CAF88");
   });
 
-  test("rejects a short hex", () => {
-    expect(normalizeColorHex("#9CA")).toBeNull();
+  test("expands 3-digit shorthand by doubling each digit", () => {
+    expect(normalizeColorHex("#fa3")).toBe("#FFAA33");
+  });
+
+  test("expands shorthand black", () => {
+    expect(normalizeColorHex("#000")).toBe("#000000");
+  });
+
+  test("expands shorthand without a leading #", () => {
+    expect(normalizeColorHex("fa3")).toBe("#FFAA33");
+  });
+
+  test("rejects a 4-digit hex (neither shorthand nor full)", () => {
+    expect(normalizeColorHex("#9CA1")).toBeNull();
+  });
+
+  test("rejects a 5-digit hex", () => {
+    expect(normalizeColorHex("#9CA12")).toBeNull();
   });
 
   test("rejects non-hex characters", () => {

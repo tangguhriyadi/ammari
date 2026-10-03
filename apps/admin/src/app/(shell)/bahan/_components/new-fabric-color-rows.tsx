@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef } from "react";
-import { Button, Input, Label } from "@ammari/ui";
+import { Button, ColorSwatch, Input, Label } from "@ammari/ui";
 
 export interface DraftColorRow {
   /** Stable React key, independent of any server id — these rows don't exist in the DB yet. */
@@ -22,15 +22,6 @@ export function createInitialColorRow(): DraftColorRow {
   return { key: "row-initial", name: "", supplierColorCode: "", hex: "" };
 }
 
-function Swatch({ hex }: { hex: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-block size-6 shrink-0 rounded-full border border-neutral-300"
-      style={{ backgroundColor: hex || undefined }}
-    />
-  );
-}
 
 /** Field errors keyed `colors.<index>.<field>`, the same convention
  * `createFabricWithColors` (apps/admin/src/lib/products/fabric-queries.ts) uses so a server-side
@@ -81,7 +72,7 @@ export function NewFabricColorRows({
               key={row.key}
               className="flex flex-col gap-3 rounded-lg border border-neutral-200 p-3 sm:flex-row sm:items-start"
             >
-              <Swatch hex={row.hex} />
+              <ColorSwatch hex={row.hex} className="size-6" />
               <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:flex-wrap">
                 <div className="flex flex-1 flex-col gap-1.5 sm:min-w-36">
                   <Label htmlFor={`new-color-name-${row.key}`}>Nama warna</Label>

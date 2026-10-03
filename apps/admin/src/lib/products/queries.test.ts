@@ -1,22 +1,39 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { describe, expect, test } from "vitest";
+import sharp from "sharp";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { testDb, withRollback, type TestTx } from "@ammari/db/test-utils";
 import { generateProductCode, generateSku, generateSlug } from "@ammari/db/catalog";
-import { auditLog } from "@ammari/db/schema";
+import { auditLog, productVariants } from "@ammari/db/schema";
+import { InMemoryStorageClient } from "@ammari/storage";
+import { __setStorageClientForTests } from "@/lib/storage";
 import { FieldError } from "./errors";
 import { createFabric, createFabricColor, setFabricColorActive, updateFabricColor } from "./fabric-queries";
+import { uploadProductImage } from "./image-queries";
 import {
   addVariants,
-  bulkSetMinStock,
   createProduct,
   getCurrentCostAssumption,
   getProductDetail,
   listProducts,
+  setVariantActive,
   updateProduct,
+  updateVariantsBulk,
 } from "./queries";
 
+async function jpegBuffer(): Promise<Buffer> {
+  return sharp({ create: { width: 20, height: 20, channels: 3, background: { r: 10, g: 20, b: 30 } } }).jpeg().toBuffer();
+}
+
 const ACTOR_ID = null; // audit_log.actor_staff_user_id is nullable; no staff fixture needed here.
+
+beforeEach(() => {
+  __setStorageClientForTests(new InMemoryStorageClient());
+});
+
+afterEach(() => {
+  __setStorageClientForTests(undefined);
+});
 
 async function createFabricFixture(tx: TestTx, overrides: Partial<Parameters<typeof createFabric>[0]> = {}) {
   return createFabric({ name: `Bahan ${randomUUID().slice(0, 8)}`, ...overrides }, ACTOR_ID, tx);
@@ -64,7 +81,7 @@ describe("addVariants", () => {
       const mocca = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
       const product = await createProductFixture(tx, fabric.id);
 
-      const created = await addVariants(
+      const { created } = await addVariants(
         {
           productId: product.id,
           selections: [
@@ -181,7 +198,7 @@ describe("addVariants", () => {
       const fabric = await createFabricFixture(tx);
       const color = await createFabricColorFixture(tx, fabric.id);
       const product = await createProductFixture(tx, fabric.id, { sizeMode: "all_size" });
-      const created = await addVariants(
+      const { created } = await addVariants(
         { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["ALLSIZE"] }] },
         ACTOR_ID,
         tx,
@@ -232,7 +249,7 @@ describe("addVariants", () => {
       const fabric = await createFabricFixture(tx);
       const color = await createFabricColorFixture(tx, fabric.id, { name: "Sage" });
       const product = await createProductFixture(tx, fabric.id);
-      const [variant] = await addVariants(
+      const { created: [variant] } = await addVariants(
         { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
         ACTOR_ID,
         tx,
@@ -246,6 +263,60 @@ describe("addVariants", () => {
       expect(detail?.variants).toHaveLength(1);
       expect(detail?.variants[0]?.sku).toBe(originalSku);
       expect(detail?.variants[0]?.colorName).toBe("Forest Green");
+    });
+  });
+});
+
+describe("addVariants — required-photo invariant", () => {
+  test("creates new variants INACTIVE for a photo-less color on an active product, and reports it in inactiveColorNames", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
+      const product = await createProductFixture(tx, fabric.id, { isActive: true });
+
+      const { created, inactiveColorNames } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
+        ACTOR_ID,
+        tx,
+      );
+
+      expect(created.every((variant) => variant.isActive === false)).toBe(true);
+      expect(inactiveColorNames).toEqual(["Mocca"]);
+    });
+  });
+
+  test("creates new variants ACTIVE when the color already has a photo", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Sage" });
+      const product = await createProductFixture(tx, fabric.id, { isActive: true });
+      await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+
+      const { created, inactiveColorNames } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
+        ACTOR_ID,
+        tx,
+      );
+
+      expect(created.every((variant) => variant.isActive === true)).toBe(true);
+      expect(inactiveColorNames).toEqual([]);
+    });
+  });
+
+  test("creates new variants ACTIVE normally when the product itself is inactive", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
+      const product = await createProductFixture(tx, fabric.id, { isActive: false });
+
+      const { created, inactiveColorNames } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
+        ACTOR_ID,
+        tx,
+      );
+
+      expect(created.every((variant) => variant.isActive === true)).toBe(true);
+      expect(inactiveColorNames).toEqual([]);
     });
   });
 });
@@ -403,29 +474,208 @@ describe("updateProduct", () => {
       }
     });
   });
+
+  describe("required-photo invariant", () => {
+    test("refuses to activate when a color with an active variant has no photo, naming the color", async () => {
+      await withRollback(async (tx) => {
+        const fabric = await createFabricFixture(tx);
+        const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
+        // Inactive first so addVariants' own rule doesn't ALSO deactivate the variant — this
+        // test is specifically about updateProduct's check, isolated from addVariants'.
+        const product = await createProductFixture(tx, fabric.id, { isActive: false });
+        await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
+
+        await expect(
+          updateProduct(
+            product.id,
+            {
+              name: product.name,
+              slug: product.slug,
+              fabricId: product.fabricId,
+              closure: product.closure,
+              basePrice: product.basePrice,
+              isActive: true,
+            },
+            ACTOR_ID,
+            tx,
+          ),
+        ).rejects.toThrow(/Mocca/);
+      });
+    });
+
+    test("allows activating once every color with an active variant has a photo", async () => {
+      await withRollback(async (tx) => {
+        const fabric = await createFabricFixture(tx);
+        const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
+        const product = await createProductFixture(tx, fabric.id, { isActive: false });
+        await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
+        await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+
+        const updated = await updateProduct(
+          product.id,
+          {
+            name: product.name,
+            slug: product.slug,
+            fabricId: product.fabricId,
+            closure: product.closure,
+            basePrice: product.basePrice,
+            isActive: true,
+          },
+          ACTOR_ID,
+          tx,
+        );
+        expect(updated.isActive).toBe(true);
+      });
+    });
+
+    test("allows activating when the color with no photo only has INACTIVE variants", async () => {
+      await withRollback(async (tx) => {
+        const fabric = await createFabricFixture(tx);
+        const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
+        const product = await createProductFixture(tx, fabric.id, { isActive: true }); // auto-inactive variant
+        await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
+
+        const updated = await updateProduct(
+          product.id,
+          {
+            name: product.name,
+            slug: product.slug,
+            fabricId: product.fabricId,
+            closure: product.closure,
+            basePrice: product.basePrice,
+            isActive: true,
+          },
+          ACTOR_ID,
+          tx,
+        );
+        expect(updated.isActive).toBe(true);
+      });
+    });
+  });
 });
 
-describe("bulkSetMinStock", () => {
-  test("sets min stock for every active variant of the product", async () => {
+describe("setVariantActive — required-photo invariant", () => {
+  test("refuses to activate a variant whose color has no photo", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
+      const product = await createProductFixture(tx, fabric.id, { isActive: false });
+      const { created: [variant] } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
+        ACTOR_ID,
+        tx,
+      );
+      if (!variant) throw new Error("expected a variant to be created");
+      await setVariantActive(variant.sku, false, ACTOR_ID, tx);
+
+      await expect(setVariantActive(variant.sku, true, ACTOR_ID, tx)).rejects.toThrow(/Mocca/);
+    });
+  });
+
+  test("allows activating a variant once its color has a photo", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
+      const product = await createProductFixture(tx, fabric.id, { isActive: false });
+      const { created: [variant] } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
+        ACTOR_ID,
+        tx,
+      );
+      if (!variant) throw new Error("expected a variant to be created");
+      await setVariantActive(variant.sku, false, ACTOR_ID, tx);
+      await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+
+      const after = await setVariantActive(variant.sku, true, ACTOR_ID, tx);
+      expect(after.isActive).toBe(true);
+    });
+  });
+
+  test("allows deactivating regardless of photos (the rule only guards activation)", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id);
+      const product = await createProductFixture(tx, fabric.id, { isActive: false });
+      const { created: [variant] } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
+        ACTOR_ID,
+        tx,
+      );
+      if (!variant) throw new Error("expected a variant to be created");
+
+      const after = await setVariantActive(variant.sku, false, ACTOR_ID, tx);
+      expect(after.isActive).toBe(false);
+    });
+  });
+});
+
+describe("updateVariantsBulk", () => {
+  test("updates every row and writes exactly ONE audit_log entry, not one per variant", async () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
       const sage = await createFabricColorFixture(tx, fabric.id, { name: "Sage" });
-      const mocca = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
-      const product = await createProductFixture(tx, fabric.id);
-      await addVariants(
-        {
-          productId: product.id,
-          selections: [
-            { fabricColorId: sage.id, sizes: ["S", "M", "L"] },
-            { fabricColorId: mocca.id, sizes: ["S", "M", "L"] },
-          ],
-        },
+      // Inactive — this test is about updateVariantsBulk itself, not the required-photo rule
+      // (addVariants would otherwise create these variants inactive on an active product whose
+      // color has no photo yet).
+      const product = await createProductFixture(tx, fabric.id, { isActive: false });
+      const { created } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: sage.id, sizes: ["S", "M", "L"] }] },
         ACTOR_ID,
         tx,
       );
 
-      const count = await bulkSetMinStock(product.id, 5, ACTOR_ID, tx);
-      expect(count).toBe(6);
+      const updated = await updateVariantsBulk(
+        {
+          productId: product.id,
+          updates: created.map((variant, index) => ({ sku: variant.sku, priceOverrideAmount: null, minStockQty: 5 + index })),
+        },
+        ACTOR_ID,
+        tx,
+      );
+      expect(updated).toHaveLength(3);
+      expect(updated.map((variant) => variant.minStockQty).sort()).toEqual([5, 6, 7]);
+
+      const entries = await tx
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.entityType, "product_variant"))
+        .then((rows) => rows.filter((row) => row.entityId === product.id && row.action === "bulk_update"));
+      expect(entries).toHaveLength(1);
+      expect((entries[0]?.after as unknown[] | null)?.length).toBe(3);
+    });
+  });
+
+  test("a failed row (SKU not found, or not belonging to this product) rolls back the entire batch (atomic)", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const sage = await createFabricColorFixture(tx, fabric.id, { name: "Sage" });
+      const product = await createProductFixture(tx, fabric.id, { isActive: false });
+      const { created } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: sage.id, sizes: ["S", "M"] }] },
+        ACTOR_ID,
+        tx,
+      );
+      const [first] = created;
+      if (!first) throw new Error("expected at least one variant");
+
+      await expect(
+        updateVariantsBulk(
+          {
+            productId: product.id,
+            updates: [
+              { sku: first.sku, priceOverrideAmount: null, minStockQty: 99 },
+              { sku: "SKU-TIDAK-ADA", priceOverrideAmount: null, minStockQty: 5 },
+            ],
+          },
+          ACTOR_ID,
+          tx,
+        ),
+      ).rejects.toThrow();
+
+      // The first row's update must NOT have been applied either — the whole call is one
+      // transaction, so a failure on the second row undoes the first.
+      const [reloaded] = await tx.select().from(productVariants).where(eq(productVariants.sku, first.sku)).limit(1);
+      expect(reloaded?.minStockQty).not.toBe(99);
     });
   });
 });

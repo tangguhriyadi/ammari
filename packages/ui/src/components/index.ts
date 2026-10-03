@@ -3,6 +3,8 @@ export { Input, type InputProps } from "./Input";
 export { Select, type SelectProps } from "./Select";
 export { Textarea, type TextareaProps } from "./Textarea";
 export { Checkbox, type CheckboxProps } from "./Checkbox";
+export { Switch, type SwitchProps } from "./Switch";
+export { ColorSwatch, type ColorSwatchProps } from "./ColorSwatch";
 export { Label, FieldError, type LabelProps } from "./Label";
 export { Card } from "./Card";
 export { Badge, type BadgeProps, type BadgeVariant } from "./Badge";

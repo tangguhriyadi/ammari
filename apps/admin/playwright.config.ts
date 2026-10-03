@@ -3,6 +3,31 @@ import { defineConfig, devices } from "@playwright/test";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
 
+// The `next dev` server this config spawns below must never write into the owner's real local
+// `ammari` database (see CLAUDE.md's "Local environment safety" rule) — e2e/global-setup.ts
+// separately creates/migrates/seeds this same `ammari_e2e` database before any test runs.
+//
+// Deliberately NOT imported from @ammari/db/test-e2e-db (which has the "real",
+// network-touching version of this same derivation, deriveE2eDatabaseUrl): Playwright only
+// transpiles this config file itself when loading it, not its workspace dependencies, so a
+// static import of an ESM-only (`import.meta.url`) sibling package fails under Node's plain
+// `require()`. This copy is pure URL parsing with no DB/module dependency — keep the two in
+// sync if the database name or guard logic ever changes.
+function e2eDatabaseUrl(): string {
+  const baseUrl = process.env.DATABASE_URL;
+  if (!baseUrl) throw new Error("DATABASE_URL is not set");
+  const url = new URL(baseUrl);
+  url.pathname = "/ammari_e2e";
+  const isLocalHost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (!isLocalHost) {
+    throw new Error(
+      `Refusing to point the e2e dev server at "${url.hostname}${url.pathname}" — e2e only ever runs against ` +
+        `host localhost/127.0.0.1, database "ammari_e2e". Check DATABASE_URL.`,
+    );
+  }
+  return url.toString();
+}
+
 export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./e2e/global-setup.ts",
@@ -27,7 +52,11 @@ export default defineConfig({
     command: "pnpm dev:e2e",
     url: "http://localhost:3001",
     reuseExistingServer: !process.env.CI,
-    env: { E2E_TEST_LOGIN: "true" },
+    // STORAGE_DRIVER=memory swaps in the in-memory StorageClient (src/lib/storage.ts) — same
+    // idea as E2E_TEST_LOGIN above, so e2e needs no real bucket. Fails closed in production,
+    // same as the login backdoor. DATABASE_URL is overridden to the isolated ammari_e2e
+    // database — see e2eDatabaseUrl() above.
+    env: { E2E_TEST_LOGIN: "true", STORAGE_DRIVER: "memory", DATABASE_URL: e2eDatabaseUrl() },
     timeout: 120_000,
   },
 });
