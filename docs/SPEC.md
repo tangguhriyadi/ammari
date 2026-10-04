@@ -5,6 +5,28 @@ husband (former software engineer) and his wife (non-technical, handles day-to-d
 This document is the source of truth for scope, architecture, data model, and business rules for
 v1. `CLAUDE.md` at the repo root points here for details and should stay in sync with this file.
 
+## Status
+
+**Built:**
+
+- Schema v1 (`packages/db`): products/fabrics/catalog, orders & finance, customers & vouchers,
+  RBAC, staff auth tables.
+- Staff auth + RBAC (`apps/admin`): email OTP + Google login, server-side permission checks (§9,
+  §10.1).
+- Admin shell: app shell, design tokens, permission-aware navigation.
+- Products, fabrics, and fabric colors (`apps/admin`), including SKU generation and pagination.
+- Product photos, per color, with thumbnail selection, staged uploads, and S3-backed storage
+  (`packages/storage`).
+
+**Next:**
+
+- Stock (`/stock`).
+- Production (`/production`).
+- Orders import (`/import` — Shopee/TikTok Shop export parsing).
+- Packing (`/packing`) + QR thank-you cards.
+- Overview dashboard (§6 metrics).
+- Main site (`apps/web`) — see §3.3/§3.4 for v1 and December 2026 scope.
+
 ## 1. Goals
 
 - **Revenue target:** IDR 1,000,000,000 in the first year — roughly 310–335 pieces/month at a
@@ -92,22 +114,24 @@ pnpm workspaces + Turborepo:
 
 ### 3.3 Main site — v1 (1 November 2026)
 
-- Home (company profile)
-- Catalog
-- Product detail — the buy button temporarily links out to Shopee/TikTok Shop (no cart yet)
-- Voucher claim — `/k/<token>`
-- OTP login
-- My account — vouchers + their expiry dates
-- Privacy policy
+- Home (company profile) — `/`
+- Catalog — `/products`
+- Product detail — `/products/[slug]` — the buy button temporarily links out to Shopee/TikTok
+  Shop (no cart yet)
+- Voucher claim — `/claim/[token]` (the QR itself still encodes `ammari.id/k/<token>`; see §4.2)
+- OTP login — `/login`
+- My account — `/account` — vouchers + their expiry dates
+- Privacy policy — `/privacy-policy`
+- Terms of service — `/terms-of-service`
 
 ### 3.4 Main site — 1 December 2026
 
-- Cart
-- Checkout
+- Cart — `/cart`
+- Checkout — `/checkout`
 - Payment
 - Shipping cost calculation
 - Voucher redemption
-- Order status
+- Order status — `/orders`
 
 ## 4. Voucher & QR thank-you card program
 
@@ -433,12 +457,6 @@ provider is not yet chosen; see the Pre-deploy checklist.
 Items that must be satisfied before the **first** deploy to any real environment (dev or prod),
 beyond the per-feature work tracked elsewhere in this document:
 
-- **better-auth version:** pinned to `1.7.6` (the newest release that cleared pnpm's
-  `minimumReleaseAge` gate at the time it was added — `1.7.7` was ~4.6 hours old and was
-  rejected). Upgrade to `>= 1.7.7` once it passes the gate, re-run all auth tests
-  (`packages/auth`, `packages/db`), and check the better-auth GitHub security advisories first —
-  the `1.7.6` → `1.7.7` diff included what looks like a sign-up-gating fix. No deploy happens
-  before that upgrade.
 - **Cloudflare IP allowlisting:** the VPS must accept HTTP(S) only from Cloudflare (firewall
   allowlist of Cloudflare IP ranges, or Authenticated Origin Pulls), and Caddy must not trust a
   client-supplied `CF-Connecting-IP` on any request that didn't actually arrive through
@@ -454,3 +472,7 @@ beyond the per-feature work tracked elsewhere in this document:
   a mismatch fails at require-time (`Could not load the "sharp" module`), not at build time, so a
   green `pnpm build` locally proves nothing about the deployed image. Confirm pnpm's
   `allowBuilds.sharp` (`pnpm-workspace.yaml`) carries through the image's own `pnpm install`.
+- **Prod bucket policy:** the prod S3 bucket needs its own public-read policy for `products/*`
+  (and the `healthcheck/*` prefix used by `packages/storage`'s own check), mirroring
+  `packages/storage/bucket-policy.dev.json` but scoped to the prod bucket's own ARN/prefixes —
+  that file only covers the dev bucket (`ammaridev-uc1gfp`).

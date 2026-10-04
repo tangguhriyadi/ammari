@@ -19,6 +19,6 @@ test("owner does not see Peran & Staf or Log Aktivitas, and direct navigation is
   await expect(nav.getByRole("link", { name: "Peran & Staf" })).toHaveCount(0);
   await expect(nav.getByRole("link", { name: "Log Aktivitas" })).toHaveCount(0);
 
-  await page.goto("/peran-staf");
+  await page.goto("/roles-staff");
   await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();
 });

@@ -15,7 +15,7 @@ export default async function BahanPage({ searchParams }: { searchParams: Promis
         title="Bahan"
         description="Kain yang dipakai untuk membuat produk."
         actions={
-          <Link href="/bahan/baru">
+          <Link href="/fabrics/new">
             <Button>Tambah bahan</Button>
           </Link>
         }
@@ -24,7 +24,7 @@ export default async function BahanPage({ searchParams }: { searchParams: Promis
         <Input name="q" defaultValue={q ?? ""} placeholder="Cari nama bahan..." aria-label="Cari bahan" />
       </form>
       <FabricList fabrics={rows} />
-      <Pagination pagination={pagination} basePath="/bahan" searchParams={{ q }} itemLabel="bahan" />
+      <Pagination pagination={pagination} basePath="/fabrics" searchParams={{ q }} itemLabel="bahan" />
     </>
   );
 }

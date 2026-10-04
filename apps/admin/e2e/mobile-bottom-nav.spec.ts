@@ -19,5 +19,5 @@ test("mobile viewport shows the bottom nav, and the Lainnya sheet opens the rest
   const produkLink = page.getByRole("link", { name: "Produk", exact: true });
   await expect(produkLink).toBeVisible();
   await produkLink.click();
-  await expect(page).toHaveURL(/\/produk$/);
+  await expect(page).toHaveURL(/\/products$/);
 });

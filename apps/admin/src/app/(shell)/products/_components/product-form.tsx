@@ -100,7 +100,7 @@ export function ProductForm({
         if (productId && initialValues) set("isActive", initialValues.isActive);
         return;
       }
-      router.push(`/produk/${result.data.id}`);
+      router.push(`/products/${result.data.id}`);
       router.refresh();
     });
   }

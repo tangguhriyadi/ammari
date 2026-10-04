@@ -23,7 +23,7 @@ export function FabricList({ fabrics }: { fabrics: Fabric[] }) {
       <ul className="flex flex-col gap-3 md:hidden">
         {fabrics.map((fabric) => (
           <li key={fabric.id}>
-            <Link href={`/bahan/${fabric.id}`}>
+            <Link href={`/fabrics/${fabric.id}`}>
               <Card className="flex flex-col gap-1">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-base font-semibold text-neutral-900">{fabric.name}</span>
@@ -54,7 +54,7 @@ export function FabricList({ fabrics }: { fabrics: Fabric[] }) {
             {fabrics.map((fabric) => (
               <tr key={fabric.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
                 <td className="px-4 py-3">
-                  <Link href={`/bahan/${fabric.id}`} className="font-medium text-brand hover:underline">
+                  <Link href={`/fabrics/${fabric.id}`} className="font-medium text-brand hover:underline">
                     {fabric.name}
                   </Link>
                 </td>

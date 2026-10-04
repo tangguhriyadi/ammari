@@ -40,7 +40,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Pesanan",
-    href: "/pesanan",
+    href: "/orders",
     icon: ShoppingBag,
     group: "Operasional",
     permissionKeys: ["orders.view"],
@@ -56,7 +56,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Impor",
-    href: "/impor",
+    href: "/import",
     icon: Upload,
     group: "Operasional",
     permissionKeys: ["orders.import"],
@@ -64,7 +64,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Stok",
-    href: "/stok",
+    href: "/stock",
     icon: Boxes,
     group: "Operasional",
     permissionKeys: ["stock.view"],
@@ -72,7 +72,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Produksi",
-    href: "/produksi",
+    href: "/production",
     icon: Factory,
     group: "Operasional",
     permissionKeys: ["production.manage"],
@@ -80,7 +80,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Produk",
-    href: "/produk",
+    href: "/products",
     icon: Package,
     group: "Katalog",
     permissionKeys: ["products.manage"],
@@ -88,7 +88,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Bahan",
-    href: "/bahan",
+    href: "/fabrics",
     icon: Palette,
     group: "Katalog",
     permissionKeys: ["products.manage"],
@@ -96,7 +96,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Iklan & Biaya",
-    href: "/iklan-biaya",
+    href: "/ads-expenses",
     icon: Megaphone,
     group: "Pertumbuhan",
     permissionKeys: ["ads_expenses.manage"],
@@ -104,7 +104,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Pelanggan & Voucher",
-    href: "/pelanggan-voucher",
+    href: "/customers",
     icon: Users,
     group: "Pertumbuhan",
     permissionKeys: ["customers.view"],
@@ -112,7 +112,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Pengaturan",
-    href: "/pengaturan",
+    href: "/settings",
     icon: Settings,
     group: "Administrasi",
     permissionKeys: ["settings.manage"],
@@ -120,7 +120,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Peran & Staf",
-    href: "/peran-staf",
+    href: "/roles-staff",
     icon: ShieldCheck,
     group: "Administrasi",
     permissionKeys: ["staff.manage", "roles.manage"],
@@ -128,7 +128,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     label: "Log Aktivitas",
-    href: "/log-aktivitas",
+    href: "/activity-log",
     icon: History,
     group: "Administrasi",
     permissionKeys: ["audit_log.view"],

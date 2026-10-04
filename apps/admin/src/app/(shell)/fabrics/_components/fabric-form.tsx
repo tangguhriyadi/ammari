@@ -141,7 +141,7 @@ export function FabricForm({
           setFieldErrors(result.fieldErrors ?? {});
           return;
         }
-        router.push("/bahan");
+        router.push("/fabrics");
         router.refresh();
         return;
       }
@@ -158,7 +158,7 @@ export function FabricForm({
         setFieldErrors(result.fieldErrors ?? {});
         return;
       }
-      router.push(`/bahan/${result.data.id}`);
+      router.push(`/fabrics/${result.data.id}`);
       router.refresh();
     });
   }
@@ -172,7 +172,7 @@ export function FabricForm({
         setFormError(result.error);
         return;
       }
-      router.push("/bahan");
+      router.push("/fabrics");
       router.refresh();
     });
   }

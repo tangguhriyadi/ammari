@@ -21,7 +21,7 @@ export function ProductList({ products }: { products: Product[] }) {
       <ul className="flex flex-col gap-3 md:hidden">
         {products.map((product) => (
           <li key={product.id}>
-            <Link href={`/produk/${product.id}`}>
+            <Link href={`/products/${product.id}`}>
               <Card className="flex gap-3">
                 <ProductThumbnail url={product.thumbnailUrl} className="size-16 shrink-0" />
                 <div className="flex flex-1 flex-col gap-1">
@@ -66,7 +66,7 @@ export function ProductList({ products }: { products: Product[] }) {
                   <ProductThumbnail url={product.thumbnailUrl} className="size-10" />
                 </td>
                 <td className="px-4 py-3">
-                  <Link href={`/produk/${product.id}`} className="font-medium text-brand hover:underline">
+                  <Link href={`/products/${product.id}`} className="font-medium text-brand hover:underline">
                     {product.name}
                   </Link>
                 </td>

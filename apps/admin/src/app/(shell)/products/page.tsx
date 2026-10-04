@@ -15,7 +15,7 @@ export default async function ProdukPage({ searchParams }: { searchParams: Promi
         title="Produk"
         description="Produk dan variannya."
         actions={
-          <Link href="/produk/baru">
+          <Link href="/products/new">
             <Button>Tambah produk</Button>
           </Link>
         }
@@ -24,7 +24,7 @@ export default async function ProdukPage({ searchParams }: { searchParams: Promi
         <Input name="q" defaultValue={q ?? ""} placeholder="Cari nama produk..." aria-label="Cari produk" />
       </form>
       <ProductList products={rows} />
-      <Pagination pagination={pagination} basePath="/produk" searchParams={{ q }} itemLabel="produk" />
+      <Pagination pagination={pagination} basePath="/products" searchParams={{ q }} itemLabel="produk" />
     </>
   );
 }

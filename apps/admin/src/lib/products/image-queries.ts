@@ -190,7 +190,7 @@ export interface UploadProductImageInput {
   fileBuffer: Buffer;
 }
 
-/** One file per call, by design (see apps/admin/src/app/(shell)/produk/actions.ts — the client
+/** One file per call, by design (see apps/admin/src/app/(shell)/products/actions.ts — the client
  * uploads sequentially, one action call per file, after downscaling in the browser). Image
  * processing (CPU-bound, no DB access) runs BEFORE any transaction or lock is taken — there is
  * no reason to hold `FOR UPDATE` on the product row while sharp resizes three buffers.

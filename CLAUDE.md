@@ -32,6 +32,9 @@ pnpm workspaces + Turborepo:
   (claim deadlines, voucher expiry, "today"), in `Asia/Jakarta`.
 - **Language:** code, identifiers, and commit messages in English. All user-facing UI text in
   Indonesian.
+- **URL paths:** all route paths are English (kebab-case); all UI text is Indonesian. Old
+  Indonesian admin paths 308-redirect to their English replacements — see the `redirects()`
+  table in `apps/admin/next.config.ts`.
 - **Visual identity:**
   - Primary: gray red `#695A5A`, white `#FFFFFF`, black `#000000`.
   - Status colors are muted earth tones: olive green (on track), brick red (below target). Do

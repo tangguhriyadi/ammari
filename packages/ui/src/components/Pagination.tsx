@@ -4,7 +4,7 @@ import { cn } from "../lib/cn";
 
 export interface PaginationProps {
   pagination: PaginationData;
-  /** The route this list lives on, e.g. "/produk". */
+  /** The route this list lives on, e.g. "/products". */
   basePath: string;
   /** Other query params to preserve across page links (e.g. { q: "gamis" }). */
   searchParams?: Record<string, string | undefined>;

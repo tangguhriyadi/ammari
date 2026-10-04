@@ -499,7 +499,7 @@ function AddVariantForm({
     return (
       <div className="rounded-lg border border-dashed border-neutral-300 p-4 text-center">
         <p className="text-base text-neutral-600">Belum ada warna untuk bahan ini.</p>
-        <Link href={`/bahan/${fabricId}`} className="text-sm font-medium text-brand hover:underline">
+        <Link href={`/fabrics/${fabricId}`} className="text-sm font-medium text-brand hover:underline">
           Tambah warna di halaman Bahan
         </Link>
       </div>

@@ -19,27 +19,27 @@ test("upload photos, reorder, set thumbnail, and block activation until every ac
 
   // 1. Create a fabric with TWO colors in one submit — Sage will get photos, Mocca won't.
   const fabricName = `E2E Bahan Foto ${unique}`;
-  await page.goto("/bahan/baru");
+  await page.goto("/fabrics/new");
   await page.getByLabel("Nama bahan").fill(fabricName);
   await page.getByLabel("Nama warna").fill("Sage");
   await page.getByRole("button", { name: "+ Tambah warna" }).click();
   await page.getByLabel("Nama warna").nth(1).fill("Mocca");
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/bahan\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   // 2. Create a product on that fabric, created INACTIVE — so the variants added below come in
   // ACTIVE normally (addVariants only auto-deactivates new variants for a photo-less color on
   // an ALREADY-active product), making the later activation attempt meaningfully test the
   // required-photo check itself rather than a variant that's inactive for an unrelated reason.
   const productName = `Contoh Gamis Foto E2E ${unique}`;
-  await page.goto("/produk/baru");
+  await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
   await page.getByLabel("Harga dasar").fill("269.000");
   // Switch, not a checkbox — role="switch" has no check()/uncheck(), click to toggle it off.
   await page.getByRole("switch", { name: "Aktif" }).click();
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/produk\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
 
   // 3. Add a size-M variant for BOTH colors in one batch.
   await page.getByRole("checkbox", { name: /Sage/ }).check();
@@ -121,20 +121,20 @@ test("staged photos can be removed individually, and Batal discards the rest aft
   const unique = Date.now();
 
   const fabricName = `E2E Bahan Foto Batal ${unique}`;
-  await page.goto("/bahan/baru");
+  await page.goto("/fabrics/new");
   await page.getByLabel("Nama bahan").fill(fabricName);
   await page.getByLabel("Nama warna").fill("Sage");
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/bahan\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   const productName = `Contoh Gamis Foto E2E Batal ${unique}`;
-  await page.goto("/produk/baru");
+  await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
   await page.getByLabel("Harga dasar").fill("269.000");
   await page.getByRole("switch", { name: "Aktif" }).click();
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/produk\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
 
   const generalGroup = page.getByTestId("photo-group-general");
   const photoA = await jpegFixture({ r: 10, g: 20, b: 30 });
