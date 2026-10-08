@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { COST_COMPONENT_UNITS } from "@ammari/db/schema";
+import { COST_COMPONENT_TYPES, COST_COMPONENT_UNITS } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/action-result";
@@ -11,6 +11,9 @@ const costComponentSchema = z.object({
   name: z.string().trim().min(1, "Nama komponen wajib diisi."),
   unit: z.enum(COST_COMPONENT_UNITS),
   defaultUnitPrice: optionalMoneyString.optional(),
+  // Defaults to "variable" (not required by every existing caller) — matches the column's own
+  // DB default, so a caller that predates this field (e.g. an older test fixture) still works.
+  costType: z.enum(COST_COMPONENT_TYPES).default("variable"),
   isActive: z.boolean(),
   sortOrder: z.coerce.number().int("Urutan harus bilangan bulat.").default(0),
 });
@@ -27,6 +30,7 @@ export async function createCostComponentAction(
         name: parsed.data.name,
         unit: parsed.data.unit,
         defaultUnitPrice: parsed.data.defaultUnitPrice ?? null,
+        costType: parsed.data.costType,
         isActive: parsed.data.isActive,
         sortOrder: parsed.data.sortOrder,
       },
@@ -50,6 +54,7 @@ export async function updateCostComponentAction(
         name: parsed.data.name,
         unit: parsed.data.unit,
         defaultUnitPrice: parsed.data.defaultUnitPrice ?? null,
+        costType: parsed.data.costType,
         isActive: parsed.data.isActive,
         sortOrder: parsed.data.sortOrder,
       },

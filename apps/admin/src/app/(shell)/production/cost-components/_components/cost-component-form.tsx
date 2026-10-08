@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Input, Label, Select, Switch } from "@ammari/ui";
-import { COST_COMPONENT_UNITS, type CostComponentUnit } from "@ammari/db/schema";
+import { COST_COMPONENT_TYPES, COST_COMPONENT_UNITS, type CostComponentType, type CostComponentUnit } from "@ammari/db/schema";
 import { createCostComponentAction, updateCostComponentAction } from "../actions";
 
 const UNIT_LABELS: Record<CostComponentUnit, string> = {
@@ -14,10 +14,16 @@ const UNIT_LABELS: Record<CostComponentUnit, string> = {
   set: "Set",
 };
 
+const COST_TYPE_LABELS: Record<CostComponentType, string> = {
+  variable: "Variabel (per pcs)",
+  fixed: "Tetap (per batch)",
+};
+
 interface CostComponentFormValues {
   name: string;
   unit: CostComponentUnit;
   defaultUnitPrice: string;
+  costType: CostComponentType;
   isActive: boolean;
   sortOrder: number;
 }
@@ -34,6 +40,7 @@ export function CostComponentForm(props: CostComponentFormProps) {
   const router = useRouter();
   const [name, setName] = useState(initialValues.name);
   const [unit, setUnit] = useState<CostComponentUnit>(initialValues.unit);
+  const [costType, setCostType] = useState<CostComponentType>(initialValues.costType);
   const [defaultUnitPrice, setDefaultUnitPrice] = useState(initialValues.defaultUnitPrice);
   const [isActive, setIsActive] = useState(initialValues.isActive);
   const [sortOrder, setSortOrder] = useState(String(initialValues.sortOrder));
@@ -43,7 +50,7 @@ export function CostComponentForm(props: CostComponentFormProps) {
   function handleSubmit() {
     setError(null);
     startTransition(async () => {
-      const payload = { name, unit, defaultUnitPrice, isActive, sortOrder: Number.parseInt(sortOrder, 10) || 0 };
+      const payload = { name, unit, defaultUnitPrice, costType, isActive, sortOrder: Number.parseInt(sortOrder, 10) || 0 };
       const result =
         props.mode === "create" ? await createCostComponentAction(payload) : await updateCostComponentAction(props.componentId, payload);
       if (!result.ok) {
@@ -90,6 +97,18 @@ export function CostComponentForm(props: CostComponentFormProps) {
             placeholder="Opsional"
           />
         </div>
+      </div>
+      <div>
+        <Label htmlFor="component-cost-type" required>
+          Jenis biaya
+        </Label>
+        <Select id="component-cost-type" value={costType} onChange={(event) => setCostType(event.target.value as CostComponentType)}>
+          {COST_COMPONENT_TYPES.map((value) => (
+            <option key={value} value={value}>
+              {COST_TYPE_LABELS[value]}
+            </option>
+          ))}
+        </Select>
       </div>
       <div>
         <Label htmlFor="component-sort-order">Urutan tampil</Label>

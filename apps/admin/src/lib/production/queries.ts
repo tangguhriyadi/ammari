@@ -1,10 +1,14 @@
 import "server-only";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import {
+  accessories,
+  accessoryMovements,
   costComponents,
   fabrics,
   fabricColors,
+  fabricStockMovements,
   productionBatches,
+  productionBatchAccessoryOverrides,
   productionBatchCosts,
   productionBatchItems,
   products,
@@ -12,13 +16,18 @@ import {
   staffUsers,
   stockMovements,
 } from "@ammari/db/schema";
-import type { CostComponentUnit, ProductionBatchStatus } from "@ammari/db/schema";
+import type { CostComponentType, CostComponentUnit, ProductionBatchStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
+import { lockAccessoryForUpdate, lockFabricForUpdate } from "@/lib/inventory/db";
+import { getAccessoryBalance } from "@/lib/inventory/accessories";
+import { getFabricBalance } from "@/lib/inventory/fabric-stock";
+import { valueDeltaForConsumption, type RawMaterialBalance } from "@/lib/inventory/moving-average";
 import { lockProductionBatchForUpdate, type Tx } from "./db";
 import { generateBatchNumber } from "./batch-number";
 import { calculateUnitCost } from "./unit-cost";
+import { resolveAccessoryNeeds } from "./accessory-needs";
 
 const PAGE_SIZE = 20;
 
@@ -103,12 +112,18 @@ export async function listBatches(
   return { rows, pagination };
 }
 
-// ---------- Detail (no cost fields — see getBatchCosts/getBatchExtraCosts) ----------
+// ---------- Detail ----------
 
 export interface BatchLineRow {
   id: string;
   sku: string;
   qty: number;
+  // IS real cost data (the per-pcs HPP, computed at posting) — unlike every other field on this
+  // row, this one is NOT safe to render outside a finance.view_profit-gated component. It is
+  // only safe to SELECT here (not a leak in itself) because every current caller of
+  // getBatchDetail either never renders it (ProductionBatchReadOnly ignores it entirely) or only
+  // renders it already inside a `canViewProfit` branch (BatchCostsSection). Do not add a new
+  // renderer of `lines` that prints this field without checking finance.view_profit first.
   unitCostAmount: number;
   size: string;
   colorName: string;
@@ -192,7 +207,10 @@ export interface BatchCosts {
  * this behind `session.permissionKeys.includes("finance.view_profit")` THEMSELVES (same contract
  * as getCurrentCostAssumption/ProductBatasHpp in lib/products): render the Server Component that
  * calls this conditionally, so the component (and this query) never runs at all for a session
- * without the permission, rather than running it and hiding the result. */
+ * without the permission, rather than running it and hiding the result. Only ever meaningful once
+ * `status = 'posted'` — a draft's fabric_cost_amount is still its 0 column default (the fabric
+ * cost is no longer settable at draft time at all; see fabric-cost-estimate.ts for the draft's
+ * own live estimate instead). */
 export async function getBatchCosts(id: string, db: Database = defaultDb): Promise<BatchCosts | null> {
   const [row] = await db
     .select({ fabricCostAmount: productionBatches.fabricCostAmount })
@@ -207,6 +225,7 @@ export interface ExtraCostLineRow {
   costComponentId: string;
   componentName: string;
   componentUnit: CostComponentUnit;
+  costType: CostComponentType;
   quantity: number;
   unitPrice: number;
   total: number;
@@ -220,6 +239,7 @@ export async function getBatchExtraCosts(id: string, db: Database = defaultDb): 
       costComponentId: productionBatchCosts.costComponentId,
       componentName: productionBatchCosts.componentName,
       componentUnit: productionBatchCosts.componentUnit,
+      costType: productionBatchCosts.costType,
       quantity: productionBatchCosts.quantity,
       unitPrice: productionBatchCosts.unitPrice,
       total: productionBatchCosts.total,
@@ -229,6 +249,59 @@ export async function getBatchExtraCosts(id: string, db: Database = defaultDb): 
     .orderBy(productionBatchCosts.createdAt);
 }
 
+export interface BatchAccessoryConsumptionRow {
+  accessoryId: string;
+  accessoryName: string;
+  /** Positive pcs consumed (the stored movement's own qty is negative — a consumption — this is
+   * its absolute value, matching how the UI wants to display it). */
+  qty: number;
+  /** Positive cost of that consumption. Same gating contract as getBatchCosts — cost data. */
+  valueAmount: number;
+  /** Whether a production.manage session overrode this accessory's computed need before posting
+   * (production_batch_accessory_overrides — the row is never deleted by posting, so it's still
+   * readable afterward). A security-review finding on the override feature: a production.manage
+   * session (which may lack finance.view_profit) can change a posted batch's recorded cost by
+   * overriding how much of an accessory was "needed" — this flag lets a finance.view_profit
+   * viewer at least SEE which lines were overridden, as a (lightweight, not a hard block) audit
+   * signal, surfaced in BatchCostsSection. */
+  overridden: boolean;
+}
+
+/** The posted batch's "Aksesoris" breakdown — one row per resolved accessory actually consumed
+ * by this batch, read back from its own accessory_movements rows (ref_type='production_batch',
+ * ref_id=this batch's id) rather than a separate summary table; the ledger IS the record. Same
+ * gating contract as getBatchCosts/getBatchExtraCosts (cost data). Empty for a draft (no
+ * consumption has happened yet) or a batch with no accessory recipe at all. */
+export async function getBatchAccessoryConsumption(id: string, db: Database = defaultDb): Promise<BatchAccessoryConsumptionRow[]> {
+  const rows = await db
+    .select({
+      accessoryId: accessoryMovements.accessoryId,
+      accessoryName: accessories.name,
+      qty: accessoryMovements.qty,
+      valueAmount: accessoryMovements.valueAmount,
+      overrideId: productionBatchAccessoryOverrides.id,
+    })
+    .from(accessoryMovements)
+    .innerJoin(accessories, eq(accessories.id, accessoryMovements.accessoryId))
+    .leftJoin(
+      productionBatchAccessoryOverrides,
+      and(
+        eq(productionBatchAccessoryOverrides.productionBatchId, id),
+        eq(productionBatchAccessoryOverrides.accessoryId, accessoryMovements.accessoryId),
+      ),
+    )
+    .where(and(eq(accessoryMovements.refType, "production_batch"), eq(accessoryMovements.refId, id)))
+    .orderBy(accessories.name);
+
+  return rows.map((row) => ({
+    accessoryId: row.accessoryId,
+    accessoryName: row.accessoryName,
+    qty: -row.qty,
+    valueAmount: -row.valueAmount,
+    overridden: row.overrideId !== null,
+  }));
+}
+
 // ---------- Create / update / delete draft ----------
 
 export interface BatchLineInput {
@@ -236,16 +309,15 @@ export interface BatchLineInput {
   qty: number;
 }
 
-export interface BatchCostsInput {
-  fabricCostAmount: number;
-}
-
 export interface ExtraCostLineInput {
   /** Omitted for a new line — present for an existing one, and MUST already belong to this
    * batch (see syncExtraCostLines, which rejects the whole save otherwise). */
   id?: string;
   costComponentId: string;
-  quantity: number;
+  /** No `quantity` field — NEVER submitted by the client for either cost_type. A 'variable'
+   * line's quantity is always this batch's current total pcs, computed server-side on every
+   * save (see syncExtraCostLines) and re-verified again at posting; a 'fixed' line's quantity is
+   * always exactly 1 (its unit_price IS the flat per-batch amount). */
   unitPrice: number;
 }
 
@@ -255,10 +327,11 @@ export interface CreateDraftInput {
   fabricYards: number | null;
   notes?: string | null;
   lines: BatchLineInput[];
-  /** `undefined` when the caller's session lacks finance.view_profit — costs then default to 0
-   * (the column default) and stay editable later by someone who does hold the permission. */
-  costs?: BatchCostsInput;
-  /** Same `undefined`-means-"don't touch" contract as `costs`. */
+  /** `undefined` when the caller's session lacks finance.view_profit — see
+   * ExtraCostLineInput/syncExtraCostLines' own doc comments for the `undefined`-means-"don't
+   * touch" contract (not `?? []`, which would silently delete an existing owner-entered list on
+   * an update by a session that can't see costs at all). Fabric cost itself is never part of
+   * this input anymore — it's computed only at posting (see postBatch/fabric-cost-estimate.ts). */
   extraCosts?: ExtraCostLineInput[];
 }
 
@@ -294,25 +367,39 @@ async function insertLines(tx: Tx, productionBatchId: string, fabricId: string, 
 }
 
 /** Diffs `lines` against whatever already exists for this batch — NOT a delete-all-reinsert
- * (unlike insertLines above): component_name/component_unit must stay frozen at whatever they
- * were when a line was ORIGINALLY added, surviving later, unrelated edits to the same draft
- * (e.g. changing a different line's quantity must never re-snapshot this one). So:
- *  - a submitted line WITH an id updates ONLY quantity/unit_price (snapshot untouched);
+ * (unlike insertLines above): component_name/component_unit/cost_type must stay frozen at
+ * whatever they were when a line was ORIGINALLY added, surviving later, unrelated edits to the
+ * same draft (e.g. changing a different line's quantity must never re-snapshot this one). So:
+ *  - a submitted line WITH an id updates ONLY unit_price (and recomputes quantity — see below);
+ *    the component/name/unit/cost_type snapshot is never re-picked;
  *  - a submitted line with NO id is a fresh INSERT, snapshotting the component's CURRENT
- *    name/unit, and must reference an ACTIVE component;
+ *    name/unit/cost_type, and must reference an ACTIVE component;
  *  - an existing row whose id is missing from the submitted set is DELETED.
  * Every id the client submits is checked against this batch's OWN rows FIRST — a mismatched id
  * (nonexistent, or belonging to a different batch entirely) rejects the WHOLE save rather than
- * silently no-op'ing on a scoped WHERE, since that could otherwise mask a real client bug. */
-async function syncExtraCostLines(tx: Tx, productionBatchId: string, lines: readonly ExtraCostLineInput[]): Promise<void> {
+ * silently no-op'ing on a scoped WHERE, since that could otherwise mask a real client bug.
+ *
+ * `quantity` is NEVER taken from the client for either existing or new lines (see
+ * ExtraCostLineInput's own doc comment) — `totalPcs` (this batch's current `sum(qty)` across the
+ * lines being saved in THIS SAME call) decides it: a 'variable' line's quantity is always
+ * `totalPcs`, recomputed on every single save regardless of whether totalPcs actually changed, so
+ * it can never silently drift; a 'fixed' line's quantity is always exactly 1. A 'variable' line
+ * can't be saved while totalPcs is 0 (quantity > 0 is a DB CHECK) — rejected with a friendly
+ * message rather than a raw constraint error. */
+async function syncExtraCostLines(
+  tx: Tx,
+  productionBatchId: string,
+  lines: readonly ExtraCostLineInput[],
+  totalPcs: number,
+): Promise<void> {
   const existing = await tx
     .select()
     .from(productionBatchCosts)
     .where(eq(productionBatchCosts.productionBatchId, productionBatchId));
-  const existingIds = new Set(existing.map((row) => row.id));
+  const existingById = new Map(existing.map((row) => [row.id, row]));
 
   for (const line of lines) {
-    if (line.id && !existingIds.has(line.id)) {
+    if (line.id && !existingById.has(line.id)) {
       throw new ActionError("Salah satu baris biaya tidak ditemukan di batch ini.");
     }
   }
@@ -327,13 +414,17 @@ async function syncExtraCostLines(tx: Tx, productionBatchId: string, lines: read
 
   for (const line of lines) {
     if (!line.id) continue;
-    // Scoped by BOTH id and production_batch_id, even though the pre-check above already
-    // guarantees this id belongs to this batch — defense in depth, same "pre-check for a
-    // friendly error + a scoped statement as the real guarantee" idiom used elsewhere (e.g.
-    // addVariants' fabric-ownership check).
+    const existingRow = existingById.get(line.id)!;
+    if (existingRow.costType === "variable" && totalPcs <= 0) {
+      throw new FieldError(
+        "costComponentId",
+        `Tambahkan minimal satu baris produksi (SKU) sebelum menyimpan biaya variabel "${existingRow.componentName}".`,
+      );
+    }
+    const quantity = existingRow.costType === "variable" ? totalPcs : 1;
     await tx
       .update(productionBatchCosts)
-      .set({ quantity: line.quantity, unitPrice: line.unitPrice })
+      .set({ quantity, unitPrice: line.unitPrice })
       .where(and(eq(productionBatchCosts.id, line.id), eq(productionBatchCosts.productionBatchId, productionBatchId)));
   }
 
@@ -359,12 +450,19 @@ async function syncExtraCostLines(tx: Tx, productionBatchId: string, lines: read
     if (!component.isActive) {
       throw new FieldError("costComponentId", `Komponen "${component.name}" sudah dinonaktifkan dan tidak bisa dipakai untuk baris baru.`);
     }
+    if (component.costType === "variable" && totalPcs <= 0) {
+      throw new FieldError(
+        "costComponentId",
+        `Tambahkan minimal satu baris produksi (SKU) sebelum menambah biaya variabel "${component.name}".`,
+      );
+    }
     return {
       productionBatchId,
       costComponentId: component.id,
       componentName: component.name,
       componentUnit: component.unit,
-      quantity: line.quantity,
+      costType: component.costType,
+      quantity: component.costType === "variable" ? totalPcs : 1,
       unitPrice: line.unitPrice,
     };
   });
@@ -382,13 +480,15 @@ export async function createDraft(input: CreateDraftInput, actorStaffUserId: str
         producedAt: input.producedAt,
         fabricYards: input.fabricYards,
         notes: input.notes ?? null,
-        ...(input.costs ?? {}),
       })
       .returning();
     if (!batch) throw new Error("failed to insert production batch");
 
     await insertLines(tx, batch.id, input.fabricId, input.lines);
-    if (input.extraCosts !== undefined) await syncExtraCostLines(tx, batch.id, input.extraCosts);
+    if (input.extraCosts !== undefined) {
+      const totalPcs = input.lines.reduce((sum, line) => sum + line.qty, 0);
+      await syncExtraCostLines(tx, batch.id, input.extraCosts, totalPcs);
+    }
 
     await writeAuditLog(tx, {
       actorStaffUserId,
@@ -406,12 +506,9 @@ export interface UpdateDraftInput {
   fabricYards: number | null;
   notes?: string | null;
   lines: BatchLineInput[];
-  /** `undefined` when the caller's session lacks finance.view_profit — existing cost values are
-   * then left completely untouched (NOT reset to 0), so a quantities-only edit can never wipe
-   * out costs the owner already entered. */
-  costs?: BatchCostsInput;
-  /** Same `undefined`-means-"don't touch" contract as `costs` — when omitted, syncExtraCostLines
-   * isn't even called, so an existing owner-entered list is never read or written. */
+  /** Same `undefined`-means-"don't touch" contract as CreateDraftInput.extraCosts — when
+   * omitted, syncExtraCostLines isn't even called, so an existing owner-entered list is never
+   * read or written. */
   extraCosts?: ExtraCostLineInput[];
 }
 
@@ -433,7 +530,6 @@ export async function updateDraft(id: string, input: UpdateDraftInput, actorStaf
         producedAt: input.producedAt,
         fabricYards: input.fabricYards,
         notes: input.notes ?? null,
-        ...(input.costs ?? {}),
       })
       .where(eq(productionBatches.id, id))
       .returning();
@@ -445,7 +541,10 @@ export async function updateDraft(id: string, input: UpdateDraftInput, actorStaf
     await tx.delete(productionBatchItems).where(eq(productionBatchItems.productionBatchId, id));
     await insertLines(tx, id, before.fabricId, input.lines);
 
-    if (input.extraCosts !== undefined) await syncExtraCostLines(tx, id, input.extraCosts);
+    if (input.extraCosts !== undefined) {
+      const totalPcs = input.lines.reduce((sum, line) => sum + line.qty, 0);
+      await syncExtraCostLines(tx, id, input.extraCosts, totalPcs);
+    }
 
     await writeAuditLog(tx, {
       actorStaffUserId,
@@ -482,15 +581,27 @@ export interface PostedBatchResult {
  * 1. `SELECT ... FOR UPDATE` the batch row FIRST — serializes a concurrent second post attempt;
  *    it blocks until this transaction commits, then sees status='posted' and fails cleanly
  *    instead of double-posting. Also serializes against a concurrent updateDraft the same way.
- * 2. Must be a draft, with at least one line, fabric_yards > 0, and fabric_cost_amount > 0.
- * 3. totalCost = fabric_cost_amount + sum of every extra-cost line's (generated) total — summed
- *    in JS over already-typed rows, not a SQL SUM(), so there's no bigint-as-string risk to even
- *    think about (see lib/stock/queries.ts's own note on why a raw SQL aggregate needs a cast
- *    and a typed column read doesn't).
- * 4. unitCost = ceil(totalCost / totalPcs), written to EVERY line in one UPDATE.
- * 5. One stock_movements row per line (type='production', ref_type='production_batch_item').
- * 6. status='posted', posted_at, posted_by_staff_user_id.
- * 7. One audit_log entry for the whole post. */
+ * 2. Must be a draft, with at least one line and fabric_yards > 0.
+ * 3. Resolve the accessory recipe for every line (resolveAccessoryNeeds) — any unresolved
+ *    size-group row rejects immediately with a message naming every product/size/group (a
+ *    configuration problem, not a stock race).
+ * 4. Lock the fabric row (always exactly one), then every NEEDED accessory row in sorted id
+ *    order — deterministic, avoids a deadlock against a concurrent post/purchase/adjustment on
+ *    the same items (same reasoning saveStockCount sorts SKUs before locking).
+ * 5. Collect EVERY shortage (fabric included) before writing anything — rejects listing every
+ *    short item in ONE message, not fail-fast on the first.
+ * 6. Re-verify every variable-cost line's quantity against the batch's ACTUAL total pcs (never
+ *    trusts whatever a prior draft save computed, or a client-submitted value — there is none).
+ * 7. Value the fabric and every accessory's consumption at their CURRENT moving-average cost
+ *    (valueDeltaForConsumption — the same zero-residual rule accessories/fabric adjustments
+ *    already use applies for free), write one fabric_stock_movements row and one
+ *    accessory_movements row per resolved accessory (ref_type='production_batch').
+ * 8. totalCost = fabricCost + Σ(accessory consumption costs) + Σ(production_batch_costs.total,
+ *    variable AND fixed). unitCost = ceil(totalCost / totalPcs), written to every line.
+ * 9. One stock_movements row per line (type='production', ref_type='production_batch_item').
+ * 10. status='posted', posted_at, posted_by_staff_user_id, fabric_cost_amount (computed, not
+ *     user-entered — see fabric-cost-estimate.ts for the draft's own non-binding estimate).
+ * 11. One audit_log entry for the whole post. */
 export async function postBatch(id: string, actorStaffUserId: string, db: Database = defaultDb): Promise<PostedBatchResult> {
   return db.transaction(async (tx) => {
     const before = await lockProductionBatchForUpdate(tx, id);
@@ -502,7 +613,107 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
     if (before.fabricYards === null || before.fabricYards <= 0) {
       throw new ActionError("Isi jumlah yard bahan sebelum posting.");
     }
-    if (before.fabricCostAmount <= 0) throw new ActionError("Isi biaya bahan sebelum posting.");
+    const fabricYards = before.fabricYards;
+    const totalPcs = lines.reduce((sum, line) => sum + line.qty, 0);
+
+    const { neededByAccessoryId, unresolved } = await resolveAccessoryNeeds(
+      lines.map((line) => ({ sku: line.sku, qty: line.qty })),
+      tx,
+    );
+    if (unresolved.length > 0) {
+      const names = unresolved
+        .map((row) => `${row.productName} (ukuran ${row.size === "ALLSIZE" ? "All Size" : row.size}, grup "${row.sizeGroup}")`)
+        .join("; ");
+      throw new ActionError(`Resep aksesoris belum lengkap untuk: ${names}.`);
+    }
+
+    const fabric = await lockFabricForUpdate(tx, before.fabricId);
+    if (!fabric) throw new Error("fabric not found for an existing production batch");
+    const fabricBalanceBefore = await getFabricBalance(before.fabricId, tx);
+
+    const accessoryIds = [...neededByAccessoryId.keys()].sort();
+    const overrideRows =
+      accessoryIds.length > 0
+        ? await tx
+            .select()
+            .from(productionBatchAccessoryOverrides)
+            .where(
+              and(
+                eq(productionBatchAccessoryOverrides.productionBatchId, id),
+                inArray(productionBatchAccessoryOverrides.accessoryId, accessoryIds),
+              ),
+            )
+        : [];
+    const overrideByAccessoryId = new Map(overrideRows.map((row) => [row.accessoryId, row.overrideQty]));
+
+    const accessoryBalanceBefore = new Map<string, RawMaterialBalance>();
+    for (const accessoryId of accessoryIds) {
+      const accessory = await lockAccessoryForUpdate(tx, accessoryId);
+      if (!accessory) throw new Error("accessory not found for a resolved recipe need");
+      accessoryBalanceBefore.set(accessoryId, await getAccessoryBalance(accessoryId, tx));
+    }
+    const accessoryRows = accessoryIds.length > 0 ? await tx.select().from(accessories).where(inArray(accessories.id, accessoryIds)) : [];
+    const accessoryById = new Map(accessoryRows.map((row) => [row.id, row]));
+
+    const effectiveNeedByAccessoryId = new Map<string, number>();
+    const shortages: string[] = [];
+    if (fabricYards > fabricBalanceBefore.qty) {
+      shortages.push(`${fabric.name}: butuh ${fabricYards} yard, stok ${fabricBalanceBefore.qty} yard`);
+    }
+    for (const accessoryId of accessoryIds) {
+      const computedQty = neededByAccessoryId.get(accessoryId)!;
+      const effectiveQty = overrideByAccessoryId.get(accessoryId) ?? computedQty;
+      effectiveNeedByAccessoryId.set(accessoryId, effectiveQty);
+      const balance = accessoryBalanceBefore.get(accessoryId)!;
+      if (effectiveQty > balance.qty) {
+        shortages.push(`${accessoryById.get(accessoryId)?.name ?? accessoryId}: butuh ${effectiveQty} pcs, stok ${balance.qty} pcs`);
+      }
+    }
+    if (shortages.length > 0) {
+      throw new ActionError(`Stok tidak cukup untuk posting: ${shortages.join("; ")}.`);
+    }
+
+    // Re-verify (never trust) every variable line's quantity — see this function's own doc
+    // comment, step 6.
+    await tx
+      .update(productionBatchCosts)
+      .set({ quantity: totalPcs })
+      .where(and(eq(productionBatchCosts.productionBatchId, id), eq(productionBatchCosts.costType, "variable")));
+
+    const fabricConsumptionValue = valueDeltaForConsumption(fabricBalanceBefore, -fabricYards);
+    await tx.insert(fabricStockMovements).values({
+      fabricId: before.fabricId,
+      qty: -fabricYards,
+      valueAmount: fabricConsumptionValue,
+      type: "production",
+      refType: "production_batch",
+      refId: id,
+      createdByStaffUserId: actorStaffUserId,
+    });
+    const fabricCostAmount = -fabricConsumptionValue;
+
+    let accessoryCostTotal = 0;
+    // An override of exactly 0 means "none of this needed after all" — skipped entirely rather
+    // than inserting a qty=0 movement, which the DB's own `qty <> 0` CHECK would reject anyway.
+    const accessoryIdsToConsume = accessoryIds.filter((accessoryId) => (effectiveNeedByAccessoryId.get(accessoryId) ?? 0) > 0);
+    if (accessoryIdsToConsume.length > 0) {
+      const accessoryMovementValues = accessoryIdsToConsume.map((accessoryId) => {
+        const effectiveQty = effectiveNeedByAccessoryId.get(accessoryId)!;
+        const balance = accessoryBalanceBefore.get(accessoryId)!;
+        const consumptionValue = valueDeltaForConsumption(balance, -effectiveQty);
+        accessoryCostTotal += -consumptionValue;
+        return {
+          accessoryId,
+          qty: -effectiveQty,
+          valueAmount: consumptionValue,
+          type: "production" as const,
+          refType: "production_batch" as const,
+          refId: id,
+          createdByStaffUserId: actorStaffUserId,
+        };
+      });
+      await tx.insert(accessoryMovements).values(accessoryMovementValues);
+    }
 
     const extraCostRows = await tx
       .select({ total: productionBatchCosts.total })
@@ -510,8 +721,7 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
       .where(eq(productionBatchCosts.productionBatchId, id));
     const extraCostsTotal = extraCostRows.reduce((sum, row) => sum + row.total, 0);
 
-    const totalPcs = lines.reduce((sum, line) => sum + line.qty, 0);
-    const totalCost = before.fabricCostAmount + extraCostsTotal;
+    const totalCost = fabricCostAmount + accessoryCostTotal + extraCostsTotal;
     const unitCostAmount = calculateUnitCost(totalCost, totalPcs);
 
     await tx.update(productionBatchItems).set({ unitCostAmount }).where(eq(productionBatchItems.productionBatchId, id));
@@ -532,7 +742,7 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
 
     const [after] = await tx
       .update(productionBatches)
-      .set({ status: "posted", postedAt: new Date(), postedByStaffUserId: actorStaffUserId })
+      .set({ status: "posted", postedAt: new Date(), postedByStaffUserId: actorStaffUserId, fabricCostAmount })
       .where(eq(productionBatches.id, id))
       .returning();
     if (!after) throw new Error("failed to update production batch");
@@ -543,7 +753,7 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
       entityType: "production_batch",
       entityId: id,
       before,
-      after: { ...after, unitCostAmount, totalPcs, extraCostsTotal },
+      after: { ...after, unitCostAmount, totalPcs, accessoryCostTotal, extraCostsTotal },
     });
 
     return { id, unitCostAmount, totalPcs };

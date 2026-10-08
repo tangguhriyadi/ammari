@@ -1,7 +1,7 @@
 import "server-only";
 import { asc, eq } from "drizzle-orm";
 import { costComponents } from "@ammari/db/schema";
-import type { CostComponentUnit } from "@ammari/db/schema";
+import type { CostComponentType, CostComponentUnit } from "@ammari/db/schema";
 import { ActionError, mapUniqueViolation } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 
@@ -33,6 +33,9 @@ export interface CostComponentInput {
   name: string;
   unit: CostComponentUnit;
   defaultUnitPrice: number | null;
+  /** "variable" (scales with the batch's pcs count) or "fixed" (one flat amount per batch) —
+   * see cost_components.cost_type's own doc comment in packages/db/src/schema/catalog.ts. */
+  costType: CostComponentType;
   isActive: boolean;
   sortOrder: number;
 }

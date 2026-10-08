@@ -1,13 +1,14 @@
 import { notFound } from "next/navigation";
 import { PageHeader } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { getBatchDetail, getBatchCosts, getBatchExtraCosts, listEligibleSkusForFabric } from "@/lib/production/queries";
+import { getBatchDetail, getBatchExtraCosts, listEligibleSkusForFabric } from "@/lib/production/queries";
 import { listActiveCostComponents } from "@/lib/production/cost-components";
-import { getFabricById } from "@/lib/products/fabric-queries";
+import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { ProductionBatchForm } from "../_components/production-batch-form";
 import { ProductionBatchReadOnly } from "../_components/production-batch-readonly";
 import { BatchStatusBadge } from "../_components/production-batch-list";
 import { BatchCostsSection } from "../_components/batch-costs-section";
+import { AccessoryNeedsSection } from "../_components/accessory-needs-section";
 import { DraftControls } from "../_components/draft-controls";
 
 export default async function ProductionBatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -49,13 +50,12 @@ async function DraftView({
   canViewProfit: boolean;
 }) {
   const eligibleSkus = await listEligibleSkusForFabric(batch.fabricId);
-  const fabric = await getFabricById(batch.fabricId);
 
   // Never fetched at all for a session without finance.view_profit — same ProductBatasHpp
   // pattern used by products/[id]/page.tsx.
-  const costs = canViewProfit ? await getBatchCosts(batch.id) : null;
   const extraCosts = canViewProfit ? await getBatchExtraCosts(batch.id) : [];
   const activeCostComponents = canViewProfit ? await listActiveCostComponents() : [];
+  const fabricBalance = canViewProfit ? await getFabricBalance(batch.fabricId) : { qty: 0, valueAmount: 0 };
 
   return (
     <>
@@ -64,7 +64,7 @@ async function DraftView({
         batchId={batch.id}
         fixedFabricName={batch.fabricName}
         // Never shipped to a session without finance.view_profit — same contract as new/page.tsx.
-        fixedFabricPrice={canViewProfit ? { priceAmount: fabric?.priceAmount ?? null, priceUnit: fabric?.priceUnit ?? null } : { priceAmount: null, priceUnit: null }}
+        fixedFabricBalance={fabricBalance}
         initialValues={{
           fabricId: batch.fabricId,
           producedAt: batch.producedAt,
@@ -73,7 +73,7 @@ async function DraftView({
           lines: batch.lines.map((line) => ({ sku: line.sku, qty: line.qty })),
         }}
         eligibleSkus={eligibleSkus}
-        initialCosts={canViewProfit ? { fabricCostAmount: String(costs?.fabricCostAmount ?? 0) } : undefined}
+        canViewProfit={canViewProfit}
         initialExtraCosts={
           canViewProfit
             ? extraCosts.map((line) => ({
@@ -81,13 +81,16 @@ async function DraftView({
                 clientKey: line.id, // already stable (a real server row) — no need to mint a new one
                 costComponentId: line.costComponentId,
                 componentName: line.componentName,
-                quantity: String(line.quantity),
+                costType: line.costType,
                 unitPrice: String(line.unitPrice),
               }))
             : undefined
         }
         activeCostComponents={activeCostComponents}
       />
+      <div className="mt-6">
+        <AccessoryNeedsSection batchId={batch.id} />
+      </div>
       <div className="mt-6">
         <DraftControls batchId={batch.id} canPost={canViewProfit} />
       </div>

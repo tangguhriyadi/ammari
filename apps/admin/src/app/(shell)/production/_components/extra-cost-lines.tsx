@@ -2,34 +2,41 @@
 
 import { Button, Input, Label, Select } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
-import type { CostComponentUnit } from "@ammari/db/schema";
+import type { CostComponentType, CostComponentUnit } from "@ammari/db/schema";
 import { previewLineTotal } from "@/lib/production/line-total-preview";
 
 export interface ActiveCostComponentOption {
   id: string;
   name: string;
   unit: CostComponentUnit;
+  costType: CostComponentType;
   defaultUnitPrice: number | null;
 }
 
 export interface ExtraCostLineState {
   /** Present only for a line that already exists on the server — see
    * lib/production/queries.ts's syncExtraCostLines for why this id matters (an existing line's
-   * component/name/unit snapshot is frozen and never re-picked; only a brand new line picks a
-   * component at all). */
+   * component/name/unit/cost_type snapshot is frozen and never re-picked; only a brand new line
+   * picks a component at all). */
   id?: string;
   /** Stable React key independent of array position — a freshly-added line has no server `id`
    * yet, and keying it off its array index would make React tear down and remount every LATER
    * new line's Select/Inputs (losing focus mid-edit) whenever an earlier line is removed. Callers
    * constructing initial state from existing server rows should set this to that row's own `id`
    * (already stable); `addLine` below generates a fresh one for a new row. Never submitted to
-   * the server — the submit payload maps only id/costComponentId/quantity/unitPrice. */
+   * the server — the submit payload maps only id/costComponentId/unitPrice. */
   clientKey: string;
   costComponentId: string;
   /** Display only for an EXISTING line (its frozen snapshot); irrelevant for a new one, whose
    * name is whatever the Select currently shows. */
   componentName?: string;
-  quantity: string;
+  /** For an EXISTING line, this is its frozen cost_type snapshot (never re-picked, same as
+   * componentName). For a NEW line, it tracks whichever component is currently selected in the
+   * dropdown (kept in sync by the Select's onChange below). Drives the price field's label
+   * ("Harga per pcs" vs "Nominal") and how its preview subtotal is computed — there is no
+   * `quantity` field here at all: it's always the batch's total pcs (variable) or exactly 1
+   * (fixed), computed server-side (see ExtraCostLineInput's own doc comment in queries.ts). */
+  costType: CostComponentType;
   unitPrice: string;
 }
 
@@ -37,12 +44,19 @@ export interface ExtraCostLinesProps {
   activeComponents: ActiveCostComponentOption[];
   lines: ExtraCostLineState[];
   onChange: (lines: ExtraCostLineState[]) => void;
+  /** The batch's current total pcs (summed across its lines) — a 'variable' line's effective
+   * quantity for the live preview total below. */
+  totalPcs: number;
+}
+
+function effectiveQuantity(line: ExtraCostLineState, totalPcs: number): number {
+  return line.costType === "variable" ? totalPcs : 1;
 }
 
 /** The "Biaya lain" section of a production batch draft — only ever rendered by the caller when
  * the session holds finance.view_profit (see ProductionBatchForm), same gating as the fabric
- * cost field right above it. */
-export function ExtraCostLines({ activeComponents, lines, onChange }: ExtraCostLinesProps) {
+ * cost estimate right above it. */
+export function ExtraCostLines({ activeComponents, lines, onChange, totalPcs }: ExtraCostLinesProps) {
   const componentById = new Map(activeComponents.map((component) => [component.id, component]));
 
   function updateLine(index: number, patch: Partial<ExtraCostLineState>) {
@@ -60,17 +74,16 @@ export function ExtraCostLines({ activeComponents, lines, onChange }: ExtraCostL
       {
         clientKey: crypto.randomUUID(),
         costComponentId: first?.id ?? "",
-        quantity: "",
+        costType: first?.costType ?? "variable",
         unitPrice: first?.defaultUnitPrice !== null && first?.defaultUnitPrice !== undefined ? String(first.defaultUnitPrice) : "",
       },
     ]);
   }
 
   const grandTotal = lines.reduce((sum, line) => {
-    const quantity = Number.parseFloat(line.quantity);
     const unitPrice = Number.parseInt(line.unitPrice, 10);
-    if (!Number.isFinite(quantity) || !Number.isFinite(unitPrice)) return sum;
-    return sum + previewLineTotal(quantity, unitPrice);
+    if (!Number.isFinite(unitPrice)) return sum;
+    return sum + previewLineTotal(effectiveQuantity(line, totalPcs), unitPrice);
   }, 0);
 
   return (
@@ -86,16 +99,19 @@ export function ExtraCostLines({ activeComponents, lines, onChange }: ExtraCostL
       )}
       {lines.map((line, index) => {
         const isExisting = Boolean(line.id);
-        const quantity = Number.parseFloat(line.quantity);
         const unitPrice = Number.parseInt(line.unitPrice, 10);
-        const lineTotal =
-          Number.isFinite(quantity) && Number.isFinite(unitPrice) ? previewLineTotal(quantity, unitPrice) : null;
+        const quantity = effectiveQuantity(line, totalPcs);
+        const lineTotal = Number.isFinite(unitPrice) && quantity > 0 ? previewLineTotal(quantity, unitPrice) : null;
+        const priceLabel = line.costType === "variable" ? "Harga per pcs" : "Nominal";
+        const typeLabel = line.costType === "variable" ? "Variabel" : "Tetap";
 
         return (
           <div key={line.clientKey} className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-3">
             <div className="flex items-center justify-between gap-2">
               {isExisting ? (
-                <p className="text-base text-neutral-900">{line.componentName}</p>
+                <p className="text-base text-neutral-900">
+                  {line.componentName} <span className="text-sm text-neutral-600">({typeLabel})</span>
+                </p>
               ) : (
                 <div className="flex-1">
                   <Label htmlFor={`extra-cost-component-${index}`} className="sr-only">
@@ -108,6 +124,7 @@ export function ExtraCostLines({ activeComponents, lines, onChange }: ExtraCostL
                       const component = componentById.get(event.target.value);
                       updateLine(index, {
                         costComponentId: event.target.value,
+                        costType: component?.costType ?? line.costType,
                         unitPrice: component?.defaultUnitPrice !== null && component?.defaultUnitPrice !== undefined
                           ? String(component.defaultUnitPrice)
                           : line.unitPrice,
@@ -131,27 +148,21 @@ export function ExtraCostLines({ activeComponents, lines, onChange }: ExtraCostL
                 Hapus
               </Button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label htmlFor={`extra-cost-qty-${index}`}>Jumlah</Label>
-                <Input
-                  id={`extra-cost-qty-${index}`}
-                  inputMode="decimal"
-                  value={line.quantity}
-                  onChange={(event) => updateLine(index, { quantity: event.target.value })}
-                  placeholder="0"
-                />
-              </div>
-              <div>
-                <Label htmlFor={`extra-cost-price-${index}`}>Harga satuan</Label>
-                <Input
-                  id={`extra-cost-price-${index}`}
-                  value={line.unitPrice}
-                  onChange={(event) => updateLine(index, { unitPrice: event.target.value })}
-                  placeholder="0"
-                />
-              </div>
+            <div>
+              <Label htmlFor={`extra-cost-price-${index}`}>{priceLabel}</Label>
+              <Input
+                id={`extra-cost-price-${index}`}
+                value={line.unitPrice}
+                onChange={(event) => updateLine(index, { unitPrice: event.target.value })}
+                placeholder="0"
+              />
             </div>
+            {line.costType === "variable" &&
+              (totalPcs > 0 ? (
+                <p className="text-sm text-neutral-600">× {totalPcs} pcs (otomatis, dari total baris produksi)</p>
+              ) : (
+                <p className="text-sm text-danger-700">Isi jumlah pcs (SKU) dulu untuk menghitung biaya variabel ini.</p>
+              ))}
             {lineTotal !== null && <p className="text-sm text-neutral-600 tabular-nums">Subtotal: {formatRupiah(lineTotal)}</p>}
           </div>
         );

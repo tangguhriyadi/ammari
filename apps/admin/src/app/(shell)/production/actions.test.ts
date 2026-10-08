@@ -7,7 +7,7 @@ const { getStaffSessionMock } = vi.hoisted(() => ({ getStaffSessionMock: vi.fn()
 vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMock }));
 
 // Mocked (not a real DB call) so the "what did the action pass through" tests below can assert
-// on the exact costs/extraCosts arguments the action layer forwards, without needing a real
+// on the exact extraCosts argument the action layer forwards, without needing a real
 // batch/fabric fixture.
 const { createDraftMock, updateDraftMock } = vi.hoisted(() => ({
   createDraftMock: vi.fn().mockResolvedValue({ id: "batch-1" }),
@@ -56,11 +56,11 @@ describe("production batch actions require production.manage", () => {
   });
 });
 
-describe("extraCosts fallback matches costs' own undefined-means-\"don't touch\" contract", () => {
+describe("extraCosts fallback is undefined-means-\"don't touch\", never []", () => {
   // Regression test for a bug caught by typescript-reviewer during Phase C: the action layer
   // previously coerced an omitted `extraCosts` key to `[]`, which syncExtraCostLines (queries.ts)
-  // treats as "the submitted set is empty" and deletes every existing line — unlike `costs`,
-  // where an omitted key correctly stays `undefined` and leaves existing cost data untouched.
+  // treats as "the submitted set is empty" and deletes every existing line — an omitted key must
+  // stay `undefined` instead, leaving existing cost data untouched.
   test("updateDraftAction forwards extraCosts as undefined (not []) when the payload omits it, even with finance.view_profit", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage", "finance.view_profit"]));
     await updateDraftAction(NIL_ID, { producedAt: "2026-10-01", fabricYards: "1", lines: [] });
@@ -86,7 +86,7 @@ describe("extraCosts fallback matches costs' own undefined-means-\"don't touch\"
       producedAt: "2026-10-01",
       fabricYards: "1",
       lines: [],
-      extraCosts: [{ costComponentId: NIL_ID, quantity: "1", unitPrice: "1000" }],
+      extraCosts: [{ costComponentId: NIL_ID, unitPrice: "1000" }],
     });
     expect(updateDraftMock).toHaveBeenCalledWith(
       NIL_ID,

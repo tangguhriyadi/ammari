@@ -12,6 +12,7 @@ import {
   staffUsers,
   thankYouCards,
 } from "../src/schema";
+import type { Size } from "../src/schema";
 import type { TestDatabase } from "./helpers";
 
 export async function insertCustomer(tx: TestDatabase, overrides: Partial<typeof customers.$inferInsert> = {}) {
@@ -98,6 +99,48 @@ export async function insertProductVariant(tx: TestDatabase) {
   if (!variant) throw new Error("failed to insert product variant fixture");
 
   return { fabric, color, product, variant };
+}
+
+/** A second (or third, ...) product + one variant sharing an EXISTING fabric/color pair (from a
+ * prior insertProductVariant call) — for tests that need several products on the same batch, or
+ * a specific sizeMode/size combination (e.g. an all_size product's ALLSIZE variant) that
+ * insertProductVariant's own fixed shape (sized, size M) doesn't cover. */
+export async function insertVariantForProduct(
+  tx: TestDatabase,
+  fabricId: string,
+  colorId: string,
+  overrides: Partial<typeof products.$inferInsert> = {},
+  variantSize: Size = "M",
+) {
+  const [product] = await tx
+    .insert(products)
+    .values({
+      name: "Produk Test",
+      code: `PRD${randomUUID().slice(0, 8).toUpperCase()}`,
+      slug: `produk-test-${randomUUID()}`,
+      fabricId,
+      closure: "front_zip",
+      sizeMode: "sized",
+      basePrice: 200_000,
+      ...overrides,
+    })
+    .returning();
+  if (!product) throw new Error("failed to insert product fixture");
+
+  const [variant] = await tx
+    .insert(productVariants)
+    .values({
+      sku: `SKU-${randomUUID()}`,
+      productId: product.id,
+      fabricId,
+      fabricColorId: colorId,
+      closure: product.closure,
+      size: variantSize,
+    })
+    .returning();
+  if (!variant) throw new Error("failed to insert product variant fixture");
+
+  return { product, variant };
 }
 
 export async function insertAccessory(tx: TestDatabase, overrides: Partial<typeof accessories.$inferInsert> = {}) {

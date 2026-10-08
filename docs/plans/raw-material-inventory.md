@@ -181,3 +181,139 @@ rows in the new tables.
 5. Production integration (resolution, shortage, locking, posting rewrite, HPP) + its tests. **(next session)**
 6. UI for "Kebutuhan aksesoris" + extended cost breakdown. **(next session)**
 7. Reviewer pass (react/typescript/security — database-reviewer already run after step 1–4) + full verification + e2e. **(next session)**
+
+## 8. Session B design — production integration (steps 5–7)
+
+Steps 1–4 are done and current (nav since restructured: purchases live at `/purchases`,
+raw-material stock under `/stock` tabs, master pages read-only — see current code, not this
+file's earlier nav notes). This section is the concrete design for steps 5–7, written down so it
+survives a context reset.
+
+### 8.1 New requirement folded in: fixed vs. variable cost components
+
+Not in the original plan — added by the owner for this session:
+
+- `cost_components.cost_type`: `text` CHECK IN `('variable', 'fixed')`, default `'variable'`.
+  Seeded "Ongkos jahit" stays variable. Form label: "Variabel (per pcs)" / "Tetap (per batch)".
+- `production_batch_costs.cost_type`: snapshotted alongside `component_name`/`component_unit`,
+  same reasoning (a later rename of the component's cost_type must never rewrite history). NOT
+  NULL, no default — always set explicitly at insert. Migration 0010 backfills existing rows from
+  their joined `cost_components.cost_type` before adding the NOT NULL constraint.
+- **Variable line**: form shows only "Harga per pcs" (`unit_price`). `quantity` is never
+  submitted by the client — the server sets it to the batch's current total pcs
+  (`sum(production_batch_items.qty)`) every time the batch is saved (create/update), and
+  re-verifies/overwrites it again at posting (an `UPDATE ... SET quantity = totalPcs WHERE
+  cost_type = 'variable'` immediately before computing totals) so a stale client-side value can
+  never leak into HPP.
+- **Fixed line**: form shows only "Nominal". Stored as `quantity = 1`, `unit_price = nominal`.
+  Never recomputed from total pcs.
+- HPP per pcs = `ceil((fabricCost + accessoryCost + sum(variable totals) + sum(fixed totals)) /
+  totalPcs)` — same `calculateUnitCost` helper, just a different totalCost composition.
+- Posted-batch breakdown groups (`BatchCostsSection` rewrite): **Kain**, **Aksesoris** (one line
+  per resolved accessory, from its `accessory_movements` consumption row(s) for this batch),
+  **Biaya variabel**, **Biaya tetap**, **Total**, **HPP/pcs**.
+
+### 8.2 Fabric cost becomes computed, not hand-typed
+
+- `production_batches.fabric_cost_amount` stays as a column (unchanged schema) but is no longer
+  writable from the draft form — `createDraft`/`updateDraft` drop `costs: BatchCostsInput`
+  entirely (no more manual fabric-cost input at draft time). It is set exactly once, at posting,
+  to the fabric consumption movement's own (absolute) value.
+- The draft form instead shows a **live estimate**: `fabricYards × current fabric average cost
+  per yard` (via `getFabricBalance` + `averageCostPerUnit`), clearly labeled as an estimate, not
+  editable. `lib/production/fabric-cost.ts`/`.test.ts` (the old `suggestFabricCost`, sourced from
+  `fabrics.priceAmount/priceUnit`) are dead code per the original plan's own note — **deleted**,
+  replaced by a new helper sourced from the ledger average instead (e.g.
+  `estimateFabricCost(fabricYards, fabricBalance)`).
+- At posting: lock the fabric row, read its balance, consumption value = `-valueDeltaForConsumption(balanceBeforeConsumption,
+  -fabricYards)` (the zero-residual rule applies for free, since it's the same helper
+  accessories/fabric adjustments already use) → this becomes `fabric_cost_amount`.
+
+### 8.3 Accessory-needs resolution (`lib/production/accessory-needs.ts`, new file)
+
+```ts
+resolveAccessoryNeeds(lines: {sku, qty}[], db) ->
+  { neededByAccessoryId: Map<accessoryId, qty>, unresolved: {productName, size, sizeGroup}[] }
+```
+
+- Join `lines` SKUs → `product_variants` (size, productId) → `products` (name, sizeMode) →
+  `product_accessory_recipes` for each distinct productId.
+- A recipe row with `accessoryId` set resolves directly (size-independent) — add
+  `qtyPerPcs × line.qty` to that accessory's running total.
+- A recipe row with `sizeGroup` set resolves **per variant**: the resolution key is the variant's
+  own `size` column as-is (a sized variant's XS/S/M/L/XL; an all-size variant's `ALLSIZE`, which
+  doubles as "Polos" — no separate mapping needed, `product_variants.size` already holds the right
+  value either way). Look up `accessories` where `size_group` (citext, case-insensitive at the SQL
+  level — compare in JS via `.toLowerCase()` once rows are pulled back) matches and `size` matches
+  that key. Found → add to that accessory's total. Not found → push to `unresolved` (never
+  throws itself — the caller decides: draft display shows it as a warning, posting rejects on any
+  non-empty `unresolved` list, message naming every product/size/group in one message).
+
+`getAccessoryNeedsForBatch(batchId, db)` (draft display) composes this with:
+- the batch's current lines (read from `production_batch_items`, not client state — same
+  "computed from what's actually saved" discipline as the cost estimate),
+- existing overrides (`production_batch_accessory_overrides`),
+- current stock per needed accessory (`getAccessoryBalance`),
+- `effectiveQty = override ?? computed`, `shortage = effectiveQty > currentStock`.
+
+### 8.4 Posting rewrite (`postBatch`)
+
+Inside the existing transaction, after the batch-row lock and existing draft/lines/fabricYards
+checks:
+
+1. `resolveAccessoryNeeds(lines, tx)` — if `unresolved.length > 0`, reject immediately (a config
+   problem, not a race; message lists every unresolved product/size/group).
+2. Lock the fabric row (`lockFabricForUpdate`), then lock every needed accessory row in **sorted
+   id order** (deterministic, avoids deadlock with a concurrent post/purchase/adjustment on the
+   same items — mirrors `saveStockCount`'s own SKU-sort reasoning).
+3. Compute every shortage (fabric: `fabricYards > balance.qty`; each accessory: `effectiveQty >
+   balance.qty`, respecting an override) **without writing anything yet**; if any shortages
+   exist, reject with ONE combined message listing every short item (fabric included).
+4. Re-verify variable-line quantities: `UPDATE production_batch_costs SET quantity = totalPcs
+   WHERE production_batch_id = id AND cost_type = 'variable'`.
+5. Compute fabric cost (§8.2) and, for each resolved accessory, its consumption value via the
+   same `valueDeltaForConsumption` helper — insert one `fabric_stock_movements` row
+   (`type='production'`, `ref_type='production_batch'`, `ref_id=batchId`) and one
+   `accessory_movements` row per resolved accessory (same ref shape).
+6. `totalCost = fabricCost + Σ(accessory consumption values) + Σ(production_batch_costs.total)`
+   (variable + fixed both included in that sum already). `unitCostAmount =
+   calculateUnitCost(totalCost, totalPcs)` — unchanged helper.
+7. Everything else (finished-goods `stock_movements` insert, `production_batch_items.unitCostAmount`
+   update, `production_batches` status/postedAt/postedBy update, audit log) stays as today, just
+   fed from the new `totalCost`.
+
+### 8.5 "Kebutuhan aksesoris" UI
+
+A server-computed section on the batch draft page (new `accessory-needs-section.tsx`, same shape
+as `BatchCostsSection` — reads `getAccessoryNeedsForBatch`), listing each needed accessory with
+current stock and a shortage badge. Per-row override uses a **single-row server action**
+(`setAccessoryOverrideAction(batchId, accessoryId, overrideQty | null)`, `null` clears the
+override row) rather than a batch-save form — smaller, lower-risk diff, consistent with this
+codebase's existing single-row action idiom (void-purchase button, cost-component active toggle).
+
+### 8.6 Implementation order (resumable)
+
+1. `constants.ts` (`COST_COMPONENT_TYPES`) + `catalog.ts` schema edits (both `cost_type` columns,
+   the two deferred leftmost indexes) → `drizzle-kit generate` → **read** migration 0010, hand-fix
+   the `production_batch_costs.cost_type` backfill (generate as nullable, backfill from joined
+   `cost_components`, then `ALTER ... SET NOT NULL`, same multi-step idiom other migrations use
+   for a NOT NULL column added to a non-empty table).
+2. `lib/production/accessory-needs.ts` + unit tests (sized hit, ALLSIZE hit, missing size, direct
+   accessory row, mixed-product aggregation).
+3. `lib/production/queries.ts`: drop `costs` from `CreateDraftInput`/`UpdateDraftInput`; rewrite
+   `syncExtraCostLines` to snapshot `cost_type` and compute/re-verify variable quantity from
+   totalPcs; rewrite `postBatch` per §8.4; delete `fabric-cost.ts`/`.test.ts`, add the new
+   ledger-sourced estimate helper.
+4. Cost-components lib/actions/UI: add `costType` field end to end (form select, list display).
+5. Production batch form/actions: remove the fabric-cost input, wire the new estimate (read-only),
+   split `extra-cost-lines.tsx` by `cost_type` (variable → "Harga per pcs" only; fixed →
+   "Nominal" only, no quantity field either way).
+6. "Kebutuhan aksesoris" section + override action; rewrite `BatchCostsSection`'s breakdown
+   groups (§8.1).
+7. Tests: unit (accessory-needs resolution, postBatch shortage incl. fabric, zero-residual on a
+   full-consumption post, cost_type split HPP, re-verified variable quantity), extend
+   `production-and-stock.spec.ts` e2e (purchase fabric + one accessory via `/purchases`, a recipe
+   on a product, post a batch, assert stock decreased and HPP shown).
+8. Verification (lean): related tests while working; at the end, one pass each of typecheck,
+   lint, build, full unit/integration suite, e2e. Then `database-reviewer` + `security-reviewer`
+   only — fix CRITICAL/HIGH. Report briefly; no commit.

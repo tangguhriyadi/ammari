@@ -36,6 +36,15 @@ export type ProductionBatchStatus = (typeof PRODUCTION_BATCH_STATUSES)[number];
 export const COST_COMPONENT_UNITS = ["pcs", "meter", "yard", "lusin", "set"] as const;
 export type CostComponentUnit = (typeof COST_COMPONENT_UNITS)[number];
 
+/** Whether a cost_components row (and the production_batch_costs lines that snapshot it) scales
+ * with a batch's pcs count ("variable", e.g. "Ongkos jahit" — priced per pcs, so its total is
+ * unit_price × the batch's total pcs) or is a single flat amount per batch regardless of pcs
+ * ("fixed", e.g. a one-off tooling fee — stored as quantity=1 × unit_price). See postBatch/
+ * syncExtraCostLines in apps/admin's lib/production/queries.ts for where this distinction
+ * controls how `quantity` is computed (never typed by hand for either kind). */
+export const COST_COMPONENT_TYPES = ["variable", "fixed"] as const;
+export type CostComponentType = (typeof COST_COMPONENT_TYPES)[number];
+
 /** Shared between accessory_movements and fabric_stock_movements (migration 0008) — both ledgers
  * use the exact same movement vocabulary. "purchase_void" is a reversal row, never a hard
  * edit/delete of the original "purchase" row (see accessory_movements' own doc comment). */

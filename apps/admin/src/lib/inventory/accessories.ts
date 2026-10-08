@@ -200,6 +200,30 @@ export async function getAccessoryBalance(accessoryId: string, db: Database = de
   return { qty: row?.qty ?? 0, valueAmount: Number(row?.valueAmount ?? 0) };
 }
 
+/** Same contract as getAccessoryBalance, batched over several accessory ids in ONE query
+ * (grouped SUM, same shape as listAccessories' own balanceByAccessory subquery) instead of one
+ * round-trip per id — for a caller that needs several accessories' balances at once (e.g. the
+ * production draft's "Kebutuhan aksesoris" section) and isn't deciding whether to WRITE a new
+ * movement (which still needs the single-row-locked getAccessoryBalance, inside its own
+ * transaction, per that function's own doc comment). An id with no movements at all (never
+ * purchased) is simply absent from the returned Map — callers should default to `{ qty: 0,
+ * valueAmount: 0 }` the same way listAccessories' `coalesce` does. */
+export async function getAccessoryBalances(accessoryIds: readonly string[], db: Database = defaultDb): Promise<Map<string, RawMaterialBalance>> {
+  if (accessoryIds.length === 0) return new Map();
+  const rows = await db
+    .select({
+      accessoryId: accessoryMovements.accessoryId,
+      qty: sql<number>`sum(${accessoryMovements.qty})::int`,
+      // See getAccessoryBalance's own comment for why this needs an explicit ::bigint ->
+      // Number() conversion rather than relying on Drizzle's typed-column mapping.
+      valueAmount: sql<string>`sum(${accessoryMovements.valueAmount})::bigint`,
+    })
+    .from(accessoryMovements)
+    .where(inArray(accessoryMovements.accessoryId, accessoryIds))
+    .groupBy(accessoryMovements.accessoryId);
+  return new Map(rows.map((row) => [row.accessoryId, { qty: row.qty, valueAmount: Number(row.valueAmount) }]));
+}
+
 // ---------- Ledger ----------
 
 export interface AccessoryLedgerRow {

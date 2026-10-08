@@ -16,18 +16,10 @@ export default async function NewProductionBatchPage() {
       <PageHeader title="Batch produksi baru" />
       <ProductionBatchForm
         mode="create"
-        fabrics={fabrics.map((fabric) => ({
-          id: fabric.id,
-          name: fabric.name,
-          // Never shipped to a session without finance.view_profit — same contract as
-          // initialCosts/initialExtraCosts/activeCostComponents below, not just unused by the
-          // form's own (already-gated) cost suggestion.
-          priceAmount: canViewProfit ? fabric.priceAmount : null,
-          priceUnit: canViewProfit ? fabric.priceUnit : null,
-        }))}
+        fabrics={fabrics.map((fabric) => ({ id: fabric.id, name: fabric.name }))}
         initialValues={{ fabricId: "", producedAt: todayInJakarta(), fabricYards: null, notes: "", lines: [] }}
         eligibleSkus={[]}
-        initialCosts={canViewProfit ? { fabricCostAmount: "" } : undefined}
+        canViewProfit={canViewProfit}
         initialExtraCosts={canViewProfit ? [] : undefined}
         activeCostComponents={activeCostComponents}
       />

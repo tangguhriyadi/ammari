@@ -139,6 +139,8 @@ export default async function globalSetup(): Promise<void> {
     "stock.view",
     "stock.adjust",
     "finance.view_profit",
+    "inventory.view",
+    "inventory.manage",
   ]);
   await ensureStaffFixture(E2E_PRODUCTION_STOCK_EMAIL, "E2E Production & Stock", E2E_PRODUCTION_STOCK_ROLE_KEY);
 

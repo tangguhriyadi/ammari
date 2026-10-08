@@ -3,24 +3,19 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { Button, Input, Label, Select, Textarea } from "@ammari/ui";
-import type { FabricPriceUnit } from "@ammari/db/schema";
+import { formatRupiah } from "@ammari/ui/lib";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import type { EligibleSkuRow } from "@/lib/production/queries";
-import { suggestFabricCost } from "@/lib/production/fabric-cost";
+import { estimateFabricCost } from "@/lib/production/fabric-cost-estimate";
+import type { RawMaterialBalance } from "@/lib/inventory/moving-average";
 import { parseDecimalQuantity } from "@/lib/production/decimal-quantity";
-import { createDraftAction, suggestEligibleSkusAction, updateDraftAction } from "../actions";
+import { createDraftAction, getFabricBalanceAction, suggestEligibleSkusAction, updateDraftAction } from "../actions";
 import { BatchLinePicker } from "./batch-line-picker";
 import { ExtraCostLines, type ActiveCostComponentOption, type ExtraCostLineState } from "./extra-cost-lines";
-
-export interface ProductionBatchFormCosts {
-  fabricCostAmount: string;
-}
 
 interface FabricOption {
   id: string;
   name: string;
-  priceAmount: number | null;
-  priceUnit: FabricPriceUnit | null;
 }
 
 interface ProductionBatchFormCommonProps {
@@ -35,29 +30,32 @@ interface ProductionBatchFormCommonProps {
    * (`suggestEligibleSkusAction`) whenever the fabric select changes, since the initial server
    * render has no fabric selected yet. */
   eligibleSkus: EligibleSkuRow[];
-  /** `undefined` when the session lacks finance.view_profit — the cost field and the whole
-   * "Biaya lain" section then simply don't render at all, and nothing is submitted for them. */
-  initialCosts?: ProductionBatchFormCosts;
+  /** Whether this session holds finance.view_profit — gates the whole cost section (fabric-cost
+   * estimate + "Biaya lain"), same discipline as every other cost figure in this feature. */
+  canViewProfit: boolean;
   initialExtraCosts?: ExtraCostLineState[];
-  /** Only meaningful (and only ever non-empty) when initialCosts is defined — harmless to pass
-   * `[]` otherwise. */
+  /** Only meaningful (and only ever non-empty) when canViewProfit — harmless to pass `[]`
+   * otherwise. */
   activeCostComponents: ActiveCostComponentOption[];
 }
 
 // A discriminated union, not optional `batchId?`/`fabrics?`/`fixedFabricName?` on a single
-// shape — "edit" always has a real `batchId` to submit to and a fixed fabric (+ its price info,
-// for the yards->cost prefill) to display; "create" always has a fabric list to pick from. This
-// lets the compiler enforce that pairing instead of a human-maintained `batchId!` non-null
-// assertion at the one call site that needs it.
+// shape — "edit" always has a real `batchId` to submit to and a fixed fabric (+ its current
+// stock balance, for the yards->cost estimate) to display; "create" always has a fabric list to
+// pick from. This lets the compiler enforce that pairing instead of a human-maintained `batchId!`
+// non-null assertion at the one call site that needs it.
 export type ProductionBatchFormProps =
   | ({ mode: "create"; fabrics: FabricOption[] } & ProductionBatchFormCommonProps)
-  | ({ mode: "edit"; batchId: string; fixedFabricName: string; fixedFabricPrice: { priceAmount: number | null; priceUnit: FabricPriceUnit | null } } & ProductionBatchFormCommonProps);
+  | ({ mode: "edit"; batchId: string; fixedFabricName: string; fixedFabricBalance: RawMaterialBalance } & ProductionBatchFormCommonProps);
 
 export function ProductionBatchForm(props: ProductionBatchFormProps) {
-  const { mode, initialValues, eligibleSkus: initialEligibleSkus, initialCosts, initialExtraCosts, activeCostComponents } = props;
+  const { mode, initialValues, eligibleSkus: initialEligibleSkus, canViewProfit, initialExtraCosts, activeCostComponents } = props;
   const router = useRouter();
   const [fabricId, setFabricId] = useState(initialValues.fabricId);
   const [eligibleSkus, setEligibleSkus] = useState(initialEligibleSkus);
+  const [fabricBalance, setFabricBalance] = useState<RawMaterialBalance | null>(
+    props.mode === "edit" ? props.fixedFabricBalance : null,
+  );
   const [producedAt, setProducedAt] = useState(initialValues.producedAt);
   const [fabricYardsText, setFabricYardsText] = useState(
     initialValues.fabricYards !== null ? String(initialValues.fabricYards) : "",
@@ -66,17 +64,15 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
   const [quantities, setQuantities] = useState<Record<string, number>>(
     Object.fromEntries(initialValues.lines.map((line) => [line.sku, line.qty])),
   );
-  const [costs, setCosts] = useState<ProductionBatchFormCosts>(initialCosts ?? { fabricCostAmount: "" });
-  const [fabricCostTouched, setFabricCostTouched] = useState(false);
   const [extraCostLines, setExtraCostLines] = useState<ExtraCostLineState[]>(initialExtraCosts ?? []);
   const [error, setError] = useState<string | null>(null);
   const [saving, startTransition] = useTransition();
   const [, startFabricLoad] = useTransition();
 
   // Create mode only (the Select branch below) — editing a draft's fabric is fixed, so there is
-  // nothing to re-fetch. Re-fetches the eligible-SKU list every time a non-empty fabric is
-  // picked; an empty/cleared selection is handled by `visibleEligibleSkus` below instead of a
-  // synchronous setState here.
+  // nothing to re-fetch. Re-fetches the eligible-SKU list AND (when this session can see costs)
+  // the fabric's current stock balance every time a non-empty fabric is picked; an empty/cleared
+  // selection is handled by `visibleEligibleSkus` below instead of a synchronous setState here.
   useEffect(() => {
     if (mode !== "create" || !fabricId) return;
     // Guards against a stale response winning a race: if the fabric is switched again (A -> B)
@@ -85,35 +81,23 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
     // already-applied eligible-SKU list/quantities after the user has moved on.
     let ignore = false;
     startFabricLoad(async () => {
-      const rows = await suggestEligibleSkusAction(fabricId);
+      const [rows, balance] = await Promise.all([
+        suggestEligibleSkusAction(fabricId),
+        canViewProfit ? getFabricBalanceAction(fabricId) : Promise.resolve(null),
+      ]);
       if (ignore) return;
       setEligibleSkus(rows);
       // A fabric switch invalidates any previously staged quantities (they belonged to the OLD
       // fabric's SKUs) — clear rather than silently carrying over qty for SKUs no longer shown.
       setQuantities({});
+      setFabricBalance(balance);
     });
     return () => {
       ignore = true;
     };
-  }, [fabricId, mode]);
+  }, [fabricId, mode, canViewProfit]);
 
   const visibleEligibleSkus = mode === "create" && !fabricId ? [] : eligibleSkus;
-
-  const selectedFabricPrice =
-    props.mode === "create"
-      ? (props.fabrics.find((fabric) => fabric.id === fabricId) ?? { priceAmount: null, priceUnit: null })
-      : props.fixedFabricPrice;
-
-  // Prefills the fabric cost from yards x the fabric's own price — same "touched" idiom as
-  // product-form.tsx's codeTouched/slugTouched, but computed as a plain derived value during
-  // render (not synchronized via an effect's setState, which would just trigger an extra
-  // cascading render for no benefit): until the user edits the cost field themselves (the
-  // vendor's actual price can differ per purchase), the INPUT shows the live suggestion instead
-  // of whatever is in `costs` state; once touched, `costs` itself is the source of truth again.
-  const suggestedFabricCost =
-    initialCosts !== undefined ? suggestFabricCost(parseDecimalQuantity(fabricYardsText), selectedFabricPrice) : null;
-  const fabricCostAmountDisplay =
-    !fabricCostTouched && suggestedFabricCost !== null ? String(suggestedFabricCost) : costs.fabricCostAmount;
 
   const isDirty =
     fabricId !== initialValues.fabricId ||
@@ -121,7 +105,6 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
     fabricYardsText !== (initialValues.fabricYards !== null ? String(initialValues.fabricYards) : "") ||
     notes !== initialValues.notes ||
     JSON.stringify(quantities) !== JSON.stringify(Object.fromEntries(initialValues.lines.map((l) => [l.sku, l.qty]))) ||
-    (initialCosts ? fabricCostAmountDisplay !== initialCosts.fabricCostAmount : false) ||
     (initialExtraCosts ? JSON.stringify(extraCostLines) !== JSON.stringify(initialExtraCosts) : false);
   useUnsavedChangesGuard(isDirty, "Ada perubahan batch produksi yang belum disimpan. Tinggalkan halaman ini?");
 
@@ -129,6 +112,9 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
   const lines = Object.entries(quantities)
     .filter(([, qty]) => qty > 0)
     .map(([sku, qty]) => ({ sku, qty }));
+  const totalPcs = lines.reduce((sum, line) => sum + line.qty, 0);
+
+  const estimatedFabricCost = canViewProfit && fabricBalance ? estimateFabricCost(fabricYardsNumber, fabricBalance) : null;
 
   function handleSubmit() {
     setError(null);
@@ -138,16 +124,9 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
         fabricYards: fabricYardsText,
         notes,
         lines,
-        costs: initialCosts !== undefined ? { fabricCostAmount: fabricCostAmountDisplay } : undefined,
-        extraCosts:
-          initialExtraCosts !== undefined
-            ? extraCostLines.map((line) => ({
-                id: line.id,
-                costComponentId: line.costComponentId,
-                quantity: line.quantity,
-                unitPrice: line.unitPrice,
-              }))
-            : undefined,
+        extraCosts: initialExtraCosts !== undefined
+          ? extraCostLines.map((line) => ({ id: line.id, costComponentId: line.costComponentId, unitPrice: line.unitPrice }))
+          : undefined,
       };
       const result =
         props.mode === "create"
@@ -217,27 +196,22 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
         <Textarea id="batch-notes" value={notes} onChange={(event) => setNotes(event.target.value)} rows={2} />
       </div>
 
-      {initialCosts !== undefined && (
+      {canViewProfit && (
         <>
           <div>
-            {/* Not `required` — unlike a product's basePrice, this can stay blank while the
-                draft is saved; only posting enforces fabric cost > 0 (see postBatch). */}
-            <Label htmlFor="batch-fabric-cost">Biaya bahan</Label>
-            <Input
-              id="batch-fabric-cost"
-              value={fabricCostAmountDisplay}
-              onChange={(event) => {
-                setFabricCostTouched(true);
-                setCosts({ fabricCostAmount: event.target.value });
-              }}
-              placeholder="0"
-            />
+            <span className="text-sm font-medium text-neutral-900">Biaya bahan (estimasi)</span>
+            <p className="min-h-11 content-center text-base text-neutral-900 tabular-nums">
+              {estimatedFabricCost !== null ? formatRupiah(estimatedFabricCost) : "—"}
+            </p>
+            <p className="text-sm text-neutral-600">
+              Dihitung dari rata-rata harga beli bahan saat ini × jumlah yard. Nilai final dihitung ulang saat posting.
+            </p>
           </div>
-          <ExtraCostLines activeComponents={activeCostComponents} lines={extraCostLines} onChange={setExtraCostLines} />
+          <ExtraCostLines activeComponents={activeCostComponents} lines={extraCostLines} onChange={setExtraCostLines} totalPcs={totalPcs} />
         </>
       )}
-      {initialCosts === undefined && mode === "edit" && (
-        <p className="text-sm text-neutral-600">Menunggu biaya diisi oleh pemilik.</p>
+      {!canViewProfit && mode === "edit" && (
+        <p className="text-sm text-neutral-600">Biaya hanya bisa dilihat dan diisi oleh pemilik.</p>
       )}
 
       {fabricId ? (

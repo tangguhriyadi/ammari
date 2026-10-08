@@ -18,6 +18,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { checkIn, citext, createdAtOnly, timestamps } from "./columns";
 import {
+  COST_COMPONENT_TYPES,
   COST_COMPONENT_UNITS,
   FABRIC_PRICE_UNITS,
   PRODUCT_CLOSURES,
@@ -29,6 +30,7 @@ import {
   STOCK_ADJUSTMENT_REASONS,
   STOCK_MOVEMENT_REF_TYPES,
   STOCK_MOVEMENT_TYPES,
+  type CostComponentType,
   type CostComponentUnit,
   type FabricPriceUnit,
   type ProductClosure,
@@ -371,6 +373,12 @@ export const costComponents = pgTable(
     name: citext("name").notNull().unique(),
     unit: text("unit").$type<CostComponentUnit>().notNull(),
     defaultUnitPrice: bigint("default_unit_price", { mode: "number" }),
+    // "variable" (scales with the batch's pcs count, e.g. "Ongkos jahit") or "fixed" (one flat
+    // amount per batch regardless of pcs) — migration 0010. Snapshotted onto
+    // production_batch_costs.cost_type at the moment a line is added, same reasoning as
+    // componentName/componentUnit (a later change here never rewrites history). Controls how
+    // that line's `quantity` is computed server-side — see postBatch/syncExtraCostLines.
+    costType: text("cost_type").$type<CostComponentType>().notNull().default("variable"),
     // Never hard-deleted once referenced by any production_batch_costs row (ON DELETE RESTRICT
     // below) — "delete" in the UI always means setting this false, same as fabric_colors.
     isActive: boolean("is_active").notNull().default(true),
@@ -379,6 +387,7 @@ export const costComponents = pgTable(
   },
   (table) => [
     check("cost_components_unit_check", checkIn(table.unit, COST_COMPONENT_UNITS)),
+    check("cost_components_cost_type_check", checkIn(table.costType, COST_COMPONENT_TYPES)),
     check("cost_components_default_unit_price_check", sql`${table.defaultUnitPrice} >= 0`),
   ],
 );
@@ -452,6 +461,12 @@ export const productionBatchCosts = pgTable(
       .references(() => costComponents.id, { onDelete: "restrict" }),
     componentName: text("component_name").notNull(),
     componentUnit: text("component_unit").$type<CostComponentUnit>().notNull(),
+    // Snapshot of costComponents.costType at the moment this line was inserted — see that
+    // column's doc comment. Drives how `quantity` below is computed (never typed by hand): a
+    // 'variable' line's quantity is always the batch's current total pcs, recomputed on every
+    // draft save and re-verified at posting; a 'fixed' line's quantity is always exactly 1 (its
+    // unit_price IS the flat amount). No default — always set explicitly at insert.
+    costType: text("cost_type").$type<CostComponentType>().notNull(),
     quantity: numeric("quantity", { precision: 10, scale: 2, mode: "number" }).notNull(),
     unitPrice: bigint("unit_price", { mode: "number" }).notNull(),
     total: bigint("total", { mode: "number" })
@@ -468,6 +483,7 @@ export const productionBatchCosts = pgTable(
     check("production_batch_costs_quantity_check", sql`${table.quantity} > 0`),
     check("production_batch_costs_unit_price_check", sql`${table.unitPrice} >= 0`),
     check("production_batch_costs_component_unit_check", checkIn(table.componentUnit, COST_COMPONENT_UNITS)),
+    check("production_batch_costs_cost_type_check", checkIn(table.costType, COST_COMPONENT_TYPES)),
   ],
 );
 
@@ -745,6 +761,10 @@ export const productAccessoryRecipes = pgTable(
   },
   (table) => [
     index("product_accessory_recipes_product_id_idx").on(table.productId),
+    // Deferred from migration 0008 (leftmost index for the ON DELETE RESTRICT check against
+    // accessories, same reasoning every other RESTRICT-FK index in this schema gives — an
+    // unindexed check seq-scans this table on every accessory delete attempt).
+    index("product_accessory_recipes_accessory_id_idx").on(table.accessoryId),
     check(
       "product_accessory_recipes_exactly_one_target_check",
       sql`(${table.accessoryId} is null) <> (${table.sizeGroup} is null)`,
@@ -780,6 +800,11 @@ export const productionBatchAccessoryOverrides = pgTable(
   },
   (table) => [
     unique("production_batch_accessory_overrides_batch_accessory_key").on(table.productionBatchId, table.accessoryId),
+    // Deferred from migration 0008 — same reasoning as
+    // product_accessory_recipes_accessory_id_idx above (the unique constraint's own index
+    // leads with production_batch_id, not accessory_id, so it doesn't cover this RESTRICT
+    // check's leftmost-prefix need).
+    index("production_batch_accessory_overrides_accessory_id_idx").on(table.accessoryId),
     check("production_batch_accessory_overrides_override_qty_check", sql`${table.overrideQty} >= 0`),
   ],
 );

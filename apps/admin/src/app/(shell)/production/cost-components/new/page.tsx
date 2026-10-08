@@ -10,7 +10,7 @@ export default async function NewCostComponentPage() {
       <PageHeader title="Komponen biaya baru" />
       <CostComponentForm
         mode="create"
-        initialValues={{ name: "", unit: "pcs", defaultUnitPrice: "", isActive: true, sortOrder: 0 }}
+        initialValues={{ name: "", unit: "pcs", defaultUnitPrice: "", costType: "variable", isActive: true, sortOrder: 0 }}
       />
     </>
   );

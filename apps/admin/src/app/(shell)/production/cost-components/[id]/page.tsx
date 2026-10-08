@@ -20,6 +20,7 @@ export default async function EditCostComponentPage({ params }: { params: Promis
           name: component.name,
           unit: component.unit,
           defaultUnitPrice: component.defaultUnitPrice !== null ? String(component.defaultUnitPrice) : "",
+          costType: component.costType,
           isActive: component.isActive,
           sortOrder: component.sortOrder,
         }}
