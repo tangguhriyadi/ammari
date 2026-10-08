@@ -11,6 +11,7 @@ import {
   Settings,
   ShieldCheck,
   ShoppingBag,
+  Tags,
   Upload,
   Users,
 } from "lucide-react";
@@ -76,6 +77,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: Factory,
     group: "Operasional",
     permissionKeys: ["production.manage"],
+    mobilePrimary: false,
+  },
+  {
+    label: "Aksesoris",
+    href: "/accessories",
+    icon: Tags,
+    group: "Operasional",
+    permissionKeys: ["inventory.view", "inventory.manage"],
     mobilePrimary: false,
   },
   {

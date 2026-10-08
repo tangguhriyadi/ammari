@@ -18,6 +18,7 @@ const {
   reorderProductImagesAction,
   setProductThumbnailAction,
   updateImageAltTextAction,
+  saveRecipeAction,
 } = await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
@@ -140,6 +141,33 @@ describe("every product server action requires products.manage", () => {
   // actions write through the real default db client, not the `ammari_test` one — that path is
   // instead covered against an injected test db in queries.test.ts and image-queries.test.ts.
   // This file only verifies the rejection path, which never reaches the DB at all.
+});
+
+describe("saveRecipeAction", () => {
+  test("rejects a session without products.manage", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions([]));
+    await expect(
+      saveRecipeAction({ productId: "00000000-0000-0000-0000-000000000000", lines: [] }),
+    ).rejects.toThrow();
+  });
+
+  test("rejects a line with both accessoryId and sizeGroup set, before touching the DB", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["products.manage"]));
+    const result = await saveRecipeAction({
+      productId: "00000000-0000-0000-0000-000000000000",
+      lines: [{ accessoryId: "00000000-0000-0000-0000-000000000000", sizeGroup: "X", qtyPerPcs: 1 }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a line with neither accessoryId nor sizeGroup set", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["products.manage"]));
+    const result = await saveRecipeAction({
+      productId: "00000000-0000-0000-0000-000000000000",
+      lines: [{ qtyPerPcs: 1 }],
+    });
+    expect(result.ok).toBe(false);
+  });
 });
 
 describe("bulkUpdateVariantsAction field validation", () => {

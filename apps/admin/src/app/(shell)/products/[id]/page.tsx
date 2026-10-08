@@ -6,11 +6,14 @@ import { getProductDetail, getCurrentCostAssumption } from "@/lib/products/queri
 import { listFabricColors, listFabricsWithUsage } from "@/lib/products/fabric-queries";
 import { listProductColorGroups, listProductImages } from "@/lib/products/image-queries";
 import { calculateBatasHpp } from "@/lib/products/batas-hpp";
+import { listActiveAccessories, listDistinctSizeGroups } from "@/lib/inventory/accessories";
+import { listRecipeForProduct } from "@/lib/inventory/recipes";
 import { ProductForm } from "../_components/product-form";
 import { VariantBuilder } from "../_components/variant-builder";
 import { BatasHppCard } from "../_components/batas-hpp-card";
 import { ProductPhotosSection } from "../_components/product-photos-section";
 import { ProductThumbnail } from "../_components/product-thumbnail";
+import { AccessoryRecipeSection } from "../_components/accessory-recipe-section";
 
 export default async function ProdukDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission("products.manage");
@@ -23,6 +26,9 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
   const availableColors = await listFabricColors(product.fabricId, { activeOnly: true });
   const colorGroups = await listProductColorGroups(product.id);
   const images = await listProductImages(product.id);
+  const recipeRows = await listRecipeForProduct(product.id);
+  const activeAccessories = await listActiveAccessories();
+  const distinctSizeGroups = await listDistinctSizeGroups();
 
   // Never computed at all for a session without finance.view_profit — ProductBatasHpp below
   // (which runs the actual cost_assumptions query + calculation) is simply never rendered in
@@ -98,6 +104,22 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
           thumbnailImageId={product.thumbnailImageId}
           colorGroups={colorGroups}
           images={images}
+        />
+      </div>
+
+      <div className="mt-8">
+        <AccessoryRecipeSection
+          productId={product.id}
+          initialRows={recipeRows.map((row) => ({
+            id: row.id,
+            clientKey: row.id,
+            target: row.accessoryId !== null ? ("accessory" as const) : ("sizeGroup" as const),
+            accessoryId: row.accessoryId ?? "",
+            sizeGroup: row.sizeGroup ?? "",
+            qtyPerPcs: String(row.qtyPerPcs),
+          }))}
+          activeAccessories={activeAccessories.map((accessory) => ({ id: accessory.id, name: accessory.name, size: accessory.size }))}
+          distinctSizeGroups={distinctSizeGroups}
         />
       </div>
     </>

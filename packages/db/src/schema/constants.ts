@@ -36,6 +36,18 @@ export type ProductionBatchStatus = (typeof PRODUCTION_BATCH_STATUSES)[number];
 export const COST_COMPONENT_UNITS = ["pcs", "meter", "yard", "lusin", "set"] as const;
 export type CostComponentUnit = (typeof COST_COMPONENT_UNITS)[number];
 
+/** Shared between accessory_movements and fabric_stock_movements (migration 0008) — both ledgers
+ * use the exact same movement vocabulary. "purchase_void" is a reversal row, never a hard
+ * edit/delete of the original "purchase" row (see accessory_movements' own doc comment). */
+export const RAW_MATERIAL_MOVEMENT_TYPES = ["purchase", "purchase_void", "production", "adjustment"] as const;
+export type RawMaterialMovementType = (typeof RAW_MATERIAL_MOVEMENT_TYPES)[number];
+
+/** Mirrors stock_movements' own ref_type idiom, scoped to what can actually consume/reference a
+ * raw-material item: a production batch (aggregated consumption, not per line — see queries) or
+ * a manual purchase/adjustment/void with no single natural source row. */
+export const RAW_MATERIAL_MOVEMENT_REF_TYPES = ["production_batch", "manual"] as const;
+export type RawMaterialMovementRefType = (typeof RAW_MATERIAL_MOVEMENT_REF_TYPES)[number];
+
 export const CHANNEL_IDS = ["shopee", "tiktok", "web", "reseller"] as const;
 export type ChannelId = (typeof CHANNEL_IDS)[number];
 

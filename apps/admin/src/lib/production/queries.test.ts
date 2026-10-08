@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
-import { testDb, withRollback, type TestDatabase } from "@ammari/db/test-utils";
+import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
 import { insertProductVariant, insertStaffUser } from "@ammari/db/test-fixtures";
 import {
   costComponents,
@@ -44,12 +44,18 @@ async function insertCostComponentFixture(tx: TestDatabase, overrides: Partial<t
  * prevent_posted_batch_delete (migration 0007) otherwise rejects deleting ANY posted batch,
  * which is correct production behavior but not what disposable test fixtures need. */
 async function forceDeletePostedBatchFixture(db: TestDatabase, batchId: string): Promise<void> {
-  await db.execute(sql`ALTER TABLE production_batches DISABLE TRIGGER prevent_posted_batch_delete`);
-  try {
-    await db.delete(productionBatches).where(eq(productionBatches.id, batchId));
-  } finally {
-    await db.execute(sql`ALTER TABLE production_batches ENABLE TRIGGER prevent_posted_batch_delete`);
-  }
+  await withTriggerDisabled(db, "production_batches", "prevent_posted_batch_delete", () =>
+    db.delete(productionBatches).where(eq(productionBatches.id, batchId)),
+  );
+}
+
+/** Same reasoning as forceDeletePostedBatchFixture — stock_movements is now append-only
+ * (migration 0008, prevent_stock_movement_mutation), so a real-commit test's own disposable
+ * movement rows need the trigger-disabling helper instead of a plain delete. */
+async function forceDeleteStockMovementsFixture(db: TestDatabase, sku: string): Promise<void> {
+  await withTriggerDisabled(db, "stock_movements", "prevent_stock_movement_mutation", () =>
+    db.delete(stockMovements).where(eq(stockMovements.sku, sku)),
+  );
 }
 
 /** drizzle-orm wraps the driver error as "Failed query: ..." and puts the real Postgres message
@@ -194,7 +200,7 @@ describe("postBatch", () => {
       const rows = await testDb.select().from(stockMovements).where(eq(stockMovements.sku, variant.sku));
       expect(rows).toHaveLength(1); // exactly one movement, not two
     } finally {
-      await testDb.delete(stockMovements).where(eq(stockMovements.sku, variant.sku));
+      await forceDeleteStockMovementsFixture(testDb, variant.sku);
       // The winning postBatch call left this batch posted — prevent_posted_batch_delete
       // (migration 0007) now rejects a plain delete, so this disposable fixture needs the
       // trigger-disabling helper instead.
@@ -292,9 +298,10 @@ describe("postBatch", () => {
       // marks it deleted (invisible to that lookup, within this same transaction) before the
       // ON DELETE CASCADE to its children fires. Deleting a child directly first would still see
       // the parent as 'posted' and get rejected by its own trigger. The parent row itself is now
-      // ALSO guarded (prevent_posted_batch_delete), so this disposable fixture needs the
-      // trigger-disabling helper rather than a plain delete.
-      await testDb.delete(stockMovements).where(eq(stockMovements.sku, variant.sku));
+      // ALSO guarded (prevent_posted_batch_delete), and stock_movements is now append-only too
+      // (prevent_stock_movement_mutation) — both disposable fixtures need the trigger-disabling
+      // helper rather than a plain delete.
+      await forceDeleteStockMovementsFixture(testDb, variant.sku);
       await forceDeletePostedBatchFixture(testDb, batch.id);
       await testDb.delete(costComponents).where(eq(costComponents.id, component.id));
       await testDb.delete(productVariants).where(eq(productVariants.sku, variant.sku));

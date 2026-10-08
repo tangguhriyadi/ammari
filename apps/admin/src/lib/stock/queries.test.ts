@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
-import { testDb, withRollback, type TestDatabase } from "@ammari/db/test-utils";
+import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
 import { insertProductVariant, insertStaffUser } from "@ammari/db/test-fixtures";
 import { fabricColors, fabrics, products, productVariants, stockMovements } from "@ammari/db/schema";
 import { adjustStock, getSkuDetail, listStockLedger, listStockOverview, saveStockCount } from "./queries";
@@ -62,7 +62,12 @@ describe("adjustStock", () => {
       expect(finalBalance).toBeGreaterThanOrEqual(0);
       expect(finalBalance).toBe(2); // 5 - 3, exactly one adjustment landed
     } finally {
-      await testDb.delete(stockMovements).where(eq(stockMovements.sku, variant.sku));
+      // stock_movements is append-only (migration 0008, prevent_stock_movement_mutation) — this
+      // disposable fixture's own movements need the trigger-disabling helper rather than a plain
+      // delete.
+      await withTriggerDisabled(testDb, "stock_movements", "prevent_stock_movement_mutation", () =>
+        testDb.delete(stockMovements).where(eq(stockMovements.sku, variant.sku)),
+      );
       await testDb.delete(productVariants).where(eq(productVariants.sku, variant.sku));
       await testDb.delete(products).where(eq(products.id, product.id));
       await testDb.delete(fabricColors).where(eq(fabricColors.id, color.id));

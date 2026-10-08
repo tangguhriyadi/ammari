@@ -1,0 +1,4 @@
+CREATE INDEX "accessory_movements_created_by_staff_user_id_idx" ON "accessory_movements" USING btree ("created_by_staff_user_id");--> statement-breakpoint
+CREATE INDEX "accessory_movements_voided_by_staff_user_id_idx" ON "accessory_movements" USING btree ("voided_by_staff_user_id");--> statement-breakpoint
+CREATE INDEX "fabric_stock_movements_created_by_staff_user_id_idx" ON "fabric_stock_movements" USING btree ("created_by_staff_user_id");--> statement-breakpoint
+CREATE INDEX "fabric_stock_movements_voided_by_staff_user_id_idx" ON "fabric_stock_movements" USING btree ("voided_by_staff_user_id");

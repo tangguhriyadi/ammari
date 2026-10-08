@@ -8,6 +8,7 @@ import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/products/action-result";
 import * as productQueries from "@/lib/products/queries";
 import * as imageQueries from "@/lib/products/image-queries";
+import * as recipeQueries from "@/lib/inventory/recipes";
 
 // ---------- Products ----------
 
@@ -290,6 +291,37 @@ export async function updateImageAltTextAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await imageQueries.updateImageAltText(parsed.data.imageId, parsed.data.altText || null, session.staffUser.id);
+    return undefined;
+  });
+}
+
+// ---------- Accessory recipe (BOM) ----------
+
+const recipeLineSchema = z
+  .object({
+    accessoryId: z.string().uuid().optional(),
+    sizeGroup: z.string().trim().optional(),
+    qtyPerPcs: z.coerce.number().int("Jumlah per pcs harus bilangan bulat.").positive("Jumlah per pcs harus lebih dari 0."),
+  })
+  .refine((line) => Boolean(line.accessoryId) !== Boolean(line.sizeGroup), {
+    message: "Pilih satu aksesoris ATAU satu grup ukuran untuk setiap baris.",
+  });
+
+const saveRecipeSchema = z.object({
+  productId: z.string().uuid(),
+  lines: z.array(recipeLineSchema),
+});
+
+export async function saveRecipeAction(input: z.input<typeof saveRecipeSchema>): Promise<ActionResult> {
+  const session = await requirePermission("products.manage");
+  const parsed = saveRecipeSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    await recipeQueries.saveRecipeForProduct(
+      parsed.data.productId,
+      parsed.data.lines.map((line) => ({ accessoryId: line.accessoryId ?? null, sizeGroup: line.sizeGroup ?? null, qtyPerPcs: line.qtyPerPcs })),
+      session.staffUser.id,
+    );
     return undefined;
   });
 }

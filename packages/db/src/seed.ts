@@ -115,13 +115,13 @@ async function seedInitialCostAssumptions(db: Database) {
 
 // name is citext + unique, so onConflictDoNothing is race-safe across repeated/concurrent seed
 // runs the same way seedInitialCostAssumptions' effective_from conflict target is.
-const DEFAULT_COST_COMPONENTS = [
-  "Ongkos jahit",
-  "Kancing",
-  "Handtag",
-  "Plat metal brand",
-  "Zipper packaging",
-] as const;
+// Services only (migration 0008) — the 4 goods formerly seeded here (Kancing, Handtag, Plat
+// metal brand, Zipper packaging) now flow through the dedicated accessories/accessory_movements
+// mechanism instead, which tracks their own stock and moving-average cost; cost_components
+// exists only for costs that aren't a physical, stockable item (sewing fees, ...). The migration
+// itself deletes or deactivates the 4 pre-existing seeded rows depending on whether any
+// historical production_batch_costs row already references them.
+const DEFAULT_COST_COMPONENTS = ["Ongkos jahit"] as const;
 
 async function seedCostComponentDefaults(db: Database) {
   for (const [index, name] of DEFAULT_COST_COMPONENTS.entries()) {

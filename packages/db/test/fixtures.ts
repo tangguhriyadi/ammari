@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
+  accessories,
   customers,
   fabricColors,
   fabrics,
@@ -97,6 +98,15 @@ export async function insertProductVariant(tx: TestDatabase) {
   if (!variant) throw new Error("failed to insert product variant fixture");
 
   return { fabric, color, product, variant };
+}
+
+export async function insertAccessory(tx: TestDatabase, overrides: Partial<typeof accessories.$inferInsert> = {}) {
+  const [accessory] = await tx
+    .insert(accessories)
+    .values({ name: `Kancing Test ${randomUUID().slice(0, 8)}`, ...overrides })
+    .returning();
+  if (!accessory) throw new Error("failed to insert accessory fixture");
+  return accessory;
 }
 
 export async function insertOrder(

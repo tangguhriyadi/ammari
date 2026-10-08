@@ -14,6 +14,7 @@ import {
   uniqueIndex,
   uuid,
   bigint,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { checkIn, citext, createdAtOnly, timestamps } from "./columns";
 import {
@@ -21,6 +22,8 @@ import {
   FABRIC_PRICE_UNITS,
   PRODUCT_CLOSURES,
   PRODUCTION_BATCH_STATUSES,
+  RAW_MATERIAL_MOVEMENT_REF_TYPES,
+  RAW_MATERIAL_MOVEMENT_TYPES,
   SIZE_MODES,
   SIZES,
   STOCK_ADJUSTMENT_REASONS,
@@ -30,6 +33,8 @@ import {
   type FabricPriceUnit,
   type ProductClosure,
   type ProductionBatchStatus,
+  type RawMaterialMovementRefType,
+  type RawMaterialMovementType,
   type Size,
   type SizeMode,
   type StockAdjustmentReason,
@@ -320,10 +325,12 @@ export const productionBatches = pgTable(
     notes: text("notes"),
     // draft -> posted, one-way (migration 0006). A draft is freely edited/deleted; once posted
     // it's read-only — enforced in app code (lockProductionBatchForUpdate's callers) backed by
-    // posting's own transactional row lock, AND (migration 0007) by three hand-authored
-    // triggers: prevent_posted_batch_field_change (this table — fabric_yards/fabric_cost_amount/
-    // fabric_id frozen once posted), prevent_posted_batch_items_mutation (production_batch_items),
-    // prevent_posted_batch_cost_mutation (production_batch_costs below).
+    // posting's own transactional row lock, AND by three hand-authored triggers:
+    // prevent_posted_batch_field_change (this table — migration 0007 froze fabric_yards/
+    // fabric_cost_amount/fabric_id once posted; migration 0008 extended the SAME trigger to also
+    // reject changing `status` itself away from 'posted'), prevent_posted_batch_items_mutation
+    // (production_batch_items), prevent_posted_batch_cost_mutation (production_batch_costs
+    // below) — both from migration 0007.
     status: text("status").$type<ProductionBatchStatus>().notNull().default("draft"),
     postedAt: timestamp("posted_at", { withTimezone: true, mode: "date" }),
     postedByStaffUserId: uuid("posted_by_staff_user_id").references(() => staffUsers.id, {
@@ -521,5 +528,258 @@ export const stockMovements = pgTable(
       "stock_movements_reason_adjustment_pair_check",
       sql`(${table.type} = 'adjustment') = (${table.reason} is not null)`,
     ),
+  ],
+);
+// Append-only at the DB level (migration 0008, prevent_stock_movement_mutation trigger): no
+// UPDATE or DELETE is ever allowed on this table, full stop — finished-goods movements are
+// never corrected in place, only ever offset by inserting a new adjustment row. See
+// accessory_movements below for the one ledger that DOES allow a single, narrow exception
+// (voiding a purchase) to the same append-only rule.
+
+// ---------- Raw-material inventory (accessories + fabric stock) — migration 0008 ----------
+
+// The owner's master list of non-fabric physical items used in production (buttons, size
+// labels, hang tags, metal brand plates, zipper packaging bags, ...). Stock/cost live entirely
+// in accessory_movements below, never a column on this row — see that table's doc comment for
+// why a plain SUM over the ledger is enough to derive both current stock AND a correct moving
+// average cost, with no separate mutable counter to keep in sync.
+export const accessories = pgTable(
+  "accessories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    // Reuses the EXISTING Size/SIZES enum rather than a parallel one — "ALL/Polos" in the
+    // product spec's own wording is exactly what ALLSIZE already means for a product_variant
+    // (a single labelless item used regardless of size). Nullable: an accessory with no size
+    // distinction at all (e.g. "Hang tag") simply never sets this.
+    size: text("size").$type<Size>(),
+    // citext, not text: groups the sized siblings of one logical accessory (e.g. "Label
+    // Ammari" at XS/S/M/L/XL/ALLSIZE) for recipe resolution — case/typo variants of the same
+    // group name must collide, not silently fork into two groups. The accessory form offers
+    // existing group names as a selectable list for the same reason.
+    sizeGroup: citext("size_group"),
+    isActive: boolean("is_active").notNull().default(true),
+    notes: text("notes"),
+    ...timestamps(),
+  },
+  (table) => [
+    check("accessories_size_check", checkIn(table.size, SIZES)),
+    // NULLs never collide in a unique constraint, so two ungrouped (size_group IS NULL)
+    // accessories are always allowed regardless of size — this only guards AGAINST two rows in
+    // the SAME group claiming the same size, which would make size-group resolution ambiguous.
+    unique("accessories_size_group_size_key").on(table.sizeGroup, table.size),
+  ],
+);
+
+// The append-only ledger of every accessory stock change. Current stock = SUM(qty); current
+// total value = SUM(value_amount); current average cost per pcs = the second divided by the
+// first — NEVER stored, always derived, per the product spec's explicit requirement. This works
+// without a separate mutable "running average" column because every row's OWN value_amount is
+// computed ONCE, under the accessory's row lock, from the SUM-so-far, at the moment it's
+// inserted:
+//   - 'purchase': value_amount = the exact total amount paid (no rounding — it's literally what
+//     was entered), qty = the quantity bought. This is the ONLY movement type that can move the
+//     average (a consumption/adjustment is always valued AT whatever the average already is).
+//   - 'production'/'adjustment' (a consumption, negative qty): value_amount =
+//     -round(qty_consumed * current_average_cost_per_unit) — EXCEPT when this movement brings
+//     SUM(qty) to exactly 0, in which case value_amount is instead set to exactly
+//     -(current total value), not a separately-rounded qty*average — this is what keeps the
+//     invariant "qty = 0 implies value = 0" and "qty > 0 implies value >= 0" EXACT despite
+//     rounding (a plain round(qty*avg) can leave a few rupiah of residual value stranded at
+//     zero stock, which would then corrupt the NEXT purchase's average). See
+//     lib/inventory/moving-average.ts's valueDeltaForConsumption, and its dedicated test.
+//   - 'purchase_void': an EXACT reversal of one earlier 'purchase' row — value_amount/qty are
+//     literally the negation of that row's own values, never recomputed at the current average.
+// A purchase can be voided only if no later movement exists for this accessory (checked by
+// insertion order, under the row lock) — voiding "through" an intervening consumption would
+// retroactively invalidate that consumption's already-recorded cost snapshot. The rejection
+// message in that case tells the user to use a manual adjustment instead.
+//
+// DB-immutable (migration 0008, prevent_accessory_movement_mutation trigger): DELETE is always
+// rejected; UPDATE is rejected UNLESS the only columns changing are voided_at/
+// voided_by_staff_user_id, going from NULL, exactly once.
+export const accessoryMovements = pgTable(
+  "accessory_movements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accessoryId: uuid("accessory_id")
+      .notNull()
+      .references(() => accessories.id, { onDelete: "restrict" }),
+    qty: integer("qty").notNull(),
+    valueAmount: bigint("value_amount", { mode: "number" }).notNull(),
+    type: text("type").$type<RawMaterialMovementType>().notNull(),
+    refType: text("ref_type").$type<RawMaterialMovementRefType>().notNull(),
+    refId: text("ref_id"),
+    // Only ever set for type = 'adjustment' — reuses STOCK_ADJUSTMENT_REASONS as-is (recount/
+    // damaged/lost/other), same reasons finished-goods stock already uses.
+    reason: text("reason").$type<StockAdjustmentReason>(),
+    // Purchase-only, both optional on the form itself (supplier may be unknown; purchasedAt is
+    // always required when type='purchase', checked below).
+    supplier: text("supplier"),
+    purchasedAt: date("purchased_at", { mode: "string" }),
+    // Set only on a 'purchase_void' row, pointing back at the 'purchase' row it reverses.
+    voidsMovementId: uuid("voids_movement_id").references((): AnyPgColumn => accessoryMovements.id, {
+      onDelete: "restrict",
+    }),
+    // Set only on the ORIGINAL 'purchase' row, once, when it's later voided — doubles as the
+    // double-void guard (checked under the accessory's row lock before inserting the void).
+    voidedAt: timestamp("voided_at", { withTimezone: true, mode: "date" }),
+    voidedByStaffUserId: uuid("voided_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    createdByStaffUserId: uuid("created_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    // Free-text, same as stock_movements.note — meaningful on any movement type (a purchase's
+    // own remark, or why an adjustment/void was made), not purchase-only like supplier/
+    // purchasedAt above.
+    note: text("note"),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    index("accessory_movements_accessory_id_created_at_idx").on(table.accessoryId, table.createdAt),
+    index("accessory_movements_ref_idx").on(table.refType, table.refId),
+    // Both are NOT NULL-able RESTRICT FKs to staff_users on an append-only, only-grows table —
+    // same reasoning stock_movements_created_by_staff_user_id_idx already gives for its own
+    // sibling column (database-reviewer finding).
+    index("accessory_movements_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
+    index("accessory_movements_voided_by_staff_user_id_idx").on(table.voidedByStaffUserId),
+    unique("accessory_movements_voids_movement_id_key").on(table.voidsMovementId),
+    check("accessory_movements_qty_check", sql`${table.qty} <> 0`),
+    check("accessory_movements_type_check", checkIn(table.type, RAW_MATERIAL_MOVEMENT_TYPES)),
+    check("accessory_movements_ref_type_check", checkIn(table.refType, RAW_MATERIAL_MOVEMENT_REF_TYPES)),
+    check("accessory_movements_reason_check", checkIn(table.reason, STOCK_ADJUSTMENT_REASONS)),
+    check(
+      "accessory_movements_reason_adjustment_pair_check",
+      sql`(${table.type} = 'adjustment') = (${table.reason} is not null)`,
+    ),
+    check(
+      "accessory_movements_purchased_at_pair_check",
+      sql`(${table.type} = 'purchase') = (${table.purchasedAt} is not null)`,
+    ),
+    check(
+      "accessory_movements_voids_movement_id_pair_check",
+      sql`(${table.type} = 'purchase_void') = (${table.voidsMovementId} is not null)`,
+    ),
+    check("accessory_movements_voided_at_type_check", sql`${table.voidedAt} is null or ${table.type} = 'purchase'`),
+    check(
+      "accessory_movements_voided_pair_check",
+      sql`(${table.voidedAt} is not null) = (${table.voidedByStaffUserId} is not null)`,
+    ),
+  ],
+);
+
+// Identical shape to accessory_movements, fabric_id instead — see that table's doc comment for
+// the full moving-average/void/immutability design, all of which applies here unchanged. `qty`
+// is numeric(10,2) (yards), matching production_batches.fabric_yards' own precision/scale.
+export const fabricStockMovements = pgTable(
+  "fabric_stock_movements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    fabricId: uuid("fabric_id")
+      .notNull()
+      .references(() => fabrics.id, { onDelete: "restrict" }),
+    qty: numeric("qty", { precision: 10, scale: 2, mode: "number" }).notNull(),
+    valueAmount: bigint("value_amount", { mode: "number" }).notNull(),
+    type: text("type").$type<RawMaterialMovementType>().notNull(),
+    refType: text("ref_type").$type<RawMaterialMovementRefType>().notNull(),
+    refId: text("ref_id"),
+    reason: text("reason").$type<StockAdjustmentReason>(),
+    supplier: text("supplier"),
+    purchasedAt: date("purchased_at", { mode: "string" }),
+    voidsMovementId: uuid("voids_movement_id").references((): AnyPgColumn => fabricStockMovements.id, {
+      onDelete: "restrict",
+    }),
+    voidedAt: timestamp("voided_at", { withTimezone: true, mode: "date" }),
+    voidedByStaffUserId: uuid("voided_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    createdByStaffUserId: uuid("created_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    note: text("note"),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    index("fabric_stock_movements_fabric_id_created_at_idx").on(table.fabricId, table.createdAt),
+    index("fabric_stock_movements_ref_idx").on(table.refType, table.refId),
+    index("fabric_stock_movements_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
+    index("fabric_stock_movements_voided_by_staff_user_id_idx").on(table.voidedByStaffUserId),
+    unique("fabric_stock_movements_voids_movement_id_key").on(table.voidsMovementId),
+    check("fabric_stock_movements_qty_check", sql`${table.qty} <> 0`),
+    check("fabric_stock_movements_type_check", checkIn(table.type, RAW_MATERIAL_MOVEMENT_TYPES)),
+    check("fabric_stock_movements_ref_type_check", checkIn(table.refType, RAW_MATERIAL_MOVEMENT_REF_TYPES)),
+    check("fabric_stock_movements_reason_check", checkIn(table.reason, STOCK_ADJUSTMENT_REASONS)),
+    check(
+      "fabric_stock_movements_reason_adjustment_pair_check",
+      sql`(${table.type} = 'adjustment') = (${table.reason} is not null)`,
+    ),
+    check(
+      "fabric_stock_movements_purchased_at_pair_check",
+      sql`(${table.type} = 'purchase') = (${table.purchasedAt} is not null)`,
+    ),
+    check(
+      "fabric_stock_movements_voids_movement_id_pair_check",
+      sql`(${table.type} = 'purchase_void') = (${table.voidsMovementId} is not null)`,
+    ),
+    check("fabric_stock_movements_voided_at_type_check", sql`${table.voidedAt} is null or ${table.type} = 'purchase'`),
+    check(
+      "fabric_stock_movements_voided_pair_check",
+      sql`(${table.voidedAt} is not null) = (${table.voidedByStaffUserId} is not null)`,
+    ),
+  ],
+);
+
+// One product's bill of materials, excluding fabric (which is batch-level, not per-pcs — see
+// production_batches.fabric_yards). Exactly one of accessoryId/sizeGroup is ever set: a row
+// naming one specific, size-independent accessory (e.g. "Hang tag") resolves directly; a row
+// naming a size GROUP resolves per variant at draft/posting time (sized variant -> the matching
+// size's item; ALLSIZE variant -> the group's ALLSIZE/"Polos" item) — see the deferred
+// production-integration step for that resolution logic. Saved as a full replace-the-set
+// operation per product (same reasoning production_batch_items' delete-all-reinsert uses: these
+// rows are current configuration, not a history that needs to survive unrelated edits), so no
+// updatedAt is needed.
+export const productAccessoryRecipes = pgTable(
+  "product_accessory_recipes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    accessoryId: uuid("accessory_id").references(() => accessories.id, { onDelete: "restrict" }),
+    sizeGroup: citext("size_group"),
+    qtyPerPcs: integer("qty_per_pcs").notNull(),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    index("product_accessory_recipes_product_id_idx").on(table.productId),
+    check(
+      "product_accessory_recipes_exactly_one_target_check",
+      sql`(${table.accessoryId} is null) <> (${table.sizeGroup} is null)`,
+    ),
+    check("product_accessory_recipes_qty_per_pcs_check", sql`${table.qtyPerPcs} > 0`),
+    uniqueIndex("product_accessory_recipes_product_id_accessory_id_key")
+      .on(table.productId, table.accessoryId)
+      .where(sql`${table.accessoryId} is not null`),
+    uniqueIndex("product_accessory_recipes_product_id_size_group_key")
+      .on(table.productId, table.sizeGroup)
+      .where(sql`${table.sizeGroup} is not null`),
+  ],
+);
+
+// A per-batch override of the computed "needed quantity" for one RESOLVED accessory (e.g.
+// waste/spares) — keyed by the resolved accessory, not by recipe row, since a mixed-product
+// batch can have several recipe rows (across different products) resolve to the SAME accessory,
+// and the override applies to their merged total. Populated/consumed only by the deferred
+// production-integration step; the table is created now so this migration delivers the whole
+// feature's schema in one piece.
+export const productionBatchAccessoryOverrides = pgTable(
+  "production_batch_accessory_overrides",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productionBatchId: uuid("production_batch_id")
+      .notNull()
+      .references(() => productionBatches.id, { onDelete: "cascade" }),
+    accessoryId: uuid("accessory_id")
+      .notNull()
+      .references(() => accessories.id, { onDelete: "restrict" }),
+    overrideQty: integer("override_qty").notNull(),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    unique("production_batch_accessory_overrides_batch_accessory_key").on(table.productionBatchId, table.accessoryId),
+    check("production_batch_accessory_overrides_override_qty_check", sql`${table.overrideQty} >= 0`),
   ],
 );

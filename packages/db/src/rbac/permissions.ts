@@ -17,6 +17,12 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   { key: "stock.adjust", group: "stock", description: "Record manual stock adjustments" },
   { key: "production.manage", group: "production", description: "Manage production batches" },
   { key: "products.manage", group: "products", description: "Manage products, variants, and images" },
+  { key: "inventory.view", group: "inventory", description: "View accessory and fabric stock levels and ledgers" },
+  {
+    key: "inventory.manage",
+    group: "inventory",
+    description: "Manage accessories, record purchases, void purchases, and adjust raw-material stock",
+  },
   {
     key: "ads_expenses.manage",
     group: "ads_expenses",

@@ -8,8 +8,15 @@ import { describe, expect, test, vi } from "vitest";
 const { getStaffSessionMock } = vi.hoisted(() => ({ getStaffSessionMock: vi.fn() }));
 vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMock }));
 
-const { createFabricAction, deleteFabricAction, createFabricColorAction, deleteFabricColorAction } =
-  await import("./actions");
+const {
+  createFabricAction,
+  deleteFabricAction,
+  createFabricColorAction,
+  deleteFabricColorAction,
+  recordFabricPurchaseAction,
+  voidFabricPurchaseAction,
+  recordFabricAdjustmentAction,
+} = await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
   return {
@@ -50,4 +57,25 @@ describe("every fabric server action requires products.manage", () => {
   // The success path is intentionally NOT exercised here — see produk/actions.test.ts's doc
   // comment; the DB-level behavior is covered against an injected test db in
   // fabric-queries.test.ts.
+});
+
+const NIL_ID = "00000000-0000-0000-0000-000000000000";
+
+describe("fabric stock actions require inventory.manage (not products.manage)", () => {
+  test("recordFabricPurchaseAction rejects a session with products.manage but WITHOUT inventory.manage", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["products.manage"]));
+    await expect(
+      recordFabricPurchaseAction({ fabricId: NIL_ID, qty: "10", totalAmountPaid: "500.000", purchasedAt: "2026-01-01" }),
+    ).rejects.toThrow();
+  });
+
+  test("voidFabricPurchaseAction rejects a session without inventory.manage", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions([]));
+    await expect(voidFabricPurchaseAction({ movementId: NIL_ID })).rejects.toThrow();
+  });
+
+  test("recordFabricAdjustmentAction rejects a session without inventory.manage", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions([]));
+    await expect(recordFabricAdjustmentAction({ fabricId: NIL_ID, deltaQty: -1.5, reason: "damaged" })).rejects.toThrow();
+  });
 });
