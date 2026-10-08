@@ -3,9 +3,9 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Dialog } from "@ammari/ui";
-import { voidAccessoryPurchaseAction } from "../actions";
+import { voidPurchaseAction } from "../actions";
 
-export function VoidPurchaseButton({ movementId }: { movementId: string }) {
+export function VoidPurchaseButton({ type, movementId }: { type: "fabric" | "accessory"; movementId: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -14,7 +14,7 @@ export function VoidPurchaseButton({ movementId }: { movementId: string }) {
   function handleConfirm() {
     setError(null);
     startTransition(async () => {
-      const result = await voidAccessoryPurchaseAction({ movementId });
+      const result = await voidPurchaseAction({ type, movementId });
       if (!result.ok) {
         setError(result.error);
         return;
@@ -26,8 +26,8 @@ export function VoidPurchaseButton({ movementId }: { movementId: string }) {
 
   return (
     <>
-      <Button type="button" variant="ghost" onClick={() => setOpen(true)}>
-        Batalkan
+      <Button type="button" variant="danger" onClick={() => setOpen(true)}>
+        Batalkan pembelian
       </Button>
       <Dialog
         open={open}

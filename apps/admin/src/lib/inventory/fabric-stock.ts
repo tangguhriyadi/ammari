@@ -1,6 +1,6 @@
 import "server-only";
-import { and, count, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
-import { fabricStockMovements, staffUsers } from "@ammari/db/schema";
+import { and, count, desc, eq, gt, ilike, inArray, or, sql } from "drizzle-orm";
+import { fabrics, fabricStockMovements, staffUsers } from "@ammari/db/schema";
 import type { RawMaterialMovementRefType, RawMaterialMovementType, StockAdjustmentReason } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError } from "@/lib/errors";
@@ -9,6 +9,59 @@ import { lockFabricForUpdate } from "./db";
 import { valueDeltaForConsumption, type RawMaterialBalance } from "./moving-average";
 
 const PAGE_SIZE = 20;
+
+// ---------- Master list with stock balance (the /stock/fabrics tab — see accessories.ts's
+// listAccessories for the identical shape this mirrors) ----------
+
+export interface FabricWithBalanceRow {
+  id: string;
+  name: string;
+  supplier: string | null;
+  qty: number;
+  valueAmount: number;
+}
+
+/** `valueAmount` is always computed — same discipline as listAccessories: the CALLER strips it
+ * before it reaches a session without finance.view_profit. */
+export async function listFabricsWithBalance(
+  filters: { q?: string },
+  rawPage: string | undefined,
+  db: Database = defaultDb,
+): Promise<{ rows: FabricWithBalanceRow[]; pagination: Pagination }> {
+  const where = filters.q ? ilike(fabrics.name, `%${filters.q}%`) : undefined;
+
+  const [totalCountRow] = await db.select({ totalCount: count() }).from(fabrics).where(where);
+  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+
+  const balanceByFabric = db
+    .select({
+      fabricId: fabricStockMovements.fabricId,
+      // numeric(10,2) SUM — comes back as a string, converted below (same reasoning as every
+      // other numeric/bigint aggregate in this file).
+      qty: sql<string>`sum(${fabricStockMovements.qty})`.as("qty"),
+      valueAmount: sql<string>`sum(${fabricStockMovements.valueAmount})::bigint`.as("value_amount"),
+    })
+    .from(fabricStockMovements)
+    .groupBy(fabricStockMovements.fabricId)
+    .as("balance_by_fabric");
+
+  const rows = await db
+    .select({
+      id: fabrics.id,
+      name: fabrics.name,
+      supplier: fabrics.supplier,
+      qty: sql<string>`coalesce(${balanceByFabric.qty}, 0)`,
+      valueAmount: sql<string>`coalesce(${balanceByFabric.valueAmount}, 0)`,
+    })
+    .from(fabrics)
+    .leftJoin(balanceByFabric, eq(balanceByFabric.fabricId, fabrics.id))
+    .where(where)
+    .orderBy(fabrics.name, fabrics.id)
+    .limit(pagination.limit)
+    .offset(pagination.offset);
+
+  return { rows: rows.map((row) => ({ ...row, qty: Number(row.qty), valueAmount: Number(row.valueAmount) })), pagination };
+}
 
 // Fabric MASTER CRUD (name, supplier, composition, reference price) lives in
 // lib/products/fabric-queries.ts, unchanged — this file is only the stock/moving-average/

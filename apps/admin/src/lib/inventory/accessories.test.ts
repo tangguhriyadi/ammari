@@ -227,6 +227,20 @@ describe("voidAccessoryPurchase (correction #2)", () => {
     });
   });
 
+  // Required by the /purchases feature's own safety guarantee (its getPurchaseById only ever
+  // returns type='purchase' rows — see lib/inventory/purchases.ts), but the void path itself
+  // must independently reject a non-purchase movement id too, regardless of how it got there.
+  test("voiding a movement that isn't type 'purchase' (an adjustment) is rejected", async () => {
+    await withRollback(async (tx) => {
+      const accessory = await insertAccessory(tx);
+      const staff = await insertStaffUser(tx);
+      await recordAccessoryPurchase({ accessoryId: accessory.id, qty: 10, totalAmountPaid: 10_000, purchasedAt: "2026-01-01" }, staff.id, tx);
+      const adjustment = await recordAccessoryAdjustment({ accessoryId: accessory.id, deltaQty: -1, reason: "damaged" }, staff.id, tx);
+
+      await expect(voidAccessoryPurchase(adjustment.id, staff.id, tx)).rejects.toThrow(/Hanya transaksi pembelian/);
+    });
+  });
+
   // Note: there is no test here for "voiding would drive stock negative" — given every purchase
   // is enforced positive (see recordAccessoryPurchase's own qty check) and the later-movement
   // check above already rejects voiding past any reducing movement, that branch is a defensive

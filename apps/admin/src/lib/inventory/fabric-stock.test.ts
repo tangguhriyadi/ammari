@@ -99,6 +99,20 @@ describe("voidFabricPurchase (correction #2)", () => {
       await expect(voidFabricPurchase(purchase.id, staff.id, tx)).rejects.toThrow(/Sesuaikan stok/);
     });
   });
+
+  // Required by the /purchases feature's own safety guarantee (its getPurchaseById only ever
+  // returns type='purchase' rows — see lib/inventory/purchases.ts), but the void path itself
+  // must independently reject a non-purchase movement id too, regardless of how it got there.
+  test("voiding a movement that isn't type 'purchase' (an adjustment) is rejected", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await insertFabric(tx);
+      const staff = await insertStaffUser(tx);
+      await recordFabricPurchase({ fabricId: fabric.id, qty: 20, totalAmountPaid: 1_000_000, purchasedAt: "2026-01-01" }, staff.id, tx);
+      const adjustment = await recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -1, reason: "damaged" }, staff.id, tx);
+
+      await expect(voidFabricPurchase(adjustment.id, staff.id, tx)).rejects.toThrow(/Hanya transaksi pembelian/);
+    });
+  });
 });
 
 describe("fabric stock ledger", () => {

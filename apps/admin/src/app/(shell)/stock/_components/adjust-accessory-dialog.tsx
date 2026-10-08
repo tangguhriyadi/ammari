@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Dialog, Input, Label, Select, Textarea } from "@ammari/ui";
 import { STOCK_ADJUSTMENT_REASONS, type StockAdjustmentReason } from "@ammari/db/schema";
-import { recordAccessoryAdjustmentAction } from "../actions";
+import { recordAccessoryAdjustmentAction } from "@/app/(shell)/accessories/actions";
 
 const REASON_LABELS: Record<StockAdjustmentReason, string> = {
   recount: "Hitung ulang",

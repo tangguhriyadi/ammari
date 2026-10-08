@@ -71,6 +71,12 @@ export async function getFabricById(id: string, db: Database = defaultDb) {
   return fabric ?? null;
 }
 
+/** Fabrics have no `is_active` flag (unlike accessories) — every fabric is always a valid
+ * purchase target, so this is simply every fabric, ordered for a picker. */
+export async function listActiveFabrics(db: Database = defaultDb) {
+  return db.select().from(fabrics).orderBy(fabrics.name);
+}
+
 export async function getFabricUsageCount(id: string, db: Database = defaultDb): Promise<number> {
   const [row] = await db.select({ usedByCount: count() }).from(products).where(eq(products.fabricId, id));
   return row?.usedByCount ?? 0;
