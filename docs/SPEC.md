@@ -118,7 +118,7 @@ pnpm workspaces + Turborepo:
 - Catalog — `/products`
 - Product detail — `/products/[slug]` — the buy button temporarily links out to Shopee/TikTok
   Shop (no cart yet)
-- Voucher claim — `/claim/[token]` (the QR itself still encodes `ammari.id/k/<token>`; see §4.2)
+- Voucher claim — `/claim/[token]` (the QR itself encodes this path directly; see §4.2)
 - OTP login — `/login`
 - My account — `/account` — vouchers + their expiry dates
 - Privacy policy — `/privacy-policy`
@@ -144,7 +144,7 @@ purchases on the main site without violating marketplace policy.
 
 ### 4.2 Token
 
-- The QR encodes `ammari.id/k/<token>`.
+- The QR encodes `https://ammari.id/claim/<token>` directly — no separate short-path redirect.
 - The token is random with **≥128 bits of entropy**.
 - Only a **hash** of the token is stored — never the raw token.
 - Reprinting a card generates a **new** token and **invalidates** the old one (the old token must

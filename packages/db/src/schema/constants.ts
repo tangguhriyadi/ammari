@@ -23,6 +23,19 @@ export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 export const STOCK_MOVEMENT_REF_TYPES = ["production_batch_item", "order_item", "manual"] as const;
 export type StockMovementRefType = (typeof STOCK_MOVEMENT_REF_TYPES)[number];
 
+/** Only ever set when `type = 'adjustment'` — see stock_movements_reason_adjustment_pair_check
+ * (migration 0006). */
+export const STOCK_ADJUSTMENT_REASONS = ["recount", "damaged", "lost", "other"] as const;
+export type StockAdjustmentReason = (typeof STOCK_ADJUSTMENT_REASONS)[number];
+
+export const PRODUCTION_BATCH_STATUSES = ["draft", "posted"] as const;
+export type ProductionBatchStatus = (typeof PRODUCTION_BATCH_STATUSES)[number];
+
+/** Units a cost_components row (and the production_batch_costs lines that snapshot it) can be
+ * priced per. "lusin" = a dozen — Pasar Baru suppliers commonly quote accessories this way. */
+export const COST_COMPONENT_UNITS = ["pcs", "meter", "yard", "lusin", "set"] as const;
+export type CostComponentUnit = (typeof COST_COMPONENT_UNITS)[number];
+
 export const CHANNEL_IDS = ["shopee", "tiktok", "web", "reseller"] as const;
 export type ChannelId = (typeof CHANNEL_IDS)[number];
 

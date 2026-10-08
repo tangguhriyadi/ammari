@@ -1,0 +1,96 @@
+import { notFound } from "next/navigation";
+import { PageHeader } from "@ammari/ui";
+import { requirePermission } from "@/lib/auth/require-permission";
+import { getBatchDetail, getBatchCosts, getBatchExtraCosts, listEligibleSkusForFabric } from "@/lib/production/queries";
+import { listActiveCostComponents } from "@/lib/production/cost-components";
+import { getFabricById } from "@/lib/products/fabric-queries";
+import { ProductionBatchForm } from "../_components/production-batch-form";
+import { ProductionBatchReadOnly } from "../_components/production-batch-readonly";
+import { BatchStatusBadge } from "../_components/production-batch-list";
+import { BatchCostsSection } from "../_components/batch-costs-section";
+import { DraftControls } from "../_components/draft-controls";
+
+export default async function ProductionBatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const session = await requirePermission("production.manage");
+  const { id } = await params;
+  const batch = await getBatchDetail(id);
+  if (!batch) notFound();
+
+  const canViewProfit = session.permissionKeys.includes("finance.view_profit");
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <PageHeader title={batch.batchNo} />
+        <BatchStatusBadge status={batch.status} />
+      </div>
+
+      {batch.status === "posted" ? (
+        <>
+          <ProductionBatchReadOnly batch={batch} />
+          {canViewProfit && (
+            <div className="mt-6">
+              <BatchCostsSection batchId={batch.id} fabricYards={batch.fabricYards} lines={batch.lines} />
+            </div>
+          )}
+        </>
+      ) : (
+        <DraftView batch={batch} canViewProfit={canViewProfit} />
+      )}
+    </>
+  );
+}
+
+async function DraftView({
+  batch,
+  canViewProfit,
+}: {
+  batch: NonNullable<Awaited<ReturnType<typeof getBatchDetail>>>;
+  canViewProfit: boolean;
+}) {
+  const eligibleSkus = await listEligibleSkusForFabric(batch.fabricId);
+  const fabric = await getFabricById(batch.fabricId);
+
+  // Never fetched at all for a session without finance.view_profit — same ProductBatasHpp
+  // pattern used by products/[id]/page.tsx.
+  const costs = canViewProfit ? await getBatchCosts(batch.id) : null;
+  const extraCosts = canViewProfit ? await getBatchExtraCosts(batch.id) : [];
+  const activeCostComponents = canViewProfit ? await listActiveCostComponents() : [];
+
+  return (
+    <>
+      <ProductionBatchForm
+        mode="edit"
+        batchId={batch.id}
+        fixedFabricName={batch.fabricName}
+        // Never shipped to a session without finance.view_profit — same contract as new/page.tsx.
+        fixedFabricPrice={canViewProfit ? { priceAmount: fabric?.priceAmount ?? null, priceUnit: fabric?.priceUnit ?? null } : { priceAmount: null, priceUnit: null }}
+        initialValues={{
+          fabricId: batch.fabricId,
+          producedAt: batch.producedAt,
+          fabricYards: batch.fabricYards,
+          notes: batch.notes ?? "",
+          lines: batch.lines.map((line) => ({ sku: line.sku, qty: line.qty })),
+        }}
+        eligibleSkus={eligibleSkus}
+        initialCosts={canViewProfit ? { fabricCostAmount: String(costs?.fabricCostAmount ?? 0) } : undefined}
+        initialExtraCosts={
+          canViewProfit
+            ? extraCosts.map((line) => ({
+                id: line.id,
+                clientKey: line.id, // already stable (a real server row) — no need to mint a new one
+                costComponentId: line.costComponentId,
+                componentName: line.componentName,
+                quantity: String(line.quantity),
+                unitPrice: String(line.unitPrice),
+              }))
+            : undefined
+        }
+        activeCostComponents={activeCostComponents}
+      />
+      <div className="mt-6">
+        <DraftControls batchId={batch.id} canPost={canViewProfit} />
+      </div>
+    </>
+  );
+}

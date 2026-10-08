@@ -9,6 +9,12 @@ export const E2E_OWNER_EMAIL = "owner@e2e.ammari.test";
 // HPP gating test; this fixture exists specifically for that.
 export const E2E_PRODUCTS_NO_FINANCE_EMAIL = "products-no-finance@e2e.ammari.test";
 const E2E_LIMITED_ROLE_KEY = "e2e_products_no_finance";
+// A dedicated role/email for the production+stock e2e flow — owner and super_admin are already
+// used right up to the 5-per-5-minutes OTP send throttle across the rest of this suite (see the
+// per-test comments explaining that budget), so a 6th login on either tips it over. A fresh
+// email starts with its own clean throttle window regardless of how loaded the other two are.
+export const E2E_PRODUCTION_STOCK_EMAIL = "production-stock@e2e.ammari.test";
+const E2E_PRODUCTION_STOCK_ROLE_KEY = "e2e_production_stock";
 
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
 // lib/products/queries.ts. A distinct name prefix keeps this from colliding with anything a
@@ -127,6 +133,15 @@ export default async function globalSetup(): Promise<void> {
   await ensureLimitedRole(E2E_LIMITED_ROLE_KEY, ["products.manage"]);
   await ensureStaffFixture(E2E_PRODUCTS_NO_FINANCE_EMAIL, "E2E Products (no finance)", E2E_LIMITED_ROLE_KEY);
 
+  await ensureLimitedRole(E2E_PRODUCTION_STOCK_ROLE_KEY, [
+    "products.manage",
+    "production.manage",
+    "stock.view",
+    "stock.adjust",
+    "finance.view_profit",
+  ]);
+  await ensureStaffFixture(E2E_PRODUCTION_STOCK_EMAIL, "E2E Production & Stock", E2E_PRODUCTION_STOCK_ROLE_KEY);
+
   const [paginationFabric] = await db
     .insert(fabrics)
     .values({ name: "E2E Pagination Fabric" })
@@ -158,6 +173,13 @@ export default async function globalSetup(): Promise<void> {
   // against a local DB — never touches anything in a real environment.
   await db
     .delete(authEmailThrottle)
-    .where(inArray(authEmailThrottle.email, [E2E_SUPER_ADMIN_EMAIL, E2E_OWNER_EMAIL, E2E_PRODUCTS_NO_FINANCE_EMAIL]));
+    .where(
+      inArray(authEmailThrottle.email, [
+        E2E_SUPER_ADMIN_EMAIL,
+        E2E_OWNER_EMAIL,
+        E2E_PRODUCTS_NO_FINANCE_EMAIL,
+        E2E_PRODUCTION_STOCK_EMAIL,
+      ]),
+    );
   await db.delete(staffAuthRateLimits);
 }

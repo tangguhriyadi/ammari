@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { PageHeader } from "@ammari/ui";
+import Link from "next/link";
+import { PageHeader, Button } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getProductDetail, getCurrentCostAssumption } from "@/lib/products/queries";
 import { listFabricColors, listFabricsWithUsage } from "@/lib/products/fabric-queries";
@@ -27,6 +28,7 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
   // (which runs the actual cost_assumptions query + calculation) is simply never rendered in
   // that case, so the number can't be sent to the client either way, not just hidden by CSS.
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
+  const canAdjustStock = session.permissionKeys.includes("stock.adjust");
   const thumbnailUrl = images.find((image) => image.id === product.thumbnailImageId)?.urls[400] ?? null;
 
   return (
@@ -34,7 +36,16 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
       <div className="flex items-start gap-4">
         <ProductThumbnail url={thumbnailUrl} className="size-16 shrink-0 sm:size-20" />
         <div className="flex-1">
-          <PageHeader title={product.name} />
+          <PageHeader
+            title={product.name}
+            actions={
+              canAdjustStock && (
+                <Link href={`/stock/count/${product.id}`}>
+                  <Button variant="secondary">Hitung stok</Button>
+                </Link>
+              )
+            }
+          />
         </div>
       </div>
       <div className="flex flex-col gap-8 lg:flex-row lg:items-start">

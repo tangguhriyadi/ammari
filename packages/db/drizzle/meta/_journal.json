@@ -43,6 +43,20 @@
       "when": 1790921071434,
       "tag": "0005_product_images_and_thumbnail",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791387761008,
+      "tag": "0006_cloudy_morlocks",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791416325299,
+      "tag": "0007_brainy_apocalypse",
+      "breakpoints": true
     }
   ]
 }

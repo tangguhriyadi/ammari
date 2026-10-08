@@ -13,6 +13,12 @@ const client = postgres(testDatabaseUrl(), { max: 5 });
 export const testDb = drizzle(client);
 
 export type TestTx = Parameters<Parameters<typeof testDb.transaction>[0]>[0];
+/** Either the top-level test client or one of its transactions — mirrors apps/admin's own
+ * `Database` union (`@/lib/db`). Fixture helpers in ./fixtures.ts accept this (not just
+ * `TestTx`) so a test can call them with the real `testDb` directly when it needs genuine
+ * cross-transaction concurrency (e.g. two real `testDb.transaction()` calls racing each other),
+ * which `withRollback`'s single shared transaction can't exercise. */
+export type TestDatabase = typeof testDb | TestTx;
 
 class RollbackSignal extends Error {}
 

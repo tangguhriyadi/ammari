@@ -1,6 +1,6 @@
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { db as defaultDb } from "./client";
-import { channels, costAssumptions, permissions, rolePermissions, roles, staffUsers } from "./schema";
+import { channels, costAssumptions, costComponents, permissions, rolePermissions, roles, staffUsers } from "./schema";
 import {
   OWNER_ROLE_KEY,
   PERMISSIONS,
@@ -113,6 +113,25 @@ async function seedInitialCostAssumptions(db: Database) {
     .onConflictDoNothing({ target: costAssumptions.effectiveFrom });
 }
 
+// name is citext + unique, so onConflictDoNothing is race-safe across repeated/concurrent seed
+// runs the same way seedInitialCostAssumptions' effective_from conflict target is.
+const DEFAULT_COST_COMPONENTS = [
+  "Ongkos jahit",
+  "Kancing",
+  "Handtag",
+  "Plat metal brand",
+  "Zipper packaging",
+] as const;
+
+async function seedCostComponentDefaults(db: Database) {
+  for (const [index, name] of DEFAULT_COST_COMPONENTS.entries()) {
+    await db
+      .insert(costComponents)
+      .values({ name, unit: "pcs", sortOrder: index })
+      .onConflictDoNothing({ target: costComponents.name });
+  }
+}
+
 async function seedStaffUserFromEnv(db: Database, emailVar: string, nameVar: string, roleKey: string) {
   const email = process.env[emailVar];
   const name = process.env[nameVar];
@@ -142,6 +161,7 @@ export async function seed(db: Database = defaultDb) {
   await syncPermissionCatalog(db);
   await seedSystemRoles(db);
   await seedInitialCostAssumptions(db);
+  await seedCostComponentDefaults(db);
   await seedStaffUsers(db);
 }
 

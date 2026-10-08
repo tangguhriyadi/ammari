@@ -11,9 +11,9 @@ import {
   staffUsers,
   thankYouCards,
 } from "../src/schema";
-import type { TestTx } from "./helpers";
+import type { TestDatabase } from "./helpers";
 
-export async function insertCustomer(tx: TestTx, overrides: Partial<typeof customers.$inferInsert> = {}) {
+export async function insertCustomer(tx: TestDatabase, overrides: Partial<typeof customers.$inferInsert> = {}) {
   // Phone must satisfy customers_phone_format_check (^\+62[0-9]{8,13}$) — digits only.
   const suffix = Array.from({ length: 10 }, () => Math.floor(Math.random() * 10)).join("");
   const [customer] = await tx
@@ -30,13 +30,13 @@ export async function insertCustomer(tx: TestTx, overrides: Partial<typeof custo
   return customer;
 }
 
-export async function getRoleByKey(tx: TestTx, key: string) {
+export async function getRoleByKey(tx: TestDatabase, key: string) {
   const [role] = await tx.select().from(roles).where(eq(roles.key, key)).limit(1);
   if (!role) throw new Error(`role "${key}" was not seeded`);
   return role;
 }
 
-export async function insertStaffUser(tx: TestTx, roleKey = "owner") {
+export async function insertStaffUser(tx: TestDatabase, roleKey = "owner") {
   const role = await getRoleByKey(tx, roleKey);
   const [staffUser] = await tx
     .insert(staffUsers)
@@ -51,7 +51,7 @@ export async function insertStaffUser(tx: TestTx, roleKey = "owner") {
 }
 
 export async function insertFabricColor(
-  tx: TestTx,
+  tx: TestDatabase,
   fabricId: string,
   overrides: Partial<typeof fabricColors.$inferInsert> = {},
 ) {
@@ -63,7 +63,7 @@ export async function insertFabricColor(
   return color;
 }
 
-export async function insertProductVariant(tx: TestTx) {
+export async function insertProductVariant(tx: TestDatabase) {
   const [fabric] = await tx.insert(fabrics).values({ name: "Katun Rayon" }).returning();
   if (!fabric) throw new Error("failed to insert fabric fixture");
 
@@ -100,7 +100,7 @@ export async function insertProductVariant(tx: TestTx) {
 }
 
 export async function insertOrder(
-  tx: TestTx,
+  tx: TestDatabase,
   overrides: Partial<typeof orders.$inferInsert> = {},
 ) {
   const subtotalAmount = overrides.subtotalAmount ?? 259_000;
@@ -124,7 +124,7 @@ export async function insertOrder(
 }
 
 export async function insertThankYouCard(
-  tx: TestTx,
+  tx: TestDatabase,
   orderId: string,
   overrides: Partial<typeof thankYouCards.$inferInsert> = {},
 ) {

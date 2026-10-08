@@ -6,8 +6,10 @@ import {
   foreignKey,
   index,
   integer,
+  numeric,
   pgTable,
   text,
+  timestamp,
   unique,
   uniqueIndex,
   uuid,
@@ -15,16 +17,22 @@ import {
 } from "drizzle-orm/pg-core";
 import { checkIn, citext, createdAtOnly, timestamps } from "./columns";
 import {
+  COST_COMPONENT_UNITS,
   FABRIC_PRICE_UNITS,
   PRODUCT_CLOSURES,
+  PRODUCTION_BATCH_STATUSES,
   SIZE_MODES,
   SIZES,
+  STOCK_ADJUSTMENT_REASONS,
   STOCK_MOVEMENT_REF_TYPES,
   STOCK_MOVEMENT_TYPES,
+  type CostComponentUnit,
   type FabricPriceUnit,
   type ProductClosure,
+  type ProductionBatchStatus,
   type Size,
   type SizeMode,
+  type StockAdjustmentReason,
 } from "./constants";
 import { staffUsers } from "./rbac";
 
@@ -193,6 +201,11 @@ export const productVariants = pgTable(
     index("product_variants_product_id_is_active_idx").on(table.productId, table.isActive),
     index("product_variants_fabric_color_id_idx").on(table.fabricColorId),
     unique("product_variants_product_color_size_key").on(table.productId, table.fabricColorId, table.size),
+    // `sku` alone is already the PK/unique, but Postgres requires a unique constraint covering
+    // the EXACT column pair to be a composite-FK target — referenced by
+    // production_batch_items_sku_fabric_fk below, same consolidation technique as
+    // products_id_fabric_id_key for product_images.
+    unique("product_variants_sku_fabric_id_key").on(table.sku, table.fabricId),
     check("product_variants_size_check", checkIn(table.size, SIZES)),
     check("product_variants_closure_check", checkIn(table.closure, PRODUCT_CLOSURES)),
     check("product_variants_price_override_amount_check", sql`${table.priceOverrideAmount} >= 0`),
@@ -296,19 +309,70 @@ export const productionBatches = pgTable(
       .references(() => fabrics.id, { onDelete: "restrict" }),
     batchNo: text("batch_no").notNull().unique(),
     producedAt: date("produced_at", { mode: "string" }).notNull(),
-    rollCount: integer("roll_count").notNull(),
+    // Replaces roll_count (migration 0007) — the owner buys by the yard from vendors whose roll
+    // lengths vary, so a roll count was never a meaningful quantity. Nullable: required only at
+    // POSTING time (postBatch enforces > 0 in app code), same "required later, not at draft-save
+    // time" shape fabric_cost_amount's own posting check already has. The one pre-existing
+    // posted batch (from before this column existed) keeps a NULL here permanently — see
+    // getBatchDetail/the UI's "—" fallback, not a crash, for that row.
+    fabricYards: numeric("fabric_yards", { precision: 10, scale: 2, mode: "number" }),
     fabricCostAmount: bigint("fabric_cost_amount", { mode: "number" }).notNull().default(0),
-    sewingCostAmount: bigint("sewing_cost_amount", { mode: "number" }).notNull().default(0),
-    otherCostAmount: bigint("other_cost_amount", { mode: "number" }).notNull().default(0),
     notes: text("notes"),
+    // draft -> posted, one-way (migration 0006). A draft is freely edited/deleted; once posted
+    // it's read-only — enforced in app code (lockProductionBatchForUpdate's callers) backed by
+    // posting's own transactional row lock, AND (migration 0007) by three hand-authored
+    // triggers: prevent_posted_batch_field_change (this table — fabric_yards/fabric_cost_amount/
+    // fabric_id frozen once posted), prevent_posted_batch_items_mutation (production_batch_items),
+    // prevent_posted_batch_cost_mutation (production_batch_costs below).
+    status: text("status").$type<ProductionBatchStatus>().notNull().default("draft"),
+    postedAt: timestamp("posted_at", { withTimezone: true, mode: "date" }),
+    postedByStaffUserId: uuid("posted_by_staff_user_id").references(() => staffUsers.id, {
+      onDelete: "restrict",
+    }),
     ...timestamps(),
   },
   (table) => [
     index("production_batches_fabric_id_idx").on(table.fabricId),
-    check("production_batches_roll_count_check", sql`${table.rollCount} > 0`),
+    index("production_batches_status_idx").on(table.status),
+    // Nullable (draft) but never <= 0 once set — "required at posting" is an app-level check
+    // (postBatch), same as fabric_cost_amount's own > 0-at-posting rule below.
+    check("production_batches_fabric_yards_check", sql`${table.fabricYards} is null or ${table.fabricYards} > 0`),
     check("production_batches_fabric_cost_amount_check", sql`${table.fabricCostAmount} >= 0`),
-    check("production_batches_sewing_cost_amount_check", sql`${table.sewingCostAmount} >= 0`),
-    check("production_batches_other_cost_amount_check", sql`${table.otherCostAmount} >= 0`),
+    check("production_batches_status_check", checkIn(table.status, PRODUCTION_BATCH_STATUSES)),
+    // Both-or-neither, same idiom as fabrics_price_amount_unit_pair_check — "posted" always
+    // carries both posted_at and posted_by_staff_user_id, "draft" always carries neither.
+    check(
+      "production_batches_status_posted_pair_check",
+      sql`(${table.status} = 'posted') = (${table.postedAt} is not null) and (${table.status} = 'posted') = (${table.postedByStaffUserId} is not null)`,
+    ),
+    // Referenced by production_batch_items' composite FK below (production_batch_id, fabric_id)
+    // -> (id, fabric_id) — same "denormalize + composite FK" technique product_variants and
+    // product_images already use, this time so a batch LINE's SKU is guaranteed to belong to the
+    // SAME fabric as its own batch.
+    unique("production_batches_id_fabric_id_key").on(table.id, table.fabricId),
+  ],
+);
+
+// The owner's reusable master list of non-fabric cost types (accessories, sewing fees, ...) —
+// migration 0007. `production_batch_costs` below snapshots a row's name/unit at the moment a
+// line is added, so renaming a component here never rewrites history (same reasoning as
+// product_variants.sku freezing a color's name at variant-creation time).
+export const costComponents = pgTable(
+  "cost_components",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: citext("name").notNull().unique(),
+    unit: text("unit").$type<CostComponentUnit>().notNull(),
+    defaultUnitPrice: bigint("default_unit_price", { mode: "number" }),
+    // Never hard-deleted once referenced by any production_batch_costs row (ON DELETE RESTRICT
+    // below) — "delete" in the UI always means setting this false, same as fabric_colors.
+    isActive: boolean("is_active").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps(),
+  },
+  (table) => [
+    check("cost_components_unit_check", checkIn(table.unit, COST_COMPONENT_UNITS)),
+    check("cost_components_default_unit_price_check", sql`${table.defaultUnitPrice} >= 0`),
   ],
 );
 
@@ -316,15 +380,21 @@ export const productionBatchItems = pgTable(
   "production_batch_items",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    productionBatchId: uuid("production_batch_id")
-      .notNull()
-      .references(() => productionBatches.id, { onDelete: "cascade" }),
-    sku: text("sku")
-      .notNull()
-      .references(() => productVariants.sku, { onDelete: "restrict" }),
+    // No single-column FK here — superseded by the composite
+    // production_batch_items_batch_fabric_fk below, same consolidation technique migration 0004
+    // used for product_variants.product_id.
+    productionBatchId: uuid("production_batch_id").notNull(),
+    // Denormalized copy of production_batches.fabric_id as of line creation — exists ONLY so the
+    // two composite FKs below can enforce, at the DB level, that this line's batch and this
+    // line's SKU always agree on the same fabric. Same technique as product_variants.fabricId/
+    // product_images.fabricId (see those columns' doc comments).
+    fabricId: uuid("fabric_id").notNull(),
+    // No single-column FK here either — superseded by production_batch_items_sku_fabric_fk.
+    sku: text("sku").notNull(),
     qty: integer("qty").notNull(),
-    // App-computed when the batch is saved: total batch cost / total batch qty, rounded up.
-    unitCostAmount: bigint("unit_cost_amount", { mode: "number" }).notNull(),
+    // App-computed ONLY at posting time: ceil(total batch cost / total batch qty) — see
+    // postBatch. Zero while the batch is still a draft; not meaningful until status = 'posted'.
+    unitCostAmount: bigint("unit_cost_amount", { mode: "number" }).notNull().default(0),
     ...createdAtOnly(),
   },
   (table) => [
@@ -333,9 +403,78 @@ export const productionBatchItems = pgTable(
     unique("production_batch_items_batch_sku_key").on(table.productionBatchId, table.sku),
     check("production_batch_items_qty_check", sql`${table.qty} > 0`),
     check("production_batch_items_unit_cost_amount_check", sql`${table.unitCostAmount} >= 0`),
+    // Together these guarantee production_batches.fabric_id === product_variants.fabric_id for
+    // every line (a line's SKU always belongs to its own batch's fabric) — mirrors
+    // product_variants' own pair of composite FKs exactly (see that table's doc comments).
+    foreignKey({
+      columns: [table.productionBatchId, table.fabricId],
+      foreignColumns: [productionBatches.id, productionBatches.fabricId],
+      name: "production_batch_items_batch_fabric_fk",
+    })
+      .onDelete("cascade")
+      .onUpdate("restrict"),
+    foreignKey({
+      columns: [table.sku, table.fabricId],
+      foreignColumns: [productVariants.sku, productVariants.fabricId],
+      name: "production_batch_items_sku_fabric_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
   ],
 );
 
+// Itemized non-fabric costs for one batch (accessories, sewing fees, ...) — migration 0007.
+// `component_name`/`component_unit` are a SNAPSHOT of the referenced cost_components row at the
+// moment this line was inserted, and are never rewritten by a later rename (see costComponents'
+// doc comment) — only `quantity`/`unit_price` (and the generated `total`) are ever updated while
+// the line still exists. `total` is a Postgres GENERATED column, not an app-computed value
+// checked by a CHECK: computing it in JS (`Math.round(quantity * unitPrice)`) and verifying with
+// a CHECK against Postgres's own `round()` would intermittently reject legitimate saves on float
+// error (e.g. 0.35 * 10 is 3.4999999999999996 in IEEE 754 but exactly 3.5 in Postgres's numeric
+// type, which rounds the opposite way) — a generated column means Postgres computes it once,
+// the same way, every time; the app never writes it, only reads it back.
+export const productionBatchCosts = pgTable(
+  "production_batch_costs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productionBatchId: uuid("production_batch_id")
+      .notNull()
+      .references(() => productionBatches.id, { onDelete: "cascade" }),
+    costComponentId: uuid("cost_component_id")
+      .notNull()
+      .references(() => costComponents.id, { onDelete: "restrict" }),
+    componentName: text("component_name").notNull(),
+    componentUnit: text("component_unit").$type<CostComponentUnit>().notNull(),
+    quantity: numeric("quantity", { precision: 10, scale: 2, mode: "number" }).notNull(),
+    unitPrice: bigint("unit_price", { mode: "number" }).notNull(),
+    total: bigint("total", { mode: "number" })
+      .notNull()
+      .generatedAlwaysAs(sql`round(quantity * unit_price)`),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    index("production_batch_costs_production_batch_id_idx").on(table.productionBatchId),
+    // cost_component_id is NOT NULL + ON DELETE RESTRICT — indexed for the same reason every
+    // other FK in this schema is: an unindexed RESTRICT check seq-scans this (append-only,
+    // only-grows) table on every cost-component delete attempt.
+    index("production_batch_costs_cost_component_id_idx").on(table.costComponentId),
+    check("production_batch_costs_quantity_check", sql`${table.quantity} > 0`),
+    check("production_batch_costs_unit_price_check", sql`${table.unitPrice} >= 0`),
+    check("production_batch_costs_component_unit_check", checkIn(table.componentUnit, COST_COMPONENT_UNITS)),
+  ],
+);
+
+// The "stock never goes negative" invariant (CLAUDE.md's atomicity rule) is enforced only by
+// convention, not by a CHECK on this table — the running balance is a cross-row SUM, which
+// Postgres can't express as a row-level constraint. Every writer that can DECREASE a SKU's
+// balance MUST lock that SKU's product_variants row (`SELECT ... FOR UPDATE`, see
+// lockVariantForUpdate / lockProductForUpdate) BEFORE computing the balance it checks against —
+// see adjustStock/saveStockCount in apps/admin/src/lib/stock/queries.ts for the pattern. A
+// purely-additive writer (e.g. postBatch in apps/admin/src/lib/production/queries.ts, which only
+// ever inserts positive qty) is safe without this today, but any FUTURE writer that can insert a
+// negative qty (a sale, a return-adjustment, anything from the Dec 2026 checkout work) MUST
+// follow the same lock-first pattern — skipping it would silently reopen the negative-stock race
+// this table's two existing writers were built specifically to close.
 export const stockMovements = pgTable(
   "stock_movements",
   {
@@ -351,10 +490,17 @@ export const stockMovements = pgTable(
       onDelete: "restrict",
     }),
     note: text("note"),
+    // Only ever set for type = 'adjustment' (manual adjustment or stock count) — see the pair
+    // check below. The allowed-values CHECK (checkIn) passes automatically while this is null,
+    // same as fabrics.price_unit.
+    reason: text("reason").$type<StockAdjustmentReason>(),
     ...createdAtOnly(),
   },
   (table) => [
-    index("stock_movements_sku_idx").on(table.sku),
+    // (sku, created_at), not sku alone — covers any sku-only query via the leftmost-prefix rule
+    // AND backs the SKU ledger's `WHERE sku = ? ORDER BY created_at` without a separate sort
+    // (migration 0006, replacing the single-column stock_movements_sku_idx from migration 0000).
+    index("stock_movements_sku_created_at_idx").on(table.sku, table.createdAt),
     index("stock_movements_ref_idx").on(table.refType, table.refId),
     index("stock_movements_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
     // At most one ledger row per (type, source order_item/production_batch_item) — a retried
@@ -369,5 +515,11 @@ export const stockMovements = pgTable(
     check("stock_movements_qty_check", sql`${table.qty} <> 0`),
     check("stock_movements_type_check", checkIn(table.type, STOCK_MOVEMENT_TYPES)),
     check("stock_movements_ref_type_check", checkIn(table.refType, STOCK_MOVEMENT_REF_TYPES)),
+    check("stock_movements_reason_check", checkIn(table.reason, STOCK_ADJUSTMENT_REASONS)),
+    // Only an 'adjustment' movement carries a reason — production/sale/return never do.
+    check(
+      "stock_movements_reason_adjustment_pair_check",
+      sql`(${table.type} = 'adjustment') = (${table.reason} is not null)`,
+    ),
   ],
 );
