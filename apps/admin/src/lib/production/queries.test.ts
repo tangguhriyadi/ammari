@@ -804,7 +804,7 @@ describe("listBatches", () => {
       const { fabric, variant } = await insertProductVariant(tx);
       const batch = await insertBatchFixture(tx, fabric.id, { lines: [{ sku: variant.sku, qty: 7 }] });
 
-      const { rows } = await listBatches(undefined, undefined, tx);
+      const { rows } = await listBatches(undefined, undefined, undefined, tx);
       const row = rows.find((r) => r.id === batch.id);
       expect(row?.totalPcs).toBe(7);
       expect(typeof row?.totalPcs).toBe("number");
@@ -816,7 +816,7 @@ describe("listBatches", () => {
       const { fabric } = await insertProductVariant(tx);
       const batch = await insertBatchFixture(tx, fabric.id, { fabricYards: null });
 
-      const { rows } = await listBatches(undefined, undefined, tx);
+      const { rows } = await listBatches(undefined, undefined, undefined, tx);
       const row = rows.find((r) => r.id === batch.id);
       expect(row?.fabricYards).toBeNull();
 

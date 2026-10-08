@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Pagination } from "@ammari/ui";
+import { Card, EmptyState, Pagination, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
 import { formatDateTime, formatRupiah, type Pagination as PaginationData } from "@ammari/ui/lib";
 import type { StockAdjustmentReason } from "@ammari/db/schema";
 import type { FabricStockLedgerRow } from "@/lib/inventory/fabric-stock";
@@ -18,59 +18,105 @@ const REASON_LABELS: Record<StockAdjustmentReason, string> = {
   other: "Lainnya",
 };
 
+function typeLabel(row: FabricStockLedgerRow) {
+  if (row.type === "purchase") {
+    return (
+      <Link href={`/purchases/${row.id}`} className="font-medium text-brand hover:underline">
+        {TYPE_LABELS[row.type]}
+      </Link>
+    );
+  }
+  return TYPE_LABELS[row.type] ?? row.type;
+}
+
 export function FabricLedger({
   rows,
   pagination,
   basePath,
+  searchParams = {},
   canViewProfit,
 }: {
   rows: FabricStockLedgerRow[];
   pagination: PaginationData;
   basePath: string;
+  searchParams?: Record<string, string | undefined>;
   canViewProfit: boolean;
 }) {
   if (rows.length === 0) {
-    return <p className="text-base text-neutral-600">Belum ada pergerakan stok untuk bahan ini.</p>;
+    return <EmptyState title="Belum ada pergerakan" description="Belum ada pergerakan stok untuk bahan ini." />;
   }
 
   return (
     <>
-      <div className="flex flex-col gap-2">
+      <CardList>
         {rows.map((row) => (
-          <div key={row.id} className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200 p-3">
-            <div>
-              <p className="text-base text-neutral-900">
-                {/* See stock's accessory-ledger.tsx for why a purchase row links out instead of
-                    carrying its own void button. */}
-                {row.type === "purchase" ? (
-                  <Link href={`/purchases/${row.id}`} className="font-medium text-brand hover:underline">
-                    {TYPE_LABELS[row.type]}
-                  </Link>
-                ) : (
-                  (TYPE_LABELS[row.type] ?? row.type)
-                )}
-                {row.reason ? ` · ${REASON_LABELS[row.reason]}` : ""}
-                {row.voidedAt !== null && <span className="ml-2 text-sm text-neutral-500">(dibatalkan)</span>}
-              </p>
-              <p className="text-sm text-neutral-600">
+          <li key={row.id}>
+            <Card className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-base text-neutral-900">
+                  {typeLabel(row)}
+                  {row.reason ? ` · ${REASON_LABELS[row.reason]}` : ""}
+                  {row.voidedAt !== null && <span className="ml-2 text-sm text-neutral-500">(dibatalkan)</span>}
+                </p>
+                <p className="text-sm text-neutral-600">
+                  {formatDateTime(row.createdAt)}
+                  {row.createdByName ? ` · ${row.createdByName}` : ""}
+                  {row.supplier ? ` · ${row.supplier}` : ""}
+                </p>
+                {row.note && <p className="text-sm text-neutral-600">{row.note}</p>}
+              </div>
+              <div className="flex flex-col items-end gap-0.5">
+                <span className={`text-base font-semibold tabular-nums ${row.qty >= 0 ? "text-success-700" : "text-danger-700"}`}>
+                  {row.qty >= 0 ? "+" : ""}
+                  {row.qty.toFixed(2)}
+                </span>
+                <span className="text-sm text-neutral-600 tabular-nums">Saldo: {row.runningQty.toFixed(2)} yard</span>
+                {canViewProfit && <span className="text-sm text-neutral-600 tabular-nums">Nilai: {formatRupiah(row.runningValueAmount)}</span>}
+              </div>
+            </Card>
+          </li>
+        ))}
+      </CardList>
+
+      <TableContainer>
+        <TableHead>
+          <Th>Tanggal</Th>
+          <Th>Jenis</Th>
+          <Th>Catatan</Th>
+          <Th>Qty</Th>
+          <Th>Saldo</Th>
+          {canViewProfit && <Th>Nilai</Th>}
+        </TableHead>
+        <tbody>
+          {rows.map((row) => (
+            <Tr key={row.id}>
+              <Td className="text-neutral-700">
                 {formatDateTime(row.createdAt)}
                 {row.createdByName ? ` · ${row.createdByName}` : ""}
-                {row.supplier ? ` · ${row.supplier}` : ""}
-              </p>
-              {row.note && <p className="text-sm text-neutral-600">{row.note}</p>}
-            </div>
-            <div className="flex flex-col items-end gap-0.5">
-              <span className={`text-base font-semibold tabular-nums ${row.qty >= 0 ? "text-success-700" : "text-danger-700"}`}>
+              </Td>
+              <Td>
+                {typeLabel(row)}
+                {row.reason ? ` · ${REASON_LABELS[row.reason]}` : ""}
+                {row.voidedAt !== null && <span className="ml-2 text-sm text-neutral-500">(dibatalkan)</span>}
+              </Td>
+              <Td className="text-neutral-700">
+                {row.supplier ?? ""}
+                {row.supplier && row.note ? " · " : ""}
+                {row.note ?? ""}
+                {!row.supplier && !row.note ? "—" : ""}
+              </Td>
+              <Td className={`tabular-nums font-medium ${row.qty >= 0 ? "text-success-700" : "text-danger-700"}`}>
                 {row.qty >= 0 ? "+" : ""}
                 {row.qty.toFixed(2)}
-              </span>
-              <span className="text-sm text-neutral-600 tabular-nums">Saldo: {row.runningQty.toFixed(2)} yard</span>
-              {canViewProfit && <span className="text-sm text-neutral-600 tabular-nums">Nilai: {formatRupiah(row.runningValueAmount)}</span>}
-            </div>
-          </div>
-        ))}
-      </div>
-      <Pagination pagination={pagination} basePath={basePath} searchParams={{}} itemLabel="pergerakan" />
+              </Td>
+              <Td className="text-neutral-700 tabular-nums">{row.runningQty.toFixed(2)} yard</Td>
+              {canViewProfit && <Td className="text-neutral-700 tabular-nums">{formatRupiah(row.runningValueAmount)}</Td>}
+            </Tr>
+          ))}
+        </tbody>
+      </TableContainer>
+
+      <Pagination pagination={pagination} basePath={basePath} searchParams={searchParams} itemLabel="pergerakan" />
     </>
   );
 }

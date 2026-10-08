@@ -43,7 +43,9 @@ export function CostComponentForm(props: CostComponentFormProps) {
   const [costType, setCostType] = useState<CostComponentType>(initialValues.costType);
   const [defaultUnitPrice, setDefaultUnitPrice] = useState(initialValues.defaultUnitPrice);
   const [isActive, setIsActive] = useState(initialValues.isActive);
-  const [sortOrder, setSortOrder] = useState(String(initialValues.sortOrder));
+  // Not user-editable — the "Urutan tampil" field is hidden from this form, so this just
+  // carries the existing value (or 0 for a new component) straight through to the payload.
+  const sortOrder = String(initialValues.sortOrder);
   const [error, setError] = useState<string | null>(null);
   const [saving, startTransition] = useTransition();
 
@@ -75,34 +77,22 @@ export function CostComponentForm(props: CostComponentFormProps) {
         </Label>
         <Input id="component-name" value={name} onChange={(event) => setName(event.target.value)} />
       </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
-          <Label htmlFor="component-unit" required>
-            Satuan
-          </Label>
-          <Select id="component-unit" value={unit} onChange={(event) => setUnit(event.target.value as CostComponentUnit)}>
-            {COST_COMPONENT_UNITS.map((value) => (
-              <option key={value} value={value}>
-                {UNIT_LABELS[value]}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <div>
-          <Label htmlFor="component-price">Harga satuan default</Label>
-          <Input
-            id="component-price"
-            value={defaultUnitPrice}
-            onChange={(event) => setDefaultUnitPrice(event.target.value)}
-            placeholder="Opsional"
-          />
-        </div>
-      </div>
       <div>
         <Label htmlFor="component-cost-type" required>
           Jenis biaya
         </Label>
-        <Select id="component-cost-type" value={costType} onChange={(event) => setCostType(event.target.value as CostComponentType)}>
+        <Select
+          id="component-cost-type"
+          value={costType}
+          onChange={(event) => {
+            const nextCostType = event.target.value as CostComponentType;
+            setCostType(nextCostType);
+            // "Tetap (per batch)" has no meaningful per-unit quantity — the unit field is
+            // hidden for it, so it's forced to 'set' rather than left at whatever the operator
+            // last picked while on "Variabel (per pcs)".
+            if (nextCostType === "fixed") setUnit("set");
+          }}
+        >
           {COST_COMPONENT_TYPES.map((value) => (
             <option key={value} value={value}>
               {COST_TYPE_LABELS[value]}
@@ -110,9 +100,30 @@ export function CostComponentForm(props: CostComponentFormProps) {
           ))}
         </Select>
       </div>
-      <div>
-        <Label htmlFor="component-sort-order">Urutan tampil</Label>
-        <Input id="component-sort-order" type="number" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {costType !== "fixed" && (
+          <div>
+            <Label htmlFor="component-unit" required>
+              Satuan
+            </Label>
+            <Select id="component-unit" value={unit} onChange={(event) => setUnit(event.target.value as CostComponentUnit)}>
+              {COST_COMPONENT_UNITS.map((value) => (
+                <option key={value} value={value}>
+                  {UNIT_LABELS[value]}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
+        <div>
+          <Label htmlFor="component-price">{costType === "fixed" ? "Nominal default" : "Harga default per pcs"}</Label>
+          <Input
+            id="component-price"
+            value={defaultUnitPrice}
+            onChange={(event) => setDefaultUnitPrice(event.target.value)}
+            placeholder="Opsional"
+          />
+        </div>
       </div>
       <Switch checked={isActive} onCheckedChange={setIsActive} label="Aktif" />
 

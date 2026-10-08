@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { cn } from "@ammari/ui";
+import { Tabs } from "@ammari/ui";
 
 const TABS = [
   { label: "Barang jadi", href: "/stock" },
@@ -8,8 +7,8 @@ const TABS = [
 ] as const;
 
 /** Route-level tabs across three distinct pages (not one page filtered by a query param, so
- * `FilterTabs` doesn't fit — see its own doc comment) — same plain-navigation-link reasoning:
- * `aria-current`, not the ARIA tabs pattern.
+ * `FilterTabs` doesn't fit — see its own doc comment) — renders through the same shared `Tabs`
+ * component every other tab row on the admin uses, so they all look and behave identically.
  *
  * `/stock` and `/stock/{fabrics,accessories}` sit behind two INDEPENDENT permission keys
  * (`stock.view` vs `inventory.view` — see lib/nav/config.ts, where the main sidebar already
@@ -26,24 +25,6 @@ export function StockTypeTabs({
   canViewRawMaterials: boolean;
 }) {
   const visibleTabs = TABS.filter((tab) => (tab.label === "Barang jadi" ? canViewFinishedGoods : canViewRawMaterials));
-  return (
-    <nav aria-label="Jenis stok" className="mb-4 flex gap-2 overflow-x-auto">
-      {visibleTabs.map((tab) => {
-        const isActive = tab.label === active;
-        return (
-          <Link
-            key={tab.label}
-            href={tab.href}
-            aria-current={isActive ? "true" : undefined}
-            className={cn(
-              "inline-flex min-h-11 shrink-0 items-center rounded-full px-4 text-base font-medium transition-colors",
-              isActive ? "bg-brand text-brand-foreground" : "bg-neutral-100 text-neutral-700 hover:bg-neutral-200",
-            )}
-          >
-            {tab.label}
-          </Link>
-        );
-      })}
-    </nav>
-  );
+  const items = visibleTabs.map((tab) => ({ label: tab.label, href: tab.href, isActive: tab.label === active }));
+  return <Tabs items={items} aria-label="Jenis stok" />;
 }

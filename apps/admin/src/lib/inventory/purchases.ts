@@ -4,8 +4,6 @@ import { accessories, accessoryMovements, fabricStockMovements, fabrics, staffUs
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
 
-const PAGE_SIZE = 20;
-
 export type PurchaseItemType = "fabric" | "accessory";
 export type PurchaseTypeFilter = PurchaseItemType | undefined;
 
@@ -59,6 +57,7 @@ function accessoryPurchaseConditions(q: string | undefined) {
 async function listFabricPurchasesOnly(
   q: string | undefined,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database,
 ): Promise<{ rows: PurchaseListRow[]; pagination: Pagination }> {
   const where = and(...fabricPurchaseConditions(q));
@@ -68,7 +67,7 @@ async function listFabricPurchasesOnly(
     .from(fabricStockMovements)
     .innerJoin(fabrics, eq(fabrics.id, fabricStockMovements.fabricId))
     .where(where);
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const rows = await db
     .select({
@@ -104,6 +103,7 @@ async function listFabricPurchasesOnly(
 async function listAccessoryPurchasesOnly(
   q: string | undefined,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database,
 ): Promise<{ rows: PurchaseListRow[]; pagination: Pagination }> {
   const where = and(...accessoryPurchaseConditions(q));
@@ -113,7 +113,7 @@ async function listAccessoryPurchasesOnly(
     .from(accessoryMovements)
     .innerJoin(accessories, eq(accessories.id, accessoryMovements.accessoryId))
     .where(where);
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const rows = await db
     .select({
@@ -170,6 +170,7 @@ interface RawUnionRow {
 async function listAllPurchases(
   q: string | undefined,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database,
 ): Promise<{ rows: PurchaseListRow[]; pagination: Pagination }> {
   const [fabricCountRow] = await db
@@ -183,7 +184,7 @@ async function listAllPurchases(
     .innerJoin(accessories, eq(accessories.id, accessoryMovements.accessoryId))
     .where(and(...accessoryPurchaseConditions(q)));
   const totalCount = (fabricCountRow?.totalCount ?? 0) + (accessoryCountRow?.totalCount ?? 0);
-  const pagination = resolvePagination({ rawPage, totalCount, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount });
 
   const qPattern = q ? `%${q}%` : null;
   const unioned = sql`
@@ -236,11 +237,12 @@ async function listAllPurchases(
 export async function listPurchases(
   filters: { type?: PurchaseTypeFilter; q?: string },
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: PurchaseListRow[]; pagination: Pagination }> {
-  if (filters.type === "fabric") return listFabricPurchasesOnly(filters.q, rawPage, db);
-  if (filters.type === "accessory") return listAccessoryPurchasesOnly(filters.q, rawPage, db);
-  return listAllPurchases(filters.q, rawPage, db);
+  if (filters.type === "fabric") return listFabricPurchasesOnly(filters.q, rawPage, rawPerPage, db);
+  if (filters.type === "accessory") return listAccessoryPurchasesOnly(filters.q, rawPage, rawPerPage, db);
+  return listAllPurchases(filters.q, rawPage, rawPerPage, db);
 }
 
 /** Looks up a single purchase by id, trying the fabric ledger then the accessory ledger — the

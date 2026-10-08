@@ -86,7 +86,9 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await page.locator("#component-price").fill("2.000");
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page).toHaveURL(/\/production\/cost-components$/);
-  await expect(page.getByText(componentName)).toBeVisible();
+  // Renders twice in the DOM (a mobile card and a desktop table row, one hidden via CSS per
+  // breakpoint; see cost-component-list.tsx) — this test runs at the 390px viewport set above.
+  await expect(page.locator(`:text-is("${componentName}"):visible`)).toBeVisible();
 
   // 5. Create a production draft: fabric yards (fabric cost is now a computed ESTIMATE, never
   // hand-typed) and one extra-cost line using the component just created — its quantity is

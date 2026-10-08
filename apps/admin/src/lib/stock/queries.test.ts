@@ -171,7 +171,7 @@ describe("read-path aggregates (real numbers, not stringified bigints)", () => {
       const { variant, product } = await insertProductVariant(tx);
       await seedStock(tx, variant.sku, 4);
 
-      const { rows } = await listStockOverview({ productId: product.id }, undefined, tx);
+      const { rows } = await listStockOverview({ productId: product.id }, undefined, undefined, tx);
       const row = rows.find((r) => r.sku === variant.sku);
       expect(row?.currentStock).toBe(4);
       expect(typeof row?.currentStock).toBe("number");
@@ -188,7 +188,7 @@ describe("read-path aggregates (real numbers, not stringified bigints)", () => {
         { sku: variant.sku, qty: 2, type: "return", refType: "manual", createdAt: new Date(base + 2000) },
       ]);
 
-      const { rows } = await listStockLedger(variant.sku, undefined, tx);
+      const { rows } = await listStockLedger(variant.sku, undefined, undefined, tx);
       // Newest first: +2 (balance 9) -> -3 (balance 7) -> +10 (balance 10).
       expect(rows.map((r) => r.qty)).toEqual([2, -3, 10]);
       expect(rows.map((r) => r.runningBalance)).toEqual([9, 7, 10]);

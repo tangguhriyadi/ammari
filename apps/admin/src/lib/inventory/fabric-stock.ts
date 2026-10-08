@@ -8,8 +8,6 @@ import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import { lockFabricForUpdate } from "./db";
 import { valueDeltaForConsumption, type RawMaterialBalance } from "./moving-average";
 
-const PAGE_SIZE = 20;
-
 // ---------- Master list with stock balance (the /stock/fabrics tab — see accessories.ts's
 // listAccessories for the identical shape this mirrors) ----------
 
@@ -26,12 +24,13 @@ export interface FabricWithBalanceRow {
 export async function listFabricsWithBalance(
   filters: { q?: string },
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: FabricWithBalanceRow[]; pagination: Pagination }> {
   const where = filters.q ? ilike(fabrics.name, `%${filters.q}%`) : undefined;
 
   const [totalCountRow] = await db.select({ totalCount: count() }).from(fabrics).where(where);
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const balanceByFabric = db
     .select({
@@ -106,13 +105,14 @@ export interface FabricStockLedgerRow {
 export async function listFabricStockLedger(
   fabricId: string,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: FabricStockLedgerRow[]; pagination: Pagination }> {
   const [totalCountRow] = await db
     .select({ totalCount: count() })
     .from(fabricStockMovements)
     .where(eq(fabricStockMovements.fabricId, fabricId));
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const windowed = db
     .select({

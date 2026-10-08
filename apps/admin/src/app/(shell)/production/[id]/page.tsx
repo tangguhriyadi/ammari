@@ -1,9 +1,10 @@
 import { notFound } from "next/navigation";
-import { PageHeader } from "@ammari/ui";
+import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getBatchDetail, getBatchExtraCosts, listEligibleSkusForFabric } from "@/lib/production/queries";
 import { listActiveCostComponents } from "@/lib/production/cost-components";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { ProductionBatchForm } from "../_components/production-batch-form";
 import { ProductionBatchReadOnly } from "../_components/production-batch-readonly";
 import { BatchStatusBadge } from "../_components/production-batch-list";
@@ -21,6 +22,7 @@ export default async function ProductionBatchDetailPage({ params }: { params: Pr
 
   return (
     <>
+      <Breadcrumb items={[...rootCrumbs("/production"), { label: batch.batchNo }]} />
       <div className="flex items-center justify-between gap-2">
         <PageHeader title={batch.batchNo} />
         <BatchStatusBadge status={batch.status} />

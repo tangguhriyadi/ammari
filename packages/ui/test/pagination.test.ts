@@ -42,4 +42,26 @@ describe("resolvePagination", () => {
     const result = resolvePagination({ rawPage: "2", totalCount: 40, pageSize: 20 });
     expect(result).toMatchObject({ page: 2, totalPages: 2, offset: 20 });
   });
+
+  test("defaults pageSize to 20 when rawPerPage is missing", () => {
+    expect(resolvePagination({ rawPage: undefined, totalCount: 45 }).pageSize).toBe(20);
+  });
+
+  test("accepts a whitelisted rawPerPage", () => {
+    const result = resolvePagination({ rawPage: undefined, rawPerPage: "50", totalCount: 120 });
+    expect(result).toMatchObject({ pageSize: 50, limit: 50, totalPages: 3 });
+  });
+
+  test("falls back to 20 when rawPerPage is outside the whitelist", () => {
+    expect(resolvePagination({ rawPage: undefined, rawPerPage: "37", totalCount: 45 }).pageSize).toBe(20);
+  });
+
+  test("falls back to 20 when rawPerPage is non-numeric", () => {
+    expect(resolvePagination({ rawPage: undefined, rawPerPage: "abc", totalCount: 45 }).pageSize).toBe(20);
+  });
+
+  test("recomputes totalPages and clamps page for the new pageSize", () => {
+    const result = resolvePagination({ rawPage: "5", rawPerPage: "100", totalCount: 45 });
+    expect(result).toMatchObject({ page: 1, totalPages: 1, pageSize: 100, offset: 0 });
+  });
 });

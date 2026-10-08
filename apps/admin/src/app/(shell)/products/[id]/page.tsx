@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { PageHeader, Button } from "@ammari/ui";
+import { PageHeader, Button, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getProductDetail, getCurrentCostAssumption } from "@/lib/products/queries";
 import { listFabricColors, listFabricsWithUsage } from "@/lib/products/fabric-queries";
@@ -8,6 +8,7 @@ import { listProductColorGroups, listProductImages } from "@/lib/products/image-
 import { calculateBatasHpp } from "@/lib/products/batas-hpp";
 import { listActiveAccessories, listDistinctSizeGroups } from "@/lib/inventory/accessories";
 import { listRecipeForProduct } from "@/lib/inventory/recipes";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { ProductForm } from "../_components/product-form";
 import { VariantBuilder } from "../_components/variant-builder";
 import { BatasHppCard } from "../_components/batas-hpp-card";
@@ -22,7 +23,7 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
   if (!detail) notFound();
   const { product, variants } = detail;
 
-  const { rows: fabrics } = await listFabricsWithUsage(undefined, undefined);
+  const { rows: fabrics } = await listFabricsWithUsage(undefined, undefined, undefined);
   const availableColors = await listFabricColors(product.fabricId, { activeOnly: true });
   const colorGroups = await listProductColorGroups(product.id);
   const images = await listProductImages(product.id);
@@ -39,6 +40,7 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
 
   return (
     <>
+      <Breadcrumb items={[...rootCrumbs("/products"), { label: product.name }]} />
       <div className="flex items-start gap-4">
         <ProductThumbnail url={thumbnailUrl} className="size-16 shrink-0 sm:size-20" />
         <div className="flex-1">

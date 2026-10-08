@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, EmptyState, Switch } from "@ammari/ui";
+import { Badge, Card, EmptyState, Switch, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import type { CostComponentType, CostComponentUnit } from "@ammari/db/schema";
 import { setCostComponentActiveAction } from "../actions";
@@ -46,25 +46,66 @@ export function CostComponentList({ components }: { components: CostComponentRow
   }
 
   return (
-    <ul className="flex flex-col gap-2">
-      {components.map((component) => (
-        <li key={component.id} className="flex items-center gap-3 rounded-lg border border-neutral-200 p-3">
-          <Link href={`/production/cost-components/${component.id}`} className="flex-1">
-            <p className="text-base text-neutral-900">{component.name}</p>
-            <p className="text-sm text-neutral-600">
-              {COST_TYPE_LABELS[component.costType]} · {UNIT_LABELS[component.unit]}
-              {component.defaultUnitPrice !== null ? ` · ${formatRupiah(component.defaultUnitPrice)}` : ""}
-            </p>
-          </Link>
-          {!component.isActive && <Badge variant="neutral">Nonaktif</Badge>}
-          <Switch
-            checked={component.isActive}
-            onCheckedChange={(checked) => handleToggle(component.id, checked)}
-            label=""
-            accessibleLabel={`Aktif untuk ${component.name}`}
-          />
-        </li>
-      ))}
-    </ul>
+    <>
+      <CardList>
+        {components.map((component) => (
+          <li key={component.id}>
+            <Card className="flex items-center gap-3">
+              <Link href={`/production/cost-components/${component.id}`} className="flex-1">
+                <p className="text-base text-neutral-900">{component.name}</p>
+                <p className="text-sm text-neutral-600">
+                  {COST_TYPE_LABELS[component.costType]} · {UNIT_LABELS[component.unit]}
+                  {component.defaultUnitPrice !== null ? ` · ${formatRupiah(component.defaultUnitPrice)}` : ""}
+                </p>
+              </Link>
+              {!component.isActive && <Badge variant="neutral">Nonaktif</Badge>}
+              <Switch
+                checked={component.isActive}
+                onCheckedChange={(checked) => handleToggle(component.id, checked)}
+                label=""
+                accessibleLabel={`Aktif untuk ${component.name}`}
+              />
+            </Card>
+          </li>
+        ))}
+      </CardList>
+
+      <TableContainer>
+        <TableHead>
+          <Th>Nama</Th>
+          <Th>Jenis</Th>
+          <Th>Satuan</Th>
+          <Th>Harga default</Th>
+          <Th>Status</Th>
+        </TableHead>
+        <tbody>
+          {components.map((component) => (
+            <Tr key={component.id}>
+              <Td>
+                <Link href={`/production/cost-components/${component.id}`} className="font-medium text-brand hover:underline">
+                  {component.name}
+                </Link>
+              </Td>
+              <Td className="text-neutral-700">{COST_TYPE_LABELS[component.costType]}</Td>
+              <Td className="text-neutral-700">{UNIT_LABELS[component.unit]}</Td>
+              <Td className="text-neutral-700 tabular-nums">
+                {component.defaultUnitPrice !== null ? formatRupiah(component.defaultUnitPrice) : "—"}
+              </Td>
+              <Td>
+                <div className="flex items-center gap-2">
+                  {!component.isActive && <Badge variant="neutral">Nonaktif</Badge>}
+                  <Switch
+                    checked={component.isActive}
+                    onCheckedChange={(checked) => handleToggle(component.id, checked)}
+                    label=""
+                    accessibleLabel={`Aktif untuk ${component.name}`}
+                  />
+                </div>
+              </Td>
+            </Tr>
+          ))}
+        </tbody>
+      </TableContainer>
+    </>
   );
 }

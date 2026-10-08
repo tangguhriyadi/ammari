@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PageHeader, Badge, Button } from "@ammari/ui";
+import { PageHeader, Badge, Button, Breadcrumb } from "@ammari/ui";
 import { formatNumber, formatRupiah } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getAccessoryBalance, getAccessoryById } from "@/lib/inventory/accessories";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 
 export default async function AccessoryDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission("inventory.view");
@@ -20,6 +21,7 @@ export default async function AccessoryDetailPage({ params }: { params: Promise<
 
   return (
     <>
+      <Breadcrumb items={[...rootCrumbs("/accessories"), { label: accessory.name }]} />
       <div className="flex items-center justify-between gap-2">
         <PageHeader
           title={accessory.name}

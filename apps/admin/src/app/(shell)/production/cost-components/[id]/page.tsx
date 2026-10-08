@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
-import { PageHeader } from "@ammari/ui";
+import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getCostComponentById } from "@/lib/production/cost-components";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { CostComponentForm } from "../_components/cost-component-form";
 
 export default async function EditCostComponentPage({ params }: { params: Promise<{ id: string }> }) {
@@ -12,6 +13,9 @@ export default async function EditCostComponentPage({ params }: { params: Promis
 
   return (
     <>
+      <Breadcrumb
+        items={[...rootCrumbs("/production"), { label: "Komponen Biaya", href: "/production/cost-components" }, { label: component.name }]}
+      />
       <PageHeader title={component.name} />
       <CostComponentForm
         mode="edit"

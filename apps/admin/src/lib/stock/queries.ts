@@ -7,8 +7,6 @@ import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { lockVariantForUpdate } from "./db";
 
-const PAGE_SIZE = 20;
-
 // ---------- Overview ----------
 
 export type ActiveFilter = "active" | "inactive" | undefined;
@@ -41,6 +39,7 @@ export interface ListStockOverviewFilters {
 export async function listStockOverview(
   filters: ListStockOverviewFilters,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: StockOverviewRow[]; pagination: Pagination }> {
   const stockBySku = db
@@ -69,7 +68,7 @@ export async function listStockOverview(
     .innerJoin(fabricColors, eq(fabricColors.id, productVariants.fabricColorId))
     .leftJoin(stockBySku, eq(stockBySku.sku, productVariants.sku))
     .where(where);
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const rows = await db
     .select({
@@ -154,10 +153,11 @@ export async function getSkuDetail(sku: string, db: Database = defaultDb): Promi
 export async function listStockLedger(
   sku: string,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: StockLedgerRow[]; pagination: Pagination }> {
   const [totalCountRow] = await db.select({ totalCount: count() }).from(stockMovements).where(eq(stockMovements.sku, sku));
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const windowed = db
     .select({

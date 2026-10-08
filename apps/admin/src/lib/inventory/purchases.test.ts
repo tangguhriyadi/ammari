@@ -84,7 +84,7 @@ describe("listPurchases", () => {
       await recordFabricPurchase({ fabricId: fabric.id, qty: 10, totalAmountPaid: 100_000, purchasedAt: "2026-01-01" }, null, testDb);
       await recordAccessoryPurchase({ accessoryId: accessory.id, qty: 50, totalAmountPaid: 25_000, purchasedAt: "2026-01-01" }, null, testDb);
 
-      const { rows } = await listPurchases({}, undefined, testDb);
+      const { rows } = await listPurchases({}, undefined, undefined, testDb);
       expect(rows.some((row) => row.itemType === "fabric" && row.itemId === fabric.id)).toBe(true);
       expect(rows.some((row) => row.itemType === "accessory" && row.itemId === accessory.id)).toBe(true);
     } finally {
@@ -107,7 +107,7 @@ describe("listPurchases", () => {
       const fabric = await insertFabric(tx);
       await recordFabricPurchase({ fabricId: fabric.id, qty: 10, totalAmountPaid: 100_000, purchasedAt: "2026-01-01" }, null, tx);
 
-      const { rows } = await listPurchases({ type: "fabric" }, undefined, tx);
+      const { rows } = await listPurchases({ type: "fabric" }, undefined, undefined, tx);
       expect(rows.every((row) => row.itemType === "fabric")).toBe(true);
       expect(rows.some((row) => row.itemId === fabric.id)).toBe(true);
     });
@@ -118,7 +118,7 @@ describe("listPurchases", () => {
       const accessory = await insertAccessory(tx);
       await recordAccessoryPurchase({ accessoryId: accessory.id, qty: 50, totalAmountPaid: 25_000, purchasedAt: "2026-01-01" }, null, tx);
 
-      const { rows } = await listPurchases({ type: "accessory" }, undefined, tx);
+      const { rows } = await listPurchases({ type: "accessory" }, undefined, undefined, tx);
       expect(rows.every((row) => row.itemType === "accessory")).toBe(true);
       expect(rows.some((row) => row.itemId === accessory.id)).toBe(true);
     });

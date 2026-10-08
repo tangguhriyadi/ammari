@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { formatRupiah } from "@ammari/ui/lib";
-import { Badge, Card } from "@ammari/ui";
+import { Badge, Card, EmptyState, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
 import type { listFabricsWithUsage } from "@/lib/products/fabric-queries";
 
 const PRICE_UNIT_LABELS: Record<string, string> = { meter: "/m", yard: "/yard" };
@@ -14,13 +14,12 @@ function priceLabel(fabric: Fabric): string | null {
 
 export function FabricList({ fabrics }: { fabrics: Fabric[] }) {
   if (fabrics.length === 0) {
-    return <p className="py-8 text-center text-base text-neutral-600">Belum ada bahan.</p>;
+    return <EmptyState title="Belum ada bahan" description="Tambah bahan untuk mulai mencatatnya." />;
   }
 
   return (
     <>
-      {/* Phone: cards, not a wide table. */}
-      <ul className="flex flex-col gap-3 md:hidden">
+      <CardList>
         {fabrics.map((fabric) => (
           <li key={fabric.id}>
             <Link href={`/fabrics/${fabric.id}`}>
@@ -36,37 +35,32 @@ export function FabricList({ fabrics }: { fabrics: Fabric[] }) {
             </Link>
           </li>
         ))}
-      </ul>
+      </CardList>
 
-      {/* Desktop/tablet: a table is fine here. */}
-      <div className="hidden overflow-x-auto rounded-lg border border-neutral-200 md:block">
-        <table className="w-full text-left text-base">
-          <thead className="border-b border-neutral-200 bg-neutral-50 text-sm text-neutral-600">
-            <tr>
-              <th className="px-4 py-3 font-medium">Nama</th>
-              <th className="px-4 py-3 font-medium">Pemasok</th>
-              <th className="px-4 py-3 font-medium">Komposisi</th>
-              <th className="px-4 py-3 font-medium">Harga</th>
-              <th className="px-4 py-3 font-medium">Dipakai</th>
-            </tr>
-          </thead>
-          <tbody>
-            {fabrics.map((fabric) => (
-              <tr key={fabric.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
-                <td className="px-4 py-3">
-                  <Link href={`/fabrics/${fabric.id}`} className="font-medium text-brand hover:underline">
-                    {fabric.name}
-                  </Link>
-                </td>
-                <td className="px-4 py-3 text-neutral-700">{fabric.supplier ?? "—"}</td>
-                <td className="px-4 py-3 text-neutral-700">{fabric.composition ?? "—"}</td>
-                <td className="px-4 py-3 text-neutral-700">{priceLabel(fabric) ?? "—"}</td>
-                <td className="px-4 py-3 text-neutral-700">{fabric.productCount} produk</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <TableContainer>
+        <TableHead>
+          <Th>Nama</Th>
+          <Th>Pemasok</Th>
+          <Th>Komposisi</Th>
+          <Th>Harga</Th>
+          <Th>Dipakai</Th>
+        </TableHead>
+        <tbody>
+          {fabrics.map((fabric) => (
+            <Tr key={fabric.id}>
+              <Td>
+                <Link href={`/fabrics/${fabric.id}`} className="font-medium text-brand hover:underline">
+                  {fabric.name}
+                </Link>
+              </Td>
+              <Td className="text-neutral-700">{fabric.supplier ?? "—"}</Td>
+              <Td className="text-neutral-700">{fabric.composition ?? "—"}</Td>
+              <Td className="text-neutral-700">{priceLabel(fabric) ?? "—"}</Td>
+              <Td className="text-neutral-700">{fabric.productCount} produk</Td>
+            </Tr>
+          ))}
+        </tbody>
+      </TableContainer>
     </>
   );
 }

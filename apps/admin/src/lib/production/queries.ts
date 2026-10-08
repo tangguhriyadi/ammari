@@ -29,8 +29,6 @@ import { generateBatchNumber } from "./batch-number";
 import { calculateUnitCost } from "./unit-cost";
 import { resolveAccessoryNeeds } from "./accessory-needs";
 
-const PAGE_SIZE = 20;
-
 // ---------- Eligible SKUs for a fabric ----------
 
 export interface EligibleSkuRow {
@@ -83,12 +81,13 @@ export interface ListBatchesRow {
 export async function listBatches(
   status: ProductionBatchStatus | undefined,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: ListBatchesRow[]; pagination: Pagination }> {
   const where = status ? eq(productionBatches.status, status) : undefined;
 
   const [totalCountRow] = await db.select({ totalCount: count() }).from(productionBatches).where(where);
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const rows = await db
     .select({

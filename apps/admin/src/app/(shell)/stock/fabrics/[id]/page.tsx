@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PageHeader } from "@ammari/ui";
+import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getFabricById } from "@/lib/products/fabric-queries";
 import { getFabricBalance, listFabricStockLedger } from "@/lib/inventory/fabric-stock";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { FabricLedger } from "../../_components/fabric-ledger";
 import { FabricStockControls } from "../../_components/fabric-stock-controls";
 
@@ -12,11 +13,11 @@ export default async function FabricStockDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; perPage?: string }>;
 }) {
   const session = await requirePermission("inventory.view");
   const { id } = await params;
-  const { page } = await searchParams;
+  const { page, perPage } = await searchParams;
 
   const fabric = await getFabricById(id);
   if (!fabric) notFound();
@@ -29,10 +30,11 @@ export default async function FabricStockDetailPage({
   // holds inventory.view/inventory.manage but not products.manage.
   const canViewMaster = session.permissionKeys.includes("products.manage");
 
-  const [balance, { rows, pagination }] = await Promise.all([getFabricBalance(id), listFabricStockLedger(id, page)]);
+  const [balance, { rows, pagination }] = await Promise.all([getFabricBalance(id), listFabricStockLedger(id, page, perPage)]);
 
   return (
     <>
+      <Breadcrumb items={[...rootCrumbs("/stock"), { label: "Kain", href: "/stock/fabrics" }, { label: fabric.name }]} />
       <PageHeader title={fabric.name} description={fabric.supplier ?? undefined} />
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <span className="text-2xl font-semibold tabular-nums text-neutral-900">{balance.qty.toFixed(2)} yard</span>
@@ -43,7 +45,13 @@ export default async function FabricStockDetailPage({
           </Link>
         )}
       </div>
-      <FabricLedger rows={rows} pagination={pagination} basePath={`/stock/fabrics/${id}`} canViewProfit={canViewProfit} />
+      <FabricLedger
+        rows={rows}
+        pagination={pagination}
+        basePath={`/stock/fabrics/${id}`}
+        searchParams={{ perPage }}
+        canViewProfit={canViewProfit}
+      />
     </>
   );
 }

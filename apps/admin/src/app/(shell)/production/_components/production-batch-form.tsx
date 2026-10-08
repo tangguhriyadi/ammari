@@ -113,6 +113,7 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
     .filter(([, qty]) => qty > 0)
     .map(([sku, qty]) => ({ sku, qty }));
   const totalPcs = lines.reduce((sum, line) => sum + line.qty, 0);
+  const yardsPerPcs = fabricYardsNumber !== null && totalPcs > 0 ? fabricYardsNumber / totalPcs : null;
 
   const estimatedFabricCost = canViewProfit && fabricBalance ? estimateFabricCost(fabricYardsNumber, fabricBalance) : null;
 
@@ -190,6 +191,14 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
           />
         </div>
       </div>
+
+      {/* Non-blocking — a genuinely thick fabric or a small batch can legitimately exceed 6
+          yard/pcs, this is just a second look against a typo (e.g. an extra digit). */}
+      {yardsPerPcs !== null && yardsPerPcs > 6 && (
+        <p role="status" className="text-base text-warning-700">
+          Pemakaian kain {yardsPerPcs.toFixed(2)} yard/pcs — pastikan tidak salah ketik.
+        </p>
+      )}
 
       <div>
         <Label htmlFor="batch-notes">Catatan</Label>

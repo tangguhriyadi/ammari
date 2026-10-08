@@ -246,8 +246,8 @@ describe("listFabricsWithUsage pagination", () => {
         await createFabricFixture(tx, { name: `${prefix} ${String(i).padStart(2, "0")}` });
       }
 
-      const page1 = await listFabricsWithUsage(prefix, "1", tx);
-      const page2 = await listFabricsWithUsage(prefix, "2", tx);
+      const page1 = await listFabricsWithUsage(prefix, "1", undefined, tx);
+      const page2 = await listFabricsWithUsage(prefix, "2", undefined, tx);
 
       expect(page1.pagination.totalCount).toBe(21);
       expect(page1.pagination.totalPages).toBe(2);

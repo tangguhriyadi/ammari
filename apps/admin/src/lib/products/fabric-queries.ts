@@ -7,8 +7,6 @@ import { normalizeColorHex } from "./color-hex";
 import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from "./errors";
 import { defaultDb, writeAuditLog, type Database } from "./db";
 
-const PAGE_SIZE = 20;
-
 const FABRIC_CONSTRAINT_FIELDS = {} as const;
 
 const FABRIC_COLOR_CONSTRAINT_FIELDS = {
@@ -30,6 +28,7 @@ export interface FabricInput {
 export async function listFabricsWithUsage(
   q: string | undefined,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: Awaited<ReturnType<typeof queryFabricsPage>>; pagination: Pagination }> {
   const where = q ? ilike(fabrics.name, `%${q}%`) : undefined;
@@ -39,7 +38,7 @@ export async function listFabricsWithUsage(
     .from(fabrics)
     .where(where);
 
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
   const rows = await queryFabricsPage(db, where, pagination);
   return { rows, pagination };
 }

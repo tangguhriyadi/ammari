@@ -693,8 +693,8 @@ describe("listProducts pagination", () => {
         });
       }
 
-      const page1 = await listProducts(prefix, "1", tx);
-      const page2 = await listProducts(prefix, "2", tx);
+      const page1 = await listProducts(prefix, "1", undefined, tx);
+      const page2 = await listProducts(prefix, "2", undefined, tx);
 
       expect(page1.pagination.totalCount).toBe(21);
       expect(page1.pagination.totalPages).toBe(2);

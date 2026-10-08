@@ -1,5 +1,6 @@
-import { PageHeader } from "@ammari/ui";
+import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { CostComponentForm } from "../_components/cost-component-form";
 
 export default async function NewCostComponentPage() {
@@ -7,6 +8,9 @@ export default async function NewCostComponentPage() {
 
   return (
     <>
+      <Breadcrumb
+        items={[...rootCrumbs("/production"), { label: "Komponen Biaya", href: "/production/cost-components" }, { label: "Tambah komponen" }]}
+      />
       <PageHeader title="Komponen biaya baru" />
       <CostComponentForm
         mode="create"

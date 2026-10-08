@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
-import { PageHeader } from "@ammari/ui";
+import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getAccessoryById } from "@/lib/inventory/accessories";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { AccessoryForm } from "../../_components/accessory-form";
 
 export default async function EditAccessoryPage({ params }: { params: Promise<{ id: string }> }) {
@@ -12,6 +13,9 @@ export default async function EditAccessoryPage({ params }: { params: Promise<{ 
 
   return (
     <>
+      <Breadcrumb
+        items={[...rootCrumbs("/accessories"), { label: accessory.name, href: `/accessories/${id}` }, { label: "Edit" }]}
+      />
       <PageHeader title={`Edit ${accessory.name}`} />
       <AccessoryForm
         mode="edit"

@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PageHeader, Badge } from "@ammari/ui";
+import { PageHeader, Badge, Breadcrumb } from "@ammari/ui";
 import { formatNumber } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getAccessoryBalance, getAccessoryById, listAccessoryLedger } from "@/lib/inventory/accessories";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { AccessoryLedger } from "../../_components/accessory-ledger";
 import { AccessoryStockControls } from "../../_components/accessory-stock-controls";
 
@@ -12,11 +13,11 @@ export default async function AccessoryStockDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; perPage?: string }>;
 }) {
   const session = await requirePermission("inventory.view");
   const { id } = await params;
-  const { page } = await searchParams;
+  const { page, perPage } = await searchParams;
 
   const accessory = await getAccessoryById(id);
   if (!accessory) notFound();
@@ -24,10 +25,14 @@ export default async function AccessoryStockDetailPage({
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
   const canManage = session.permissionKeys.includes("inventory.manage");
 
-  const [balance, { rows, pagination }] = await Promise.all([getAccessoryBalance(id), listAccessoryLedger(id, page)]);
+  const [balance, { rows, pagination }] = await Promise.all([
+    getAccessoryBalance(id),
+    listAccessoryLedger(id, page, perPage),
+  ]);
 
   return (
     <>
+      <Breadcrumb items={[...rootCrumbs("/stock"), { label: "Aksesoris", href: "/stock/accessories" }, { label: accessory.name }]} />
       <div className="flex items-center justify-between gap-2">
         <PageHeader
           title={accessory.name}
@@ -42,7 +47,13 @@ export default async function AccessoryStockDetailPage({
           Lihat data master →
         </Link>
       </div>
-      <AccessoryLedger rows={rows} pagination={pagination} basePath={`/stock/accessories/${id}`} canViewProfit={canViewProfit} />
+      <AccessoryLedger
+        rows={rows}
+        pagination={pagination}
+        basePath={`/stock/accessories/${id}`}
+        searchParams={{ perPage }}
+        canViewProfit={canViewProfit}
+      />
     </>
   );
 }

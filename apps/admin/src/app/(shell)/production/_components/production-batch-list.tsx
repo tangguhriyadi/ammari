@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { Badge, Card, EmptyState, Pagination } from "@ammari/ui";
-import { formatDate, formatNumber, type Pagination as PaginationData } from "@ammari/ui/lib";
+import { Badge, Card, EmptyState, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
+import { formatDate, formatNumber } from "@ammari/ui/lib";
 import type { ListBatchesRow } from "@/lib/production/queries";
 import type { ProductionBatchStatus } from "@ammari/db/schema";
 
@@ -10,22 +10,14 @@ export function BatchStatusBadge({ status }: { status: ProductionBatchStatus }) 
   return <Badge variant={status === "posted" ? "success" : "neutral"}>{STATUS_LABELS[status]}</Badge>;
 }
 
-export function ProductionBatchList({
-  rows,
-  pagination,
-  status,
-}: {
-  rows: ListBatchesRow[];
-  pagination: PaginationData;
-  status: ProductionBatchStatus | undefined;
-}) {
+export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
   if (rows.length === 0) {
     return <EmptyState title="Belum ada batch produksi" description="Buat batch baru untuk mulai mencatat produksi." />;
   }
 
   return (
     <>
-      <ul className="flex flex-col gap-3">
+      <CardList>
         {rows.map((row) => (
           <li key={row.id}>
             <Link href={`/production/${row.id}`}>
@@ -44,13 +36,36 @@ export function ProductionBatchList({
             </Link>
           </li>
         ))}
-      </ul>
-      <Pagination
-        pagination={pagination}
-        basePath="/production"
-        searchParams={{ status }}
-        itemLabel="batch"
-      />
+      </CardList>
+
+      <TableContainer>
+        <TableHead>
+          <Th>Batch</Th>
+          <Th>Tanggal</Th>
+          <Th>Bahan</Th>
+          <Th>Jumlah yard</Th>
+          <Th>Pcs</Th>
+          <Th>Status</Th>
+        </TableHead>
+        <tbody>
+          {rows.map((row) => (
+            <Tr key={row.id}>
+              <Td>
+                <Link href={`/production/${row.id}`} className="font-mono font-medium text-brand hover:underline">
+                  {row.batchNo}
+                </Link>
+              </Td>
+              <Td className="text-neutral-700">{formatDate(new Date(row.producedAt))}</Td>
+              <Td className="text-neutral-700">{row.fabricName}</Td>
+              <Td className="text-neutral-700 tabular-nums">{row.fabricYards !== null ? `${row.fabricYards} yard` : "—"}</Td>
+              <Td className="text-neutral-700 tabular-nums">{formatNumber(row.totalPcs)}</Td>
+              <Td>
+                <BatchStatusBadge status={row.status} />
+              </Td>
+            </Tr>
+          ))}
+        </tbody>
+      </TableContainer>
     </>
   );
 }

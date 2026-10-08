@@ -73,7 +73,7 @@ describe("accessory master CRUD", () => {
       const accessory = await insertAccessory(tx);
       await recordAccessoryPurchase({ accessoryId: accessory.id, qty: 50, totalAmountPaid: 25_000, purchasedAt: "2026-01-01" }, null, tx);
 
-      const { rows } = await listAccessories({}, undefined, tx);
+      const { rows } = await listAccessories({}, undefined, undefined, tx);
       const row = rows.find((r) => r.id === accessory.id);
       expect(row?.qty).toBe(50);
       expect(row?.valueAmount).toBe(25_000);
@@ -283,7 +283,7 @@ describe("accessory ledger", () => {
       );
       await recordAccessoryAdjustment({ accessoryId: accessory.id, deltaQty: -20, reason: "damaged" }, null, testDb);
 
-      const { rows } = await listAccessoryLedger(accessory.id, undefined, testDb);
+      const { rows } = await listAccessoryLedger(accessory.id, undefined, undefined, testDb);
       expect(rows).toHaveLength(2);
       expect(rows[0]?.type).toBe("adjustment"); // newest first
       expect(rows[0]?.runningQty).toBe(80);

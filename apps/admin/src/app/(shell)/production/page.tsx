@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { PageHeader, Button, FilterTabs } from "@ammari/ui";
+import { PageHeader, Button, FilterTabs, Pagination, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { listBatches } from "@/lib/production/queries";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { ProductionBatchList } from "./_components/production-batch-list";
 import type { ProductionBatchStatus } from "@ammari/db/schema";
 
@@ -14,16 +15,17 @@ const STATUS_OPTIONS = [
 export default async function ProductionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; page?: string }>;
+  searchParams: Promise<{ status?: string; page?: string; perPage?: string }>;
 }) {
   const session = await requirePermission("production.manage");
-  const { status: rawStatus, page } = await searchParams;
+  const { status: rawStatus, page, perPage } = await searchParams;
   const status = rawStatus === "draft" || rawStatus === "posted" ? (rawStatus as ProductionBatchStatus) : undefined;
-  const { rows, pagination } = await listBatches(status, page);
+  const { rows, pagination } = await listBatches(status, page, perPage);
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
 
   return (
     <>
+      <Breadcrumb items={rootCrumbs("/production")} />
       <PageHeader
         title="Produksi"
         description="Batch produksi dan kuantitasnya."
@@ -40,14 +42,17 @@ export default async function ProductionPage({
           </div>
         }
       />
-      <FilterTabs
-        basePath="/production"
-        paramName="status"
-        options={STATUS_OPTIONS}
-        activeValue={status}
-        aria-label="Filter status batch"
-      />
-      <ProductionBatchList rows={rows} pagination={pagination} status={status} />
+      <div className="flex flex-col gap-3">
+        <FilterTabs
+          basePath="/production"
+          paramName="status"
+          options={STATUS_OPTIONS}
+          activeValue={status}
+          aria-label="Filter status batch"
+        />
+        <ProductionBatchList rows={rows} />
+      </div>
+      <Pagination pagination={pagination} basePath="/production" searchParams={{ status, perPage }} itemLabel="batch" />
     </>
   );
 }

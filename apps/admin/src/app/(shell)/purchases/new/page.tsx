@@ -1,7 +1,8 @@
-import { PageHeader } from "@ammari/ui";
+import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { listActiveFabrics } from "@/lib/products/fabric-queries";
 import { listActiveAccessories } from "@/lib/inventory/accessories";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { PurchaseForm } from "../_components/purchase-form";
 
 export default async function NewPurchasePage() {
@@ -11,6 +12,7 @@ export default async function NewPurchasePage() {
 
   return (
     <>
+      <Breadcrumb items={[...rootCrumbs("/purchases"), { label: "Catat pembelian" }]} />
       <PageHeader title="Catat pembelian" description="Pembelian bahan atau aksesoris." />
       <PurchaseForm
         fabrics={fabrics.map((fabric) => ({ id: fabric.id, name: fabric.name }))}

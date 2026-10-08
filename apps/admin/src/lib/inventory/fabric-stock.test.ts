@@ -125,7 +125,7 @@ describe("fabric stock ledger", () => {
       await recordFabricPurchase({ fabricId: fabric.id, qty: 10, totalAmountPaid: 500_000, purchasedAt: "2026-01-01" }, null, testDb);
       await recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -2.5, reason: "damaged" }, null, testDb);
 
-      const { rows } = await listFabricStockLedger(fabric.id, undefined, testDb);
+      const { rows } = await listFabricStockLedger(fabric.id, undefined, undefined, testDb);
       expect(rows).toHaveLength(2);
       expect(rows[0]?.type).toBe("adjustment");
       expect(rows[0]?.runningQty).toBe(7.5);

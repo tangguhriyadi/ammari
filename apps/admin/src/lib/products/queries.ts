@@ -9,8 +9,6 @@ import { buildImageSizeUrl, getColorsMissingPhotos, getImageCountForColor } from
 import { todayInJakarta } from "./jakarta-date";
 import { defaultDb, lockProductForUpdate, writeAuditLog, type Database } from "./db";
 
-const PAGE_SIZE = 20;
-
 const PRODUCT_CONSTRAINT_FIELDS = {
   products_slug_unique: { field: "slug", message: "Slug ini sudah dipakai, gunakan slug lain." },
   products_code_unique: { field: "code", message: "Kode produk ini sudah dipakai, gunakan kode lain." },
@@ -43,6 +41,7 @@ export interface UpdateProductInput {
 export async function listProducts(
   q: string | undefined,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{
   rows: (Omit<Awaited<ReturnType<typeof queryProductsPage>>[number], "thumbnailStorageKey"> & { thumbnailUrl: string | null })[];
@@ -55,7 +54,7 @@ export async function listProducts(
     .from(products)
     .where(where);
 
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
   const rawRows = await queryProductsPage(db, where, pagination);
   // Built from a plain column (storage_key), not a query — a thumbnail-less product's row is
   // excluded from the join (LEFT JOIN), not merely an empty string, so `null` here always means

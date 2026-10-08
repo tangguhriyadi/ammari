@@ -184,7 +184,9 @@ test("editing two variant rows saves both in one atomic call; a validation error
   // close it (Escape) before continuing.
   await page.getByRole("navigation", { name: "Navigasi utama" }).getByRole("button", { name: "Lainnya" }).click();
   page.once("dialog", (dialog) => dialog.dismiss());
-  await page.getByRole("link", { name: "Produk", exact: true }).click();
+  // Scoped to the sheet — the breadcrumb on this page (Katalog / Produk / <name>) now renders its
+  // own "Produk" link too, so an unscoped getByRole would match both.
+  await page.getByRole("dialog").getByRole("link", { name: "Produk", exact: true }).click();
   await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
   await expect(page.getByRole("heading", { name: productName })).toBeVisible();
   await page.keyboard.press("Escape");

@@ -1,18 +1,20 @@
-import { PageHeader } from "@ammari/ui";
+import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { listFabricsWithUsage } from "@/lib/products/fabric-queries";
 import { listActiveCostComponents } from "@/lib/production/cost-components";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { ProductionBatchForm } from "../_components/production-batch-form";
 
 export default async function NewProductionBatchPage() {
   const session = await requirePermission("production.manage");
-  const { rows: fabrics } = await listFabricsWithUsage(undefined, undefined);
+  const { rows: fabrics } = await listFabricsWithUsage(undefined, undefined, undefined);
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
   const activeCostComponents = canViewProfit ? await listActiveCostComponents() : [];
 
   return (
     <>
+      <Breadcrumb items={[...rootCrumbs("/production"), { label: "Batch baru" }]} />
       <PageHeader title="Batch produksi baru" />
       <ProductionBatchForm
         mode="create"

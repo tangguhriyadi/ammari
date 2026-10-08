@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PageHeader, Badge } from "@ammari/ui";
+import { PageHeader, Badge, Breadcrumb } from "@ammari/ui";
 import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getPurchaseById, stripPurchaseAmount } from "@/lib/inventory/purchases";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { VoidPurchaseButton } from "../_components/void-purchase-button";
 
 const ITEM_TYPE_LABELS = { fabric: "Kain", accessory: "Aksesoris" } as const;
@@ -32,6 +33,7 @@ export default async function PurchaseDetailPage({ params }: { params: Promise<{
 
   return (
     <>
+      <Breadcrumb items={[...rootCrumbs("/purchases"), { label: purchase.itemName }]} />
       <div className="flex items-center justify-between gap-2">
         <PageHeader title={purchase.itemName} description={`Pembelian ${ITEM_TYPE_LABELS[purchase.itemType]} · ${formatDate(new Date(purchase.purchasedAt))}`} />
         {purchase.voidedAt !== null && <Badge variant="neutral">Dibatalkan</Badge>}

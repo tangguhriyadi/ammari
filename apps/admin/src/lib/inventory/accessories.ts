@@ -8,8 +8,6 @@ import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import { lockAccessoryForUpdate } from "./db";
 import { valueDeltaForConsumption, type RawMaterialBalance } from "./moving-average";
 
-const PAGE_SIZE = 20;
-
 const ACCESSORY_CONSTRAINT_FIELDS = {
   accessories_size_group_size_key: {
     field: "size",
@@ -47,6 +45,7 @@ export type AccessoryActiveFilter = "active" | "inactive" | undefined;
 export async function listAccessories(
   filters: { q?: string; activeFilter?: AccessoryActiveFilter },
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: AccessoryListRow[]; pagination: Pagination }> {
   const conditions = [
@@ -57,7 +56,7 @@ export async function listAccessories(
   const where = conditions.length > 0 ? and(...conditions) : undefined;
 
   const [totalCountRow] = await db.select({ totalCount: count() }).from(accessories).where(where);
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const balanceByAccessory = db
     .select({
@@ -250,13 +249,14 @@ export interface AccessoryLedgerRow {
 export async function listAccessoryLedger(
   accessoryId: string,
   rawPage: string | undefined,
+  rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: AccessoryLedgerRow[]; pagination: Pagination }> {
   const [totalCountRow] = await db
     .select({ totalCount: count() })
     .from(accessoryMovements)
     .where(eq(accessoryMovements.accessoryId, accessoryId));
-  const pagination = resolvePagination({ rawPage, totalCount: totalCountRow?.totalCount ?? 0, pageSize: PAGE_SIZE });
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const windowed = db
     .select({

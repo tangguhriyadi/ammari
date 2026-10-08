@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PageHeader } from "@ammari/ui";
+import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getStaffSession } from "@/lib/auth/staff-session";
@@ -11,6 +11,7 @@ import {
   listFabricColors,
 } from "@/lib/products/fabric-queries";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { FabricForm } from "../_components/fabric-form";
 import { FabricColorsSection } from "../_components/fabric-colors-section";
 
@@ -37,6 +38,7 @@ export default async function BahanEditPage({ params }: { params: Promise<{ id: 
 
   return (
     <>
+      <Breadcrumb items={[...rootCrumbs("/fabrics"), { label: fabric.name }]} />
       <PageHeader title={fabric.name} />
       {balance && (
         <div className="mb-6 flex flex-wrap items-center gap-3">
