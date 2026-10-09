@@ -5,6 +5,7 @@ import type { Size, StockAdjustmentReason } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
+import { valueDeltaForConsumption } from "@/lib/inventory/moving-average";
 import { lockVariantForUpdate } from "./db";
 
 // ---------- Overview ----------
@@ -231,15 +232,22 @@ export async function adjustStock(input: AdjustStockInput, actorStaffUserId: str
     const variant = await lockVariantForUpdate(tx, input.sku);
     if (!variant) throw new ActionError("SKU tidak ditemukan.");
 
-    const currentStock = await currentStockForSkuLocked(tx, input.sku);
-    const newStock = currentStock + input.deltaQty;
+    const balance = await currentBalanceForSkuLocked(tx, input.sku);
+    const newStock = balance.qty + input.deltaQty;
     if (newStock < 0) throw new FieldError("deltaQty", "Stok tidak boleh menjadi negatif.");
+
+    // Same moving-average treatment a raw-material adjustment already gets (reused unchanged
+    // from lib/inventory/moving-average.ts): valued AT the current average, with the "qty hits
+    // exactly 0 clears the remaining value" correction baked in — never a separately-rounded
+    // qty*average that could strand a few rupiah of value at zero stock.
+    const valueAmount = valueDeltaForConsumption(balance, input.deltaQty);
 
     const [movement] = await tx
       .insert(stockMovements)
       .values({
         sku: input.sku,
         qty: input.deltaQty,
+        valueAmount,
         type: "adjustment",
         refType: "manual",
         reason: input.reason,
@@ -262,13 +270,24 @@ export async function adjustStock(input: AdjustStockInput, actorStaffUserId: str
 
 /** Must only be called AFTER the caller has already locked `sku`'s product_variants row in the
  * SAME transaction (see adjustStock/saveStockCount) — this function itself does not lock
- * anything, it just recomputes the balance once that lock makes it safe to trust. */
-async function currentStockForSkuLocked(tx: Tx, sku: string): Promise<number> {
+ * anything, it just recomputes the balance once that lock makes it safe to trust. Returns both
+ * qty AND valueAmount (the same `{qty, valueAmount}` shape lib/inventory/moving-average.ts's
+ * functions expect) — finished-goods stock uses the identical moving-average idiom raw
+ * materials already do, just computed over stock_movements instead of accessory_movements/
+ * fabric_stock_movements. */
+export async function currentBalanceForSkuLocked(tx: Tx, sku: string): Promise<{ qty: number; valueAmount: number }> {
   const [row] = await tx
-    .select({ total: sql<number>`coalesce(sum(${stockMovements.qty})::int, 0)` })
+    .select({
+      qty: sql<number>`coalesce(sum(${stockMovements.qty}), 0)::int`,
+      // NOT cast down to ::int — a bigint SUM genuinely needs the range. postgres.js returns
+      // bigint (OID 20) as a STRING regardless of how it was produced — a raw `sql` fragment
+      // bypasses Drizzle's typed bigint-mode "number" column mapping entirely, so this MUST be
+      // converted explicitly (same idiom as lib/inventory/accessories.ts's getAccessoryBalance).
+      valueAmount: sql<string>`coalesce(sum(${stockMovements.valueAmount}), 0)::bigint`,
+    })
     .from(stockMovements)
     .where(eq(stockMovements.sku, sku));
-  return row?.total ?? 0;
+  return { qty: row?.qty ?? 0, valueAmount: Number(row?.valueAmount ?? 0) };
 }
 
 // ---------- Stock count (opname) ----------
@@ -318,13 +337,17 @@ export async function saveStockCount(
       // of this function could bypass it.
       if (line.physicalQty < 0) throw new FieldError(line.sku, "Jumlah tidak boleh negatif.");
       await lockVariantForUpdate(tx, line.sku);
-      const currentStock = await currentStockForSkuLocked(tx, line.sku);
-      const delta = line.physicalQty - currentStock;
+      const balance = await currentBalanceForSkuLocked(tx, line.sku);
+      const delta = line.physicalQty - balance.qty;
       if (delta === 0) continue;
       changedSkus.push(line.sku);
+      // Same moving-average treatment as adjustStock — valued AT the current average computed
+      // from THIS line's own balance (each line locks and re-reads its own SKU before valuing
+      // it, so an earlier line's write in this same loop never stales a later line's balance).
       movements.push({
         sku: line.sku,
         qty: delta,
+        valueAmount: valueDeltaForConsumption(balance, delta),
         type: "adjustment",
         refType: "manual",
         reason: "recount",

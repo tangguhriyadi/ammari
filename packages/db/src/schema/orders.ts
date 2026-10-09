@@ -7,18 +7,20 @@ import {
   IMPORT_BATCH_KINDS,
   IMPORT_BATCH_STATUSES,
   ORDER_STATUSES,
+  type ChannelId,
+  type OrderStatus,
 } from "./constants";
 import { productVariants } from "./catalog";
 import { staffUsers } from "./rbac";
 import { customers } from "./customers";
 
-// `id` is a natural key (one of the 4 fixed values below) referenced by many FKs with the
+// `id` is a natural key (one of the 7 fixed values below) referenced by many FKs with the
 // default ON UPDATE NO ACTION, so once any child row exists it is effectively immutable —
 // intentional: channel ids are fixed, not user-editable data.
 export const channels = pgTable(
   "channels",
   {
-    id: text("id").primaryKey(),
+    id: text("id").$type<ChannelId>().primaryKey(),
     name: text("name").notNull(),
     ...timestamps(),
   },
@@ -56,10 +58,23 @@ export const orders = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     channelId: text("channel_id")
+      .$type<ChannelId>()
       .notNull()
       .references(() => channels.id, { onDelete: "restrict" }),
-    channelOrderNo: text("channel_order_no").notNull(),
-    status: text("status").notNull().default("to_ship"),
+    // Internal, always-present, human-readable number ("ORD-YYYYMM-NNNN", Jakarta month) —
+    // generated for every order regardless of channel (see lib/orders/order-number.ts, mirroring
+    // production's generateBatchNumber). This is what staff and the UI reference everywhere.
+    orderNo: text("order_no").notNull().unique(),
+    // The MARKETPLACE's own order number — nullable because manual-entry channels (whatsapp/
+    // instagram/offline/web/reseller) have no external order number at all. Postgres's plain
+    // UNIQUE constraint already treats every NULL as distinct from every other NULL (same idiom
+    // as customers.phone/vouchers.usedOrderId), so several manual orders on the same channel with
+    // no channel_order_no never collide. REQUIRED (app-level, see lib/orders/queries.ts) for
+    // MARKETPLACE_CHANNEL_IDS ("shopee"/"tiktok") specifically so a future importer's re-import
+    // of the same order hits orders_channel_id_channel_order_no_key and updates in place instead
+    // of inserting a duplicate.
+    channelOrderNo: text("channel_order_no"),
+    status: text("status").$type<OrderStatus>().notNull().default("to_ship"),
     customerId: uuid("customer_id").references(() => customers.id, { onDelete: "restrict" }),
     buyerUsername: text("buyer_username"),
     orderDate: timestamp("order_date", { withTimezone: true, mode: "date" }).notNull(),
@@ -74,6 +89,18 @@ export const orders = pgTable(
     importBatchId: uuid("import_batch_id").references(() => importBatches.id, {
       onDelete: "restrict",
     }),
+    // Free-text shipping address for a manual order — a structured customer_addresses table is
+    // deliberately deferred to the Dec 2026 main-site checkout work (docs/SPEC.md §5.2); this is
+    // the pragmatic v1 shape for staff-entered orders. Lives on the order, not the customer, same
+    // reasoning buyerUsername already does (an order's buyer identity doesn't require a resolved
+    // customers row).
+    shippingAddress: text("shipping_address"),
+    notes: text("notes"),
+    // Who recorded a manual order — null for an imported order (those are attributed via
+    // import_batches.uploadedBy at the batch level instead).
+    createdByStaffUserId: uuid("created_by_staff_user_id").references(() => staffUsers.id, {
+      onDelete: "restrict",
+    }),
     ...timestamps(),
   },
   (table) => [
@@ -82,6 +109,7 @@ export const orders = pgTable(
     index("orders_import_batch_id_idx").on(table.importBatchId),
     index("orders_status_idx").on(table.status),
     index("orders_completed_at_idx").on(table.completedAt),
+    index("orders_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
     check("orders_status_check", checkIn(table.status, ORDER_STATUSES)),
     check("orders_subtotal_amount_check", sql`${table.subtotalAmount} >= 0`),
     check("orders_shipping_amount_check", sql`${table.shippingAmount} >= 0`),

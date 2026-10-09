@@ -1,83 +1,97 @@
 {
-  "version": "7",
-  "dialect": "postgresql",
-  "entries": [
-    {
-      "idx": 0,
-      "version": "7",
-      "when": 1790818830491,
-      "tag": "0000_numerous_karen_page",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1790818846327,
-      "tag": "0001_rbac_triggers",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1790821111887,
-      "tag": "0002_make_customer_phone_nullable",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1790821155736,
-      "tag": "0003_staff_auth",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1790897994493,
-      "tag": "0004_fabric_colors_and_variant_immutability",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1790921071434,
-      "tag": "0005_product_images_and_thumbnail",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1791387761008,
-      "tag": "0006_cloudy_morlocks",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1791416325299,
-      "tag": "0007_brainy_apocalypse",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1791437675383,
-      "tag": "0008_strange_sharon_carter",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1791443822425,
-      "tag": "0009_stormy_master_chief",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1791469772190,
-      "tag": "0010_lonely_chamber",
-      "breakpoints": true
-    }
-  ]
+    "version": "7",
+    "dialect": "postgresql",
+    "entries": [
+        {
+            "idx": 0,
+            "version": "7",
+            "when": 1790818830491,
+            "tag": "0000_numerous_karen_page",
+            "breakpoints": true
+        },
+        {
+            "idx": 1,
+            "version": "7",
+            "when": 1790818846327,
+            "tag": "0001_rbac_triggers",
+            "breakpoints": true
+        },
+        {
+            "idx": 2,
+            "version": "7",
+            "when": 1790821111887,
+            "tag": "0002_make_customer_phone_nullable",
+            "breakpoints": true
+        },
+        {
+            "idx": 3,
+            "version": "7",
+            "when": 1790821155736,
+            "tag": "0003_staff_auth",
+            "breakpoints": true
+        },
+        {
+            "idx": 4,
+            "version": "7",
+            "when": 1790897994493,
+            "tag": "0004_fabric_colors_and_variant_immutability",
+            "breakpoints": true
+        },
+        {
+            "idx": 5,
+            "version": "7",
+            "when": 1790921071434,
+            "tag": "0005_product_images_and_thumbnail",
+            "breakpoints": true
+        },
+        {
+            "idx": 6,
+            "version": "7",
+            "when": 1791387761008,
+            "tag": "0006_cloudy_morlocks",
+            "breakpoints": true
+        },
+        {
+            "idx": 7,
+            "version": "7",
+            "when": 1791416325299,
+            "tag": "0007_brainy_apocalypse",
+            "breakpoints": true
+        },
+        {
+            "idx": 8,
+            "version": "7",
+            "when": 1791437675383,
+            "tag": "0008_strange_sharon_carter",
+            "breakpoints": true
+        },
+        {
+            "idx": 9,
+            "version": "7",
+            "when": 1791443822425,
+            "tag": "0009_stormy_master_chief",
+            "breakpoints": true
+        },
+        {
+            "idx": 10,
+            "version": "7",
+            "when": 1791469772190,
+            "tag": "0010_lonely_chamber",
+            "breakpoints": true
+        },
+        {
+            "idx": 11,
+            "version": "7",
+            "when": 1791505989273,
+            "tag": "0011_gorgeous_darkstar",
+            "breakpoints": true
+        },
+        {
+            "idx": 12,
+            "version": "7",
+            "when": 1791509080768,
+            "tag": "0012_grant_orders_manage_permission",
+            "breakpoints": true
+        }
+    ]
 }

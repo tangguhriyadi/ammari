@@ -158,6 +158,12 @@ describe("postBatch", () => {
       // Consumed exactly the stock purchased — correction #1's zero-residual rule leaves no
       // stranded value behind at zero stock.
       expect(await getFabricBalance(fabric.id, tx)).toEqual({ qty: 0, valueAmount: 0 });
+
+      // The finished-goods stock_movements row carries its own cost basis too (qty *
+      // unit_cost_amount) — this is what a later sale's moving-average HPP is computed from.
+      const movements = await tx.select().from(stockMovements).where(eq(stockMovements.sku, variant.sku));
+      expect(movements).toHaveLength(1);
+      expect(movements[0]!.valueAmount).toBe(3 * 333_334);
     });
   });
 

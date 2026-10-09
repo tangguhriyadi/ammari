@@ -14,6 +14,7 @@ describe("stock_movements", () => {
         tx.insert(stockMovements).values({
           sku: variant.sku,
           qty: -1,
+          valueAmount: -10_000,
           type: "sale",
           refType: "order_item",
           refId,
@@ -26,6 +27,7 @@ describe("stock_movements", () => {
         tx.insert(stockMovements).values({
           sku: variant.sku,
           qty: 1,
+          valueAmount: 10_000,
           type: "return",
           refType: "order_item",
           refId,
@@ -42,6 +44,7 @@ describe("stock_movements", () => {
       await tx.insert(stockMovements).values({
         sku: variant.sku,
         qty: -1,
+        valueAmount: -10_000,
         type: "sale",
         refType: "order_item",
         refId,
@@ -51,6 +54,7 @@ describe("stock_movements", () => {
         tx.insert(stockMovements).values({
           sku: variant.sku,
           qty: -1,
+          valueAmount: -10_000,
           type: "sale",
           refType: "order_item",
           refId,

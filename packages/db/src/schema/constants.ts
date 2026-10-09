@@ -57,8 +57,20 @@ export type RawMaterialMovementType = (typeof RAW_MATERIAL_MOVEMENT_TYPES)[numbe
 export const RAW_MATERIAL_MOVEMENT_REF_TYPES = ["production_batch", "manual"] as const;
 export type RawMaterialMovementRefType = (typeof RAW_MATERIAL_MOVEMENT_REF_TYPES)[number];
 
-export const CHANNEL_IDS = ["shopee", "tiktok", "web", "reseller"] as const;
+/** "shopee"/"tiktok" are the two marketplace channels a future importer reconciles against —
+ * `channel_order_no` is required for these (validated in app code, see lib/orders/queries.ts)
+ * so a later import of the same order updates via the existing unique key instead of duplicating
+ * it. "whatsapp"/"instagram"/"offline" are manual-entry-only channels (no external order number
+ * ever exists for them); "web" is reserved for the Dec 2026 main-site checkout. */
+export const CHANNEL_IDS = ["shopee", "tiktok", "web", "reseller", "whatsapp", "instagram", "offline"] as const;
 export type ChannelId = (typeof CHANNEL_IDS)[number];
+
+/** Channels whose orders always originate from a marketplace with its own order numbering —
+ * `channel_order_no` is required (not just optionally present) for these, specifically so a
+ * future Shopee/TikTok importer's re-import of the same order hits
+ * `orders_channel_id_channel_order_no_key` and updates in place rather than inserting a
+ * duplicate. See orders.ts's doc comment on `channelOrderNo`. */
+export const MARKETPLACE_CHANNEL_IDS: readonly ChannelId[] = ["shopee", "tiktok"];
 
 export const ORDER_STATUSES = [
   "awaiting_payment",

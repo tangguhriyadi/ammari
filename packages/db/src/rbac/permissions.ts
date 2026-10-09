@@ -1,6 +1,21 @@
 // The v1 permission catalog (docs/SPEC.md §9). This is the single source of truth: the seed
 // script syncs these rows into the `permissions` table, and application code imports this file
 // directly rather than querying permission keys as magic strings.
+//
+// IMPORTANT — adding a key here is NOT enough on its own: nothing automatically re-runs
+// `pnpm --filter @ammari/db db:seed` against a real database when this array changes (there is
+// no CI/deploy step that does it today), so a new permission added here can sit invisible to
+// every already-provisioned super_admin/owner on dev/prod/a human's local db indefinitely,
+// exactly as happened with "orders.manage" after it was first added here. Migrations DO run
+// reliably on every environment (docs/SPEC.md §2.3), so every new permission key must ALSO ship
+// with a migration that idempotently (ON CONFLICT DO NOTHING) inserts the row into `permissions`
+// and grants it to `super_admin` (always) and `owner` (unless it's in
+// OWNER_EXCLUDED_PERMISSION_KEYS below) — see migration 0012 for the pattern.
+//
+// (Test/e2e databases never show this gap: packages/db/test/e2e-db.ts and
+// test/global-setup.ts's own seed step re-run `seed()` from scratch on every run, so they always
+// see the current PERMISSIONS array. A real dev/prod database, or a developer's own local
+// `ammari` db, does not get that for free.)
 
 export interface PermissionDefinition {
   key: string;
@@ -11,6 +26,7 @@ export interface PermissionDefinition {
 export const PERMISSIONS: readonly PermissionDefinition[] = [
   { key: "overview.view", group: "overview", description: "View the overview dashboard" },
   { key: "orders.view", group: "orders", description: "View orders" },
+  { key: "orders.manage", group: "orders", description: "Record manual orders and change order status" },
   { key: "orders.import", group: "orders", description: "Import Shopee/TikTok order and income exports" },
   { key: "packing.print_cards", group: "packing", description: "Print thank-you cards during packing" },
   { key: "stock.view", group: "stock", description: "View stock levels and movements" },

@@ -1,6 +1,7 @@
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { db as defaultDb } from "./client";
 import { channels, costAssumptions, costComponents, permissions, rolePermissions, roles, staffUsers } from "./schema";
+import type { ChannelId } from "./schema";
 import {
   OWNER_ROLE_KEY,
   PERMISSIONS,
@@ -13,15 +14,20 @@ import {
  * whatever DATABASE_URL points at (see test/global-setup.ts). */
 type Database = typeof defaultDb;
 
-const CHANNEL_NAMES: Record<string, string> = {
+const CHANNEL_NAMES: Record<ChannelId, string> = {
   shopee: "Shopee",
   tiktok: "TikTok Shop",
   web: "Main site",
   reseller: "Reseller",
+  whatsapp: "WhatsApp",
+  instagram: "Instagram",
+  offline: "Offline",
 };
 
 async function upsertChannels(db: Database) {
-  for (const [id, name] of Object.entries(CHANNEL_NAMES)) {
+  // Object.entries widens the key back to `string` regardless of CHANNEL_NAMES' own Record<ChannelId, ...>
+  // type — cast back so `id` matches channels.id's `$type<ChannelId>()`.
+  for (const [id, name] of Object.entries(CHANNEL_NAMES) as [ChannelId, string][]) {
     await db.insert(channels).values({ id, name }).onConflictDoUpdate({ target: channels.id, set: { name } });
   }
 }

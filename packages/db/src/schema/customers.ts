@@ -14,12 +14,21 @@ export const customers = pgTable(
     // vouchers.usedOrderId below), so no partial index is needed to permit several phone-less
     // customers.
     phone: text("phone").unique(),
-    email: citext("email").notNull().unique(),
+    // Nullable (migration 0011): a staff-created customer from manual order entry (/orders/new)
+    // is created with only a name and optional phone — no email is ever asked at that point.
+    // citext UNIQUE already tolerates multiple NULLs the same way phone above does, so several
+    // email-less customers never collide.
+    email: citext("email").unique(),
     name: text("name").notNull(),
     type: text("type").notNull().default("retail"),
     phoneVerifiedAt: timestamp("phone_verified_at", { withTimezone: true, mode: "date" }),
     emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true, mode: "date" }),
-    pdpConsentAt: timestamp("pdp_consent_at", { withTimezone: true, mode: "date" }).notNull(),
+    // Nullable (migration 0011): a staff-created customer (manual order entry) has given no PDP
+    // consent — stamping this automatically at staff-entry time would misrepresent consent that
+    // was never actually given by the buyer. Stays null until the buyer later self-serves (a
+    // voucher claim or main-site signup, docs/SPEC.md §4.3/§10.3), which is the only place real
+    // consent is captured.
+    pdpConsentAt: timestamp("pdp_consent_at", { withTimezone: true, mode: "date" }),
     promoConsentAt: timestamp("promo_consent_at", { withTimezone: true, mode: "date" }),
     ...timestamps(),
   },

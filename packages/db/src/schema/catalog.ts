@@ -506,6 +506,32 @@ export const stockMovements = pgTable(
       .notNull()
       .references(() => productVariants.sku, { onDelete: "restrict" }),
     qty: integer("qty").notNull(),
+    // Migration 0011. Mirrors accessory_movements.valueAmount/fabric_stock_movements.valueAmount
+    // exactly — current stock VALUE for a SKU is SUM(value_amount), current average cost per pcs
+    // is that divided by SUM(qty), same moving-average idiom, computed by the SAME
+    // lib/inventory/moving-average.ts functions (they operate on a generic {qty, valueAmount}
+    // shape, not anything raw-material-specific):
+    //   - 'production': value_amount = qty * the batch line's unit_cost_amount (an inflow with
+    //     its own known cost, same role a raw-material 'purchase' plays — this is the ONLY
+    //     movement type that moves the average upward with a fresh cost basis).
+    //   - 'sale' (a consumption, negative qty): value_amount =
+    //     valueDeltaForConsumption(balanceBeforeLocked, -qty) — valued AT the current average,
+    //     snapshotted onto order_items.unit_cost at the same moment (see lib/orders/queries.ts).
+    //   - 'return': an EXACT reversal of the 'sale' row for the SAME order_item (same ref_id) —
+    //     value_amount is the negation of that row's own value_amount, never recomputed at
+    //     whatever the average happens to be when the return posts. Returns are always whole-item
+    //     (full qty of the original order_item) — never a partial-quantity return — matching the
+    //     (type, ref_type, ref_id) unique index below, which allows exactly one 'sale' and one
+    //     'return' row per order_item, not an arbitrary number of partial ones.
+    //   - 'adjustment' (manual adjustment or stock count, either sign): same
+    //     valueDeltaForConsumption treatment as a raw-material adjustment — see adjustStock/
+    //     saveStockCount in apps/admin/src/lib/stock/queries.ts.
+    // Backfilled for pre-existing 'production' rows (qty * the referenced production_batch_item's
+    // unit_cost_amount) and to 0 for pre-existing 'adjustment' rows in migration 0011 itself —
+    // see that migration's hand-authored backfill section (same
+    // disable-trigger/UPDATE/re-enable-trigger idiom migration 0010 used for
+    // production_batch_costs.cost_type).
+    valueAmount: bigint("value_amount", { mode: "number" }).notNull(),
     type: text("type").notNull(),
     refType: text("ref_type").notNull(),
     refId: text("ref_id"),

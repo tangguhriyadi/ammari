@@ -163,6 +163,7 @@ export async function insertOrder(
     .insert(orders)
     .values({
       channelId: "shopee",
+      orderNo: `ORD-TEST-${randomUUID()}`,
       channelOrderNo: `ORDER-${randomUUID()}`,
       orderDate: new Date(),
       subtotalAmount,

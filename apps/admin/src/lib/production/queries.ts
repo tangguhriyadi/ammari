@@ -728,10 +728,16 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
     // One movement per line, in a single INSERT — the partial unique index on
     // (type, ref_type, ref_id) is a defense-in-depth backstop; the row lock above is what
     // actually prevents a concurrent double-post from reaching this statement twice.
+    // valueAmount = qty * this line's own unitCostAmount — a 'production' movement is an inflow
+    // with its own known cost (the batch's costing, just computed above), the same role a
+    // raw-material 'purchase' plays for accessory_movements/fabric_stock_movements: it's the ONLY
+    // finished-goods movement type that moves a SKU's moving average with a fresh cost basis
+    // (see stock_movements.valueAmount's doc comment in catalog.ts).
     await tx.insert(stockMovements).values(
       lines.map((line) => ({
         sku: line.sku,
         qty: line.qty,
+        valueAmount: line.qty * unitCostAmount,
         type: "production" as const,
         refType: "production_batch_item" as const,
         refId: line.id,
