@@ -15,6 +15,11 @@ const eslintConfig = defineConfig([
     // The e2e dev server's own distDir (next.config.ts) — same reasoning as ".next/**" above,
     // just a second build output directory, not source.
     ".next-e2e/**",
+    // Playwright's own generated output (gitignored already) — the HTML report in particular
+    // bundles third-party JS assets (e.g. CodeMirror, for the trace viewer) that trip
+    // react-hooks/rules-of-hooks and other rules meant for our own source.
+    "playwright-report/**",
+    "test-results/**",
   ]),
 ]);
 

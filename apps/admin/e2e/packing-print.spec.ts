@@ -1,8 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
-import { E2E_PACKING_PRINT_EMAIL } from "./global-setup";
+import { E2E_PACKING_PRINT_EMAIL, E2E_PACKING_PRINT_WEBKIT_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
-import { insertToShipOrdersDirectly } from "./helpers/db-order-fixtures";
 
 /** Chromium's `page.pdf()` output isn't object-stream-compressed for its page tree (unlike some
  * PDF producers), so counting `/Type /Page` dictionary markers in the raw bytes — excluding the
@@ -32,34 +31,42 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
     return () => printed;
   }
 
-  /** `browserName === "webkit"` skips the fabric → product → stock → order UI flow and inserts
-   * the two `to_ship` orders directly into `ammari_e2e` instead (helpers/db-order-fixtures.ts) —
-   * a pre-existing, unrelated WebKit bug blocks that flow's own form submission (confirmed via a
-   * throwaway debug run: clicking "Simpan" on /fabrics/new fires no network request at all under
-   * WebKit, no console/page error either). This spec exists to verify the print-timing fix, not
-   * that bug, so WebKit gets the same two `to_ship` orders through a UI-independent path instead
-   * of being blocked entirely. Chromium keeps the full, realistic UI flow unchanged. */
-  async function setUpTwoPrintableOrders(page: Page, browserName: string): Promise<{ orderANo: string; orderBNo: string }> {
-    await loginAs(page, E2E_PACKING_PRINT_EMAIL);
-
-    if (browserName === "webkit") {
-      const [orderANo, orderBNo] = await insertToShipOrdersDirectly(2);
-      await page.goto("/packing");
-      await page.locator("tr").filter({ hasText: orderANo! }).getByRole("checkbox").check();
-      await page.locator("tr").filter({ hasText: orderBNo! }).getByRole("checkbox").check();
-      await page.getByRole("button", { name: /^Cetak kartu/ }).click();
-      await expect(page.getByText("2 kartu siap dicetak")).toBeVisible({ timeout: 15_000 });
-      return { orderANo: orderANo!, orderBNo: orderBNo! };
+  /** Clicks `button`, then waits for `page` to reach `urlPattern` — and if that doesn't happen
+   * within `timeout`, clicks `button` ONE more time before waiting again. This is the mitigation
+   * for the dev-server-only WebKit flakiness documented in docs/plans/packing-cards.md ("WebKit
+   * form-submission investigation"): the first click's Server Action call genuinely succeeds
+   * (confirmed via request/response + DB inspection) but the client-side redirect that should
+   * follow it is intermittently dropped by a `next dev` Fast Refresh/HMR event landing at the
+   * wrong moment — on ANY of a multi-step flow's several submissions, not just the first. A
+   * single whole-test `retries` (playwright.config.ts) isn't fine-grained enough for a flow with
+   * this many submission points; a second click on the SAME, already-settled page is what
+   * reliably recovers (confirmed manually: a forced second click after the first "silently did
+   * nothing" always succeeded instantly). This never fires on Chromium (that engine hasn't shown
+   * this race once in a WebKit-only VS full-suite build), so it's a no-op cost there. */
+  async function clickAndWaitForUrl(page: Page, button: Locator, urlPattern: RegExp): Promise<void> {
+    await button.click();
+    try {
+      await expect(page).toHaveURL(urlPattern, { timeout: 5_000 });
+    } catch {
+      await button.click();
+      await expect(page).toHaveURL(urlPattern, { timeout: 10_000 });
     }
+  }
 
+  // WebKit gets its own dedicated email — `retries: 1` (playwright.config.ts) means its tests can
+  // log in up to 2× each, which on top of Chromium's own run against E2E_PACKING_PRINT_EMAIL in
+  // the same full-suite invocation would otherwise tip over the shared 5-per-5-minutes OTP
+  // throttle (see global-setup.ts's doc comment on E2E_PACKING_PRINT_WEBKIT_EMAIL).
+  async function setUpTwoPrintableOrders(page: Page, browserName: string): Promise<{ orderANo: string; orderBNo: string }> {
+    const email = browserName === "webkit" ? E2E_PACKING_PRINT_WEBKIT_EMAIL : E2E_PACKING_PRINT_EMAIL;
+    await loginAs(page, email);
     const unique = Date.now();
 
     const fabricName = `E2E Bahan Print ${unique}`;
     await page.goto("/fabrics/new");
     await page.getByLabel("Nama bahan").fill(fabricName);
     await page.getByLabel("Nama warna").fill("Print");
-    await page.getByRole("button", { name: "Simpan" }).click();
-    await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
+    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan" }), /\/fabrics\/[0-9a-f-]+$/);
 
     const productName = `Contoh Gamis Print E2E ${unique}`;
     await page.goto("/products/new");
@@ -68,8 +75,7 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
     await page.getByLabel("Harga dasar").fill("269.000");
     const code = await page.getByLabel("Kode produk").inputValue();
     await page.getByRole("switch", { name: "Aktif" }).click();
-    await page.getByRole("button", { name: "Simpan" }).click();
-    await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
+    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan" }), /\/products\/[0-9a-f-]+$/);
 
     await page.getByRole("checkbox", { name: /Print/ }).check();
     await page.getByRole("checkbox", { name: "M", exact: true }).check();
@@ -82,15 +88,13 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
     await page.locator("#purchase-item").selectOption({ label: fabricName });
     await page.locator("#purchase-qty").fill("10");
     await page.locator("#purchase-amount").fill("1.000.000");
-    await page.getByRole("button", { name: "Simpan" }).click();
-    await expect(page).toHaveURL(/\/purchases\/[0-9a-f-]+$/);
+    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan" }), /\/purchases\/[0-9a-f-]+$/);
 
     await page.goto("/production/new");
     await page.locator("#batch-fabric").selectOption({ label: fabricName });
     await page.locator("#batch-fabric-yards").fill("10");
     await page.locator(`#qty-${sku}`).fill("2");
-    await page.getByRole("button", { name: "Simpan draf" }).click();
-    await expect(page).toHaveURL(/\/production\/[0-9a-f-]+$/);
+    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan draf" }), /\/production\/[0-9a-f-]+$/);
     await page.getByRole("button", { name: "Posting ke stok" }).click();
     await page.getByRole("button", { name: "Posting", exact: true }).click();
     await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
@@ -99,8 +103,7 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
       await page.goto("/orders/new");
       await page.locator("#order-channel").selectOption({ label: "WhatsApp" });
       await page.locator(`#qty-${sku}`).fill("1");
-      await page.getByRole("button", { name: "Simpan pesanan" }).click();
-      await expect(page).toHaveURL(/\/orders\/[0-9a-f-]+$/, { timeout: 15_000 });
+      await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan pesanan" }), /\/orders\/[0-9a-f-]+$/);
       return (await page.locator("h1").textContent())!.trim();
     }
     const orderANo = await createOrder();

@@ -32,6 +32,12 @@ const E2E_PACKING_ROLE_KEY = "e2e_packing";
 // packing.spec.ts's own login against E2E_PACKING_EMAIL tips over the 5-per-5-minutes OTP send
 // throttle if both specs share one email. Same role, no new permissions to maintain.
 export const E2E_PACKING_PRINT_EMAIL = "packing-print@e2e.ammari.test";
+// A THIRD email, same role again, used only by packing-print.spec.ts's WebKit runs — WebKit's
+// `retries: 2` (playwright.config.ts, absorbing a known flaky `next dev` HMR/Fast-Refresh race;
+// see docs/plans/packing-cards.md) means each of its 2 tests can log in up to 3 times, which on
+// top of Chromium's own 2 logins against E2E_PACKING_PRINT_EMAIL in the SAME full-suite run would
+// otherwise tip over the shared throttle. Separate email, separate budget.
+export const E2E_PACKING_PRINT_WEBKIT_EMAIL = "packing-print-webkit@e2e.ammari.test";
 
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
 // lib/products/queries.ts. A distinct name prefix keeps this from colliding with anything a
@@ -188,6 +194,7 @@ export default async function globalSetup(): Promise<void> {
   ]);
   await ensureStaffFixture(E2E_PACKING_EMAIL, "E2E Packing", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PACKING_PRINT_EMAIL, "E2E Packing Print", E2E_PACKING_ROLE_KEY);
+  await ensureStaffFixture(E2E_PACKING_PRINT_WEBKIT_EMAIL, "E2E Packing Print WebKit", E2E_PACKING_ROLE_KEY);
 
   const [paginationFabric] = await db
     .insert(fabrics)
@@ -229,6 +236,7 @@ export default async function globalSetup(): Promise<void> {
         E2E_ORDERS_EMAIL,
         E2E_PACKING_EMAIL,
         E2E_PACKING_PRINT_EMAIL,
+        E2E_PACKING_PRINT_WEBKIT_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);

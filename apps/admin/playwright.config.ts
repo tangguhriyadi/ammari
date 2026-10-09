@@ -50,11 +50,22 @@ export default defineConfig({
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    // WebKit only runs the print spec (not the whole suite) — this project exists specifically
-    // to catch print-timing/rendering bugs (window.print() racing a not-yet-painted DOM) that
-    // are real cross-browser risks but that nothing else in this suite needs a second engine
-    // for; `page.pdf()` itself is Chromium-only, so the WebKit runs skip that half of each test.
-    { name: "webkit", use: { ...devices["Desktop Safari"] }, testMatch: /packing-print\.spec\.ts/ },
+    // WebKit only runs the print spec, not the other form specs — see docs/plans/packing-cards.md
+    // ("WebKit form-submission investigation") for why: every create/edit form's own server
+    // action call genuinely succeeds under WebKit (confirmed via request/response + DB
+    // inspection), but the CLIENT-SIDE redirect that should follow it is intermittently dropped
+    // when a `next dev` Fast Refresh/HMR event lands at the wrong moment — a real, if flaky,
+    // dev-server-only race that never reproduces under `next build`/`next start` (no on-demand
+    // compilation, no HMR, in a production build). `retries` absorbs that flakiness here rather
+    // than adding app-code workarounds for something that can't affect a real user. Forcing the
+    // OTHER form specs to run under WebKit too would need the same treatment many times over for
+    // zero additional signal, which isn't a good trade — packing-print.spec.ts stays WebKit-
+    // covered because `window.print()` timing (the bug it actually guards) is a genuine
+    // cross-browser concern independent of this dev-server quirk. `retries: 1` (not more) — each
+    // retry re-logs-in, and this spec's own 2 tests already have a dedicated email
+    // (E2E_PACKING_PRINT_WEBKIT_EMAIL) just for this; even 1 retry per test stays safely under
+    // that email's own 5-per-5-minutes OTP budget.
+    { name: "webkit", use: { ...devices["Desktop Safari"] }, testMatch: /packing-print\.spec\.ts/, retries: 1 },
   ],
   webServer: {
     // "dev:e2e" (not "dev"): binds to 127.0.0.1 only, so the sign-in backdoor's localhost check

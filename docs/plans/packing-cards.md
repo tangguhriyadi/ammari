@@ -164,3 +164,32 @@ account creation/linking.
 4. Printed-card badge wording — fine as drafted.
 5. Card copy — approved as drafted.
 6. QR error-correction level — **Q**, for print durability.
+
+## WebKit form-submission investigation (2026-10-09)
+
+A real bug report: under Playwright's WebKit project, clicking "Simpan" on `/fabrics/new` (and
+every other create/edit form) appeared to do nothing — no navigation, no visible error.
+
+**Root cause, confirmed via request/response + disabled-state + DB inspection across many clean
+runs**: the Server Action call itself genuinely succeeds (a real `Next-Action`-headed POST, a 200
+response, and the row is actually written to the DB) — it's the CLIENT-SIDE `router.push()` that
+should follow it that's intermittently lost, specifically when a Fast Refresh/HMR event from
+`next dev`'s on-demand compiler lands around the same moment. This happens under WebKit, not
+Chromium, in every run where it reproduced (including full suites where Chromium had already
+exercised the exact same action earlier in the same dev-server process, ruling out "never compiled
+before" as the trigger) — but it's a genuine timing race, not deterministic: the same spec passed
+cleanly many times before failing the same way with no code change in between. It is NOT a
+hydration-race (ruled out: an explicit "disable the submit button until mounted" guard on the
+shared `Button` component made no difference) and NOT an overlapping-element click (ruled out:
+`elementFromPoint` at the click coordinate resolves to the button itself).
+
+**This cannot happen in production.** `next build`/`next start` never do on-demand compilation and
+never run Fast Refresh/HMR — both are prerequisites for the failure mode above. No app code change
+is applicable here; there is no bug in the forms themselves to fix.
+
+**Decision**: WebKit stays scoped to `packing-print.spec.ts` only (`playwright.config.ts`), with
+`retries: 1` there to absorb the residual flakiness, rather than the broader form-submission suite
+— forcing those to pass reliably under WebKit too would mean the same retry treatment repeated
+across many more specs for zero additional signal, which isn't a good trade. `packing-print.spec.ts`
+keeps its WebKit coverage because the bug it guards (`window.print()` timing) is a genuine
+cross-browser concern independent of this dev-server quirk.
