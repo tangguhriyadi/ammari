@@ -476,3 +476,8 @@ beyond the per-feature work tracked elsewhere in this document:
   (and the `healthcheck/*` prefix used by `packages/storage`'s own check), mirroring
   `packages/storage/bucket-policy.dev.json` but scoped to the prod bucket's own ARN/prefixes —
   that file only covers the dev bucket (`ammaridev-uc1gfp`).
+- **`MAIN_SITE_URL` (apps/admin):** apps/web's own public base URL — `https://ammari.my.id` on
+  dev, `https://ammari.id` in production (no trailing slash; must be `https://` once
+  `NODE_ENV=production`, enforced by `apps/admin/src/lib/main-site-url.ts`). Every thank-you-card
+  claim URL this app generates (the packing feature's QR + printed fallback text, §4.2) is built
+  from this — get it wrong and every card printed in that environment points at the wrong site.

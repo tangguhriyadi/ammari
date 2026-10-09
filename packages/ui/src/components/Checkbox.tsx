@@ -6,10 +6,13 @@ import { FieldError } from "./field-error";
 export interface CheckboxProps extends InputHTMLAttributes<HTMLInputElement> {
   label: string;
   error?: string;
+  /** Visually hides `label` (still read by screen readers) — for a checkbox-only column where
+   * a neighboring cell already shows what the row is. */
+  hideLabel?: boolean;
 }
 
 export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Checkbox(
-  { id, label, error, className, ...props },
+  { id, label, error, hideLabel, className, ...props },
   ref,
 ) {
   const autoId = useId();
@@ -35,7 +38,7 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Che
           )}
           {...props}
         />
-        {label}
+        {hideLabel ? <span className="sr-only">{label}</span> : label}
       </label>
       {error && <FieldError id={errorId}>{error}</FieldError>}
     </div>

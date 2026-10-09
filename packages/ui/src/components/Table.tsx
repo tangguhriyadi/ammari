@@ -22,7 +22,7 @@ export function TableHead({ children }: { children: ReactNode }) {
 }
 
 export function Th({ className, ...props }: ThHTMLAttributes<HTMLTableCellElement>) {
-  return <th className={cn("px-4 py-3 font-medium", className)} {...props} />;
+  return <th className={cn("whitespace-nowrap px-4 py-3 font-medium", className)} {...props} />;
 }
 
 export function Tr({ className, ...props }: HTMLAttributes<HTMLTableRowElement>) {

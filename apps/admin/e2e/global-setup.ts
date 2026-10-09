@@ -21,6 +21,17 @@ const E2E_PRODUCTION_STOCK_ROLE_KEY = "e2e_production_stock";
 // stock via a real production batch before placing an order against it.
 export const E2E_ORDERS_EMAIL = "orders@e2e.ammari.test";
 const E2E_ORDERS_ROLE_KEY = "e2e_orders";
+// A dedicated role/email for the packing e2e flow (print cards + mark shipped + cancel-voids-
+// card) — same "fresh email, clean OTP throttle" reasoning as every other dedicated fixture
+// above; also needs packing.print_cards on top of everything E2E_ORDERS_EMAIL already has,
+// since this flow seeds its own finished-goods stock via a real production batch too.
+export const E2E_PACKING_EMAIL = "packing@e2e.ammari.test";
+const E2E_PACKING_ROLE_KEY = "e2e_packing";
+// A second email on the SAME `e2e_packing` role, dedicated to packing-print.spec.ts — that spec
+// logs in up to 4 times in one run (2 layouts × chromium + webkit), which on top of
+// packing.spec.ts's own login against E2E_PACKING_EMAIL tips over the 5-per-5-minutes OTP send
+// throttle if both specs share one email. Same role, no new permissions to maintain.
+export const E2E_PACKING_PRINT_EMAIL = "packing-print@e2e.ammari.test";
 
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
 // lib/products/queries.ts. A distinct name prefix keeps this from colliding with anything a
@@ -163,6 +174,21 @@ export default async function globalSetup(): Promise<void> {
   ]);
   await ensureStaffFixture(E2E_ORDERS_EMAIL, "E2E Orders", E2E_ORDERS_ROLE_KEY);
 
+  await ensureLimitedRole(E2E_PACKING_ROLE_KEY, [
+    "products.manage",
+    "production.manage",
+    "stock.view",
+    "stock.adjust",
+    "finance.view_profit",
+    "inventory.view",
+    "inventory.manage",
+    "orders.view",
+    "orders.manage",
+    "packing.print_cards",
+  ]);
+  await ensureStaffFixture(E2E_PACKING_EMAIL, "E2E Packing", E2E_PACKING_ROLE_KEY);
+  await ensureStaffFixture(E2E_PACKING_PRINT_EMAIL, "E2E Packing Print", E2E_PACKING_ROLE_KEY);
+
   const [paginationFabric] = await db
     .insert(fabrics)
     .values({ name: "E2E Pagination Fabric" })
@@ -201,6 +227,8 @@ export default async function globalSetup(): Promise<void> {
         E2E_PRODUCTS_NO_FINANCE_EMAIL,
         E2E_PRODUCTION_STOCK_EMAIL,
         E2E_ORDERS_EMAIL,
+        E2E_PACKING_EMAIL,
+        E2E_PACKING_PRINT_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);

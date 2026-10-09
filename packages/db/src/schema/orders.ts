@@ -82,6 +82,13 @@ export const orders = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true, mode: "date" }),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true, mode: "date" }),
     returnedAt: timestamp("returned_at", { withTimezone: true, mode: "date" }),
+    // Both optional, set (if at all) at the to_ship -> shipped transition (see
+    // lib/orders/queries.ts's transitionOrderStatus) — packing can mark an order shipped with
+    // no courier/tracking info at all, e.g. a bulk "Tandai dikirim". Free text, not an enum: the
+    // admin UI offers a <datalist> of common Indonesian couriers as a typing aid, but never
+    // restricts the value at the DB level (docs/plans/packing-cards.md).
+    courier: text("courier"),
+    trackingNumber: text("tracking_number"),
     subtotalAmount: bigint("subtotal_amount", { mode: "number" }).notNull(),
     shippingAmount: bigint("shipping_amount", { mode: "number" }).notNull().default(0),
     discountAmount: bigint("discount_amount", { mode: "number" }).notNull().default(0),

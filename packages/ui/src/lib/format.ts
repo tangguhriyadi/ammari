@@ -13,6 +13,11 @@ const timeFormatter = new Intl.DateTimeFormat("id-ID", {
   hour12: false,
   timeZone: JAKARTA_TIME_ZONE,
 });
+const shortDateFormatter = new Intl.DateTimeFormat("id-ID", {
+  day: "numeric",
+  month: "short",
+  timeZone: JAKARTA_TIME_ZONE,
+});
 
 /** Whole-rupiah only — money is never fractional (CLAUDE.md). Built from a plain number format
  * plus a literal "Rp " rather than `style: "currency"`, because id-ID's own currency formatting
@@ -34,4 +39,10 @@ export function formatDate(date: Date): string {
  * combined Intl format, so the separator is guaranteed rather than left to locale defaults. */
 export function formatDateTime(date: Date): string {
   return `${dateFormatter.format(date)}, ${timeFormatter.format(date)}`;
+}
+
+/** e.g. "1 Okt" — no year, for compact UI (badges, table cells) where the exact year is rarely
+ * the point. */
+export function formatShortDate(date: Date): string {
+  return shortDateFormatter.format(date);
 }

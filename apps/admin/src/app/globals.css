@@ -11,3 +11,15 @@ body {
   background: var(--color-neutral-50);
   color: var(--color-neutral-900);
 }
+
+/* Thank-you card printing (packing/_components/print-cards-overlay.tsx) portals its cards into
+   a dedicated #print-root appended directly to <body>. This one rule is what makes printing show
+   ONLY the cards: every other direct child of <body> — the admin shell (header, sidebar/bottom
+   nav, the page's own content) and any open Dialog (a native <dialog>, also rendered somewhere
+   inside that same shell tree) — is hidden in one shot, instead of relying on `print:hidden`
+   being remembered on every individual piece of chrome. */
+@media print {
+  body > :not(#print-root) {
+    display: none !important;
+  }
+}

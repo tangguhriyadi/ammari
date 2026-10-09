@@ -21,6 +21,11 @@ import { ActionError, FieldError, mapUniqueViolation } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { generateOrderNumber } from "./order-number";
 import { canTransitionOrderStatus, ORDER_STATUS_TIMESTAMP_COLUMN, STOCK_NOT_YET_DECREMENTED_STATUSES } from "./status";
+// Cross-feature, one-directional (packing/queries.ts never imports anything from here) — thank-
+// you-card lifecycle lives in lib/packing per docs/plans/packing-cards.md; a cancelled/returned
+// order voiding its own active card is this function's job, not packing's, since packing has no
+// other reason to ever be called FROM a status transition.
+import { voidActiveCardForOrder } from "@/lib/packing/queries";
 
 // ---------- Channels ----------
 
@@ -327,15 +332,26 @@ export async function updateOrderItems(
 
 // ---------- Status transitions ----------
 
+export interface TransitionOrderStatusOptions {
+  /** Only ever applied when `toStatus === "shipped"` — packing's bulk "Tandai dikirim" omits
+   * both, a per-order one may set either or both. */
+  courier?: string | null;
+  trackingNumber?: string | null;
+}
+
 /** The ONLY path allowed to move an order between statuses (status.ts's own doc comment) —
  * checks ORDER_STATUS_TRANSITIONS, stamps the matching timestamp column, and runs the matching
  * stock side effect (decrement on awaiting_payment -> to_ship; whole-item restore on any
- * cancellation/return of an order whose stock had already left), all in one transaction. */
+ * cancellation/return of an order whose stock had already left), all in one transaction. A
+ * cancelled/returned transition ALSO voids the order's active thank-you card in this same
+ * transaction (docs/plans/packing-cards.md) — an already-`claimed` card/voucher is never
+ * touched; that policy is the owner's to decide later. */
 export async function transitionOrderStatus(
   orderId: string,
   toStatus: OrderStatus,
   actorStaffUserId: string,
   db: Database = defaultDb,
+  options: TransitionOrderStatusOptions = {},
 ) {
   return db.transaction(async (tx) => {
     // SELECT ... FOR UPDATE — without this, two concurrent transitions on the SAME order (two
@@ -354,17 +370,27 @@ export async function transitionOrderStatus(
     if (fromStatus === "awaiting_payment" && toStatus === "to_ship") {
       const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
       await decrementStockForOrderItems(tx, items, actorStaffUserId);
-    } else if ((toStatus === "cancelled" || toStatus === "returned") && !STOCK_NOT_YET_DECREMENTED_STATUSES.includes(fromStatus)) {
-      await restoreStockForOrderItems(tx, orderId, actorStaffUserId);
+    } else if (toStatus === "cancelled" || toStatus === "returned") {
+      if (!STOCK_NOT_YET_DECREMENTED_STATUSES.includes(fromStatus)) {
+        await restoreStockForOrderItems(tx, orderId, actorStaffUserId);
+      }
+      // Same transaction as the status change itself — an active card must never outlive the
+      // order it was printed for (docs/plans/packing-cards.md). No-op if there isn't one.
+      await voidActiveCardForOrder(tx, orderId, actorStaffUserId);
     }
 
     const timestampColumn = (ORDER_STATUS_TIMESTAMP_COLUMN as Record<string, string>)[toStatus];
+    // courier/trackingNumber are only ever meaningful alongside the shipped transition itself —
+    // never set (or overwritten) by any other transition, even if a caller passed them by
+    // mistake on e.g. a "completed" transition.
+    const shippingFields =
+      toStatus === "shipped" ? { courier: options.courier ?? null, trackingNumber: options.trackingNumber ?? null } : {};
     // WHERE status = fromStatus, not just id — a second concurrent caller that somehow still
     // reached this point with a stale fromStatus (defense in depth beyond the row lock above)
     // updates zero rows instead of silently overwriting a status it never actually validated.
     const [updated] = await tx
       .update(orders)
-      .set({ status: toStatus, ...(timestampColumn ? { [timestampColumn]: new Date() } : {}) })
+      .set({ status: toStatus, ...(timestampColumn ? { [timestampColumn]: new Date() } : {}), ...shippingFields })
       .where(and(eq(orders.id, orderId), eq(orders.status, fromStatus)))
       .returning();
     if (!updated) throw new ActionError("Status pesanan sudah berubah — muat ulang halaman.");

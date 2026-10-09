@@ -67,6 +67,15 @@ npm dist-tag, because their actual runtime/peer support lags behind:
   `UPDATE ... WHERE ... RETURNING`. Never implement these as check-then-write (a `SELECT` to
   check a condition followed by a separate `INSERT`/`UPDATE`); that pattern race-conditions under
   concurrent requests.
+- **Reference data the code depends on — permission keys, channel ids, required lookup rows —
+  must ship in a migration** (idempotent `INSERT ... ON CONFLICT DO NOTHING`), never only in
+  `packages/db/src/seed.ts`. Nothing re-runs `db:seed` against a real database when that kind of
+  constant changes, so a new permission/channel/role added only there can sit invisible on
+  dev/prod/a developer's own local db indefinitely — this has already happened twice (the
+  `orders.manage` permission, then the `whatsapp`/`instagram`/`offline` channels, neither visible
+  until a migration backfilled them). `seed.ts` stays the right place only for dev/demo data and
+  deploy-specific first-run bootstrap (e.g. the owner's own staff account from env vars) — never
+  for a closed set application code matches against by literal key.
 
 ## Security
 
@@ -114,6 +123,14 @@ This repo has agents, skills, and commands preinstalled in `.claude/` — use th
    any code.
 2. **TDD** (`tdd-workflow` skill) is required for: vouchers, OTP, payments, and stock. UI pages
    are covered by e2e tests instead, not unit-level TDD.
+   - **Any e2e test for a list page must assert at both a mobile viewport (390px) and a desktop
+     viewport (the Playwright project default, 1280px)**, not just one. A list page renders two
+     independent layouts (`CardList` for phones, `TableContainer` for tablet/desktop — see
+     `packages/ui/src/components/Table.tsx`); a test pinned to only one viewport can pass while
+     the other layout is silently broken or missing entirely. This happened once already:
+     `/packing`'s desktop table was missing outright (`CardList` is `md:hidden` with no
+     `TableContainer` counterpart), and the existing e2e test never caught it because it pinned a
+     390px mobile viewport for its one test.
 3. **Before each commit, run `/code-review`**, routing to the matching reviewer:
    - `typescript-reviewer` — all TypeScript changes
    - `react-reviewer` — `.tsx` changes

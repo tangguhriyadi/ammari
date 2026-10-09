@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatDate, formatDateTime, formatNumber, formatRupiah } from "../src/lib/format";
+import { formatDate, formatDateTime, formatNumber, formatRupiah, formatShortDate } from "../src/lib/format";
 
 describe("formatRupiah", () => {
   test("formats whole rupiah with a thousands separator and no decimals", () => {
@@ -36,5 +36,11 @@ describe("formatDate", () => {
 describe("formatDateTime", () => {
   test("formats as '1 Okt 2026, 20.14' with a dot time separator", () => {
     expect(formatDateTime(new Date("2026-10-01T13:14:00Z"))).toBe("1 Okt 2026, 20.14");
+  });
+});
+
+describe("formatShortDate", () => {
+  test("formats in Asia/Jakarta as '1 Okt', with no year", () => {
+    expect(formatShortDate(new Date("2026-09-30T18:00:00Z"))).toBe("1 Okt");
   });
 });

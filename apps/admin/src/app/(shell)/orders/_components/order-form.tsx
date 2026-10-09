@@ -162,6 +162,7 @@ export function OrderForm({ channels, variants }: { channels: ChannelOption[]; v
 
       <div className="flex flex-col gap-3 rounded-lg border border-neutral-200 p-4">
         <h2 className="text-lg font-semibold text-neutral-900">Pelanggan</h2>
+        <p className="text-sm text-neutral-600">Nama akan dicetak di kartu terima kasih. Pelanggan tetap opsional.</p>
         <Select value={customerMode} onChange={(event) => setCustomerMode(event.target.value as CustomerMode)} aria-label="Jenis pelanggan">
           <option value="none">Tanpa akun pelanggan</option>
           <option value="existing">Pilih pelanggan yang sudah ada</option>

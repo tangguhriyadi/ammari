@@ -40,23 +40,42 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: "html",
   use: {
-    baseURL: "http://localhost:3001",
+    // A dedicated port (3101), distinct from the owner's own `pnpm dev` on :3001 — e2e must
+    // never be able to collide with or reuse a developer's own running dev server (that
+    // confuses which database/env a request actually hit — this exact scenario cost real
+    // debugging time once already: a stale e2e-flavored server left running on :3001 looked,
+    // from the browser, indistinguishable from the owner's own server).
+    baseURL: "http://localhost:3101",
     trace: "on-first-retry",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    // WebKit only runs the print spec (not the whole suite) — this project exists specifically
+    // to catch print-timing/rendering bugs (window.print() racing a not-yet-painted DOM) that
+    // are real cross-browser risks but that nothing else in this suite needs a second engine
+    // for; `page.pdf()` itself is Chromium-only, so the WebKit runs skip that half of each test.
+    { name: "webkit", use: { ...devices["Desktop Safari"] }, testMatch: /packing-print\.spec\.ts/ },
+  ],
   webServer: {
     // "dev:e2e" (not "dev"): binds to 127.0.0.1 only, so the sign-in backdoor's localhost check
     // (e2e-login-gate.ts) is backed by an actual network-layer guarantee — nothing outside this
     // machine can even open a TCP connection — rather than trusting the client-supplied Host/
     // x-forwarded-for headers on their own, which anyone reaching the port could otherwise spoof.
     command: "pnpm dev:e2e",
-    url: "http://localhost:3001",
-    reuseExistingServer: !process.env.CI,
+    url: "http://localhost:3101",
+    // Always false, not just outside CI — reusing ANY already-running server here (even one
+    // Playwright itself spawned earlier and failed to tear down) risks silently testing against
+    // stale compiled code or a stale env. With a dedicated port, "already in use" now fails
+    // loudly instead of quietly reusing something unknown — the correct failure mode for a
+    // leftover process, not a thing to paper over by reusing it.
+    reuseExistingServer: false,
     // STORAGE_DRIVER=memory swaps in the in-memory StorageClient (src/lib/storage.ts) — same
     // idea as E2E_TEST_LOGIN above, so e2e needs no real bucket. Fails closed in production,
     // same as the login backdoor. DATABASE_URL is overridden to the isolated ammari_e2e
-    // database — see e2eDatabaseUrl() above.
-    env: { E2E_TEST_LOGIN: "true", STORAGE_DRIVER: "memory", DATABASE_URL: e2eDatabaseUrl() },
+    // database — see e2eDatabaseUrl() above. MAIN_SITE_URL is a harmless placeholder — e2e never
+    // exercises the real apps/web, only that lib/main-site-url.ts's validation passes and the
+    // packing claim URL builds from SOME configured value (see lib/packing/token.ts).
+    env: { E2E_TEST_LOGIN: "true", STORAGE_DRIVER: "memory", DATABASE_URL: e2eDatabaseUrl(), MAIN_SITE_URL: "http://localhost:3000" },
     timeout: 120_000,
   },
 });

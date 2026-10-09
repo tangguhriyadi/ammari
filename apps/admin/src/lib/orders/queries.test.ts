@@ -1,8 +1,8 @@
 import { eq, inArray } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
-import { insertProductVariant, insertStaffUser } from "@ammari/db/test-fixtures";
-import { fabricColors, fabrics, orderItems, orders, products, productVariants, stockMovements } from "@ammari/db/schema";
+import { insertProductVariant, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
+import { fabricColors, fabrics, orderItems, orders, products, productVariants, stockMovements, thankYouCards } from "@ammari/db/schema";
 import { createOrder, getOrderDetail, transitionOrderStatus, updateOrderItems } from "./queries";
 import { generateOrderNumber } from "./order-number";
 
@@ -487,6 +487,136 @@ describe("transitionOrderStatus", () => {
       await testDb.delete(fabricColors).where(eq(fabricColors.id, color.id));
       await testDb.delete(fabrics).where(eq(fabrics.id, fabric.id));
     }
+  });
+
+  test("cancelling an order with an active thank-you card voids it in the same transaction", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      await seedStock(tx, variant.sku, 5, 50_000);
+      const order = await createOrder(
+        {
+          channelId: "offline",
+          orderDate: "2026-10-09",
+          items: [{ sku: variant.sku, qty: 1, unitPrice: 259_000 }],
+          discountAmount: 0,
+          shippingAmount: 0,
+          status: "to_ship",
+        },
+        staff.id,
+        tx,
+      );
+      const card = await insertThankYouCard(tx, order.id);
+
+      await transitionOrderStatus(order.id, "cancelled", staff.id, tx);
+
+      const [updatedCard] = await tx.select().from(thankYouCards).where(eq(thankYouCards.id, card.id));
+      expect(updatedCard?.status).toBe("void");
+    });
+  });
+
+  test("cancelling an order with NO thank-you card is a no-op for thank_you_cards, not an error", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      await seedStock(tx, variant.sku, 5, 50_000);
+      const order = await createOrder(
+        {
+          channelId: "offline",
+          orderDate: "2026-10-09",
+          items: [{ sku: variant.sku, qty: 1, unitPrice: 259_000 }],
+          discountAmount: 0,
+          shippingAmount: 0,
+          status: "to_ship",
+        },
+        staff.id,
+        tx,
+      );
+
+      const updated = await transitionOrderStatus(order.id, "cancelled", staff.id, tx);
+      expect(updated.status).toBe("cancelled");
+    });
+  });
+
+  test("cancelling an order never touches an already-claimed card", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      await seedStock(tx, variant.sku, 5, 50_000);
+      const order = await createOrder(
+        {
+          channelId: "offline",
+          orderDate: "2026-10-09",
+          items: [{ sku: variant.sku, qty: 1, unitPrice: 259_000 }],
+          discountAmount: 0,
+          shippingAmount: 0,
+          status: "to_ship",
+        },
+        staff.id,
+        tx,
+      );
+      await transitionOrderStatus(order.id, "shipped", staff.id, tx);
+      const { customers } = await import("@ammari/db/schema");
+      const [customer] = await tx.insert(customers).values({ name: "Test Customer" }).returning();
+      const card = await insertThankYouCard(tx, order.id, {
+        status: "claimed",
+        claimedByCustomerId: customer!.id,
+        claimedAt: new Date(),
+      });
+
+      await transitionOrderStatus(order.id, "returned", staff.id, tx);
+
+      const [unchangedCard] = await tx.select().from(thankYouCards).where(eq(thankYouCards.id, card.id));
+      expect(unchangedCard?.status).toBe("claimed");
+    });
+  });
+
+  test("a shipped transition stamps courier/trackingNumber when provided", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      await seedStock(tx, variant.sku, 5, 50_000);
+      const order = await createOrder(
+        {
+          channelId: "offline",
+          orderDate: "2026-10-09",
+          items: [{ sku: variant.sku, qty: 1, unitPrice: 259_000 }],
+          discountAmount: 0,
+          shippingAmount: 0,
+          status: "to_ship",
+        },
+        staff.id,
+        tx,
+      );
+
+      const updated = await transitionOrderStatus(order.id, "shipped", staff.id, tx, { courier: "JNE", trackingNumber: "JX123" });
+      expect(updated.courier).toBe("JNE");
+      expect(updated.trackingNumber).toBe("JX123");
+    });
+  });
+
+  test("a bulk shipped transition (no courier/trackingNumber) leaves both null", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      await seedStock(tx, variant.sku, 5, 50_000);
+      const order = await createOrder(
+        {
+          channelId: "offline",
+          orderDate: "2026-10-09",
+          items: [{ sku: variant.sku, qty: 1, unitPrice: 259_000 }],
+          discountAmount: 0,
+          shippingAmount: 0,
+          status: "to_ship",
+        },
+        staff.id,
+        tx,
+      );
+
+      const updated = await transitionOrderStatus(order.id, "shipped", staff.id, tx);
+      expect(updated.courier).toBeNull();
+      expect(updated.trackingNumber).toBeNull();
+    });
   });
 });
 

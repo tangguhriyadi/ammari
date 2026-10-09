@@ -51,11 +51,23 @@ export function Dialog({
         "[&::backdrop]:bg-black/40"
       }
       onClose={() => onOpenChange(false)}
-      onCancel={() => onOpenChange(false)}
+      // The native "cancel" event (fired by Escape) is cancelable — while `loading`, prevent it
+      // outright so the dialog never actually closes mid-submit, rather than letting it close
+      // and merely skipping our own onOpenChange call (that would leave the native <dialog>
+      // closed while `open` stays true, desyncing the next render's showModal() call).
+      onCancel={(event) => {
+        if (loading) {
+          event.preventDefault();
+          return;
+        }
+        onOpenChange(false);
+      }}
       onClick={(event) => {
         // A click that lands on the <dialog> element itself (not its content) is a backdrop
-        // click — the content wrapper below stops propagation before it reaches here.
-        if (event.target === dialogRef.current) onOpenChange(false);
+        // click — the content wrapper below stops propagation before it reaches here. Ignored
+        // entirely while `loading`, same reasoning as the Escape guard above — an in-flight
+        // submit must never be orphaned by a dismiss the user didn't get explicit feedback for.
+        if (event.target === dialogRef.current && !loading) onOpenChange(false);
       }}
     >
       {/* Stops a backdrop click's propagation so the handler above doesn't treat content clicks
@@ -71,7 +83,7 @@ export function Dialog({
         )}
         {children && <div className="mt-4">{children}</div>}
         <div className="mt-6 flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
+          <Button variant="secondary" disabled={loading} onClick={() => onOpenChange(false)}>
             {cancelLabel}
           </Button>
           {onConfirm && (

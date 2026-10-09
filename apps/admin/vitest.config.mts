@@ -5,6 +5,10 @@ import { defineConfig } from "vitest/config";
 if (existsSync(".env")) {
   process.loadEnvFile(".env");
 }
+// Test-only fallback, same spirit as playwright.config.ts's webServer.env overrides — never
+// written into the real .env (see lib/main-site-url.ts's module-load validation, which every
+// lib/packing test transitively imports). `??=` so a real value already in .env always wins.
+process.env.MAIN_SITE_URL ??= "http://localhost:3000";
 
 export default defineConfig({
   resolve: {

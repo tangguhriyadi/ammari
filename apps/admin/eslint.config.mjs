@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // The e2e dev server's own distDir (next.config.ts) — same reasoning as ".next/**" above,
+    // just a second build output directory, not source.
+    ".next-e2e/**",
   ]),
 ]);
 

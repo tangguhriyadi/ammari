@@ -3,6 +3,17 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   transpilePackages: ["@ammari/db", "@ammari/auth", "@ammari/storage", "@ammari/ui"],
+  // Next 16 takes an exclusive, cross-process lock at `<distDir>/lock` and REFUSES to start a
+  // second `next dev` for the same project directory, even on a different port — discovered the
+  // hard way debugging a "/packing shows nothing" report: `playwright.config.ts`'s own `next
+  // dev` (a SEPARATE port, 3101) would otherwise collide with the owner's own `pnpm dev` on
+  // :3001 purely because both share the default `.next` distDir, and Playwright's
+  // `reuseExistingServer` logic could end up silently talking to whichever server (the owner's
+  // real one, or a stale leftover from an earlier e2e run) already held that lock. A distinct
+  // distDir per instance — gated on `E2E_TEST_LOGIN` (set only by playwright.config.ts's
+  // webServer.env, see `dev:e2e`) — makes the two dev servers (and their locks) fully
+  // independent, so they can run side by side with zero risk of one affecting the other.
+  distDir: process.env.E2E_TEST_LOGIN === "true" ? ".next-e2e" : ".next",
   // Permanent redirects from the old Indonesian route paths to the English ones (see CLAUDE.md's
   // URL convention) — keeps old bookmarks/links working. Specific sub-paths come before their
   // parent's catch-all so e.g. "/produk/baru" lands on "/products/new", not "/products/baru".
