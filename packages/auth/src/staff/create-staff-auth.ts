@@ -10,8 +10,8 @@ import {
   isActiveStaffAuthUser,
   loadActiveStaffForEmail,
   markStaffLastLogin,
-  recordEmailThrottleAttemptAndCount,
 } from "./staff-data";
+import { recordEmailThrottleAttemptAndCount } from "../shared/email-throttle";
 
 // 5 minutes / 6 digits / 5 attempts: CLAUDE.md's OTP rules.
 const OTP_EXPIRES_IN_SECONDS = 5 * 60;

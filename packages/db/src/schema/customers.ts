@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
-import { bigint, check, inet, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { checkIn, citext, createdAtOnly, timestamps } from "./columns";
-import { CUSTOMER_TYPES, OTP_PURPOSES, THANK_YOU_CARD_STATUSES, VOUCHER_STATUSES } from "./constants";
+import { bigint, check, index, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { checkIn, citext, timestamps } from "./columns";
+import { CUSTOMER_TYPES, THANK_YOU_CARD_STATUSES, VOUCHER_STATUSES } from "./constants";
 import { staffUsers } from "./rbac";
 import { orders } from "./orders";
 
@@ -43,37 +43,6 @@ export const customers = pgTable(
       "customers_phone_format_check",
       sql`${table.phone} is null or ${table.phone} ~ '^\\+62[0-9]{8,13}$'`,
     ),
-  ],
-);
-
-export const otpCodes = pgTable(
-  "otp_codes",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    // citext, not text: CLAUDE.md requires OTP be rate-limited per destination, and an
-    // attacker varying an email's case (Victim@Example.com vs victim@example.com) must not be
-    // able to bypass that limit — matches the same citext choice on customers.email.
-    destination: citext("destination").notNull(),
-    purpose: text("purpose").notNull(),
-    codeHash: text("code_hash").notNull(),
-    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
-    attempts: integer("attempts").notNull().default(0),
-    consumedAt: timestamp("consumed_at", { withTimezone: true, mode: "date" }),
-    // Backs the CLAUDE.md-required "rate-limited ... per IP" half of OTP throttling (the
-    // (destination, purpose, created_at) index below backs the per-destination half).
-    requesterIp: inet("requester_ip"),
-    ...createdAtOnly(),
-  },
-  (table) => [
-    index("otp_codes_destination_purpose_created_at_idx").on(
-      table.destination,
-      table.purpose,
-      table.createdAt,
-    ),
-    index("otp_codes_expires_at_idx").on(table.expiresAt),
-    index("otp_codes_requester_ip_idx").on(table.requesterIp),
-    check("otp_codes_purpose_check", checkIn(table.purpose, OTP_PURPOSES)),
-    check("otp_codes_attempts_check", sql`${table.attempts} <= 5`),
   ],
 );
 

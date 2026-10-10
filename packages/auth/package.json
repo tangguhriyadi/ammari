@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./staff": "./src/staff/index.ts",
+    "./customer": "./src/customer/index.ts",
     "./testing": "./src/testing/index.ts"
   },
   "scripts": {

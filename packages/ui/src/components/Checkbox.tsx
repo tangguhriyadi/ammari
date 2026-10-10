@@ -1,10 +1,16 @@
-import { type InputHTMLAttributes, forwardRef, useId } from "react";
+import { type InputHTMLAttributes, type ReactNode, forwardRef, useId } from "react";
 import { cn } from "../lib/cn";
 import { mergeDescribedBy } from "../lib/describedby";
 import { FieldError } from "./field-error";
 
 export interface CheckboxProps extends InputHTMLAttributes<HTMLInputElement> {
-  label: string;
+  /** A plain string for most checkboxes; `ReactNode` is also accepted for the rare case where
+   * the label itself needs inline content (e.g. a link) — a consent checkbox linking to a
+   * policy page, for instance. When passing links, stop their click from bubbling up to this
+   * label (`onClick={(e) => e.stopPropagation()}`), since a native `<label>` toggles its input
+   * on any click inside it, including a nested `<a>`, which would fire alongside the navigation
+   * rather than instead of it. */
+  label: ReactNode;
   error?: string;
   /** Visually hides `label` (still read by screen readers) — for a checkbox-only column where
    * a neighboring cell already shows what the row is. */

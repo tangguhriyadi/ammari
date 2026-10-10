@@ -1,7 +1,6 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { db as defaultDb } from "@ammari/db";
 import {
-  authEmailThrottle,
   permissions,
   rolePermissions,
   roles,
@@ -98,37 +97,6 @@ export async function markStaffLastLogin(db: Database, staffAuthUserId: string):
   await db.update(staffUsers).set({ lastLoginAt: new Date() }).where(eq(staffUsers.id, row.staffUserId));
 }
 
-/** One row per OTP-send attempt (see schema/auth-throttle.ts for why this can't be derived from
- * Better Auth's own verification table) — records the attempt AND atomically returns how many
- * OTHER attempts already exist for `email` within `windowSeconds`, in a single SQL statement.
- *
- * The returned count does NOT include the row this call just inserted: a RETURNING subquery
- * over the same table runs against the command's own starting snapshot, which — per Postgres's
- * normal MVCC rule that a statement doesn't see its own effects — excludes the row the outer
- * INSERT is still in the middle of writing. Callers must treat the result as "prior attempts,"
- * i.e. block once this value reaches the limit, not once it exceeds it (confirmed by the
- * 6-requests-in-a-window test in packages/auth/test/staff-auth.test.ts).
- *
- * Deliberately not a separate "count, then decide, then insert" — per CLAUDE.md, anything that
- * can happen concurrently must not be check-then-write. Two concurrent requests for the same
- * email each run this as one atomic INSERT ... RETURNING; the only remaining imprecision is
- * truly-simultaneous requests not yet seeing each other's uncommitted insert under READ
- * COMMITTED, which can undercount by at most one per overlapping batch — an accepted, standard
- * tolerance for a rate limiter, unlike the previous unbounded-overcount race. */
-export async function recordEmailThrottleAttemptAndCount(
-  db: Database,
-  email: string,
-  windowSeconds: number,
-): Promise<number> {
-  const [row] = await db
-    .insert(authEmailThrottle)
-    .values({ email })
-    .returning({
-      count: sql<number>`(
-        select count(*) from ${authEmailThrottle}
-        where ${authEmailThrottle.email} = ${email}
-          and ${authEmailThrottle.createdAt} > now() - make_interval(secs => ${windowSeconds})
-      )`,
-    });
-  return Number(row?.count ?? 1);
-}
+// recordEmailThrottleAttemptAndCount moved to ../shared/email-throttle.ts — auth_email_throttle
+// is shared with the customer Better Auth instance (see that table's own doc comment), so the
+// function that writes to it is hoisted out of this staff-only module rather than duplicated.

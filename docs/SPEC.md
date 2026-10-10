@@ -17,6 +17,8 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
 - Products, fabrics, and fabric colors (`apps/admin`), including SKU generation and pagination.
 - Product photos, per color, with thumbnail selection, staged uploads, and S3-backed storage
   (`packages/storage`).
+- Customer auth + account (`apps/web`): email OTP + Google self-signup, mandatory PDP consent
+  step, optional profile completion (§10.3).
 
 **Next:**
 
@@ -25,7 +27,8 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
 - Orders import (`/import` — Shopee/TikTok Shop export parsing).
 - Packing (`/packing`) + QR thank-you cards.
 - Overview dashboard (§6 metrics).
-- Main site (`apps/web`) — see §3.3/§3.4 for v1 and December 2026 scope.
+- Main site (`apps/web`) — voucher claim flow and the rest of §3.3/§3.4's v1 and December 2026
+  scope.
 
 ## 1. Goals
 
@@ -342,10 +345,10 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
 Two separate [Better Auth](https://better-auth.com) instances, by design, never sharing tables,
 cookies, or secrets:
 
-- **Staff** (`apps/admin` only) — built this session, detailed in §10.1–§10.2.
-- **Customer** (`apps/web`, from the main site's OTP login / voucher claim flow onward) — **not
-  built yet**. §10.3 records the design so it can be added later without touching the staff
-  instance.
+- **Staff** (`apps/admin` only) — built, detailed in §10.1–§10.2.
+- **Customer** (`apps/web`) — login/account built (see docs/plans/voucher-claim.md session 1);
+  the voucher claim flow itself (`/claim/[token]`) is session 2, not yet built. §10.3 records the
+  design. Adding it touched neither the staff instance's tables nor its config.
 
 Both live in `packages/auth` (`@ammari/auth`), which depends on `packages/db` for schema and the
 Drizzle client but owns all Better Auth configuration, hooks, and session/permission-loading
@@ -426,31 +429,48 @@ sibling schema files.
 
 ### 10.2 Email delivery
 
-An `EmailSender` interface (`packages/auth`) with two implementations: `ConsoleEmailSender`
-(local dev — prints the OTP to the server console) and `UnconfiguredEmailSender` (production
-without a provider configured — throws loudly rather than silently dropping the email). A real
-provider is not yet chosen; see the Pre-deploy checklist.
+An `EmailSender` interface (`packages/auth`) with three implementations: `ConsoleEmailSender`
+(local dev — prints the OTP to the server console), `UnconfiguredEmailSender` (production
+without a provider configured — throws loudly rather than silently dropping the email), and
+`ResendEmailSender` (calls Resend's REST API directly via `fetch`, no SDK dependency). Both
+apps select `ResendEmailSender` the same way: `RESEND_API_KEY` + `EMAIL_FROM` set.
 
-### 10.3 Customer login (apps/web) — design only, not built
+### 10.3 Customer login (apps/web)
+
+Built — see docs/plans/voucher-claim.md (session 1) for the full plan; the voucher claim flow
+itself (`/claim/[token]`) is session 2, not yet built.
 
 - Self sign-up allowed (unlike staff), via Google or email OTP.
-- Profile completion is **optional**: after a first Google sign-in, a "Lengkapi profil" page
-  (phone, address, promo consent) with a "Lewati" (skip) button — skipping still creates the
-  account.
-- Privacy consent **cannot** be skipped: "Dengan melanjutkan, kamu menyetujui Kebijakan Privasi
-  Ammari" (linked) on the sign-up screen, with `pdp_consent_at` recorded at account creation.
-  Promo consent stays a separate, optional, unticked checkbox.
-- `customers.phone` is nullable (migration `0002`, done this session) but still **required**
-  where it matters operationally: the voucher claim form, and at checkout (December). Address is
-  collected at checkout, not account creation.
-- While phone is missing, a dismissible-per-session "Lengkapi profilmu" banner shows after login
-  and on the account page.
-- Account linking: a Google sign-in whose email already belongs to a customer (e.g. created via a
-  voucher claim) links to that customer instead of creating a duplicate — only on a
-  Google-**verified** email.
+- **Login creates only the minimal identity needed to authenticate — it never captures PDP
+  consent.** After sign-in, a mandatory `/consent` step (checkbox linking to `/privacy-policy`
+  and `/terms-of-service`, "Lanjutkan" button) gates the claim and account pages for as long as
+  `customers.pdp_consent_at` is null; accepting it stamps that column for the signed-in customer.
+  The claim server action (session 2) independently re-checks `pdp_consent_at` server-side —
+  never only a page-level redirect. Promo consent is not yet captured anywhere (not part of
+  session 1's scope); it stays a future, separate, optional checkbox.
+- Profile completion is **optional**: `/account/complete-profile` (name, phone) with a "Lewati"
+  (skip) button — skipping leaves the account as-is, no write. `customers.phone` is nullable
+  (migration `0002`) and **never required** anywhere in the customer-facing flow, including the
+  voucher claim — the claim itself needs no form at all beyond being signed in and consented
+  (decided plan; supersedes this section's earlier draft, which had the claim form collecting
+  name/phone/email). Address is collected at checkout (December), not account creation.
+- While phone is missing, a dismissible-per-session (`sessionStorage`) "Lengkapi profilmu"
+  banner shows on the account page.
+- Account linking: a sign-in whose email already belongs to a customer (e.g. created via a
+  voucher claim, or by staff manual order entry) links to that customer instead of creating a
+  duplicate. For Google specifically, only on a Google-**verified** email — an unverified Google
+  email matching an existing customer is rejected outright, not linked (it can't create a
+  separate row either: `customers.email` is `citext UNIQUE`). Email-OTP completion is itself
+  proof of ownership, so it always qualifies to link.
+- No `proxy.ts` on apps/web — most of the app is intentionally public. `/account`, `/consent`,
+  and (session 2) the claim action each check the session server-side individually.
 - Schema: separate `customer_auth_*` tables (mirroring `staff_auth_*`), own cookie prefix
-  (reserved: `ammari_customer`), own secret (reserved: `CUSTOMER_BETTER_AUTH_SECRET`). Nothing in
-  the staff instance needs to change to add this.
+  (`ammari_customer`), own secret (`CUSTOMER_BETTER_AUTH_SECRET`), ~60-day sliding session.
+  Nothing in the staff instance needed to change to add this; `auth_email_throttle` (the
+  per-destination OTP-send throttle) is shared by both instances via a hoisted helper in
+  `packages/auth/src/shared/email-throttle.ts`.
+- Email delivery: `ResendEmailSender` (see §10.2) is shared with the staff instance — same
+  `RESEND_API_KEY`/`EMAIL_FROM` env vars, selected the same way in both apps.
 
 ## 11. Pre-deploy checklist
 
@@ -462,9 +482,10 @@ beyond the per-feature work tracked elsewhere in this document:
   client-supplied `CF-Connecting-IP` on any request that didn't actually arrive through
   Cloudflare. Otherwise the auth rate limit (§10.1) can be bypassed by spoofing that header on a
   direct-to-origin request.
-- **Email provider:** `EmailSender` has no real implementation yet (§10.2) — production currently
-  refuses to start without one (`UnconfiguredEmailSender` throws rather than silently dropping
-  OTP emails), so this blocks any real deploy, not just a "nice to have."
+- **Email provider:** `ResendEmailSender` (§10.2) is implemented; `RESEND_API_KEY`/`EMAIL_FROM`
+  still need real values set in each environment — production refuses to start without them
+  (`UnconfiguredEmailSender` throws rather than silently dropping OTP emails otherwise), so this
+  still blocks any real deploy until those env vars are actually filled in.
 - **sharp platform binaries (product images):** `sharp` ships prebuilt native binaries per
   platform/libc — the ones resolved into `node_modules` on a developer's Mac are NOT the ones
   Linux/the Docker image needs. Verify in the actual Docker build/image (not just locally) that

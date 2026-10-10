@@ -1,6 +1,13 @@
 @import "tailwindcss";
+@import "@ammari/ui/theme.css";
+@source "../../../../packages/ui/src/**/*.{ts,tsx}";
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
 
 body {
-  background: #ffffff;
-  color: #000000;
+  background: var(--color-neutral-50);
+  color: var(--color-neutral-900);
 }

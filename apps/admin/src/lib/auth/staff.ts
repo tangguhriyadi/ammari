@@ -2,7 +2,7 @@ import "server-only";
 import { after } from "next/server";
 import { nextCookies } from "better-auth/next-js";
 import { createStaffAuth } from "@ammari/auth/staff";
-import { ConsoleEmailSender, UnconfiguredEmailSender } from "@ammari/auth";
+import { ConsoleEmailSender, ResendEmailSender, UnconfiguredEmailSender } from "@ammari/auth";
 import { CapturingEmailSender } from "@ammari/auth/testing";
 import { db } from "@ammari/db";
 
@@ -21,8 +21,13 @@ export const capturingEmailSender = isE2eTestLoginEnabled ? new CapturingEmailSe
 
 function emailSender() {
   if (capturingEmailSender) return capturingEmailSender;
-  // No real provider chosen yet (see docs/SPEC.md's Pre-deploy checklist) — production must
-  // fail loudly rather than silently drop OTP emails.
+  // Resend (see @ammari/auth's ResendEmailSender) when configured — shared with apps/web's own
+  // customer instance, same two env vars. Falls back to console locally / throws in production
+  // without it (docs/SPEC.md's Pre-deploy checklist: production must fail loudly rather than
+  // silently drop OTP emails).
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.EMAIL_FROM;
+  if (apiKey && from) return new ResendEmailSender({ apiKey, from });
   return process.env.NODE_ENV === "production" ? new UnconfiguredEmailSender() : new ConsoleEmailSender();
 }
 

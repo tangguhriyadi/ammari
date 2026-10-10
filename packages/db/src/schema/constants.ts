@@ -101,9 +101,6 @@ export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 export const CUSTOMER_TYPES = ["retail", "reseller"] as const;
 export type CustomerType = (typeof CUSTOMER_TYPES)[number];
 
-export const OTP_PURPOSES = ["staff_login", "customer_login", "voucher_claim"] as const;
-export type OtpPurpose = (typeof OTP_PURPOSES)[number];
-
 export const THANK_YOU_CARD_STATUSES = ["active", "claimed", "void"] as const;
 export type ThankYouCardStatus = (typeof THANK_YOU_CARD_STATUSES)[number];
 

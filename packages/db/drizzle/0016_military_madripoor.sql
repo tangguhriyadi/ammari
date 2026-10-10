@@ -1,0 +1,1 @@
+DROP TABLE "otp_codes" CASCADE;

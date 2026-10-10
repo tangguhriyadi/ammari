@@ -4,4 +4,6 @@ export * from "./catalog";
 export * from "./orders";
 export * from "./customers";
 export * from "./staff-auth";
+export * from "./customer-auth";
 export * from "./auth-throttle";
+export * from "./claim-throttle";

@@ -17,5 +17,11 @@ export const authEmailThrottle = pgTable(
     email: citext("email").notNull(),
     ...createdAtOnly(),
   },
-  (table) => [index("auth_email_throttle_email_created_at_idx").on(table.email, table.createdAt)],
+  (table) => [
+    index("auth_email_throttle_email_created_at_idx").on(table.email, table.createdAt),
+    // Backs the opportunistic cleanup delete in @ammari/auth's shared/email-throttle.ts (a plain
+    // age filter, not scoped to one email) — the composite index above has `email` as its
+    // leading column, so it can't serve that query efficiently on its own.
+    index("auth_email_throttle_created_at_idx").on(table.createdAt),
+  ],
 );
