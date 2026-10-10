@@ -1,16 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { Button, Checkbox } from "@ammari/ui";
 import { acceptPdpConsentAction } from "./actions";
 
 export function ConsentForm({ next }: { next: string }) {
+  const [consented, setConsented] = useState(false);
+
   return (
     <form action={acceptPdpConsentAction} className="flex w-full max-w-sm flex-col gap-4">
       <input type="hidden" name="next" value={next} />
       <Checkbox
         name="consent"
         required
+        checked={consented}
+        onChange={(e) => setConsented(e.target.checked)}
         label={
           <span>
             Dengan melanjutkan, kamu menyetujui{" "}
@@ -41,7 +46,9 @@ export function ConsentForm({ next }: { next: string }) {
           </span>
         }
       />
-      <Button type="submit">Lanjutkan</Button>
+      <Button type="submit" disabled={!consented}>
+        Lanjutkan
+      </Button>
     </form>
   );
 }
