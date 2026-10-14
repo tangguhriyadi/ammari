@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { Badge, Breadcrumb, PageHeader } from "@ammari/ui";
-import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
+import { formatDate, formatDateTime, formatRupiah, formatShortDate } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getOrderDetail, stripOrderDetailCost } from "@/lib/orders/queries";
 import { ORDER_STATUS_TRANSITIONS } from "@/lib/orders/status";
@@ -32,7 +32,14 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
       <Breadcrumb items={[...rootCrumbs("/orders"), { label: detail.orderNo }]} />
       <div className="flex items-center justify-between gap-2">
         <PageHeader title={detail.orderNo} description={`${detail.channelName} · ${formatDate(new Date(detail.orderDate))}`} />
-        <Badge variant={ORDER_STATUS_BADGE_VARIANT[detail.status]}>{ORDER_STATUS_LABELS[detail.status]}</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={ORDER_STATUS_BADGE_VARIANT[detail.status]}>{ORDER_STATUS_LABELS[detail.status]}</Badge>
+          {detail.cardClaimedAt && (
+            <Badge variant="success" className="whitespace-nowrap">
+              Diklaim · {formatShortDate(detail.cardClaimedAt)}
+            </Badge>
+          )}
+        </div>
       </div>
 
       {canManage && <StatusActions orderId={detail.id} allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]} />}

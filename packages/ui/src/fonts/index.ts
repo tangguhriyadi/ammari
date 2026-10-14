@@ -12,7 +12,7 @@ export const inter = Inter({
 /** Reserved for the AMMARI wordmark and page titles (PageHeader's `title`) at 24px+ only. */
 export const cormorant = Cormorant({
   subsets: ["latin"],
-  weight: ["300", "500"],
+  weight: ["300", "500", "600", "700"],
   variable: "--font-cormorant",
   display: "swap",
 });

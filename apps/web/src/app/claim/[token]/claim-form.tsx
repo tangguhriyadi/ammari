@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { Button } from "@ammari/ui";
-import { formatDate } from "@ammari/ui/lib";
+import { formatDate, formatRupiah } from "@ammari/ui/lib";
 import { claimAction, type ClaimActionState } from "./actions";
 
 const USABLE_FROM = "1 Desember 2026";
@@ -15,7 +15,7 @@ export function ClaimForm({ token }: { token: string }) {
   if (state.status === "success") {
     return (
       <div className="flex flex-col items-center gap-3">
-        <p className="text-base font-medium text-neutral-900">Voucher Rp20.000 berhasil diklaim!</p>
+        <p className="text-base font-medium text-neutral-900">Voucher {formatRupiah(state.amount)} berhasil diklaim!</p>
         <p className="max-w-sm text-sm text-neutral-700">
           Bisa dipakai mulai {USABLE_FROM} di ammari.id, berlaku sampai {formatDate(new Date(state.expiresAt))}.
         </p>

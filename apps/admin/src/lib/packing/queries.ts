@@ -68,6 +68,9 @@ export interface PackingQueueRow {
   orderDate: Date;
   /** `null` = no active card printed yet. */
   cardPrintedAt: Date | null;
+  /** `null` = not claimed (yet, or ever) — set once a buyer claims this order's card on the
+   * main site (`apps/web`'s `/claim/[token]`, docs/plans/voucher-claim.md session 2). */
+  cardClaimedAt: Date | null;
 }
 
 export interface PackingPickListItem {
@@ -108,6 +111,16 @@ export async function listPackingQueue(
     .where(eq(thankYouCards.status, "active"))
     .as("active_card");
 
+  // A reprint voids the previous active card, so at most one `active` row ever exists per
+  // order — but a card that's since been CLAIMED is no longer `active` (its own status moved to
+  // `claimed`), hence the separate join: the two states are mutually exclusive per order, never
+  // both populated for the same row.
+  const claimedCard = db
+    .select({ orderId: thankYouCards.orderId, claimedAt: thankYouCards.claimedAt })
+    .from(thankYouCards)
+    .where(eq(thankYouCards.status, "claimed"))
+    .as("claimed_card");
+
   const rows = await db
     .select({
       id: orders.id,
@@ -118,11 +131,13 @@ export async function listPackingQueue(
       buyerUsername: orders.buyerUsername,
       orderDate: orders.orderDate,
       cardPrintedAt: activeCard.printedAt,
+      cardClaimedAt: claimedCard.claimedAt,
     })
     .from(orders)
     .innerJoin(channels, eq(channels.id, orders.channelId))
     .leftJoin(customers, eq(customers.id, orders.customerId))
     .leftJoin(activeCard, eq(activeCard.orderId, orders.id))
+    .leftJoin(claimedCard, eq(claimedCard.orderId, orders.id))
     .where(where)
     .orderBy(asc(orders.orderDate), asc(orders.id))
     .limit(pagination.limit)

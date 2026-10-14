@@ -10,6 +10,7 @@ import {
   productVariants,
   staffUsers,
   stockMovements,
+  thankYouCards,
   MARKETPLACE_CHANNEL_IDS,
 } from "@ammari/db/schema";
 import type { ChannelId, OrderStatus } from "@ammari/db/schema";
@@ -512,6 +513,10 @@ export interface OrderDetail {
   createdByName: string | null;
   createdAt: Date;
   items: OrderItemRow[];
+  /** `null` = no card claimed (yet, or ever) for this order. Set once a buyer claims the
+   * thank-you card's voucher on the main site (apps/web's `/claim/[token]`, docs/plans/
+   * voucher-claim.md session 2). */
+  cardClaimedAt: Date | null;
 }
 
 export async function getOrderDetail(id: string, db: Database = defaultDb): Promise<OrderDetail | null> {
@@ -567,7 +572,17 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
     .where(eq(orderItems.orderId, id))
     .orderBy(orderItems.createdAt);
 
-  return { ...order, items: itemRows };
+  // At most one claimed card normally exists per order (voidActiveCardForOrder/mintThankYouCard
+  // never touch an already-claimed card), but `desc(claimedAt).limit(1)` is defensive rather
+  // than assuming that invariant holds forever.
+  const [claimedCard] = await db
+    .select({ claimedAt: thankYouCards.claimedAt })
+    .from(thankYouCards)
+    .where(and(eq(thankYouCards.orderId, id), eq(thankYouCards.status, "claimed")))
+    .orderBy(desc(thankYouCards.claimedAt))
+    .limit(1);
+
+  return { ...order, items: itemRows, cardClaimedAt: claimedCard?.claimedAt ?? null };
 }
 
 /** Cost data (unit_cost) is gated by finance.view_profit, same discipline every other cost field

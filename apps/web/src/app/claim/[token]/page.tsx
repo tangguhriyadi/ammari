@@ -31,7 +31,7 @@ export default async function ClaimTokenPage({ params }: { params: Promise<{ tok
       <ClaimLayout title="Voucher Rp20.000 menunggumu" message="Masuk untuk mengklaim voucher belanja dari Ammari.">
         <Link
           href={`/login?next=${encodeURIComponent(next)}`}
-          className="inline-flex min-h-11 items-center justify-center rounded-md bg-brand px-6 text-base font-medium text-brand-foreground transition-colors hover:bg-neutral-800"
+          className="inline-flex min-h-11 items-center justify-center rounded-md bg-brand px-6 text-base font-bold text-brand-foreground transition-colors hover:bg-neutral-800"
         >
           Masuk untuk klaim
         </Link>

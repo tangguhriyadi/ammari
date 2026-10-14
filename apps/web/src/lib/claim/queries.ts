@@ -74,24 +74,39 @@ export type ClaimOutcome =
   | { ok: false; reason: ClaimRejectionReason; claimedByCustomerId: string | null };
 
 /** The atomic claim transaction (CLAUDE.md: concurrent writes must be a transaction + row
- * lock/conditional update, never check-then-write). Locks the card row FIRST, then its order —
- * a second concurrent call for the SAME token blocks on the card lock until the first commits,
- * then re-reads the now-`claimed` row itself rather than trusting any pre-fetched state, so
- * exactly one of two concurrent claims for the same card ever succeeds. Every outcome past this
- * point (reject or succeed) writes exactly one `audit_log` row keyed by `thank_you_cards.id` —
- * never the raw token (CLAUDE.md / docs/plans/voucher-claim.md). */
+ * lock/conditional update, never check-then-write). Locks the order row FIRST, then the card
+ * (see the lock-order comment inline below) — a second concurrent call for the SAME token blocks
+ * on the card lock until the first commits, then re-reads the now-`claimed` row itself rather
+ * than trusting any pre-fetched state, so exactly one of two concurrent claims for the same card
+ * ever succeeds. Every outcome past this point (reject or succeed) writes exactly one
+ * `audit_log` row keyed by `thank_you_cards.id` — never the raw token (CLAUDE.md /
+ * docs/plans/voucher-claim.md). */
 export async function claimVoucher(
   tokenHash: string,
   customer: { id: string; pdpConsentAt: Date | null },
   db: Database = defaultDb,
 ): Promise<ClaimOutcome> {
   return db.transaction(async (tx) => {
-    const [card] = await tx.select().from(thankYouCards).where(eq(thankYouCards.tokenHash, tokenHash)).for("update").limit(1);
-    if (!card) return { ok: false, reason: "not_found", claimedByCustomerId: null };
+    // Unlocked lookup, only to resolve which order this card belongs to — never trusted for
+    // anything past this point (the locked re-read below is what `classifyCard` actually sees).
+    // Locking ORDER then CARD here is required, not arbitrary: apps/admin's
+    // `transitionOrderStatus`/`voidActiveCardForOrder` and `mintThankYouCard` both lock the
+    // order row first and only then touch `thank_you_cards` in the same transaction — locking
+    // the other way round here would deadlock against those under real concurrent traffic (a
+    // staff cancel/reprint racing a customer claim on the same order).
+    const [cardRef] = await tx
+      .select({ id: thankYouCards.id, orderId: thankYouCards.orderId })
+      .from(thankYouCards)
+      .where(eq(thankYouCards.tokenHash, tokenHash))
+      .limit(1);
+    if (!cardRef) return { ok: false, reason: "not_found", claimedByCustomerId: null };
 
     // ON DELETE RESTRICT on thank_you_cards.order_id guarantees this row always exists.
-    const [order] = await tx.select().from(orders).where(eq(orders.id, card.orderId)).for("update").limit(1);
-    if (!order) throw new Error(`order ${card.orderId} missing for thank_you_card ${card.id}`);
+    const [order] = await tx.select().from(orders).where(eq(orders.id, cardRef.orderId)).for("update").limit(1);
+    if (!order) throw new Error(`order ${cardRef.orderId} missing for thank_you_card ${cardRef.id}`);
+
+    const [card] = await tx.select().from(thankYouCards).where(eq(thankYouCards.id, cardRef.id)).for("update").limit(1);
+    if (!card) throw new Error(`thank_you_card ${cardRef.id} disappeared mid-transaction`);
 
     const cardReason = classifyCard(card, order, new Date());
     if (cardReason) {

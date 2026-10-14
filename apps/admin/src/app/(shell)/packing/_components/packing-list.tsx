@@ -19,7 +19,14 @@ export interface PackingListProps {
 type ReprintWarning = { orderIds: string[]; orderNos: string[] } | null;
 type NoCardWarning = { orderIds: string[]; orderNos: string[] } | null;
 
-function CardStatusBadge({ printedAt }: { printedAt: Date | null }) {
+function CardStatusBadge({ printedAt, claimedAt }: { printedAt: Date | null; claimedAt: Date | null }) {
+  if (claimedAt) {
+    return (
+      <Badge variant="success" className="whitespace-nowrap">
+        Diklaim · {formatShortDate(claimedAt)}
+      </Badge>
+    );
+  }
   return printedAt ? (
     <Badge variant="success" className="whitespace-nowrap">
       Tercetak · {formatShortDate(printedAt)}
@@ -174,7 +181,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                   checked={selectedIds.has(row.id)}
                   onChange={() => toggleSelected(row.id)}
                 />
-                <CardStatusBadge printedAt={row.cardPrintedAt} />
+                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} />
               </div>
               <p className="text-sm text-neutral-600">
                 {formatDate(new Date(row.orderDate))} · {row.customerName ?? row.buyerUsername ?? "—"}
@@ -254,7 +261,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 <PickList items={items[row.id] ?? []} />
               </Td>
               <Td>
-                <CardStatusBadge printedAt={row.cardPrintedAt} />
+                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} />
               </Td>
               {canShip && (
                 <Td className="whitespace-nowrap">
