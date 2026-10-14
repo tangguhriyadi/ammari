@@ -63,6 +63,12 @@ export const thankYouCards = pgTable(
       onDelete: "restrict",
     }),
     claimedAt: timestamp("claimed_at", { withTimezone: true, mode: "date" }),
+    // The exact sticker code printed on this card's thermal QR sticker (docs/plans/
+    // thermal-stickers.md) — persisted at mint time so /packing always shows the code that's
+    // physically on the latest card, never recomputed/re-displayed differently afterward.
+    // Nullable: cards minted before this feature shipped have none, and that's permanent (no
+    // backfill) — a sticker/card re-print is the only way an old row gets one.
+    stickerCode: text("sticker_code"),
     ...timestamps(),
   },
   (table) => [

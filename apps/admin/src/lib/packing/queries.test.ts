@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { withRollback } from "@ammari/db/test-utils";
 import { insertOrder, insertProductVariant, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
@@ -8,6 +8,7 @@ import {
   getCardPrintStatus,
   listPackingQueue,
   mintThankYouCard,
+  mintThankYouCardsForOrders,
   voidActiveCardForOrder,
 } from "./queries";
 
@@ -82,6 +83,84 @@ describe("listPackingQueue", () => {
       const { rows } = await listPackingQueue({ channelId: "whatsapp" }, undefined, undefined, tx);
       expect(rows.map((r) => r.id)).toContain(whatsappOrder.id);
       expect(rows.map((r) => r.id)).not.toContain(offlineOrder.id);
+    });
+  });
+
+  test("an order with an active card shows its PERSISTED sticker code, never a preview", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const { variant } = await insertProductVariant(tx);
+      const order = await insertOrder(tx, { status: "to_ship", channelId: "whatsapp", orderNo: "ORD-000004-4444" });
+      await tx.insert(orderItems).values({ orderId: order.id, sku: variant.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      await mintThankYouCardsForOrders([order.id], staff.id, tx);
+
+      const { rows } = await listPackingQueue({}, undefined, undefined, tx);
+      const row = rows.find((r) => r.id === order.id);
+      expect(row?.stickerCodeIsPreview).toBe(false);
+      // whatsapp -> "WA"; insertProductVariant's fixture is always product "Gamis Basic" / color
+      // "Black" / size "M" -> "GA"/"BL"/"M"; LAST4 from the internal order number (non-
+      // marketplace channel).
+      expect(row?.stickerCode).toBe("WA-GA-BL-M-4444");
+    });
+  });
+
+  test("an order with no card yet shows a PREVIEW sticker code computed from its current items", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const order = await insertOrder(tx, { status: "to_ship", channelId: "whatsapp", orderNo: "ORD-000005-5555" });
+      await tx.insert(orderItems).values({ orderId: order.id, sku: variant.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      const { rows } = await listPackingQueue({}, undefined, undefined, tx);
+      const row = rows.find((r) => r.id === order.id);
+      expect(row?.stickerCodeIsPreview).toBe(true);
+      expect(row?.stickerCode).toBe("WA-GA-BL-M-5555");
+    });
+  });
+
+  test("a preview collision is caught even when the colliding order is on a DIFFERENT page (whole-queue scope, not per-page)", async () => {
+    await withRollback(async (tx) => {
+      const { variant: variantA } = await insertProductVariant(tx);
+      const orderA = await insertOrder(tx, {
+        status: "to_ship",
+        channelId: "whatsapp",
+        orderNo: "AAAAAA994281",
+        orderDate: new Date("1970-01-01"), // guaranteed to sort first -> lands on page 1
+      });
+      await tx.insert(orderItems).values({ orderId: orderA.id, sku: variantA.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      // 9 unrelated filler orders (smallest real page size is 10 — PAGE_SIZE_OPTIONS in
+      // packages/ui/src/lib/pagination.ts) dated between orderA and orderB, so orderA + fillers
+      // fill page 1 and orderB lands on page 2. A different channel ("offline" -> "OFF") so a
+      // filler's own code can never collide with orderA/orderB's "WA-..." codes.
+      const { variant: fillerVariant } = await insertProductVariant(tx);
+      for (let i = 0; i < 9; i++) {
+        const filler = await insertOrder(tx, {
+          status: "to_ship",
+          channelId: "offline",
+          orderDate: new Date(`1970-01-0${i + 2}`),
+        });
+        await tx.insert(orderItems).values({ orderId: filler.id, sku: fillerVariant.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+      }
+
+      const { variant: variantB } = await insertProductVariant(tx);
+      const orderB = await insertOrder(tx, {
+        status: "to_ship",
+        channelId: "whatsapp",
+        orderNo: "BBBBBB774281",
+        orderDate: new Date("1970-01-11"),
+      });
+      await tx.insert(orderItems).values({ orderId: orderB.id, sku: variantB.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      const { rows } = await listPackingQueue({}, "1", "10", tx);
+      expect(rows.map((r) => r.id)).toContain(orderA.id);
+      expect(rows.map((r) => r.id)).not.toContain(orderB.id); // confirms orderB really is off-page
+      // Both orders' base code is "WA-GA-BL-M-4281" (same product/color/size, same LAST4) — a
+      // REAL collision, caught only by scanning the whole to_ship queue, not just this page. If
+      // this page's own computation couldn't see off-page orderB, it would wrongly show the
+      // plain 4-char code instead.
+      const rowA = rows.find((r) => r.id === orderA.id);
+      expect(rowA?.stickerCode).toBe("WA-GA-BL-M-994281");
     });
   });
 });
@@ -195,6 +274,80 @@ describe("getCardPrintStatus", () => {
 
       const status = await getCardPrintStatus([order.id], tx);
       expect(status.get(order.id)).toBe(false);
+    });
+  });
+});
+
+describe("mintThankYouCardsForOrders", () => {
+  test("mints every order in the batch and persists each one's sticker code on its card", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const { variant: variantA } = await insertProductVariant(tx);
+      const orderA = await insertOrder(tx, { status: "to_ship", channelId: "whatsapp", orderNo: "ORD-000001-1111" });
+      await tx.insert(orderItems).values({ orderId: orderA.id, sku: variantA.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      const { variant: variantB } = await insertProductVariant(tx);
+      const orderB = await insertOrder(tx, { status: "to_ship", channelId: "whatsapp", orderNo: "ORD-000002-2222" });
+      await tx.insert(orderItems).values({ orderId: orderB.id, sku: variantB.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      const minted = await mintThankYouCardsForOrders([orderA.id, orderB.id], staff.id, tx);
+      expect(minted).toHaveLength(2);
+      const byOrderId = new Map(minted.map((m) => [m.orderId, m]));
+      expect(byOrderId.get(orderA.id)?.stickerCode).toBe("WA-GA-BL-M-1111");
+      expect(byOrderId.get(orderB.id)?.stickerCode).toBe("WA-GA-BL-M-2222");
+
+      const [cardA] = await tx.select().from(thankYouCards).where(eq(thankYouCards.orderId, orderA.id));
+      const [cardB] = await tx.select().from(thankYouCards).where(eq(thankYouCards.orderId, orderB.id));
+      expect(cardA?.stickerCode).toBe("WA-GA-BL-M-1111");
+      expect(cardB?.stickerCode).toBe("WA-GA-BL-M-2222");
+    });
+  });
+
+  test("two orders in the same batch colliding on the base code both get widened to 6-char LAST4", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const { variant: variantA } = await insertProductVariant(tx);
+      const orderA = await insertOrder(tx, { status: "to_ship", channelId: "whatsapp", orderNo: "AAAAAA994281" });
+      await tx.insert(orderItems).values({ orderId: orderA.id, sku: variantA.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      const { variant: variantB } = await insertProductVariant(tx);
+      const orderB = await insertOrder(tx, { status: "to_ship", channelId: "whatsapp", orderNo: "BBBBBB774281" });
+      await tx.insert(orderItems).values({ orderId: orderB.id, sku: variantB.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      const minted = await mintThankYouCardsForOrders([orderA.id, orderB.id], staff.id, tx);
+      const byOrderId = new Map(minted.map((m) => [m.orderId, m]));
+      expect(byOrderId.get(orderA.id)?.stickerCode).toBe("WA-GA-BL-M-994281");
+      expect(byOrderId.get(orderB.id)?.stickerCode).toBe("WA-GA-BL-M-774281");
+    });
+  });
+
+  test("reprinting an order recomputes and persists a sticker code on the NEW active card", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const { variant } = await insertProductVariant(tx);
+      const order = await insertOrder(tx, { status: "to_ship", channelId: "whatsapp", orderNo: "ORD-000003-3333" });
+      await tx.insert(orderItems).values({ orderId: order.id, sku: variant.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      const firstMint = await mintThankYouCardsForOrders([order.id], staff.id, tx);
+      expect(firstMint[0]?.stickerCode).toBe("WA-GA-BL-M-3333");
+      expect(firstMint[0]?.wasReprint).toBe(false);
+
+      const secondMint = await mintThankYouCardsForOrders([order.id], staff.id, tx);
+      expect(secondMint[0]?.wasReprint).toBe(true);
+      expect(secondMint[0]?.stickerCode).toBe("WA-GA-BL-M-3333");
+
+      const activeCards = await tx
+        .select()
+        .from(thankYouCards)
+        .where(and(eq(thankYouCards.orderId, order.id), eq(thankYouCards.status, "active")));
+      expect(activeCards).toHaveLength(1);
+      expect(activeCards[0]?.stickerCode).toBe("WA-GA-BL-M-3333");
+
+      const voidedCards = await tx
+        .select()
+        .from(thankYouCards)
+        .where(and(eq(thankYouCards.orderId, order.id), eq(thankYouCards.status, "void")));
+      expect(voidedCards).toHaveLength(1);
     });
   });
 });

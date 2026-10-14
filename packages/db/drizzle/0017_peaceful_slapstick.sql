@@ -1,0 +1,1 @@
+ALTER TABLE "thank_you_cards" ADD COLUMN "sticker_code" text;

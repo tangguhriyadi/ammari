@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, eq, inArray } from "drizzle-orm";
+import { and, asc, count, eq, inArray, notInArray } from "drizzle-orm";
 import {
   channels,
   customers,
@@ -11,12 +11,14 @@ import {
   productVariants,
   thankYouCards,
 } from "@ammari/db/schema";
-import type { ChannelId } from "@ammari/db/schema";
+import type { ChannelId, Size } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { buildImageSizeUrl } from "@/lib/products/image-queries";
 import { ActionError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { generateClaimToken, hashClaimToken } from "./token";
+import { resolveCardBuyerName } from "./card-copy";
+import { assignStickerCodes, type StickerCodeFixed, type StickerCodeOrderInput } from "./sticker-code";
 
 // ---------- Claim deadline ----------
 
@@ -71,6 +73,15 @@ export interface PackingQueueRow {
   /** `null` = not claimed (yet, or ever) — set once a buyer claims this order's card on the
    * main site (`apps/web`'s `/claim/[token]`, docs/plans/voucher-claim.md session 2). */
   cardClaimedAt: Date | null;
+  /** The sticker code shown on `/packing` (docs/plans/thermal-stickers.md). `null` only for a
+   * card printed before this feature shipped (no backfill) — the UI shows a plain dash then.
+   * Real (non-preview) once an active card exists; see `stickerCodeIsPreview`. */
+  stickerCode: string | null;
+  /** `true` = this order has no active card yet, so `stickerCode` is a PREVIEW computed over the
+   * whole to_ship queue right now — it can still change (another order joining/leaving the
+   * queue could shift collision handling) until the order is actually printed, at which point
+   * the exact code gets persisted on its card and `stickerCodeIsPreview` becomes `false`. */
+  stickerCodeIsPreview: boolean;
 }
 
 export interface PackingPickListItem {
@@ -78,7 +89,7 @@ export interface PackingPickListItem {
   sku: string;
   productName: string;
   colorName: string;
-  size: string;
+  size: Size;
   qty: number;
   thumbnailUrl: string | null;
 }
@@ -106,7 +117,7 @@ export async function listPackingQueue(
   const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const activeCard = db
-    .select({ orderId: thankYouCards.orderId, printedAt: thankYouCards.createdAt })
+    .select({ orderId: thankYouCards.orderId, printedAt: thankYouCards.createdAt, stickerCode: thankYouCards.stickerCode })
     .from(thankYouCards)
     .where(eq(thankYouCards.status, "active"))
     .as("active_card");
@@ -132,6 +143,7 @@ export async function listPackingQueue(
       orderDate: orders.orderDate,
       cardPrintedAt: activeCard.printedAt,
       cardClaimedAt: claimedCard.claimedAt,
+      persistedStickerCode: activeCard.stickerCode,
     })
     .from(orders)
     .innerJoin(channels, eq(channels.id, orders.channelId))
@@ -146,7 +158,88 @@ export async function listPackingQueue(
   const orderIds = rows.map((row) => row.id);
   const items = orderIds.length > 0 ? await listPickListItems(orderIds, db) : new Map<string, PackingPickListItem[]>();
 
-  return { rows, items, pagination };
+  // Sticker-code preview (docs/plans/thermal-stickers.md): scoped to the WHOLE to_ship queue —
+  // never just this page, and never narrowed by `filters.channelId` either — a collision between
+  // two orders must be caught even if the staffer is currently looking at a single-channel
+  // filtered view that only shows one of them. Orders that already have an active card show
+  // their PERSISTED code instead (never recomputed here); only genuinely unprinted orders need a
+  // preview.
+  const unprintedOrderIds = await getUnprintedToShipOrderIds(db);
+  const fixedEntries = await getFixedStickerCodesForToShipQueue([], db);
+  const previewInputs = await getStickerCodeInputsForOrders(unprintedOrderIds, db);
+  const previewMap = assignStickerCodes(previewInputs, fixedEntries);
+
+  const rowsWithStickerCodes: PackingQueueRow[] = rows.map(({ persistedStickerCode, ...row }) => {
+    const isPrinted = row.cardPrintedAt !== null;
+    return {
+      ...row,
+      stickerCode: isPrinted ? persistedStickerCode : (previewMap.get(row.id) ?? null),
+      stickerCodeIsPreview: !isPrinted,
+    };
+  });
+
+  return { rows: rowsWithStickerCodes, items, pagination };
+}
+
+/** Every `to_ship` order with NO active thank-you card — the "pending" set for the sticker-code
+ * preview (docs/plans/thermal-stickers.md): these are the orders whose code could still change
+ * before they're actually printed. */
+async function getUnprintedToShipOrderIds(db: Database): Promise<string[]> {
+  const activeCardOrderIds = db.select({ orderId: thankYouCards.orderId }).from(thankYouCards).where(eq(thankYouCards.status, "active"));
+  const rows = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(and(eq(orders.status, "to_ship"), notInArray(orders.id, activeCardOrderIds)));
+  return rows.map((r) => r.id);
+}
+
+/** Already-persisted sticker codes for every `to_ship` order's active card, excluding
+ * `excludeOrderIds` (the batch currently being (re)minted, whose old code is about to be
+ * replaced) — this is the "fixed" collision context `assignStickerCodes` never recomputes.
+ * Cards minted before this feature shipped have `stickerCode: null` and are simply excluded
+ * (they impose no collision constraint — see the schema's own doc comment on why there's no
+ * backfill). */
+async function getFixedStickerCodesForToShipQueue(excludeOrderIds: string[], db: Database): Promise<StickerCodeFixed[]> {
+  const conditions = [
+    eq(thankYouCards.status, "active"),
+    eq(orders.status, "to_ship"),
+    excludeOrderIds.length > 0 ? notInArray(thankYouCards.orderId, excludeOrderIds) : undefined,
+  ].filter((c) => c !== undefined);
+
+  const rows = await db
+    .select({ orderId: thankYouCards.orderId, code: thankYouCards.stickerCode })
+    .from(thankYouCards)
+    .innerJoin(orders, eq(orders.id, thankYouCards.orderId))
+    .where(and(...conditions));
+
+  return rows.filter((r): r is { orderId: string; code: string } => r.code !== null);
+}
+
+/** Everything `buildStickerCodeBase`/`assignStickerCodes` needs for a batch of orders — channel,
+ * both order-number forms, and every item (reusing the same pick-list-items query the queue
+ * display already runs, rather than re-deriving the same joins a second way). */
+export async function getStickerCodeInputsForOrders(orderIds: string[], db: Database): Promise<StickerCodeOrderInput[]> {
+  if (orderIds.length === 0) return [];
+  const [orderRows, itemsByOrderId] = await Promise.all([
+    db
+      .select({ id: orders.id, channelId: orders.channelId, orderNo: orders.orderNo, channelOrderNo: orders.channelOrderNo })
+      .from(orders)
+      .where(inArray(orders.id, orderIds)),
+    listPickListItems(orderIds, db),
+  ]);
+
+  return orderRows.map((order) => ({
+    orderId: order.id,
+    channelId: order.channelId,
+    orderNo: order.orderNo,
+    channelOrderNo: order.channelOrderNo,
+    items: (itemsByOrderId.get(order.id) ?? []).map((item) => ({
+      productName: item.productName,
+      colorName: item.colorName,
+      size: item.size,
+      qty: item.qty,
+    })),
+  }));
 }
 
 async function listPickListItems(orderIds: string[], db: Database): Promise<Map<string, PackingPickListItem[]>> {
@@ -271,6 +364,69 @@ export async function mintThankYouCard(orderId: string, actorStaffUserId: string
 
     return { cardId: card.id, orderId, token, claimDeadline, wasReprint: Boolean(existingActive) };
   });
+}
+
+export interface MintedCardForBatch {
+  orderId: string;
+  orderNo: string;
+  buyerName: string;
+  token: string;
+  claimDeadline: Date;
+  stickerCode: string;
+  wasReprint: boolean;
+}
+
+/** The one mint entry point BOTH print paths share (docs/plans/thermal-stickers.md: "printing
+ * stickers counts as printing the card" — the owner's own requirement that this never fork into
+ * two different minting code paths). Mints/rotates every order's card via the existing
+ * `mintThankYouCard` (unchanged), then — in the SAME transaction — computes and persists each
+ * new card's sticker code: `fixed` is every OTHER `to_ship` order's already-persisted code
+ * (this batch's own old codes, if any, are excluded since they're being replaced right now),
+ * `pending` is this batch's own orders, so a collision against either is caught and widened
+ * before anything commits. Returns everything either caller (`printThankYouCardsAction`,
+ * `printStickerSheetsAction`) needs — the SVG-vs-PDF rendering is the only thing that differs
+ * downstream. */
+export async function mintThankYouCardsForOrders(orderIds: string[], staffUserId: string, tx: Tx): Promise<MintedCardForBatch[]> {
+  const dedupedOrderIds = [...new Set(orderIds)];
+
+  const minted: { orderId: string; orderNo: string; buyerName: string; cardId: string; token: string; claimDeadline: Date; wasReprint: boolean }[] = [];
+  for (const orderId of dedupedOrderIds) {
+    const order = await getOrderSummaryForCard(orderId, tx);
+    if (!order) throw new ActionError(`Pesanan ${orderId} tidak ditemukan.`);
+    const result = await mintThankYouCard(orderId, staffUserId, tx);
+    minted.push({
+      orderId,
+      orderNo: order.orderNo,
+      buyerName: resolveCardBuyerName(order),
+      cardId: result.cardId,
+      token: result.token,
+      claimDeadline: result.claimDeadline,
+      wasReprint: result.wasReprint,
+    });
+  }
+
+  const [pendingInputs, fixedEntries] = await Promise.all([
+    getStickerCodeInputsForOrders(dedupedOrderIds, tx),
+    getFixedStickerCodesForToShipQueue(dedupedOrderIds, tx),
+  ]);
+  const codeByOrderId = assignStickerCodes(pendingInputs, fixedEntries);
+
+  const results: MintedCardForBatch[] = [];
+  for (const m of minted) {
+    const stickerCode = codeByOrderId.get(m.orderId);
+    if (!stickerCode) throw new Error(`no sticker code computed for order ${m.orderId}`);
+    await tx.update(thankYouCards).set({ stickerCode }).where(eq(thankYouCards.id, m.cardId));
+    results.push({
+      orderId: m.orderId,
+      orderNo: m.orderNo,
+      buyerName: m.buyerName,
+      token: m.token,
+      claimDeadline: m.claimDeadline,
+      stickerCode,
+      wasReprint: m.wasReprint,
+    });
+  }
+  return results;
 }
 
 /** Voids an order's active thank-you card, if it has one — called from

@@ -7,11 +7,17 @@ import { runAction, type ActionResult } from "@/lib/action-result";
 import { ActionError } from "@/lib/errors";
 import { defaultDb } from "@/lib/db";
 import { transitionOrderStatus } from "@/lib/orders/queries";
-import { getCardPrintStatus, getOrderSummaryForCard, mintThankYouCard } from "@/lib/packing/queries";
+import { getCardPrintStatus, mintThankYouCardsForOrders } from "@/lib/packing/queries";
 import { claimUrl, claimUrlHost, formatClaimTokenForDisplay } from "@/lib/packing/token";
-import { resolveCardBuyerName } from "@/lib/packing/card-copy";
+import { buildStickerSheetPdf, stickerPdfFilename, type StickerPdfCard } from "@/lib/packing/sticker-pdf";
 
-const orderIdsSchema = z.array(z.string().uuid()).min(1, "Pilih minimal 1 pesanan.");
+// Upper-bounded, not just non-empty — `printStickerSheetsAction` mints/rotates a card AND builds
+// a PDF for every id in one request, inside one DB transaction holding `orders` row locks for
+// its whole duration; an unbounded array (the shared server-action body limit is 12MB, sized for
+// product-image uploads — next.config.ts — which fits hundreds of thousands of UUIDs) would be a
+// real memory/lock-duration DoS from any account holding only `packing.print_cards`. 500 is
+// comfortably above any realistic physical sticker/card print batch.
+const orderIdsSchema = z.array(z.string().uuid()).min(1, "Pilih minimal 1 pesanan.").max(500, "Maksimal 500 pesanan sekaligus.");
 
 export async function getCardPrintStatusAction(orderIds: string[]): Promise<ActionResult<Record<string, boolean>>> {
   await requirePermission("packing.print_cards");
@@ -40,11 +46,6 @@ export async function printThankYouCardsAction(orderIds: string[]): Promise<Acti
   const session = await requirePermission("packing.print_cards");
   const parsed = orderIdsSchema.safeParse(orderIds);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
-  // Deduped — this is a public server action, not just the (Set-backed, naturally-deduped)
-  // client call site: a crafted request repeating the same orderId would otherwise mint it
-  // twice in the same batch, with the second mint silently voiding the first's card before the
-  // response is ever sent — the client would show a token that's already dead on arrival.
-  const dedupedOrderIds = [...new Set(parsed.data)];
   return runAction(async () =>
     // One transaction for the WHOLE batch, not one per order — if any order later in the batch
     // fails (not found, already cancelled/returned), every mint already committed for earlier
@@ -53,25 +54,51 @@ export async function printThankYouCardsAction(orderIds: string[]): Promise<Acti
     // one, and no token ever delivered to anyone. Wrapping in one transaction makes the whole
     // batch succeed or fail together.
     defaultDb.transaction(async (tx) => {
+      const minted = await mintThankYouCardsForOrders(parsed.data, session.staffUser.id, tx);
       const results: PrintableCard[] = [];
-      for (const orderId of dedupedOrderIds) {
-        const order = await getOrderSummaryForCard(orderId, tx);
-        if (!order) throw new ActionError(`Pesanan ${orderId} tidak ditemukan.`);
-        const minted = await mintThankYouCard(orderId, session.staffUser.id, tx);
-        const url = claimUrl(minted.token);
+      for (const card of minted) {
+        const url = claimUrl(card.token);
         const qrSvg = await QRCode.toString(url, { type: "svg", errorCorrectionLevel: "Q", margin: 0 });
         results.push({
-          orderId,
-          orderNo: order.orderNo,
-          buyerName: resolveCardBuyerName(order),
+          orderId: card.orderId,
+          orderNo: card.orderNo,
+          buyerName: card.buyerName,
           claimUrlHost: claimUrlHost(),
-          claimTokenDisplay: formatClaimTokenForDisplay(minted.token),
+          claimTokenDisplay: formatClaimTokenForDisplay(card.token),
           qrSvg,
         });
       }
       return results;
     }),
   );
+}
+
+export interface StickerSheetPdfResult {
+  filename: string;
+  /** Base64-encoded PDF bytes — travels through the existing `ActionResult` envelope like every
+   * other action in this codebase, rather than a dedicated Route Handler
+   * (docs/plans/thermal-stickers.md). The client decodes it into a `Blob` and triggers a real
+   * file download. */
+  pdfBase64: string;
+}
+
+export async function printStickerSheetsAction(orderIds: string[]): Promise<ActionResult<StickerSheetPdfResult>> {
+  const session = await requirePermission("packing.print_cards");
+  const parsed = orderIdsSchema.safeParse(orderIds);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    const minted = await defaultDb.transaction((tx) => mintThankYouCardsForOrders(parsed.data, session.staffUser.id, tx));
+    const cards: StickerPdfCard[] = minted.map((card) => ({
+      orderId: card.orderId,
+      code: card.stickerCode,
+      claimUrl: claimUrl(card.token),
+    }));
+    const pdfBytes = await buildStickerSheetPdf(cards);
+    return {
+      filename: stickerPdfFilename(new Date()),
+      pdfBase64: Buffer.from(pdfBytes).toString("base64"),
+    };
+  });
 }
 
 const markShippedSchema = z.object({

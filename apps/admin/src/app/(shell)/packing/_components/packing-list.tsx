@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 import { Badge, Button, Card, CardList, Checkbox, Dialog, EmptyState, TableContainer, TableHead, Th, Tr, Td } from "@ammari/ui";
 import { formatDate, formatShortDate } from "@ammari/ui/lib";
 import type { PackingPickListItem, PackingQueueRow } from "@/lib/packing/queries";
-import { bulkMarkShippedAction, getCardPrintStatusAction, printThankYouCardsAction, type PrintableCard } from "../actions";
+import {
+  bulkMarkShippedAction,
+  getCardPrintStatusAction,
+  printStickerSheetsAction,
+  printThankYouCardsAction,
+  type PrintableCard,
+} from "../actions";
 import { PickList } from "./pick-list";
 import { MarkShippedDialog } from "./mark-shipped-dialog";
 import { PrintCardsOverlay } from "./print-cards-overlay";
@@ -16,7 +22,7 @@ export interface PackingListProps {
   canShip: boolean;
 }
 
-type ReprintWarning = { orderIds: string[]; orderNos: string[] } | null;
+type ReprintWarning = { orderIds: string[]; orderNos: string[]; mode: "card" | "sticker" } | null;
 type NoCardWarning = { orderIds: string[]; orderNos: string[] } | null;
 
 function CardStatusBadge({ printedAt, claimedAt }: { printedAt: Date | null; claimedAt: Date | null }) {
@@ -34,6 +40,81 @@ function CardStatusBadge({ printedAt, claimedAt }: { printedAt: Date | null; cla
   ) : (
     <Badge variant="neutral">Belum</Badge>
   );
+}
+
+/** `srLabel`: only needed in the mobile `CardList`, where this renders as a bare string with no
+ * surrounding context — the desktop `TableContainer` already gives it one via its own `<Th>Kode
+ * stiker</Th>` column header, so that call site omits it. */
+function StickerCode({ code, isPreview, srLabel }: { code: string | null; isPreview: boolean; srLabel?: string }) {
+  const label = srLabel && <span className="sr-only">{srLabel}: </span>;
+  if (!code) {
+    return (
+      <span className="text-sm text-neutral-500">
+        {label}—
+      </span>
+    );
+  }
+  return (
+    <span className={`whitespace-nowrap font-mono text-sm ${isPreview ? "text-neutral-500 italic" : "font-medium text-neutral-900"}`}>
+      {label}
+      {code}
+      {isPreview && <span className="not-italic"> (pratinjau)</span>}
+    </span>
+  );
+}
+
+/** iPadOS Safari reports its UA as a plain Mac ("Macintosh") since iPadOS 13 — the only reliable
+ * way to tell it apart from a real Mac is that a touch-capable Mac UA is always an iPad (no
+ * production Mac has a touchscreen). Needed because a synthetic `<a download>` click is
+ * unreliable there for blob PDFs across iPadOS versions; opening the blob URL in a new tab
+ * instead hands the PDF to Safari's own inline viewer, from which "Cetak"/"Simpan ke File" both
+ * work via the share sheet — a better outcome there than a download that may silently do
+ * nothing. */
+function isLikelyIPadSafari(): boolean {
+  return typeof navigator !== "undefined" && /Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
+}
+
+/** On the iPad-Safari path, MUST be called synchronously inside the click handler that starts
+ * the print — never after an `await` (the two server-action round-trips a real print goes
+ * through). Safari only allows `window.open` to create a real, non-blocked window within an
+ * actual user-gesture call stack; calling it once the PDF bytes are finally ready (well outside
+ * that window) is the textbook case Safari's popup blocker exists to catch, and it fails
+ * silently — `window.open` just returns `null`/an already-closed window, with nothing to show
+ * for it even though the mint already committed server-side. Opening a blank tab immediately and
+ * navigating it later (`popup.location.href = ...`) sidesteps this: the OPEN itself happens in
+ * the gesture, only the navigation is deferred. Returns `null` on every other browser, where the
+ * plain `<a download>` path below is used instead and no popup is needed at all. */
+function openStickerPopupPlaceholder(): Window | null {
+  return isLikelyIPadSafari() ? window.open("", "_blank") : null;
+}
+
+/** `popup`: whatever `openStickerPopupPlaceholder` returned for THIS SAME click, or `null` on a
+ * non-iPad-Safari browser. Returns an error message to show the staffer, or `null` on success. */
+function downloadOrOpenPdf(pdfBase64: string, filename: string, popup: Window | null): string | null {
+  const binary = atob(pdfBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+
+  if (isLikelyIPadSafari()) {
+    if (!popup || popup.closed) {
+      URL.revokeObjectURL(url);
+      return "Pop-up diblokir. Izinkan pop-up untuk situs ini di pengaturan Safari, lalu coba lagi.";
+    }
+    popup.location.href = url;
+  } else {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+  // Delayed, not immediate — revoking right after `.click()`/navigating `popup` can race the
+  // browser actually starting to read the blob in some engines.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return null;
 }
 
 export function PackingList({ rows, items, canShip }: PackingListProps) {
@@ -101,22 +182,51 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
     router.refresh(); // so the card-status badges reflect the fresh print immediately
   }
 
-  function handlePrintClick() {
-    if (visibleSelectedIds.length === 0) return;
+  // `popup`: already-opened (by the CALLER, synchronously, before any await — see
+  // `openStickerPopupPlaceholder`'s own doc comment) on iPad Safari; `null` everywhere else.
+  async function mintAndDownloadStickers(orderIds: string[], popup: Window | null) {
+    const result = await printStickerSheetsAction(orderIds);
+    if (!result.ok) {
+      popup?.close();
+      setError(result.error);
+      return;
+    }
+    const downloadError = downloadOrOpenPdf(result.data.pdfBase64, result.data.filename, popup);
+    if (downloadError) {
+      setError(downloadError);
+      return;
+    }
+    router.refresh(); // so the sticker-code/card-status cells reflect the fresh print immediately
+  }
+
+  // Shared by both "Cetak stiker" (primary) and "Cetak kartu" (secondary) — printing stickers
+  // counts as printing the card (docs/plans/thermal-stickers.md), so both go through the exact
+  // same already-printed check and reprint-warning flow, only the mint confirmation's eventual
+  // action (`onMint`) differs. `stickerPopup`: already opened synchronously by THIS click (iPad
+  // Safari only — see `openStickerPopupPlaceholder`); closed here if the flow turns out to need
+  // the reprint-warning dialog instead of minting right away, since a fresh one gets opened by
+  // the dialog's own confirm click once the staffer actually proceeds.
+  function handlePrintClick(mode: "card" | "sticker", onMint: (orderIds: string[]) => Promise<void>, stickerPopup: Window | null = null) {
+    if (visibleSelectedIds.length === 0) {
+      stickerPopup?.close();
+      return;
+    }
     setError(null);
     const orderIds = visibleSelectedIds;
     startTransition(async () => {
       const statusResult = await getCardPrintStatusAction(orderIds);
       if (!statusResult.ok) {
+        stickerPopup?.close();
         setError(statusResult.error);
         return;
       }
       const alreadyPrinted = orderIds.filter((id) => statusResult.data[id]);
       if (alreadyPrinted.length > 0) {
-        setReprintWarning({ orderIds, orderNos: alreadyPrinted.map(orderNoFor) });
+        stickerPopup?.close();
+        setReprintWarning({ orderIds, orderNos: alreadyPrinted.map(orderNoFor), mode });
         return;
       }
-      await mintAndShowCards(orderIds);
+      await onMint(orderIds);
     });
   }
 
@@ -156,7 +266,28 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
   return (
     <>
       <div className="flex flex-wrap items-center gap-2 py-1">
-        <Button variant="secondary" loading={pending} disabled={visibleSelectedIds.length === 0} onClick={handlePrintClick}>
+        {/* Primary print path (docs/plans/thermal-stickers.md) — the thermal QR sticker sheet
+            replaces the A6/A4 card as the default; the card stays available as a secondary
+            option below. Both share the exact same mint/reprint-warning flow. */}
+        <Button
+          loading={pending}
+          disabled={visibleSelectedIds.length === 0}
+          onClick={() => {
+            // Opened HERE, synchronously, inside the real click — not inside the async
+            // `mintAndDownloadStickers` this hands off to, which only runs after two awaited
+            // server round-trips (well outside Safari's user-gesture window for `window.open`).
+            const popup = openStickerPopupPlaceholder();
+            handlePrintClick("sticker", (orderIds) => mintAndDownloadStickers(orderIds, popup), popup);
+          }}
+        >
+          {visibleSelectedIds.length > 0 ? `Cetak stiker (${visibleSelectedIds.length})` : "Cetak stiker"}
+        </Button>
+        <Button
+          variant="secondary"
+          loading={pending}
+          disabled={visibleSelectedIds.length === 0}
+          onClick={() => handlePrintClick("card", mintAndShowCards)}
+        >
           {visibleSelectedIds.length > 0 ? `Cetak kartu (${visibleSelectedIds.length})` : "Cetak kartu"}
         </Button>
         {canShip && (
@@ -186,6 +317,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
               <p className="text-sm text-neutral-600">
                 {formatDate(new Date(row.orderDate))} · {row.customerName ?? row.buyerUsername ?? "—"}
               </p>
+              <StickerCode code={row.stickerCode} isPreview={row.stickerCodeIsPreview} srLabel="Kode stiker" />
               <PickList items={items[row.id] ?? []} />
               {canShip && (
                 // Disabled while ANY bulk/print transition is in flight (`pending` covers the
@@ -220,6 +352,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
           </Th>
           <Th>No. Pesanan</Th>
           <Th>Tanggal · Pembeli</Th>
+          <Th>Kode stiker</Th>
           <Th>Pick list</Th>
           <Th>Kartu</Th>
           {canShip && (
@@ -252,6 +385,9 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                     {row.customerName ?? row.buyerUsername ?? "—"}
                   </span>
                 </div>
+              </Td>
+              <Td className="whitespace-nowrap">
+                <StickerCode code={row.stickerCode} isPreview={row.stickerCodeIsPreview} />
               </Td>
               {/* Capped so `PickList`'s own `truncate` (on each item's product-name line) actually
                   has a width to truncate against — a table cell's content otherwise reports its
@@ -296,8 +432,12 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
         loading={pending}
         onConfirm={() => {
           const orderIds = reprintWarning?.orderIds ?? [];
+          const mode = reprintWarning?.mode ?? "card";
+          // Synchronously, inside this real confirm click — same reasoning as the toolbar
+          // button's own click handler above (`openStickerPopupPlaceholder`'s doc comment).
+          const popup = mode === "sticker" ? openStickerPopupPlaceholder() : null;
           setReprintWarning(null);
-          startTransition(() => mintAndShowCards(orderIds));
+          startTransition(() => (mode === "sticker" ? mintAndDownloadStickers(orderIds, popup) : mintAndShowCards(orderIds)));
         }}
       />
 
