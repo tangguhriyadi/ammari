@@ -18,23 +18,32 @@ place them on the VPS at:
 ```
 
 `chmod 600` the key. These two files are what `deploy/Caddyfile`'s `tls` directive loads.
+Confirmed (via a real `caddy:2.10.2` container, no override) that the official Caddy image runs
+its process as root, which can read a mode-600 file owned by any user (root bypasses the
+owner/group permission check) — so `chmod 600`, owned by whichever user did the `curl`/upload
+(typically `deploy`), is fine as-is; no extra `chown` or looser mode needed for Caddy to read it.
 
 ## 2. The Cloudflare origin-pull CA (`origin-pull-ca.pem`, this directory)
 
-This is what makes **Authenticated Origin Pulls** work — Cloudflare dashboard → **SSL/TLS →
-Origin Server**, enable **"Authenticated Origin Pulls"**, then download **"Cloudflare Origin CA
-Root Certificate"** from the same page. It's the same fixed, public certificate for every
-Cloudflare account (not customer-specific) — but its exact bytes are still a TLS trust anchor, so
-this repo asks you to fetch it yourself rather than trusting a copy pasted in by an agent. Place
-it on the VPS at:
+This is what makes **Authenticated Origin Pulls** work. Cloudflare dashboard → **SSL/TLS →
+Origin Server**, enable **"Authenticated Origin Pulls"** — but do **NOT** download the
+"Cloudflare Origin CA Root Certificate" shown on that same page; that one verifies *origin*
+certificates (the opposite direction, and not what `client_auth` here checks). The certificate
+that signs Cloudflare's own client certs for origin pulls is a separate, fixed file Cloudflare
+publishes directly:
 
-```
-/opt/ammari/cloudflare/origin-pull-ca.pem
+```bash
+curl -fsSL https://developers.cloudflare.com/ssl/static/authenticated_origin_pull_ca.pem \
+  -o /opt/ammari/cloudflare/origin-pull-ca.pem
 ```
 
-This is what `deploy/Caddyfile`'s `client_auth { trust_pool file { pem_file ... } } }` reads —
-without it, Caddy will reject every request (nothing to verify client certs against), which is
-the fail-closed behavior you want if this step is ever skipped.
+Confirmed (during development) to be a self-signed cert with
+`CN=origin-pull.cloudflare.net, OU=Origin Pull`, valid until 2029 — same for every Cloudflare
+account, not customer-specific, which is why a `curl` one-liner is enough; no dashboard download
+needed for this file at all. This is what `deploy/Caddyfile`'s
+`client_auth { trust_pool file { pem_file ... } } }` reads — without it, Caddy will reject every
+request (nothing to verify client certs against), which is the fail-closed behavior you want if
+this step is ever skipped.
 
 ## Verify before relying on either
 

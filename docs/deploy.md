@@ -61,22 +61,45 @@ SSH in as `ubuntu` for this whole section.
    - **Create Certificate** → download both files → place on the VPS at
      `/opt/ammari/caddy/certs/origin.pem` and `origin.key` (`chmod 600` the key). See
      `deploy/cloudflare/README.md` for exact hostnames to include.
-   - Enable **Authenticated Origin Pulls**, then download **"Cloudflare Origin CA Root
-     Certificate"** → place it at `/opt/ammari/cloudflare/origin-pull-ca.pem`.
+   - Enable **Authenticated Origin Pulls**. **Do not** download the "Cloudflare Origin CA Root
+     Certificate" shown on this page for this step — that cert verifies *origin* certificates
+     (the other direction), not the client certificate Cloudflare itself presents on origin
+     pulls. The correct, fixed CA for that is published directly by Cloudflare; fetch it with:
+     ```bash
+     curl -fsSL https://developers.cloudflare.com/ssl/static/authenticated_origin_pull_ca.pem \
+       -o /opt/ammari/cloudflare/origin-pull-ca.pem
+     ```
+     (same for every Cloudflare account — see `deploy/cloudflare/README.md` for how this was
+     confirmed). This is exactly what `deploy/Caddyfile`'s `client_auth { trust_pool file {
+     pem_file /etc/caddy/cloudflare/origin-pull-ca.pem } }` reads.
 3. Confirm `ammari.my.id`/`www`/`admin.ammari.my.id` DNS records are proxied (orange cloud) —
    should already be true per §0.
+
+**File permissions, confirmed:** the official `caddy:2.10.2` image runs its process as root
+inside the container (checked directly — `docker run --rm --entrypoint sh caddy:2.10.2 -c
+whoami` → `root`), and root bypasses the owner/group permission check on a file — so `chmod 600`
+on `origin.key` and `origin-pull-ca.pem`, owned by whichever user fetched them (typically
+`deploy`), is fine as-is. No `chown` to a Caddy-specific user, and no looser mode, needed.
 
 ## 3. GitHub repository settings
 
 1. **Settings → Actions → General → Workflow permissions**: set to "Read and write permissions"
    (needed for `GITHUB_TOKEN` to push to GHCR).
-2. **Settings → Secrets and variables → Actions**, add:
+2. **Settings → Environments → New environment**, name it exactly `dev` (the workflow's `deploy`
+   job references `environment: dev`, which must match). Under that environment's own
+   **Environment secrets** (not the repository-level **Secrets and variables → Actions** page),
+   add:
    | Secret | Value |
    |---|---|
    | `DEPLOY_SSH_HOST` | `43.129.55.61` |
    | `DEPLOY_SSH_USER` | `deploy` |
    | `DEPLOY_SSH_KEY` | contents of `ammari_deploy_key` (the private half from step 1.3) |
    | `DEPLOY_SSH_KNOWN_HOSTS` | the output saved from step 1.4 |
+
+   Environment secrets, not repository secrets, deliberately: prod will get its own
+   `production` environment later, reusing these same four secret names with its own values,
+   gated by **required reviewers** on that environment — a deploy to prod then needs an explicit
+   human approval click in the Actions run, which a plain repository secret can't express.
 
 ## 4. Fill in the real env files
 

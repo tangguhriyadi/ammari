@@ -146,6 +146,11 @@ jobs:
     needs: [plan, build]
     if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
+    # The DEPLOY_SSH_* secrets this job reads are GitHub Environment secrets on the "dev"
+    # environment, not repository secrets (docs/deploy.md §3) — prod reuses the same four secret
+    # names under its own "production" environment later, with required reviewers gating it.
+    # Applies to the rollback path too: rollback runs this same job, just with `build` skipped.
+    environment: dev
     steps:
       - uses: actions/checkout@v4
 

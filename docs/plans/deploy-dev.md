@@ -47,10 +47,12 @@ VPS — see Facts below), not rebuilt from scratch.
      to the VPS IP, bypassing Cloudflare) **must fail** — proves the origin-pull requirement is
      actually enforced, not just configured.
    - The Cloudflare origin-pull CA certificate's exact bytes are **not hand-transcribed into this
-     repo** — getting a TLS trust anchor subtly wrong is worse than not automating it at all. The
-     owner downloads it from the Cloudflare dashboard (SSL/TLS → Origin Server →
-     "Authenticated Origin Pulls") and places it on the server; `deploy/cloudflare/README.md`
-     documents exactly where.
+     repo** — getting a TLS trust anchor subtly wrong is worse than not automating it at all. It's
+     a fixed file Cloudflare publishes directly (NOT the "Origin CA Root Certificate" the
+     dashboard offers on the same Authenticated-Origin-Pulls page — that one verifies origin
+     certs, the opposite direction; a wrong first draft of this plan conflated the two), fetched
+     with a one-line `curl` straight to the server; `deploy/cloudflare/README.md` and
+     `docs/deploy.md` §2 have the exact command.
 2. **Images are environment-agnostic.** No `NEXT_PUBLIC_*` vars exist in either app today
    (verified by grep) and nothing else is baked in per-environment at build time. The only
    values set during the Docker `build` stage are harmless, identical-across-environments
@@ -274,3 +276,30 @@ Everything else the reviewer checked (the rsync excludes' anchoring, the Caddy `
 `trust_pool`/`trusted_proxies` directives, `docker-compose.yml`'s network isolation, both
 `/api/health` route handlers, the Dockerfiles' build-stage placeholder secrets never reaching the
 runtime image) came back clean — no flaws found.
+
+## Post-review owner corrections
+
+Two fixes caught by the owner before the first real deploy, neither surfaced by the automated
+reviews above:
+
+1. **GitHub Environments, not repository secrets.** The four `DEPLOY_SSH_*` secrets belong on a
+   GitHub **Environment** named `dev` (Settings → Environments → Environment secrets), not the
+   repository-level secrets page — so prod can later reuse the same four secret names under its
+   own `production` environment, gated by required reviewers (a plain repository secret can't
+   express that approval gate). Added `environment: dev` to the workflow's `deploy` job (the only
+   job that reads those secrets — `build` only uses the built-in `GITHUB_TOKEN`); this covers the
+   rollback path too, since rollback runs the same `deploy` job with `build` skipped. Updated
+   `docs/deploy.md` §3 to describe the Environment setup instead of the repository secrets page.
+2. **Wrong Cloudflare certificate named for Authenticated Origin Pulls.** The original runbook/
+   README told the owner to download the "Cloudflare Origin CA Root Certificate" from the
+   dashboard for this — that cert verifies *origin* certificates (the other direction); it's not
+   what Cloudflare's own client certificate on an origin pull is signed by. The correct CA is a
+   separate, fixed file Cloudflare publishes directly at
+   `https://developers.cloudflare.com/ssl/static/authenticated_origin_pull_ca.pem` — confirmed by
+   actually fetching it and checking its subject (`CN=origin-pull.cloudflare.net, OU=Origin
+   Pull`, valid to 2029). Fixed `docs/deploy.md` §2 and `deploy/cloudflare/README.md` to fetch it
+   with a one-line `curl` instead of a dashboard download; `deploy/Caddyfile`'s own
+   `trust_pool file { pem_file ... }` path was already correct and needed no change. Also
+   confirmed (by actually running `caddy:2.10.2` and checking) that Caddy's official image runs
+   as root in-container, so a `chmod 600` file owned by `deploy` is readable by it as-is — no
+   permission adjustment needed, documented in both files so this isn't re-litigated later.
