@@ -8,8 +8,8 @@ export default async function SizeChartBaruPage() {
 
   return (
     <>
-      <Breadcrumb items={[...rootCrumbs("/content/size-charts"), { label: "Tambah size chart" }]} />
-      <PageHeader title="Tambah Size Chart" />
+      <Breadcrumb items={[...rootCrumbs("/content/size-charts"), { label: "Tambah tabel ukuran" }]} />
+      <PageHeader title="Tambah Tabel Ukuran" />
       <SizeChartForm />
     </>
   );

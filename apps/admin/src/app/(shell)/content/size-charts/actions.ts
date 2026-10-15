@@ -22,7 +22,7 @@ const sizeChartRowSchema = z.object({
 });
 
 const sizeChartSchema = z.object({
-  name: z.string().trim().min(1, "Nama size chart wajib diisi."),
+  name: z.string().trim().min(1, "Nama tabel ukuran wajib diisi."),
   // Exactly one row per CUTTING_SIZES entry — validated more specifically (which sizes, in
   // which order) by sizeChartQueries' own validateRows, so a malformed/incomplete submission
   // still gets a friendly Indonesian message rather than a raw DB CHECK violation.

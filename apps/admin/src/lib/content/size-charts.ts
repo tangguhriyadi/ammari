@@ -83,7 +83,7 @@ export async function getSizeChartDetail(id: string, db: Database = defaultDb): 
 function validateRows(rows: SizeChartRowInput[]): void {
   const sizes = rows.map((row) => row.size);
   if (sizes.length !== CUTTING_SIZES.length || !CUTTING_SIZES.every((size) => sizes.includes(size))) {
-    throw new ActionError("Size chart harus memiliki baris untuk setiap ukuran (XS, S, M, L, XL).");
+    throw new ActionError("Tabel ukuran harus memiliki baris untuk setiap ukuran (XS, S, M, L, XL).");
   }
   for (const row of rows) {
     if (row.heightRecommendationMaxCm < row.heightRecommendationMinCm) {
@@ -130,7 +130,7 @@ export async function updateSizeChart(
   validateRows(input.rows);
   return db.transaction(async (tx) => {
     const before = await getSizeChartDetail(id, tx);
-    if (!before) throw new ActionError("Size chart tidak ditemukan.");
+    if (!before) throw new ActionError("Tabel ukuran tidak ditemukan.");
 
     const [after] = await tx.update(sizeCharts).set({ name: input.name }).where(eq(sizeCharts.id, id)).returning();
     if (!after) throw new Error("failed to update size chart");
@@ -153,13 +153,13 @@ export async function updateSizeChart(
 export async function deleteSizeChart(id: string, actorStaffUserId: string | null, db: Database = defaultDb): Promise<void> {
   await db.transaction(async (tx) => {
     const before = await getSizeChartDetail(id, tx);
-    if (!before) throw new ActionError("Size chart tidak ditemukan.");
+    if (!before) throw new ActionError("Tabel ukuran tidak ditemukan.");
     try {
       await tx.delete(sizeChartRows).where(eq(sizeChartRows.sizeChartId, id));
       await tx.delete(sizeCharts).where(eq(sizeCharts.id, id));
     } catch (error) {
       if (isPostgresErrorCode(error, "23503")) {
-        throw new ActionError("Size chart masih dipakai oleh satu atau lebih produk, tidak bisa dihapus.");
+        throw new ActionError("Tabel ukuran masih dipakai oleh satu atau lebih produk, tidak bisa dihapus.");
       }
       throw error;
     }

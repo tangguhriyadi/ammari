@@ -50,7 +50,11 @@ test.describe("product highlights (Keunggulan)", () => {
     await page.getByRole("checkbox", { name: BREATHABLE, exact: true }).check();
     await expect(page.getByTestId("highlights-counter")).toHaveText("2/5");
 
-    await page.getByRole("button", { name: "Simpan", exact: true }).click();
+    // Scoped to the product form itself — the product EDIT page (reached below via
+    // page.goto(page.url())) also renders the Storefront section's own "Simpan" button
+    // (docs/plans/storefront-cms.md), which would otherwise be a second exact-text match on the
+    // same page for an owner session (owner holds content.manage too).
+    await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
     await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
     // Lets the click's OWN client-side router.push/refresh fully settle before the next line's
     // hard navigation — firing `page.goto` immediately after races that in-flight navigation
@@ -67,7 +71,10 @@ test.describe("product highlights (Keunggulan)", () => {
     await page.getByRole("checkbox", { name: BREATHABLE, exact: true }).uncheck();
     await page.getByRole("checkbox", { name: FLOWY, exact: true }).check();
     await expect(page.getByTestId("highlights-counter")).toHaveText("2/5");
-    await page.getByRole("button", { name: "Simpan", exact: true }).click();
+    // Scoped to the form — this click happens on the product EDIT page (reached via
+    // page.goto(page.url()) above), where the Storefront section's own "Simpan" button also
+    // renders for this owner session (see the scoping note earlier in this test).
+    await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
     await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
     await page.waitForLoadState("networkidle");
     await page.goto(page.url());
@@ -102,7 +109,8 @@ test.describe("product highlights (Keunggulan)", () => {
     await page.getByRole("checkbox", { name: "Tidak menerawang", exact: true }).uncheck();
     await page.getByRole("checkbox", { name: FALLS_PERFECTLY, exact: true }).uncheck();
     await expect(page.getByTestId("highlights-counter")).toHaveText("2/5");
-    await page.getByRole("button", { name: "Simpan", exact: true }).click();
+    // Scoped to the form — same reasoning as the earlier edit-page click above.
+    await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
     await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
     await page.waitForLoadState("networkidle");
     await page.goto(page.url());

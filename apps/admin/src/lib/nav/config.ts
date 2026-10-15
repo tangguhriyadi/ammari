@@ -3,6 +3,7 @@ import {
   Boxes,
   Factory,
   History,
+  Home,
   LayoutDashboard,
   Megaphone,
   Package,
@@ -114,11 +115,17 @@ export const NAV_ITEMS: readonly NavItem[] = [
     mobilePrimary: false,
   },
   {
-    // The future "Konten" area (docs/plans/storefront-cms.md) will eventually also hold the
-    // homepage section editors (session 4, not built yet) — this group is created now, with just
-    // this one item, rather than parking size charts under "Katalog" temporarily, so session 4
-    // only has to ADD items here, never rename/move this one later.
-    label: "Ukuran",
+    // The homepage section editors (docs/plans/storefront-cms.md, session 4) — Hero/Grid Produk/
+    // Feature Block/Kenapa Ammari all live under /content itself, not one nav item per section.
+    label: "Beranda",
+    href: "/content",
+    icon: Home,
+    group: "Konten",
+    permissionKeys: ["content.manage"],
+    mobilePrimary: false,
+  },
+  {
+    label: "Tabel Ukuran",
     href: "/content/size-charts",
     icon: Ruler,
     group: "Konten",

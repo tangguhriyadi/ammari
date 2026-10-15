@@ -1,83 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import sharp from "sharp";
 import { loginAs } from "./helpers/login";
+import { createPublishablePhotoReadyProduct, createSizeChart } from "./helpers/publishable-product";
 import { E2E_PAGINATION_PRODUCT_PREFIX, E2E_PRODUCTS_NO_FINANCE_EMAIL, E2E_STOREFRONT_EMAIL } from "./global-setup";
-
-async function jpegFixture(): Promise<Buffer> {
-  return sharp({ create: { width: 40, height: 40, channels: 3, background: { r: 120, g: 90, b: 90 } } }).jpeg().toBuffer();
-}
-
-/** Creates a fabric+color, an ACTIVE product with one M variant on that color, and uploads one
- * photo WITH alt text to that color — everything the required-photo invariant AND the
- * storefront publish-time alt-text check both need satisfied, so the Storefront section's
- * publish toggle can actually succeed later in the same test. Returns the product's detail
- * page URL. */
-async function createPublishablePhotoReadyProduct(page: Page, label: string): Promise<{ productId: string; productName: string }> {
-  const unique = `${label}-${Date.now()}`;
-
-  const fabricName = `E2E Bahan Storefront ${unique}`;
-  await page.goto("/fabrics/new");
-  await page.getByLabel("Nama bahan").fill(fabricName);
-  await page.getByLabel("Nama warna").fill("Sage");
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
-
-  const productName = `Contoh Gamis Storefront E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  await page.getByLabel("Harga dasar").fill("269.000");
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-  const productId = page.url().split("/products/")[1]!;
-
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
-  await expect(page.getByRole("heading", { name: productName })).toBeVisible();
-
-  const sageGroup = page
-    .locator('[data-testid^="photo-group-"]')
-    .filter({ has: page.getByRole("heading", { name: "Sage", exact: true }) });
-  await sageGroup.locator('input[type="file"]').setInputFiles({ name: "sage.jpg", mimeType: "image/jpeg", buffer: await jpegFixture() });
-  // Two separate "save" buttons exist in the DOM at once (a phone-only `sm:hidden` one with the
-  // `save-photos-button` testid, and a desktop-only `hidden sm:flex` plain "Simpan foto" button)
-  // — only one is ever actually visible at a given viewport, so :visible picks whichever one
-  // this test's current viewport shows, rather than hardcoding the mobile-only testid.
-  await page.getByTestId("unsaved-photos-bar").locator("button:visible").filter({ hasText: "Simpan" }).click();
-  const sageTile = sageGroup.getByTestId("photo-tile");
-  await expect(sageTile).toHaveCount(1, { timeout: 15_000 });
-
-  await sageTile.getByRole("button", { name: "Opsi foto" }).click();
-  await page.getByRole("menuitem", { name: "Ubah teks alternatif" }).click();
-  const altDialog = page.getByRole("dialog");
-  await altDialog.getByLabel("Teks alternatif").fill("Gamis warna Sage tampak depan");
-  await altDialog.getByRole("button", { name: "Simpan", exact: true }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-
-  return { productId, productName };
-}
-
-async function createSizeChart(page: Page, name: string): Promise<void> {
-  await page.goto("/content/size-charts/new");
-  await page.getByLabel("Nama size chart").fill(name);
-  const rows: Array<{ size: string; bust: number; length: number; sleeve: number }> = [
-    { size: "XS", bust: 86, length: 128, sleeve: 54 },
-    { size: "S", bust: 90, length: 130, sleeve: 55 },
-    { size: "M", bust: 94, length: 132, sleeve: 56 },
-    { size: "L", bust: 98, length: 134, sleeve: 57 },
-    { size: "XL", bust: 102, length: 136, sleeve: 58 },
-  ];
-  for (const { size, bust, length, sleeve } of rows) {
-    await page.locator(`#bust-${size}`).fill(String(bust));
-    await page.locator(`#length-${size}`).fill(String(length));
-    await page.locator(`#sleeve-${size}`).fill(String(sleeve));
-    await page.getByLabel(`Tinggi badan minimum untuk ukuran ${size}`).fill("150");
-    await page.getByLabel(`Tinggi badan maksimum untuk ukuran ${size}`).fill("165");
-  }
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await expect(page).toHaveURL(/\/content\/size-charts\/[0-9a-f-]+$/);
-}
 
 /** Writes "Gamis <b>syar'i</b> dan nyaman." as one paragraph, then a 2-item bullet list, using
  * only the toolbar buttons (>=44px touch targets per docs/plans/storefront-cms.md — no
@@ -101,10 +25,16 @@ async function writeFormattedDescription(page: Page): Promise<void> {
 async function runStorefrontFlow(page: Page, label: string): Promise<void> {
   const { productId, productName } = await createPublishablePhotoReadyProduct(page, label);
 
+  // Scoped to the Storefront section's own card throughout — the product EDIT page also has
+  // the main ProductForm's own "Simpan" button (plain text, same as this section's), so every
+  // control/button lookup below is scoped to data-testid="storefront-section" rather than the
+  // whole page.
+  const section = page.getByTestId("storefront-section");
+
   // --- Write a formatted description, save, and confirm it persists after reload. ---
-  await expect(page.getByRole("heading", { name: "Storefront", exact: true })).toBeVisible();
+  await expect(section.getByRole("heading", { name: "Toko online", exact: true })).toBeVisible();
   await writeFormattedDescription(page);
-  await page.getByRole("button", { name: "Simpan storefront" }).click();
+  await section.getByRole("button", { name: "Simpan" }).click();
   await page.waitForLoadState("networkidle");
 
   await page.goto(page.url());
@@ -117,12 +47,12 @@ async function runStorefrontFlow(page: Page, label: string): Promise<void> {
   // server error — the "sized" product has no size_chart_id yet at this point. The component
   // itself reverts the toggle back to OFF on a failed save (nothing was actually persisted), so
   // no extra click is needed to "undo" it afterward.
-  await page.getByRole("switch", { name: "Tayang di storefront" }).click();
-  await page.getByRole("button", { name: "Simpan storefront" }).click();
+  await section.getByRole("switch", { name: "Tayang di toko online" }).click();
+  await section.getByRole("button", { name: "Simpan" }).click();
   // Both the generic form error AND the Select's own FieldError can carry the same message —
   // `.first()` avoids a strict-mode violation from matching more than one `role="alert"`.
-  await expect(page.getByRole("alert").filter({ hasText: "size chart" }).first()).toBeVisible();
-  await expect(page.getByRole("switch", { name: "Tayang di storefront" })).toHaveAttribute("aria-checked", "false");
+  await expect(section.getByRole("alert").filter({ hasText: "tabel ukuran" }).first()).toBeVisible();
+  await expect(section.getByRole("switch", { name: "Tayang di toko online" })).toHaveAttribute("aria-checked", "false");
 
   // --- Create a size chart and assign it to this product. ---
   const chartName = `E2E Chart ${label} ${Date.now()}`;
@@ -131,12 +61,12 @@ async function runStorefrontFlow(page: Page, label: string): Promise<void> {
   await page.locator("#size-chart-picker").selectOption({ label: chartName });
 
   // --- Publish toggle: now succeeds (active + size chart assigned + alt text present). ---
-  await page.getByRole("switch", { name: "Tayang di storefront" }).click();
-  await page.getByRole("button", { name: "Simpan storefront" }).click();
+  await section.getByRole("switch", { name: "Tayang di toko online" }).click();
+  await section.getByRole("button", { name: "Simpan" }).click();
   await page.waitForLoadState("networkidle");
 
   await page.goto(page.url());
-  await expect(page.getByRole("switch", { name: "Tayang di storefront" })).toHaveAttribute("aria-checked", "true");
+  await expect(section.getByRole("switch", { name: "Tayang di toko online" })).toHaveAttribute("aria-checked", "true");
   await expect(page.locator("#size-chart-picker")).toHaveValue(/.+/);
 
   // Sanity: still the same product throughout.
@@ -157,10 +87,14 @@ test.describe("product storefront section", () => {
   test("a staff user without content.manage never sees the Storefront section or /content/size-charts", async ({ page }) => {
     await loginAs(page, E2E_PRODUCTS_NO_FINANCE_EMAIL); // products.manage only, no content.manage
 
-    await page.goto("/products");
+    // Searched, not just /products' default (page-1-sorted-by-name) listing — this suite's own
+    // "Contoh Gamis ..." fixtures sort alphabetically before "E2E Pagination Produk" and can
+    // push it past page 1 once enough of them exist across the whole run, same class of bug as
+    // "Produk" vs "Produksi" elsewhere in this app's e2e.
+    await page.goto(`/products?q=${encodeURIComponent(E2E_PAGINATION_PRODUCT_PREFIX)}`);
     await page.getByRole("link", { name: new RegExp(`${E2E_PAGINATION_PRODUCT_PREFIX} 00`) }).first().click();
     await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-    await expect(page.getByRole("heading", { name: "Storefront" })).toHaveCount(0);
+    await expect(page.getByTestId("storefront-section")).toHaveCount(0);
 
     await page.goto("/content/size-charts");
     await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();

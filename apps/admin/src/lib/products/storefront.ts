@@ -51,14 +51,14 @@ export async function updateProductStorefront(
     // pattern updateProduct already uses for fabric/closure immutability.
     if (input.isPublishedOnStorefront) {
       if (!before.isActive) {
-        throw new FieldError("isPublishedOnStorefront", "Produk harus aktif sebelum bisa ditayangkan di storefront.");
+        throw new FieldError("isPublishedOnStorefront", "Produk harus aktif sebelum bisa ditayangkan di toko online.");
       }
       if (before.sizeMode === "sized" && !input.sizeChartId) {
-        throw new FieldError("sizeChartId", "Pilih size chart sebelum menayangkan produk ukuran XS-XL ini di storefront.");
+        throw new FieldError("sizeChartId", "Pilih tabel ukuran sebelum menayangkan produk ukuran XS-XL ini di toko online.");
       }
       if (await hasImagesMissingAltText(id, tx)) {
         throw new ActionError(
-          "Semua foto produk harus memiliki teks alternatif sebelum bisa ditayangkan di storefront. Lengkapi di bagian Foto di bawah.",
+          "Semua foto produk harus memiliki teks alternatif sebelum bisa ditayangkan di toko online. Lengkapi di bagian Foto di bawah.",
         );
       }
     }
@@ -98,12 +98,12 @@ export async function updateProductStorefront(
     } catch (error) {
       // 23503: products.size_chart_id -> size_charts(id) ON DELETE RESTRICT — reached if the
       // chart was deleted concurrently between the form loading its options and this save.
-      if (isPostgresErrorCode(error, "23503")) throw new FieldError("sizeChartId", "Size chart tidak ditemukan.");
+      if (isPostgresErrorCode(error, "23503")) throw new FieldError("sizeChartId", "Tabel ukuran tidak ditemukan.");
       // 23514: products_is_published_on_storefront_active_check — reachable only via a race
       // (product deactivated concurrently between the pre-check above and this UPDATE); the
       // pre-check above already covers the common, non-racy path with the same message.
       if (isPostgresErrorCode(error, "23514")) {
-        throw new FieldError("isPublishedOnStorefront", "Produk harus aktif sebelum bisa ditayangkan di storefront.");
+        throw new FieldError("isPublishedOnStorefront", "Produk harus aktif sebelum bisa ditayangkan di toko online.");
       }
       throw error;
     }

@@ -40,17 +40,20 @@ export type HomepageSectionKey = (typeof HOMEPAGE_SECTION_KEYS)[number];
 // in apps/web. Not backed by its own DB CHECK: it lives inside a `why_ammari` JSONB content
 // value's `points[].icon` field (storefront_homepage_sections.draft_content/published_content),
 // not a dedicated column, so this set is enforced by the per-key Zod schema at save time instead
-// (a later session), not by Postgres. Labels live in packages/db/src/catalog/why-ammari.ts, same
-// key↔label/key↔icon split PRODUCT_HIGHLIGHT_KEYS already uses.
+// (a later session), not by Postgres — confirmed by grepping every shipped migration for these
+// key strings (none found) before this set was last revised, so revising it needs no migration.
+// Labels live in packages/db/src/catalog/why-ammari.ts, same key↔label/key↔icon split
+// PRODUCT_HIGHLIGHT_KEYS already uses. `bandung_made`/`trusted_by_customers` were dropped (owner
+// decision): no city mention on the storefront, and no unverifiable customer-count claim.
 export const WHY_AMMARI_ICON_KEYS = [
   "syari_design",
   "premium_fabric",
-  "handmade_craftsmanship",
-  "comfortable_fit",
+  "careful_tailoring",
+  "all_day_comfort",
   "easy_care",
+  "not_see_through",
+  "nursing_friendly",
   "responsive_service",
-  "trusted_by_customers",
-  "bandung_made",
 ] as const;
 export type WhyAmmariIconKey = (typeof WHY_AMMARI_ICON_KEYS)[number];
 

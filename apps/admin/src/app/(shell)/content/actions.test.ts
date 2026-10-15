@@ -1,0 +1,117 @@
+import { describe, expect, test, vi } from "vitest";
+
+// Same mocking strategy as content/size-charts/actions.test.ts — exercises requirePermission's
+// actual enforcement without a real session/DB.
+const { getStaffSessionMock } = vi.hoisted(() => ({ getStaffSessionMock: vi.fn() }));
+vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMock }));
+
+const {
+  saveHeroDraftAction,
+  saveProductGridDraftAction,
+  saveFeatureBlockDraftAction,
+  saveWhyAmmariDraftAction,
+  setHomepageSectionVisibilityAction,
+  publishHomepageAction,
+  discardHomepageDraftAction,
+} = await import("./actions");
+
+function sessionWithPermissions(permissionKeys: string[]) {
+  return {
+    staffUser: { id: "staff-1", name: "Test Staff", email: "staff@example.test", roleId: "role-1" },
+    role: { id: "role-1", key: "test_role", name: "Test Role" },
+    permissionKeys,
+  };
+}
+
+const VALID_HERO = {
+  isVisible: true,
+  content: { eyebrow: "", headline: "Headline", ctaLabel: "Lihat", ctaTarget: { type: "anchor" as const }, image: null },
+};
+const VALID_PRODUCT_GRID = { isVisible: true, content: { title: "Grid", tiles: [] } };
+const VALID_FEATURE_BLOCK = {
+  isVisible: true,
+  content: {
+    title: "Judul",
+    subtitle: "Subjudul",
+    ctaLabel: "Lihat",
+    linkedProduct: { productId: "11111111-1111-4111-8111-111111111111", fabricColorId: null },
+    image: null,
+  },
+};
+const VALID_WHY_AMMARI = { isVisible: true, content: { eyebrow: "", heading: "Kenapa Pilih Kami", points: [] } };
+
+describe("homepage content actions require content.manage, NOT products.manage", () => {
+  test.each([
+    ["saveHeroDraftAction", () => saveHeroDraftAction(VALID_HERO)],
+    ["saveProductGridDraftAction", () => saveProductGridDraftAction(VALID_PRODUCT_GRID)],
+    ["saveFeatureBlockDraftAction", () => saveFeatureBlockDraftAction(VALID_FEATURE_BLOCK)],
+    ["saveWhyAmmariDraftAction", () => saveWhyAmmariDraftAction(VALID_WHY_AMMARI)],
+    ["setHomepageSectionVisibilityAction", () => setHomepageSectionVisibilityAction("hero", true)],
+    ["publishHomepageAction", () => publishHomepageAction()],
+    ["discardHomepageDraftAction", () => discardHomepageDraftAction()],
+  ] as const)("%s rejects a session holding products.manage but NOT content.manage", async (_name, run) => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["products.manage"]));
+    await expect(run()).rejects.toThrow();
+  });
+
+  test("an unauthenticated session (null) redirects rather than proceeding", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(null);
+    await expect(saveHeroDraftAction(VALID_HERO)).rejects.toThrow();
+  });
+});
+
+describe("homepage content action validation (shape only — never reaches the DB)", () => {
+  test("saveHeroDraftAction rejects a blank headline", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const result = await saveHeroDraftAction({ ...VALID_HERO, content: { ...VALID_HERO.content, headline: "   " } });
+    expect(result.ok).toBe(false);
+  });
+
+  test("saveHeroDraftAction rejects a product CTA with no productId", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const result = await saveHeroDraftAction({
+      ...VALID_HERO,
+      content: { ...VALID_HERO.content, ctaTarget: { type: "product" as const, productId: "", fabricColorId: null } },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("saveProductGridDraftAction rejects a duplicate (productId, fabricColorId) tile pair", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const tile = { productId: "11111111-1111-4111-8111-111111111111", fabricColorId: null };
+    const result = await saveProductGridDraftAction({ isVisible: true, content: { title: "Grid", tiles: [tile, tile] } });
+    expect(result.ok).toBe(false);
+  });
+
+  test("saveFeatureBlockDraftAction rejects a missing linkedProduct", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const { title, subtitle, ctaLabel } = VALID_FEATURE_BLOCK.content;
+    const result = await saveFeatureBlockDraftAction({ isVisible: true, content: { title, subtitle, ctaLabel } as never });
+    expect(result.ok).toBe(false);
+  });
+
+  test("saveWhyAmmariDraftAction rejects a 5th point", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const point = { icon: "syari_design" as const, title: "Judul", text: "Teks" };
+    const result = await saveWhyAmmariDraftAction({
+      isVisible: true,
+      content: { eyebrow: "", heading: "Kenapa Pilih Kami", points: [point, point, point, point, point] },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("saveWhyAmmariDraftAction rejects an unknown icon key", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const result = await saveWhyAmmariDraftAction({
+      isVisible: true,
+      content: { eyebrow: "", heading: "Kenapa Pilih Kami", points: [{ icon: "not_a_real_icon", title: "Judul", text: "Teks" }] as never },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("setHomepageSectionVisibilityAction rejects an unknown section key", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const result = await setHomepageSectionVisibilityAction("not_a_real_key", true);
+    expect(result.ok).toBe(false);
+  });
+});

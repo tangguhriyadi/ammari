@@ -1,6 +1,16 @@
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { db as defaultDb } from "./client";
-import { channels, costAssumptions, costComponents, permissions, rolePermissions, roles, staffUsers } from "./schema";
+import {
+  channels,
+  costAssumptions,
+  costComponents,
+  HOMEPAGE_SECTION_KEYS,
+  permissions,
+  rolePermissions,
+  roles,
+  staffUsers,
+  storefrontHomepageSections,
+} from "./schema";
 import type { ChannelId } from "./schema";
 import {
   OWNER_ROLE_KEY,
@@ -29,6 +39,21 @@ async function upsertChannels(db: Database) {
   // type — cast back so `id` matches channels.id's `$type<ChannelId>()`.
   for (const [id, name] of Object.entries(CHANNEL_NAMES) as [ChannelId, string][]) {
     await db.insert(channels).values({ id, name }).onConflictDoUpdate({ target: channels.id, set: { name } });
+  }
+}
+
+// Ensures the 4 fixed homepage section rows exist (migration 0019's own idempotent INSERT
+// already does this for dev/prod) — ONLY re-synced here, never overwritten: onConflictDoNothing,
+// not onConflictDoUpdate (unlike upsertChannels), because a row that already exists may hold
+// real draft/published content an admin wrote, which a reseed must never clobber. This mirrors
+// upsertChannels/syncPermissionCatalog's own "migration ships it, seed.ts also keeps a fresh
+// local/test db in sync" dual mechanism (CLAUDE.md's database rule: ship in a migration, never
+// ONLY in seed.ts) — needed because `packages/db/test/e2e-db.ts` TRUNCATEs every table on each
+// e2e run and relies on THIS function, not a migration replay, to restore these 4 rows (a
+// already-applied migration's own INSERT never runs again).
+async function seedHomepageSections(db: Database) {
+  for (const key of HOMEPAGE_SECTION_KEYS) {
+    await db.insert(storefrontHomepageSections).values({ key }).onConflictDoNothing({ target: storefrontHomepageSections.key });
   }
 }
 
@@ -164,6 +189,7 @@ async function seedStaffUsers(db: Database) {
 
 export async function seed(db: Database = defaultDb) {
   await upsertChannels(db);
+  await seedHomepageSections(db);
   await syncPermissionCatalog(db);
   await seedSystemRoles(db);
   await seedInitialCostAssumptions(db);

@@ -170,9 +170,30 @@ the client), shape:
   letting the admin upload an arbitrary icon image would be a second, smaller image-upload
   pipeline for no real benefit over a well-chosen fixed set. New module
   `packages/db/src/catalog/why-ammari.ts` (mirroring `catalog/highlights.ts` exactly):
-  `WHY_AMMARI_ICON_KEYS` in `schema/constants.ts`, labels + canonical order here. **Proposed
-  initial key set** (confirm/edit before implementation — this is a first draft, not a final
-  answer the way the other 6 resolved questions are):
+  `WHY_AMMARI_ICON_KEYS` in `schema/constants.ts`, labels + canonical order here. **Resolved key
+  set** (owner-confirmed during session 4's implementation, replacing the earlier 8-key draft
+  below — `bandung_made`/`trusted_by_customers` dropped: no city mention on the storefront, and
+  no unverifiable customer-count claim):
+
+  | key | Indonesian label | admin icon (`apps/admin`) |
+  |---|---|---|
+  | `syari_design` | Desain Syar'i | `Shirt` |
+  | `premium_fabric` | Bahan Premium | `Gem` |
+  | `careful_tailoring` | Dijahit dengan Teliti | `Scissors` |
+  | `all_day_comfort` | Nyaman Seharian | `Wind` |
+  | `easy_care` | Mudah Dirawat | `Droplets` |
+  | `not_see_through` | Tidak Menerawang | `EyeOff` |
+  | `nursing_friendly` | Busui Friendly | `Baby` |
+  | `responsive_service` | Respons Cepat | `MessageCircle` |
+
+  Each key maps to one `lucide-react` icon per consuming app — `apps/admin`'s own mapping (its
+  icon picker) is above; `apps/web` picks its own mapping independently when it builds the
+  public section (session 7), same "key↔label in `packages/db`, key↔icon-component in the
+  consuming app" split `PRODUCT_HIGHLIGHT_KEYS` already uses. Not backed by a DB CHECK (lives
+  inside `why_ammari`'s JSONB content, Zod-validated only) and never written by any shipped
+  migration, confirmed before this key set was revised — so revising it needed no migration.
+
+  <details><summary>Earlier 8-key draft (superseded)</summary>
 
   | key | Indonesian label | why |
   |---|---|---|
@@ -185,9 +206,7 @@ the client), shape:
   | `trusted_by_customers` | Dipercaya Ribuan Pelanggan | social proof, no specific number claimed in the key itself |
   | `bandung_made` | Dibuat di Bandung | local-provenance/craft story |
 
-  Each key maps to one `lucide-react` icon in `apps/web` (exact icon chosen during
-  implementation — not a planning-level decision), same "key↔label in `packages/db`,
-  key↔icon-component in the consuming app" split `PRODUCT_HIGHLIGHT_KEYS` already uses.
+  </details>
 
 `ContentImage` = `{ storageKey: string, altText: string, width: number, height: number }`
 (optionally `mobileStorageKey`/`mobileWidth`/`mobileHeight` for the hero's optional separate
@@ -653,8 +672,8 @@ no version log), localization/multi-language (Indonesian-only, per CLAUDE.md).
 5. **PDP route is `/products/[slug]` from the start**; the `/products` catalog index comes later
    as separate (Phase 3) work. The homepage grid stays hand-curated, not catalog-driven.
 6. **"Kenapa Ammari" icons** come from a fixed, code-defined key set (same pattern as
-   `PRODUCT_HIGHLIGHT_KEYS`) — see the proposed 8-key table above; confirm or edit that specific
-   list before implementation (the *pattern* is decided, the *exact keys* are a first draft).
+   `PRODUCT_HIGHLIGHT_KEYS`) — see the resolved 8-key table above (owner-confirmed during
+   session 4, superseding the earlier draft kept there for history).
 7. **Access is permission-based**: `content.manage` (the only new permission this plan needs) is
    created via migration, granted by default to `super_admin`/`owner`, and assignable to any
    other role later purely through the roles/staff admin screen — no hardcoded role-name checks

@@ -12,17 +12,17 @@ export default async function SizeChartsPage() {
     <>
       <Breadcrumb items={rootCrumbs("/content/size-charts")} />
       <PageHeader
-        title="Size Chart"
+        title="Tabel Ukuran"
         description="Tabel ukuran (Lingkar dada, Panjang gamis, Panjang lengan, Rekomendasi tinggi badan) yang dipakai produk ber-ukuran XS–XL."
         actions={
           <Link href="/content/size-charts/new">
-            <Button>Tambah size chart</Button>
+            <Button>Tambah tabel ukuran</Button>
           </Link>
         }
       />
 
       {charts.length === 0 ? (
-        <EmptyState title="Belum ada size chart" description="Tambah size chart untuk mulai memakainya di halaman produk." />
+        <EmptyState title="Belum ada tabel ukuran" description="Tambah tabel ukuran untuk mulai memakainya di halaman produk." />
       ) : (
         <>
           <CardList>

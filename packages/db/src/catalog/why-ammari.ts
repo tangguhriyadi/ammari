@@ -10,12 +10,12 @@ export { WHY_AMMARI_ICON_KEYS, type WhyAmmariIconKey };
 export const WHY_AMMARI_ICON_LABELS: Record<WhyAmmariIconKey, string> = {
   syari_design: "Desain Syar'i",
   premium_fabric: "Bahan Premium",
-  handmade_craftsmanship: "Dijahit dengan Teliti",
-  comfortable_fit: "Nyaman Seharian",
+  careful_tailoring: "Dijahit dengan Teliti",
+  all_day_comfort: "Nyaman Seharian",
   easy_care: "Mudah Dirawat",
-  responsive_service: "Respon Cepat",
-  trusted_by_customers: "Dipercaya Ribuan Pelanggan",
-  bandung_made: "Dibuat di Bandung",
+  not_see_through: "Tidak Menerawang",
+  nursing_friendly: "Busui Friendly",
+  responsive_service: "Respons Cepat",
 };
 
 /** `WHY_AMMARI_ICON_KEYS` paired with its own label, in the one canonical order — the convenient

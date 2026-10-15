@@ -69,17 +69,17 @@ export function StorefrontSection({
   }
 
   return (
-    <div className="flex flex-col gap-4 rounded-lg border border-neutral-200 p-4">
-      <h2 className="text-lg font-semibold text-neutral-900">Storefront</h2>
+    <div className="flex flex-col gap-4 rounded-lg border border-neutral-200 p-4" data-testid="storefront-section">
+      <h2 className="text-lg font-semibold text-neutral-900">Toko online</h2>
 
       <Switch
-        label="Tayang di storefront"
+        label="Tayang di toko online"
         checked={values.isPublishedOnStorefront}
         onCheckedChange={(checked) => set("isPublishedOnStorefront", checked)}
         error={fieldErrors.isPublishedOnStorefront}
       />
       {!isActive && !values.isPublishedOnStorefront && (
-        <p className="text-sm text-neutral-600">Produk harus aktif terlebih dahulu sebelum bisa ditayangkan di storefront.</p>
+        <p className="text-sm text-neutral-600">Produk harus aktif terlebih dahulu sebelum bisa ditayangkan di toko online.</p>
       )}
 
       <RichTextEditor
@@ -108,7 +108,7 @@ export function StorefrontSection({
       ) : (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <Label htmlFor="size-chart-picker">Size chart</Label>
+            <Label htmlFor="size-chart-picker">Tabel ukuran</Label>
             <Link href="/content/size-charts" className="text-sm text-brand hover:underline">
               Kelola ukuran
             </Link>
@@ -126,7 +126,7 @@ export function StorefrontSection({
               </option>
             ))}
           </Select>
-          {!values.sizeChartId && <p className="text-sm text-neutral-600">Pilih size chart sebelum menayangkan produk ini.</p>}
+          {!values.sizeChartId && <p className="text-sm text-neutral-600">Pilih tabel ukuran sebelum menayangkan produk ini.</p>}
         </div>
       )}
 
@@ -138,7 +138,7 @@ export function StorefrontSection({
 
       <div className="flex justify-end">
         <Button type="button" onClick={handleSave} loading={pending}>
-          Simpan storefront
+          Simpan
         </Button>
       </div>
     </div>
