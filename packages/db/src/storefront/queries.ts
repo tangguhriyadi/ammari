@@ -7,9 +7,11 @@ import {
   products,
   productVariants,
   sizeChartRows,
+  stockMovements,
   storefrontHomepageSections,
 } from "../schema";
 import { CUTTING_SIZES, HOMEPAGE_SECTION_KEYS, type CuttingSize, type HomepageSectionKey, type Size, type SizeMode } from "../schema/constants";
+import { qualifiedColumn } from "../sql-helpers";
 
 // Replaces the old `getActiveProductBySlug` placeholder (deleted — it was a bare `.select()`,
 // exactly the anti-pattern this module must not repeat).
@@ -179,28 +181,20 @@ export async function getStorefrontProductBySlug(slug: string, db: Database = de
   // `available` is a boolean derived from a qty-only SUM — never the raw stock number, and
   // never any other column off stock_movements (value_amount stays untouched).
   //
-  // The subquery's correlation is written with hardcoded, explicitly table-qualified
-  // identifiers ("sm.sku"/"product_variants.sku"), NOT `${productVariants.sku}`-style column
-  // interpolation inside the `sql` template: drizzle-orm 0.45.3 renders an interpolated Column
-  // reference as a bare, unqualified identifier (just `"sku"`, never `"product_variants"."sku"`)
-  // when it appears inside a raw `sql` fragment rather than its own query-builder call. Since
-  // `stock_movements.sku` and `product_variants.sku` share the exact same column name, two bare
-  // `"sku"` references inside this subquery's scope both resolve to `stock_movements.sku` (the
-  // only "sku" column the subquery's own FROM clause can see) — Postgres accepts that silently
-  // (`"sku" = "sku"` is always true), so the subquery sums EVERY row in stock_movements, not
-  // just this one SKU's. Confirmed empirically against the real local Postgres by reproducing
-  // apps/admin/src/lib/stock/queries.ts's own identical `${stockMovements.qty}`/
-  // `${stockMovements.sku} = ${productVariants.sku}` pattern with two SKUs: it returned the
-  // SAME (wrong, summed-over-both) stock figure for both — see this session's report for the
-  // two admin call sites affected. `sm.sku`/`product_variants.sku` here are hardcoded SQL text,
-  // never user input, same safety argument schema/columns.ts's `checkIn`/`checkArraySubset`
-  // already give for their own `sql.raw` use.
+  // This correlated subquery (comparing stock_movements.sku to this query's own
+  // product_variants.sku) MUST use `qualifiedColumn()` for both sides, never bare
+  // `${table.column}` interpolation — see that helper's doc comment (packages/db/src/sql-helpers.ts)
+  // for the exact, confirmed drizzle-orm 0.45.3 bug this avoids: this query has no join (just a
+  // single `.from(productVariants)`), which is precisely the condition under which drizzle
+  // renders every interpolated column bare/unqualified, including ones belonging to a different
+  // table referenced only inside this subquery — silently turning the intended correlation into
+  // a self-comparison that sums every SKU's stock, not just this one's.
   const variants = await db
     .select({
       sku: productVariants.sku,
       fabricColorId: productVariants.fabricColorId,
       size: productVariants.size,
-      available: sql<boolean>`coalesce((select sum(sm.qty) from stock_movements sm where sm.sku = product_variants.sku), 0) > 0`,
+      available: sql<boolean>`coalesce((select sum(${qualifiedColumn(stockMovements, stockMovements.qty)}) from ${stockMovements} where ${qualifiedColumn(stockMovements, stockMovements.sku)} = ${qualifiedColumn(productVariants, productVariants.sku)}), 0) > 0`,
     })
     .from(productVariants)
     .where(and(eq(productVariants.productId, productRow.id), eq(productVariants.isActive, true)));

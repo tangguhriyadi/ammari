@@ -3,7 +3,14 @@ import { describe, expect, test } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
 import { insertProductVariant, insertStaffUser } from "@ammari/db/test-fixtures";
 import { fabricColors, fabrics, products, productVariants, stockMovements } from "@ammari/db/schema";
-import { adjustStock, getSkuDetail, listStockLedger, listStockOverview, saveStockCount } from "./queries";
+import {
+  adjustStock,
+  getSkuDetail,
+  listProductSkusForCount,
+  listStockLedger,
+  listStockOverview,
+  saveStockCount,
+} from "./queries";
 
 async function seedStock(tx: TestDatabase, sku: string, qty: number, unitCost = 0) {
   await tx.insert(stockMovements).values({ sku, qty, valueAmount: qty * unitCost, type: "production", refType: "manual" });
@@ -270,6 +277,65 @@ describe("read-path aggregates (real numbers, not stringified bigints)", () => {
       const row = rows.find((r) => r.sku === variant.sku);
       expect(row?.currentStock).toBe(4);
       expect(typeof row?.currentStock).toBe("number");
+    });
+  });
+
+  // Regression test for a real bug: getSkuDetail's currentStock subquery correlated
+  // stock_movements to product_variants via `${stockMovements.sku} = ${productVariants.sku}`
+  // inside a hand-written `(select ...)` fragment. drizzle-orm renders BOTH interpolated column
+  // references as the bare, unqualified identifier "sku" in that context, so the condition was
+  // actually "sku" = "sku" (always true) and the subquery summed EVERY SKU's stock in the whole
+  // table, not just this one. A single-SKU test (above) can never catch this — the sum "across
+  // all SKUs" and "for this one SKU" are identical when only one SKU exists in scope. This test
+  // seeds a SECOND, unrelated SKU with a very different stock level specifically to make the two
+  // sums diverge.
+  test("getSkuDetail's currentStock is isolated to its own SKU, not summed across every SKU", async () => {
+    await withRollback(async (tx) => {
+      const { variant: variantA } = await insertProductVariant(tx);
+      await seedStock(tx, variantA.sku, 10);
+
+      const { variant: variantB } = await insertProductVariant(tx); // a different fabric/product/SKU
+      await seedStock(tx, variantB.sku, 1000);
+
+      const detailA = await getSkuDetail(variantA.sku, tx);
+      const detailB = await getSkuDetail(variantB.sku, tx);
+      expect(detailA?.currentStock).toBe(10);
+      expect(detailB?.currentStock).toBe(1000);
+    });
+  });
+
+  // Same root cause and same reasoning as the test above, for listProductSkusForCount — the
+  // "Hitung Stok" (stock count) screen's own data source, which lists MULTIPLE SKUs of ONE
+  // product side by side. This is the function where the bug is most visible: every SKU of a
+  // multi-variant product showed the SAME (wrong, summed-over-all) figure, not just a single
+  // mislabeled lookup.
+  test("listProductSkusForCount reports each SKU's own currentStock, not one shared total", async () => {
+    await withRollback(async (tx) => {
+      const { fabric, color, product, variant: variantM } = await insertProductVariant(tx); // size "M" by default
+      await seedStock(tx, variantM.sku, 7);
+
+      // A SECOND variant of the SAME product (not insertVariantForProduct, which creates its
+      // own separate product) — the whole point is two SKUs under one productId, since that's
+      // exactly what the "Hitung Stok" screen lists side by side.
+      const [variantL] = await tx
+        .insert(productVariants)
+        .values({
+          sku: `SKU-${product.code}-L`,
+          productId: product.id,
+          fabricId: fabric.id,
+          fabricColorId: color.id,
+          closure: product.closure,
+          size: "L",
+        })
+        .returning();
+      if (!variantL) throw new Error("failed to insert second variant fixture");
+      await seedStock(tx, variantL.sku, 2);
+
+      const skus = await listProductSkusForCount(product.id, tx);
+      const rowM = skus.find((row) => row.sku === variantM.sku);
+      const rowL = skus.find((row) => row.sku === variantL.sku);
+      expect(rowM?.currentStock).toBe(7);
+      expect(rowL?.currentStock).toBe(2);
     });
   });
 

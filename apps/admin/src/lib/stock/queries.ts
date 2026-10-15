@@ -2,6 +2,7 @@ import "server-only";
 import { and, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { fabricColors, productionBatchItems, products, productVariants, staffUsers, stockMovements } from "@ammari/db/schema";
 import type { Size, StockAdjustmentReason } from "@ammari/db/schema";
+import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
@@ -136,7 +137,13 @@ export async function getSkuDetail(sku: string, db: Database = defaultDb): Promi
       colorHex: fabricColors.hex,
       productId: products.id,
       productName: products.name,
-      currentStock: sql<number>`coalesce((select sum(${stockMovements.qty})::int from ${stockMovements} where ${stockMovements.sku} = ${productVariants.sku}), 0)`,
+      // Hardened to use `qualifiedColumn()` (2026-10-15 incident) rather than bare
+      // `${table.column}` interpolation for this correlation — see that helper's doc comment
+      // (@ammari/db/sql-helpers) for the confirmed drizzle-orm 0.45.3 behavior this avoids. This
+      // specific query was NOT actually producing a wrong number (the two `innerJoin`s below
+      // happen to make drizzle qualify every column correctly here), but its correctness
+      // shouldn't depend on an incidental join staying present forever.
+      currentStock: sql<number>`coalesce((select sum(${qualifiedColumn(stockMovements, stockMovements.qty)})::int from ${stockMovements} where ${qualifiedColumn(stockMovements, stockMovements.sku)} = ${qualifiedColumn(productVariants, productVariants.sku)}), 0)`,
     })
     .from(productVariants)
     .innerJoin(products, eq(products.id, productVariants.productId))
@@ -377,7 +384,9 @@ export async function listProductSkusForCount(productId: string, db: Database = 
       size: productVariants.size,
       colorName: fabricColors.name,
       colorHex: fabricColors.hex,
-      currentStock: sql<number>`coalesce((select sum(${stockMovements.qty})::int from ${stockMovements} where ${stockMovements.sku} = ${productVariants.sku}), 0)`,
+      // Hardened the same way and for the same reason as getSkuDetail's own currentStock above
+      // — see that function's comment and @ammari/db/sql-helpers's qualifiedColumn doc comment.
+      currentStock: sql<number>`coalesce((select sum(${qualifiedColumn(stockMovements, stockMovements.qty)})::int from ${stockMovements} where ${qualifiedColumn(stockMovements, stockMovements.sku)} = ${qualifiedColumn(productVariants, productVariants.sku)}), 0)`,
     })
     .from(productVariants)
     .innerJoin(fabricColors, eq(fabricColors.id, productVariants.fabricColorId))
