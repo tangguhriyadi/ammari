@@ -64,10 +64,15 @@ SSH in as `ubuntu` for this whole section.
    - **Create Certificate** → download both files → place on the VPS at
      `/opt/ammari/caddy/certs/origin.pem` and `origin.key` (`chmod 600` the key). See
      `deploy/cloudflare/README.md` for exact hostnames to include.
-   - Enable **Authenticated Origin Pulls**. **Do not** download the "Cloudflare Origin CA Root
-     Certificate" shown on this page for this step — that cert verifies *origin* certificates
-     (the other direction), not the client certificate Cloudflare itself presents on origin
-     pulls. The correct, fixed CA for that is published directly by Cloudflare; fetch it with:
+   - Enable **Authenticated Origin Pulls — the Global toggle specifically**, not Zone-level or
+     Per-hostname (three separate toggles on this page — see `deploy/cloudflare/README.md` for
+     what each one means and why Zone-level must stay OFF for dev: with it ON and no certificate
+     uploaded, Cloudflare presents no client cert at all, and every request fails with a generic
+     **Cloudflare error 520**, not an obviously TLS-related error). **Do not** download the
+     "Cloudflare Origin CA Root Certificate" shown on this page for this step — that cert
+     verifies *origin* certificates (the other direction), not the client certificate Cloudflare
+     itself presents on origin pulls. The correct, fixed CA for Global AOP is published directly
+     by Cloudflare; fetch it with:
      ```bash
      curl -fsSL https://developers.cloudflare.com/ssl/static/authenticated_origin_pull_ca.pem \
        -o /opt/ammari/cloudflare/origin-pull-ca.pem
@@ -145,21 +150,47 @@ run. It will:
 ### Verify the Cloudflare boundary actually works
 
 ```bash
-curl -I https://43.129.55.61 -H "Host: ammari.my.id" -k
+curl -Ik https://ammari.my.id --resolve ammari.my.id:443:43.129.55.61 --max-time 10
+curl -Ik https://admin.ammari.my.id --resolve admin.ammari.my.id:443:43.129.55.61 --max-time 10
 ```
-This bypasses Cloudflare entirely (talking straight to the VPS IP). It **must fail** — a TLS
-handshake error or connection reset, not an HTTP response — because Caddy requires the
-Cloudflare origin-pull client certificate, which curl here doesn't have. If you get an actual
-HTTP response instead, STOP and fix the Cloudflare/Caddy setup before trusting anything about
-this environment: it means `cf-connecting-ip` (and therefore the auth rate limiter, §10.1) can
-be spoofed by anyone who finds the VPS IP.
+**Not** `curl -I https://<IP> -H "Host: ..."` — that sets the Host *header*, which is only read
+after a TLS handshake has already completed, but says nothing to the handshake itself. Without
+matching SNI, Caddy can't pick the right site block at all and curl fails with an unrelated
+TLS error (observed: `tlsv1 alert internal error`) that tells you nothing about whether
+Authenticated Origin Pulls is actually enforced. `--resolve HOST:PORT:IP` keeps the real
+hostname in both the SNI and the Host header while still routing the connection straight to the
+VPS IP, bypassing Cloudflare's network — that's the part that actually exercises the thing
+you're testing.
+
+Both commands **must fail** with a TLS-layer error, not an HTTP response — Caddy requires the
+Cloudflare origin-pull client certificate, which curl here doesn't have. Observed failure:
+OpenSSL/LibreSSL `error:...:SSL routines:...:reason(1116)` — TLS alert `certificate_required`,
+sent *after* the handshake (TLS 1.3 behavior — see `deploy/cloudflare/README.md` on why the same
+underlying issue shows up as Cloudflare error 520 when Cloudflare itself is the one hitting it).
+The `-k` matters here too: without it, curl would fail even earlier for an unrelated reason — the
+Origin Certificate isn't signed by a publicly-trusted CA (it's only trusted via the special
+Cloudflare Full-strict relationship), so a normal cert-verifying curl call never even reaches the
+client-auth check. If either command gets an actual HTTP response instead of a TLS error, STOP
+and fix the Cloudflare/Caddy setup before trusting anything about this environment: it means
+`cf-connecting-ip` (and therefore the auth rate limiter, §10.1) can be spoofed by anyone who
+finds the VPS IP.
 
 Then confirm the real path works: `https://ammari.my.id` and `https://admin.ammari.my.id` in a
 browser.
 
-## 7. One-time bootstrap: first super-admin
+## 7. One-time bootstrap: first staff account(s)
 
-Never automated — run this once, by hand, after the first successful deploy:
+Never automated — run this once, by hand, after the first successful deploy. `packages/db/src/
+seed.ts` reads up to two independent email/name pairs, each creating at most one `staff_users`
+row with a specific role:
+
+| Env vars | Role created | What that role can do (`packages/db/src/rbac/permissions.ts`) |
+|---|---|---|
+| `SEED_SUPER_ADMIN_EMAIL` / `SEED_SUPER_ADMIN_NAME` | `super_admin` | **Every** permission in the catalog, including `roles.manage`, `staff.manage`, `audit_log.view`. |
+| `SEED_OWNER_EMAIL` / `SEED_OWNER_NAME` | `owner` | Every permission **except** `roles.manage`, `staff.manage`, `audit_log.view` — full business access (orders, stock, products, ...), but can't manage other staff accounts, roles, or view the audit log. |
+
+Set whichever pair(s) you actually want — both in the same invocation if you want two separate
+people/accounts, or just one if you only need one account right now:
 ```bash
 docker run --rm --env-file /opt/ammari/env/admin.env \
   -e SEED_SUPER_ADMIN_EMAIL="you@example.com" -e SEED_SUPER_ADMIN_NAME="Your Name" \
@@ -168,9 +199,22 @@ docker run --rm --env-file /opt/ammari/env/admin.env \
 ```
 (not `pnpm exec tsx ...` — that goes through corepack, which can hang on a download
 confirmation prompt the first time it runs as a given user; see `packages/db/Dockerfile`'s own
-comment on its `CMD` for why this image never invokes `pnpm` at runtime at all.)
-Idempotent (`onConflictDoNothing` — see `packages/db/src/seed.ts`), safe to re-run. Log in at
-`https://admin.ammari.my.id` with that email to confirm.
+comment on its `CMD` for why this image never invokes `pnpm` at runtime at all.) Leaving a pair
+unset is fine — the script logs `skipping staff user seed: SEED_OWNER_EMAIL / SEED_OWNER_NAME
+not set` for whichever pair you didn't provide and moves on; it never fails because one pair is
+missing.
+
+**Important — this inserts, it never updates.** Each pair does `INSERT ... ON CONFLICT (email)
+DO NOTHING`, keyed on `staff_users.email`. If you run the seed once for an email under
+`SEED_SUPER_ADMIN_*`, then later run it again for the **same email** under `SEED_OWNER_*` (or
+vice versa, or with a different name), the second run's insert is a **silent no-op**: no new
+row (email is unique), no update to the existing row — that person keeps whichever role and name
+were set by whichever invocation inserted them **first**, and the script prints nothing to tell
+you a conflict happened. Changing an existing staff member's role or name is a job for the admin
+UI (`/roles-staff`) once you're logged in, not for re-running this script with different values.
+
+Idempotent in the safe sense (re-running never duplicates a row or crashes), but not a "fix this
+person's role" tool. Log in at `https://admin.ammari.my.id` with the email you seeded to confirm.
 
 ## Rollback
 
@@ -191,3 +235,40 @@ Rare (Cloudflare publishes changes occasionally), but when it happens:
 ```
 Regenerates `deploy/cloudflare-ips.txt` and the two derived Caddy snippets. Commit the result;
 the next deploy syncs it to the server and reloads Caddy automatically.
+
+## Troubleshooting
+
+Real failures hit during the first dev rollout, and their fixes:
+
+- **Migrations fail with `28P01 password authentication failed`, but the password is right.**
+  Sumopod's direct port (`65434`, §0) expects the username **without** the `.jkt1_003` suffix
+  shown elsewhere in Sumopod's dashboard — using the suffixed form on this port authenticates as
+  a different (or nonexistent) role and fails with this exact error, which looks like a wrong
+  password but isn't. Double-check `DATABASE_URL` in `env/admin.env`/`env/web.env` strips it.
+- **`admin`/`web` report "unhealthy" in `docker compose ps`, even though the site works in a
+  browser.** Next's standalone `server.js` binds to `$HOSTNAME`; Docker exports that as the
+  container ID unless the image overrides it, so the server ends up listening on an address
+  Docker Compose's own in-container healthcheck (which curls `127.0.0.1`) can't reach, while
+  external traffic via Cloudflare/Caddy still gets through fine — which is exactly why this can
+  look like "it works, but Docker disagrees." Fixed by `ENV HOSTNAME=0.0.0.0` in both
+  `apps/admin/Dockerfile` and `apps/web/Dockerfile`; if it ever recurs, check that ENV line is
+  still there after any Dockerfile edit.
+- **Every request gets Cloudflare error 520.** Almost always the Authenticated Origin Pulls
+  **Zone-level** toggle is ON with no custom client certificate uploaded — see
+  `deploy/cloudflare/README.md`'s "three separate AOP toggles" section. Dev should only ever
+  have **Global** AOP enabled. Confirm with the `curl --resolve ... -k` check above: a clean TLS
+  `certificate_required` alert there (not a 520) means AOP is configured correctly and the 520
+  is something else; if that curl check itself returns an actual HTTP response, something is
+  mis-set in the other direction (origin trusting nothing, effectively).
+- **Reading logs and health status on the VPS.** As `deploy` (not `ubuntu` or `root` —
+  `/opt/ammari` and the running containers are owned by/started as `deploy`):
+  ```bash
+  sudo -iu deploy
+  cd /opt/ammari
+  docker compose ps                                              # overall status
+  docker compose logs --tail 100 admin                           # or web / caddy
+  docker inspect --format '{{json .State.Health}}' $(docker compose ps -q admin) | python3 -m json.tool
+  ```
+  (`deploy/remote-deploy.sh`'s own `poll_health` now prints the same two things automatically
+  into the GitHub Actions log when a deploy's post-deploy health check fails — this is for
+  digging in further by hand, or for a failure that happens well after a deploy succeeded.)

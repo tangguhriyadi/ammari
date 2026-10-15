@@ -6,6 +6,14 @@
 # Manual run with `sha` set is a ROLLBACK: skips the build entirely and redeploys images already
 # pushed under that SHA (never re-runs their migrator — see CLAUDE.md's migration
 # backward-compatibility rule, which is exactly what makes this safe).
+#
+# `runs-on: ubuntu-24.04` (not `ubuntu-latest`) and every action version below pinned to node24:
+# `ubuntu-latest` moves to Ubuntu 26 on 19 Oct 2026, and GitHub forces JS actions onto the
+# node24 runtime starting mid-2026 (node20 removed later that year) — `actions/checkout@v4`,
+# `docker/setup-buildx-action@v3`, `docker/login-action@v3`, `docker/build-push-action@v6` were
+# all still on node20. Versions below (checkout v7.0.1, setup-buildx-action v4.4.1,
+# login-action v4.6.0, build-push-action v7.4.0 at the time of this bump) were confirmed
+# directly against each action's own `action.yml` (`runs: using: node24`), not guessed.
 name: Deploy (dev)
 
 on:
@@ -28,13 +36,13 @@ concurrency:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
       is_rollback: ${{ steps.resolve.outputs.is_rollback }}
       images: ${{ steps.affected.outputs.images }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -104,18 +112,18 @@ jobs:
   build:
     needs: plan
     if: needs.plan.outputs.is_rollback == 'false' && needs.plan.outputs.images != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         image: ${{ fromJson(needs.plan.outputs.images) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.sha }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -132,7 +140,7 @@ jobs:
 
       # VPS architecture is x86_64 (confirmed via `uname -m` on the VPS,
       # docs/plans/deploy-dev.md) — building for linux/amd64 only, no QEMU/cross-build needed.
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ steps.dockerfile.outputs.path }}
@@ -145,14 +153,14 @@ jobs:
   deploy:
     needs: [plan, build]
     if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The DEPLOY_SSH_* secrets this job reads are GitHub Environment secrets on the "dev"
     # environment, not repository secrets (docs/deploy.md §3) — prod reuses the same four secret
     # names under its own "production" environment later, with required reviewers gating it.
     # Applies to the rollback path too: rollback runs this same job, just with `build` skipped.
     environment: dev
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up SSH
         env:

@@ -359,3 +359,56 @@ Files touched by this round: `apps/admin/Dockerfile`, `apps/web/Dockerfile` (HOS
 `packages/db/Dockerfile` (CMD, comment updates), `packages/db/src/migrate.ts` (new),
 `packages/db/package.json` (`db:migrate` script), `deploy/remote-deploy.sh` (migrator
 invocation + failure diagnostics), `docs/deploy.md` (§0, §6, §7).
+
+## First dev deploy is live — post-rollout follow-ups
+
+Five more fixes from the now-live dev environment, none of which were failures this time —
+things the owner caught while confirming the setup was actually correct, not just working by
+accident:
+
+1. **Authenticated Origin Pulls has three separate toggles** (Global / Zone-level /
+   Per-hostname), and dev only ever enables Global. With Zone-level ON and no custom client cert
+   uploaded, Cloudflare presents no client certificate at all — and because TLS 1.3 delivers the
+   "certificate required" alert *after* the handshake, Cloudflare's edge reports that to the
+   browser as a generic error 520, not anything TLS-shaped. Documented in both
+   `deploy/cloudflare/README.md` and `docs/deploy.md` §2, including what prod would need instead
+   (its own uploaded client cert + `trust_pool` pointed at its own CA, not Cloudflare's shared
+   one).
+2. **The bypass-verification curl command was testing the wrong thing.** `curl -I https://<IP>
+   -H "Host: ..."` sets the Host *header* post-handshake but leaves SNI pointed at nothing
+   Caddy can match, failing for an unrelated reason (`tlsv1 alert internal error`) that proves
+   nothing about Authenticated Origin Pulls. Fixed to `curl -Ik https://<hostname> --resolve
+   <hostname>:443:<IP>` — keeps the real hostname in both SNI and Host while still routing
+   straight to the VPS IP. Expected failure is now a TLS `certificate_required` alert
+   specifically, confirmed against the real deployed server.
+3. **The bootstrap docs didn't explain `SEED_SUPER_ADMIN_*` vs `SEED_OWNER_*`.** Documented the
+   exact permission difference (`super_admin` = every permission; `owner` = everything except
+   `roles.manage`/`staff.manage`/`audit_log.view`, from `packages/db/src/rbac/permissions.ts`)
+   and the sharper point: `seedStaffUserFromEnv`'s `ON CONFLICT (email) DO NOTHING` means seeding
+   the SAME email under both vars (in separate invocations) is a **silent no-op** on the second
+   one — the row keeps whichever role/name the FIRST successful insert gave it, with zero log
+   output telling you a conflict happened. Not a bug (no duplication, nothing corrupted), but a
+   real footgun if the intent was "fix this person's role by re-running seed" — that's what
+   `/roles-staff` is for instead. **Simplification proposed, not implemented** (per instruction):
+   keep insert-only semantics (safer default — a stale env var on an accidental future bootstrap
+   re-run can never silently overwrite a real staff member's name/role), but add an explicit log
+   line when the conflict fires, so a no-op is never silent. Changing to `onConflictDoUpdate`
+   was considered and rejected as the default — more useful for intentional role changes, but
+   turns every accidental re-run into a silent overwrite risk instead of a silent no-op risk,
+   which is worse for a script that's supposed to be safe to run more than once.
+4. **GitHub Actions runner/action versions were headed for deprecation.** `ubuntu-latest` moves
+   to Ubuntu 26 on 19 Oct 2026, and GitHub forces JS actions onto node24 starting mid-2026
+   (node20 removed later that year) — `actions/checkout@v4`, `docker/setup-buildx-action@v3`,
+   `docker/login-action@v3`, and `docker/build-push-action@v6` were all still node20. Pinned
+   `runs-on: ubuntu-24.04` on all three jobs; bumped to `checkout@v7`, `setup-buildx-action@v4`,
+   `login-action@v4`, `build-push-action@v7` — versions and node24 confirmed directly against
+   each action's own `action.yml` via GitHub's API and raw file contents, not guessed from a web
+   search (which turned up conflicting, unverifiable claims from third-party mirrors).
+5. Added a `## Troubleshooting` section to `docs/deploy.md` capturing the Sumopod username
+   (`28P01` symptom), the `HOSTNAME` fix, the Cloudflare 520/AOP-toggle connection, and how to
+   read container/health logs on the VPS as `deploy` via `sudo -iu deploy`.
+
+Files touched by this round: `.github/workflows/deploy-dev.yml` (runner/action versions),
+`deploy/cloudflare/README.md`, `docs/deploy.md` (§2, §6, §7, new Troubleshooting section).
+No code changes needed for item 3 (seed.ts) — documentation and a deferred proposal only, per
+instruction.

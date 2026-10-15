@@ -25,12 +25,31 @@ owner/group permission check) — so `chmod 600`, owned by whichever user did th
 
 ## 2. The Cloudflare origin-pull CA (`origin-pull-ca.pem`, this directory)
 
-This is what makes **Authenticated Origin Pulls** work. Cloudflare dashboard → **SSL/TLS →
-Origin Server**, enable **"Authenticated Origin Pulls"** — but do **NOT** download the
-"Cloudflare Origin CA Root Certificate" shown on that same page; that one verifies *origin*
-certificates (the opposite direction, and not what `client_auth` here checks). The certificate
-that signs Cloudflare's own client certs for origin pulls is a separate, fixed file Cloudflare
-publishes directly:
+This is what makes **Authenticated Origin Pulls** work. Cloudflare's dashboard has **three**
+separate AOP toggles under **SSL/TLS → Origin Server** — picking the wrong one is the single
+easiest way to break this:
+
+- **Global** — Cloudflare presents its own shared client certificate (the one `origin-pull-ca.pem`
+  below verifies) on every origin pull, for every zone with this toggle on. **This is what dev
+  uses.** No certificate to upload; just enable the toggle.
+- **Zone-level** — Cloudflare instead presents a *custom* client certificate you've uploaded for
+  this specific zone. **Must stay OFF for dev** unless you've actually uploaded one: with
+  Zone-level ON and no certificate uploaded, Cloudflare presents **no client certificate at all**
+  on the handshake — and because TLS 1.3 delivers the "certificate required" alert *after* the
+  handshake completes (not during), Cloudflare's edge sees what looks like a succeeding
+  connection that then gets cut off, and reports it to the browser as a generic **Cloudflare
+  error 520** ("web server returned an unknown error"), not anything that points at TLS or
+  certificates. If dev (or prod) ever starts throwing 520s with Caddy itself logging nothing
+  useful, check this toggle first.
+- **Per-hostname** — even more granular than zone-level (Enterprise); not used here.
+- **Prod, later**: if prod ever needs Zone-level instead of Global (e.g. to use a cert dev
+  doesn't share), that means (a) generating/uploading our own client certificate as that zone's
+  one, AND (b) changing `deploy/Caddyfile`'s `trust_pool` to point at **our own** CA instead of
+  `authenticated_origin_pull_ca.pem` — Global and Zone-level are not two paths to the same
+  trust anchor, they're genuinely different certificates on both ends.
+
+Confirm **Global** AOP is the one enabled, then fetch the fixed CA it presents — a separate,
+publicly-published file, not downloaded from the dashboard:
 
 ```bash
 curl -fsSL https://developers.cloudflare.com/ssl/static/authenticated_origin_pull_ca.pem \
