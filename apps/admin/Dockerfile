@@ -76,7 +76,19 @@ RUN set -eu; \
 FROM node:24.21.0-bookworm-slim AS runner
 RUN groupadd --system --gid 1001 nodejs && useradd --system --uid 1001 --gid nodejs nextjs
 WORKDIR /app
-ENV NODE_ENV=production PORT=3000
+# Next's standalone server.js binds to $HOSTNAME if set (default "0.0.0.0" otherwise) — but
+# Docker itself exports HOSTNAME as the container ID unless the image's own ENV HOSTNAME takes
+# precedence. Without this, the server ends up listening only on an address tied to the
+# container's own hostname/eth0, not the loopback interface — external traffic via the
+# published port still worked (confirmed during this session's own smoke tests, which is
+# exactly how this got missed), but Docker Compose's own HEALTHCHECK, which curls
+# 127.0.0.1 FROM INSIDE the container, got connection-refused every time (the real dev deploy's
+# failure: both admin and web reported "unhealthy", confirmed via `docker inspect
+# .State.Health`). Set here (the image), not in deploy/docker-compose.yml, because this is a
+# property of how the standalone server itself behaves, independent of how it's ever run (a
+# bare `docker run`, compose, any future orchestrator) — matches PORT being set the same way
+# right below it.
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
 COPY --from=builder --chown=nextjs:nodejs /app/apps/admin/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/admin/.next/static ./apps/admin/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/apps/admin/public ./apps/admin/public

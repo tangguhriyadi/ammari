@@ -303,3 +303,59 @@ reviews above:
    confirmed (by actually running `caddy:2.10.2` and checking) that Caddy's official image runs
    as root in-container, so a `chmod 600` file owned by `deploy` is readable by it as-is — no
    permission adjustment needed, documented in both files so this isn't re-litigated later.
+
+## First real dev deploy — failures diagnosed on the VPS, fixed and re-verified
+
+The first actual deploy failed. Four real bugs, each diagnosed by the owner on the VPS, fixed
+here and re-verified locally with real containers (not just re-read):
+
+1. **Both apps "unhealthy."** Next's standalone `server.js` binds to `$HOSTNAME`, which Docker
+   exports as the container ID unless the image overrides it — so the server ended up listening
+   on an address tied to the container's own hostname/eth0, not loopback. External traffic via
+   a published port still reached it (exactly how this session's own earlier smoke tests missed
+   it — they curled from outside via `-p`, never checked `docker inspect .State.Health`), but
+   Docker Compose's `HEALTHCHECK`, which curls `127.0.0.1` from *inside* the container, got
+   connection-refused every time. Fixed with `ENV HOSTNAME=0.0.0.0` in both
+   `apps/admin/Dockerfile`'s and `apps/web/Dockerfile`'s runner stage (not
+   `deploy/docker-compose.yml` — this is a property of how the standalone server itself behaves,
+   independent of how it's ever run). Re-verified properly this time: ran each container with no
+   published port and read `docker inspect --format='{{json .State.Health}}'` directly —
+   `"Status": "healthy"`, not just "an external curl worked."
+2. **`drizzle-kit migrate` swallowed the real error.** On the actual failure it printed only
+   "applying migrations..." then exited 1 — the real cause was invisible even attached to a TTY.
+   Replaced with `packages/db/src/migrate.ts`, calling `drizzle-orm/postgres-js/migrator`'s
+   `migrate()` directly (`max: 1`) and printing every relevant field from both the error AND its
+   `.cause` (confirmed empirically that drizzle wraps the real Postgres/connection error one
+   level down, under `.cause` — the first version of this script, which only looked at the
+   top-level error, printed a useless "Failed query: ..." with no actual reason) — Postgres
+   `code`/`detail`/`hint`/`severity`/etc. when it's a real migration SQL error (verified against
+   a real foreign-key-to-a-nonexistent-table failure, run against a throwaway `ammari_scratch`
+   database, then dropped), or `code`/`address`/`port`/`syscall`/`errno` when it's a connection
+   failure (verified against an unreachable port) — **never** the connection string either way
+   (grepped the output for a planted fake password; clean). `packages/db/package.json`'s
+   `db:migrate` script now runs this file via `tsx`, so local `pnpm db:migrate` behavior is
+   unchanged in shape, just a different (and now actually informative) implementation underneath.
+3. **The migrator container hung on a corepack download prompt.** Its `CMD` called
+   `pnpm exec ...` — but `pnpm` is a corepack shim, and corepack's "is this version prepared for
+   the current user" cache is per-`$HOME`. The `base` stage's own `corepack prepare` (needed so
+   the *build* steps work) only primed **root's** cache; the non-root `migrator` user added for
+   the earlier security fix has a different `$HOME`, so its very first `pnpm` invocation tried to
+   download pnpm fresh — and attached to a TTY/stdin (exactly how the real SSH-driven deploy
+   runs it), that blocked on corepack's Y/n confirmation prompt instead of erroring. Fixed by
+   never invoking `pnpm` at runtime at all: `CMD` now calls `node_modules/.bin/tsx` directly.
+   Re-verified with `docker run -i ... < /dev/null` (stdin attached, the exact failure
+   condition) for both the default migrate command and the seed-bootstrap override — both fail
+   instantly and cleanly on a missing `DATABASE_URL` with no corepack message at all, and both
+   succeed end-to-end against the real local database.
+4. **No visibility into *why* a health check failed, from CI.** `deploy/remote-deploy.sh`'s
+   `poll_health` now prints the failing container's last 80 log lines and Docker's own
+   `.State.Health.Log` before returning failure — re-verified with a scratch `docker compose`
+   stack running a deliberately misconfigured copy of the real admin image (BETTER_AUTH_URL
+   omitted): the diagnostic output correctly surfaced "Error: BETTER_AUTH_URL is not set"
+   straight from the container's own logs, which is exactly the class of failure that otherwise
+   requires SSHing in by hand to discover.
+
+Files touched by this round: `apps/admin/Dockerfile`, `apps/web/Dockerfile` (HOSTNAME),
+`packages/db/Dockerfile` (CMD, comment updates), `packages/db/src/migrate.ts` (new),
+`packages/db/package.json` (`db:migrate` script), `deploy/remote-deploy.sh` (migrator
+invocation + failure diagnostics), `docs/deploy.md` (§0, §6, §7).

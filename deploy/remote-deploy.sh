@@ -28,7 +28,7 @@ docker pull "$REGISTRY/ammari-migrator:$MIGRATOR_IMAGE_TAG"
 # here aborts the whole deploy — the running containers (old images, old schema expectations)
 # are never touched if this fails (docs/SPEC.md §2.3).
 echo "==> Running migrations"
-docker run --rm --env-file env/admin.env "$REGISTRY/ammari-migrator:$MIGRATOR_IMAGE_TAG" pnpm exec drizzle-kit migrate
+docker run --rm --env-file env/admin.env "$REGISTRY/ammari-migrator:$MIGRATOR_IMAGE_TAG"
 
 echo "==> Updating image tags"
 {
@@ -60,6 +60,20 @@ poll_health() {
     sleep 3
   done
   echo "==> $service FAILED health check after deploy" >&2
+  # Without this, the Actions log just shows "FAILED" with no way to tell WHY from CI — the
+  # first real dev deploy hit exactly this (both services unhealthy) and the actual cause
+  # (HOSTNAME binding, see apps/admin/Dockerfile's/apps/web/Dockerfile's own comments) only
+  # became visible by SSHing in and running these two commands by hand.
+  local container
+  container="$(docker compose ps -q "$service" || true)"
+  if [ -n "$container" ]; then
+    echo "==> $service: last 80 log lines" >&2
+    docker logs --tail 80 "$container" >&2 2>&1 || true
+    echo "==> $service: Docker's own HEALTHCHECK log" >&2
+    docker inspect --format '{{json .State.Health.Log}}' "$container" >&2 2>&1 || true
+  else
+    echo "==> $service: no container found for 'docker compose ps -q $service'" >&2
+  fi
   return 1
 }
 

@@ -38,7 +38,11 @@ RUN pnpm turbo run build --filter=@ammari/web
 FROM node:24.21.0-bookworm-slim AS runner
 RUN groupadd --system --gid 1001 nodejs && useradd --system --uid 1001 --gid nodejs nextjs
 WORKDIR /app
-ENV NODE_ENV=production PORT=3000
+# See apps/admin/Dockerfile's identical comment: Next's standalone server.js binds to
+# $HOSTNAME, which Docker otherwise exports as the container ID — this is what made both apps
+# report "unhealthy" on the first real dev deploy (confirmed via `docker inspect .State.Health`
+# on the VPS). Set in the image, not deploy/docker-compose.yml, for the same reason PORT is.
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public

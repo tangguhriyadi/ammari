@@ -14,8 +14,11 @@ Do these in order — later steps assume earlier ones are done.
   deploy an amd64 image to an arm64 host).
 - DNS already points `ammari.my.id`, `www.ammari.my.id`, `admin.ammari.my.id` at that IP,
   proxied (orange cloud) on Cloudflare.
-- Database: Sumopod shared Postgres 16.13, direct connection (not PgBouncer) — see
-  `deploy/env/admin.env.example`'s comment for the exact connection string shape.
+- Database: Sumopod shared Postgres 16.13, **direct** connection on port `65434` — **not**
+  PgBouncer (ports 6432/6433 break Drizzle's advisory-lock/prepared-statement assumptions). The
+  username on that direct port has the `.jkt1_003` suffix **stripped** (confirmed working form
+  from Sumopod's dashboard) — see `deploy/env/admin.env.example`'s comment for the exact
+  connection string shape.
 - Repo: `github.com/tangguhriyadi/ammari`.
 
 ## 1. One-time VPS setup
@@ -127,10 +130,17 @@ run. It will:
    run has no prior commit to diff against, so it builds all three.
 2. Sync `deploy/` onto the VPS (never touching `env/`, `caddy/certs/`, or
    `cloudflare/origin-pull-ca.pem` — those stay exactly as you set them in steps 1/2/4).
-3. Run the migrator (`drizzle-kit migrate`) — **aborts the whole deploy if this fails**, before
-   any app container is touched.
+3. Run the migrator (`packages/db/src/migrate.ts`, via the image's default command) —
+   **aborts the whole deploy if this fails**, before any app container is touched. Unlike the
+   `drizzle-kit migrate` CLI (which on the first real deploy printed only "applying
+   migrations..." then exited 1, with the real Postgres error nowhere in the log, even attached
+   to a TTY), this prints the actual error — message, Postgres `code`/`detail`/`hint` when
+   present, or the underlying connection error's `code`/`address`/`port` for a connectivity
+   failure — and never the connection string.
 4. Bring up `caddy`/`admin`/`web` via `docker compose up -d`, reload Caddy's config, then poll
-   `/api/health` on both apps before declaring success.
+   `/api/health` on both apps before declaring success. On a failure here, the Actions log now
+   includes that container's last 80 log lines and Docker's own `HEALTHCHECK` log (`deploy/
+   remote-deploy.sh`'s `poll_health`) — no more SSHing in by hand just to see why.
 
 ### Verify the Cloudflare boundary actually works
 
@@ -154,8 +164,11 @@ Never automated — run this once, by hand, after the first successful deploy:
 docker run --rm --env-file /opt/ammari/env/admin.env \
   -e SEED_SUPER_ADMIN_EMAIL="you@example.com" -e SEED_SUPER_ADMIN_NAME="Your Name" \
   ghcr.io/tangguhriyadi/ammari-migrator:<the-deployed-sha> \
-  pnpm exec tsx src/seed.ts
+  node_modules/.bin/tsx src/seed.ts
 ```
+(not `pnpm exec tsx ...` — that goes through corepack, which can hang on a download
+confirmation prompt the first time it runs as a given user; see `packages/db/Dockerfile`'s own
+comment on its `CMD` for why this image never invokes `pnpm` at runtime at all.)
 Idempotent (`onConflictDoNothing` — see `packages/db/src/seed.ts`), safe to re-run. Log in at
 `https://admin.ammari.my.id` with that email to confirm.
 
