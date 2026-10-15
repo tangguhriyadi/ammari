@@ -4,8 +4,10 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Input, Label, Select, Switch, Textarea } from "@ammari/ui";
 import type { ProductClosure, SizeMode } from "@ammari/db/schema";
+import type { ProductHighlightKey } from "@ammari/db/highlights";
 import { generateProductCode, generateSlug } from "@ammari/db/catalog";
 import { createProductAction, updateProductAction } from "../actions";
+import { HighlightsEditor } from "./highlights-editor";
 
 export interface Fabric {
   id: string;
@@ -22,6 +24,7 @@ export interface ProductFormValues {
   basePrice: string;
   description: string;
   isActive: boolean;
+  highlights: ProductHighlightKey[];
 }
 
 const EMPTY_VALUES: ProductFormValues = {
@@ -34,6 +37,7 @@ const EMPTY_VALUES: ProductFormValues = {
   basePrice: "",
   description: "",
   isActive: true,
+  highlights: [],
 };
 
 export function ProductForm({
@@ -75,6 +79,7 @@ export function ProductForm({
   function handleSubmit() {
     setFormError(null);
     setFieldErrors({});
+
     startTransition(async () => {
       const common = {
         name: values.name,
@@ -84,6 +89,7 @@ export function ProductForm({
         basePrice: values.basePrice,
         description: values.description || undefined,
         isActive: values.isActive,
+        highlights: values.highlights,
       };
       const result = productId
         ? await updateProductAction(productId, common)
@@ -253,6 +259,8 @@ export function ProductForm({
           error={fieldErrors.description}
         />
       </div>
+
+      <HighlightsEditor selected={values.highlights} onChange={(highlights) => set("highlights", highlights)} />
 
       <Switch label="Aktif" checked={values.isActive} onCheckedChange={(checked) => set("isActive", checked)} />
 

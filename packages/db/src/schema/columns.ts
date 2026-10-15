@@ -37,3 +37,15 @@ export function checkIn(column: AnyPgColumn, values: readonly string[]): SQL {
   const list = values.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ");
   return sql`${column} in (${sql.raw(list)})`;
 }
+
+/** Same reasoning and `sql.raw` safety argument as `checkIn` above, for a `text[]` column: every
+ * element of the column's array value must be one of `values` (Postgres's `<@` "is contained
+ * by" operator). Confirmed empirically (not just from docs) against the real local Postgres 16
+ * that `<@` rejects an unlisted element with a plain CHECK violation (23514) — no custom
+ * function needed for this half of the constraint, unlike the "no duplicates" half (see
+ * schema/catalog.ts's own comment on `products_highlights_no_duplicates_check` for why that one
+ * DOES need one: Postgres flatly refuses a subquery inside any CHECK expression). */
+export function checkArraySubset(column: AnyPgColumn, values: readonly string[]): SQL {
+  const list = values.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ");
+  return sql`${column} <@ ARRAY[${sql.raw(list)}]::text[]`;
+}

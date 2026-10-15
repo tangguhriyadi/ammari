@@ -127,6 +127,13 @@
       "when": 1792018061759,
       "tag": "0017_peaceful_slapstick",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792057085211,
+      "tag": "0018_early_daredevil",
+      "breakpoints": true
     }
   ]
 }

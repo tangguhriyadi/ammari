@@ -14,6 +14,15 @@ export type SizeMode = (typeof SIZE_MODES)[number];
 export const PRODUCT_CLOSURES = ["front_zip", "back_zip"] as const;
 export type ProductClosure = (typeof PRODUCT_CLOSURES)[number];
 
+// A FIXED set, not free text (owner requirement) — the future storefront maps each key to its
+// own icon, which only works for a closed set. This array IS the canonical display order
+// everywhere (admin checkboxes, storefront badges); nothing else decides ordering. Labels
+// (Indonesian display text) are NOT here — see packages/db/src/catalog/highlights.ts, which
+// imports this array; they're UI copy, never stored in the DB, so a label can be reworded
+// without a migration.
+export const PRODUCT_HIGHLIGHT_KEYS = ["breathable", "flowy", "falls_perfectly", "cool_fabric", "not_see_through"] as const;
+export type ProductHighlightKey = (typeof PRODUCT_HIGHLIGHT_KEYS)[number];
+
 export const FABRIC_PRICE_UNITS = ["meter", "yard"] as const;
 export type FabricPriceUnit = (typeof FABRIC_PRICE_UNITS)[number];
 

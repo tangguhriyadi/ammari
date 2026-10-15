@@ -16,12 +16,13 @@ import {
   bigint,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
-import { checkIn, citext, createdAtOnly, timestamps } from "./columns";
+import { checkArraySubset, checkIn, citext, createdAtOnly, timestamps } from "./columns";
 import {
   COST_COMPONENT_TYPES,
   COST_COMPONENT_UNITS,
   FABRIC_PRICE_UNITS,
   PRODUCT_CLOSURES,
+  PRODUCT_HIGHLIGHT_KEYS,
   PRODUCTION_BATCH_STATUSES,
   RAW_MATERIAL_MOVEMENT_REF_TYPES,
   RAW_MATERIAL_MOVEMENT_TYPES,
@@ -142,6 +143,16 @@ export const products = pgTable(
     // own. RESTRICT then becomes a free safety net against any future code path that forgets to
     // null this first.
     thumbnailImageId: uuid("thumbnail_image_id"),
+    // A FIXED set of selling-point keys (e.g. "breathable", "flowy"), NOT free text — the
+    // future storefront maps each key to its own icon, which only works for a closed set (see
+    // packages/db/src/schema/constants.ts's PRODUCT_HIGHLIGHT_KEYS, the single source of truth
+    // for the set, and packages/db/src/catalog/highlights.ts for the Indonesian labels, which
+    // are NOT stored here — only the key is). Display order is always
+    // PRODUCT_HIGHLIGHT_KEYS' own canonical order, never this array's storage order — the admin
+    // form writes it in that order already (checkboxes have no concept of reordering), and
+    // every reader iterates the canonical list rather than trusting storage order, so this is
+    // belt-and-suspenders, not a real dependency. Migration 0018.
+    highlights: text("highlights").array().notNull().default(sql`'{}'::text[]`),
     ...timestamps(),
   },
   (table) => [
@@ -154,6 +165,21 @@ export const products = pgTable(
     check("products_closure_check", checkIn(table.closure, PRODUCT_CLOSURES)),
     check("products_size_mode_check", checkIn(table.sizeMode, SIZE_MODES)),
     check("products_base_price_check", sql`${table.basePrice} >= 0`),
+    check("products_highlights_allowed_check", checkArraySubset(table.highlights, PRODUCT_HIGHLIGHT_KEYS)),
+    // Postgres flatly refuses a subquery inside ANY check constraint, even one that only reads
+    // the row's own column (confirmed empirically against the real local Postgres 16 — "cannot
+    // use subquery in check constraint" — not just assumed from the docs) — ARRAY(SELECT
+    // DISTINCT unnest(...)) is exactly that, so "no duplicates" is expressed through a tiny
+    // IMMUTABLE SQL function instead (hand-authored in this migration, same "hand-authored
+    // addition to an auto-generated migration" idiom this codebase already uses for trigger
+    // functions — see migration 0001's set_updated_at()). Confirmed working against the real
+    // local Postgres too: a genuine duplicate is rejected with 23514.
+    check("products_highlights_no_duplicates_check", sql`not text_array_has_duplicates(${table.highlights})`),
+    // Technically implied once the two checks above both hold (5 distinct allowed keys, no
+    // duplicates ⇒ at most 5 elements) — kept anyway as a cheap, explicit, self-documenting
+    // invariant, same reasoning this schema already applies to plenty of other "belt and
+    // suspenders" RESTRICT FKs/CHECKs.
+    check("products_highlights_max_check", sql`cardinality(${table.highlights}) <= 5`),
     // Referenced by product_variants' composite FK below (product_id, fabric_id, closure) ->
     // (id, fabric_id, closure) — this is what makes "a product's fabric OR closure can't change
     // once it has variants" a real DB guarantee (ON UPDATE RESTRICT), not just an app-level

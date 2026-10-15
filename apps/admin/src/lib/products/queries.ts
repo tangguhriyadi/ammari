@@ -26,6 +26,9 @@ export interface CreateProductInput {
   basePrice: number;
   description?: string | null;
   isActive: boolean;
+  /** Already validated + trimmed by the caller (actions.ts's highlightsSchema) — this layer
+   * just passes it straight through to the `highlights` column, same as every other field. */
+  highlights: string[];
 }
 
 export interface UpdateProductInput {
@@ -36,6 +39,7 @@ export interface UpdateProductInput {
   basePrice: number;
   description?: string | null;
   isActive: boolean;
+  highlights: string[];
 }
 
 export async function listProducts(
@@ -75,6 +79,7 @@ function queryProductsPage(db: Database, where: ReturnType<typeof ilike> | undef
       closure: products.closure,
       basePrice: products.basePrice,
       isActive: products.isActive,
+      highlights: products.highlights,
       fabricName: fabrics.name,
       activeVariantCount: count(productVariants.sku),
       thumbnailStorageKey: productImages.storageKey,

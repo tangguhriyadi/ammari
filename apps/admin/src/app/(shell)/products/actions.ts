@@ -2,6 +2,7 @@
 
 import { z } from "zod";
 import { PRODUCT_CLOSURES, SIZE_MODES, SIZES } from "@ammari/db/schema";
+import { PRODUCT_HIGHLIGHT_KEYS } from "@ammari/db/highlights";
 import { generateProductCode, generateSlug } from "@ammari/db/catalog";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
@@ -11,6 +12,19 @@ import * as imageQueries from "@/lib/products/image-queries";
 import * as recipeQueries from "@/lib/inventory/recipes";
 
 // ---------- Products ----------
+
+// A FIXED set, not free text (owner requirement) — `z.enum` rejects any key outside
+// PRODUCT_HIGHLIGHT_KEYS outright, never trusting the client's checkboxes alone. `.max(5)` and
+// the no-duplicate `.refine` are both ALSO enforced at the DB level (products_highlights_max_check/
+// products_highlights_no_duplicates_check, migration 0018) — kept here too so a bad request
+// gets a clean validation error instead of a raw constraint-violation bubbling up. The final
+// `.transform` re-sorts into PRODUCT_HIGHLIGHT_KEYS' own canonical order — display order is
+// never whatever order the client happened to send, only ever this one.
+const highlightsSchema = z
+  .array(z.enum(PRODUCT_HIGHLIGHT_KEYS))
+  .max(5, "Maksimal 5 keunggulan.")
+  .refine((keys) => new Set(keys).size === keys.length, "Keunggulan tidak boleh duplikat.")
+  .transform((keys) => PRODUCT_HIGHLIGHT_KEYS.filter((key) => keys.includes(key)));
 
 const createProductSchema = z.object({
   name: z.string().trim().min(1, "Nama produk wajib diisi."),
@@ -22,6 +36,7 @@ const createProductSchema = z.object({
   basePrice: moneyString,
   description: z.string().trim().optional(),
   isActive: z.boolean(),
+  highlights: highlightsSchema,
 });
 
 const updateProductSchema = createProductSchema.omit({ code: true, sizeMode: true });
@@ -44,6 +59,7 @@ export async function createProductAction(
         basePrice: parsed.data.basePrice,
         description: parsed.data.description || null,
         isActive: parsed.data.isActive,
+        highlights: parsed.data.highlights,
       },
       session.staffUser.id,
     );
@@ -69,6 +85,7 @@ export async function updateProductAction(
         basePrice: parsed.data.basePrice,
         description: parsed.data.description || null,
         isActive: parsed.data.isActive,
+        highlights: parsed.data.highlights,
       },
       session.staffUser.id,
     );

@@ -42,6 +42,11 @@ export const E2E_PACKING_PRINT_WEBKIT_EMAIL = "packing-print-webkit@e2e.ammari.t
 // — same "fresh email, clean OTP throttle" reasoning as every dedicated fixture above; this spec
 // logs in at both a mobile and a desktop viewport in the same run.
 export const E2E_PACKING_STICKERS_EMAIL = "packing-stickers@e2e.ammari.test";
+// A dedicated email for product-highlights.spec.ts (docs/plans/product-highlights.md) — same
+// "fresh email, clean OTP throttle" reasoning as every dedicated fixture above; this spec logs
+// in once but runs its edit/reorder flow at both a mobile and a desktop viewport in the same
+// run. Owner role (products.manage), same as products.spec.ts's own E2E_OWNER_EMAIL.
+export const E2E_PRODUCT_HIGHLIGHTS_EMAIL = "product-highlights@e2e.ammari.test";
 
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
 // lib/products/queries.ts. A distinct name prefix keeps this from colliding with anything a
@@ -200,6 +205,7 @@ export default async function globalSetup(): Promise<void> {
   await ensureStaffFixture(E2E_PACKING_PRINT_EMAIL, "E2E Packing Print", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PACKING_PRINT_WEBKIT_EMAIL, "E2E Packing Print WebKit", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PACKING_STICKERS_EMAIL, "E2E Packing Stickers", E2E_PACKING_ROLE_KEY);
+  await ensureStaffFixture(E2E_PRODUCT_HIGHLIGHTS_EMAIL, "E2E Product Highlights", OWNER_ROLE_KEY);
 
   const [paginationFabric] = await db
     .insert(fabrics)

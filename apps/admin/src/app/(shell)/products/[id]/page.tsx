@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { PageHeader, Button, Breadcrumb } from "@ammari/ui";
+import type { ProductHighlightKey } from "@ammari/db/highlights";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getProductDetail, getCurrentCostAssumption } from "@/lib/products/queries";
 import { listFabricColors, listFabricsWithUsage } from "@/lib/products/fabric-queries";
@@ -72,6 +73,9 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
               basePrice: String(product.basePrice),
               description: product.description ?? "",
               isActive: product.isActive,
+              // Cast, not re-validated here: the DB's own CHECK constraints (migration 0018)
+              // already guarantee every stored element is one of PRODUCT_HIGHLIGHT_KEYS.
+              highlights: product.highlights as ProductHighlightKey[],
             }}
           />
         </div>

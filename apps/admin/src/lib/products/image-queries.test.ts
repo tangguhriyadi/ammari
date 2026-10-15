@@ -43,6 +43,7 @@ async function createProductFixture(tx: Database, fabricId: string, overrides: P
       sizeMode: "sized",
       basePrice: 269_000,
       isActive: true,
+      highlights: [],
       ...overrides,
     },
     ACTOR_ID,

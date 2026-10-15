@@ -42,6 +42,7 @@ describe("every product server action requires products.manage", () => {
         sizeMode: "sized",
         basePrice: "269.000",
         isActive: true,
+        highlights: [],
       }),
     ).rejects.toThrow();
   });
@@ -56,6 +57,7 @@ describe("every product server action requires products.manage", () => {
         closure: "front_zip",
         basePrice: "269.000",
         isActive: true,
+        highlights: [],
       }),
     ).rejects.toThrow();
   });
@@ -82,6 +84,7 @@ describe("every product server action requires products.manage", () => {
         sizeMode: "sized",
         basePrice: "269.000",
         isActive: true,
+        highlights: [],
       }),
     ).rejects.toThrow();
   });

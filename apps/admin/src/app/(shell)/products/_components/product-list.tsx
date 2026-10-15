@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { formatRupiah } from "@ammari/ui/lib";
 import { Badge, Card, EmptyState, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
+import { PRODUCT_HIGHLIGHTS } from "@ammari/db/highlights";
 import type { listProducts } from "@/lib/products/queries";
 import { ProductThumbnail } from "./product-thumbnail";
 
@@ -10,6 +11,12 @@ const CLOSURE_LABELS: Record<string, string> = {
 };
 
 type Product = Awaited<ReturnType<typeof listProducts>>["rows"][number];
+
+/** Read-only label list, in the one canonical order — iterates PRODUCT_HIGHLIGHTS (not the
+ * product's own stored array) so display order never depends on storage order. */
+function highlightLabels(keys: readonly string[]): string[] {
+  return PRODUCT_HIGHLIGHTS.filter((h) => keys.includes(h.key)).map((h) => h.label);
+}
 
 export function ProductList({ products }: { products: Product[] }) {
   if (products.length === 0) {
@@ -37,6 +44,13 @@ export function ProductList({ products }: { products: Product[] }) {
                   <span className="text-sm text-neutral-600">
                     {formatRupiah(product.basePrice)} · {product.activeVariantCount} varian aktif
                   </span>
+                  {product.highlights.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {highlightLabels(product.highlights).map((label) => (
+                        <Badge key={label}>{label}</Badge>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </Card>
             </Link>
@@ -54,6 +68,7 @@ export function ProductList({ products }: { products: Product[] }) {
           <Th>Model resleting</Th>
           <Th>Harga dasar</Th>
           <Th>Varian aktif</Th>
+          <Th>Keunggulan</Th>
           <Th>Status</Th>
         </TableHead>
         <tbody>
@@ -71,6 +86,15 @@ export function ProductList({ products }: { products: Product[] }) {
               <Td className="text-neutral-700">{CLOSURE_LABELS[product.closure] ?? product.closure}</Td>
               <Td className="text-neutral-700 tabular-nums">{formatRupiah(product.basePrice)}</Td>
               <Td className="text-neutral-700 tabular-nums">{product.activeVariantCount}</Td>
+              <Td>
+                {product.highlights.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {highlightLabels(product.highlights).map((label) => (
+                      <Badge key={label}>{label}</Badge>
+                    ))}
+                  </div>
+                )}
+              </Td>
               <Td>
                 <Badge variant={product.isActive ? "success" : "neutral"}>
                   {product.isActive ? "Aktif" : "Nonaktif"}
