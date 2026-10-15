@@ -1,9 +1,31 @@
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getHomepageSection, listPublishableProducts } from "@/lib/content/homepage";
-import { heroContentSchema } from "@/lib/content/homepage-schemas";
+import { heroContentSchema, type ContentImage } from "@/lib/content/homepage-schemas";
+import { buildContentImagePreviewUrl } from "@/lib/content/content-image-queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { HeroForm, type HeroFormValues } from "../_components/hero-form";
+import type { ContentImageFieldValue } from "../_components/content-image-field";
+
+function toFieldValue(image: ContentImage | null): ContentImageFieldValue | null {
+  if (!image) return null;
+  return {
+    storageKey: image.storageKey,
+    altText: image.altText,
+    width: image.width,
+    height: image.height,
+    previewUrl: buildContentImagePreviewUrl(image.storageKey),
+    mobile:
+      image.mobileStorageKey && image.mobileWidth && image.mobileHeight
+        ? {
+            storageKey: image.mobileStorageKey,
+            width: image.mobileWidth,
+            height: image.mobileHeight,
+            previewUrl: buildContentImagePreviewUrl(image.mobileStorageKey),
+          }
+        : null,
+  };
+}
 
 export default async function ContentHeroPage() {
   await requirePermission("content.manage");
@@ -21,6 +43,7 @@ export default async function ContentHeroPage() {
           parsed.data.ctaTarget.type === "product"
             ? { productId: parsed.data.ctaTarget.productId, fabricColorId: parsed.data.ctaTarget.fabricColorId }
             : null,
+        image: toFieldValue(parsed.data.image),
       }
     : {
         isVisible: section?.draftIsVisible ?? true,
@@ -29,6 +52,7 @@ export default async function ContentHeroPage() {
         ctaLabel: "",
         ctaTargetType: "anchor",
         ctaProduct: null,
+        image: null,
       };
 
   return (

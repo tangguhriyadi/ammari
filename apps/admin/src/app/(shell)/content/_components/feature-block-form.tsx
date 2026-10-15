@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { Button, Input, Label, Switch, Textarea } from "@ammari/ui";
 import type { PublishableProductOption } from "@/lib/content/homepage";
 import { saveFeatureBlockDraftAction } from "../actions";
+import { ContentImageField, type ContentImageFieldValue } from "./content-image-field";
 import { ProductColorPicker, type ProductColorValue } from "./product-color-picker";
 
 export interface FeatureBlockFormValues {
@@ -13,6 +14,23 @@ export interface FeatureBlockFormValues {
   subtitle: string;
   ctaLabel: string;
   linkedProduct: ProductColorValue | null;
+  image: ContentImageFieldValue | null;
+}
+
+/** Strips client-only `previewUrl` and flattens into contentImageSchema's shape — feature_block
+ * never offers a mobile crop in the UI, so `mobile` is always null here, but the shape still
+ * carries the (always-null) mobile* fields the shared schema expects. */
+function toContentImagePayload(image: ContentImageFieldValue | null) {
+  if (!image) return null;
+  return {
+    storageKey: image.storageKey,
+    altText: image.altText,
+    width: image.width,
+    height: image.height,
+    mobileStorageKey: null,
+    mobileWidth: null,
+    mobileHeight: null,
+  };
 }
 
 export function FeatureBlockForm({
@@ -41,7 +59,7 @@ export function FeatureBlockForm({
           subtitle: values.subtitle,
           ctaLabel: values.ctaLabel,
           linkedProduct: values.linkedProduct ?? { productId: "", fabricColorId: null },
-          image: null,
+          image: toContentImagePayload(values.image),
         },
       });
       if (!result.ok) {
@@ -77,10 +95,13 @@ export function FeatureBlockForm({
         />
       </div>
 
-      <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-neutral-300 p-3">
-        <span className="text-sm font-medium text-neutral-700">Gambar feature block</span>
-        <p className="text-sm text-neutral-600">Unggah gambar akan tersedia di sesi berikutnya.</p>
-      </div>
+      <ContentImageField
+        sectionKey="feature_block"
+        label="Gambar feature block"
+        value={values.image}
+        onChange={(image) => set("image", image)}
+        disabled={pending}
+      />
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="feature-block-cta-label" required>

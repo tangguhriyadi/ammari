@@ -11,6 +11,7 @@ import {
   productGridContentSchema,
   whyAmmariContentSchema,
 } from "@/lib/content/homepage-schemas";
+import { uploadContentImage, type UploadedContentImage } from "@/lib/content/content-image-queries";
 
 // ---------- Homepage section drafts + publish (docs/plans/storefront-cms.md, session 4) ----------
 //
@@ -91,5 +92,39 @@ export async function discardHomepageDraftAction(): Promise<ActionResult> {
   return runAction(async () => {
     await homepage.discardHomepageDraft(session.staffUser.id);
     return undefined;
+  });
+}
+
+// ---------- Content image upload (session 5) ----------
+//
+// Upload-only — never touches the database. The returned ContentImage fields are held in the
+// editor form's own client state and only become part of a section's draft_content once the
+// admin clicks "Simpan" (saveHeroDraftAction/saveFeatureBlockDraftAction above, validated again
+// there by contentImageSchema). An image uploaded here but never saved into a draft is a
+// harmless orphan (see content-image-queries.ts/homepage.ts's cleanup, which only ever reaches
+// objects that WERE referenced by a draft at some point) — same accepted tradeoff
+// apps/admin/src/lib/products/image-queries.ts's own "an orphaned object in the bucket is a
+// harmless no-op" comment already makes for product photos.
+
+const uploadContentImageInputSchema = z.object({
+  sectionKey: z.enum(["hero", "feature_block"]),
+  variant: z.enum(["desktop", "mobile"]),
+});
+
+export async function uploadContentImageAction(formData: FormData): Promise<ActionResult<UploadedContentImage>> {
+  await requirePermission("content.manage");
+
+  const file = formData.get("file");
+  if (!(file instanceof File)) return { ok: false, error: "File tidak ditemukan." };
+
+  const parsed = uploadContentImageInputSchema.safeParse({
+    sectionKey: formData.get("sectionKey"),
+    variant: formData.get("variant"),
+  });
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+
+  return runAction(async () => {
+    const fileBuffer = Buffer.from(await file.arrayBuffer());
+    return uploadContentImage({ sectionKey: parsed.data.sectionKey, variant: parsed.data.variant, fileBuffer });
   });
 }

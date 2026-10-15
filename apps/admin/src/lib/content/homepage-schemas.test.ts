@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  contentImageSchema,
   featureBlockContentSchema,
   heroContentSchema,
   productGridContentSchema,
@@ -9,6 +10,46 @@ import {
 const PRODUCT_ID = "11111111-1111-4111-8111-111111111111";
 const COLOR_ID = "22222222-2222-4222-8222-222222222222";
 const OTHER_PRODUCT_ID = "33333333-3333-4333-8333-333333333333";
+
+function image(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    storageKey: "content/hero/abc/",
+    altText: "Model memakai gamis",
+    width: 1600,
+    height: 900,
+    mobileStorageKey: null,
+    mobileWidth: null,
+    mobileHeight: null,
+    ...overrides,
+  };
+}
+
+describe("contentImageSchema", () => {
+  test("accepts an image with no mobile crop", () => {
+    expect(contentImageSchema.safeParse(image()).success).toBe(true);
+  });
+
+  test("accepts an image with a complete mobile crop", () => {
+    const result = contentImageSchema.safeParse(
+      image({ mobileStorageKey: "content/hero/def/", mobileWidth: 750, mobileHeight: 1000 }),
+    );
+    expect(result.success).toBe(true);
+  });
+
+  test("rejects a blank alt text", () => {
+    expect(contentImageSchema.safeParse(image({ altText: "   " })).success).toBe(false);
+  });
+
+  test("rejects a partial mobile crop (storage key without width/height)", () => {
+    const result = contentImageSchema.safeParse(image({ mobileStorageKey: "content/hero/def/" }));
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects a partial mobile crop (width/height without a storage key)", () => {
+    const result = contentImageSchema.safeParse(image({ mobileWidth: 750, mobileHeight: 1000 }));
+    expect(result.success).toBe(false);
+  });
+});
 
 describe("heroContentSchema", () => {
   test("accepts an anchor CTA with no product reference", () => {
@@ -62,6 +103,28 @@ describe("heroContentSchema", () => {
       ctaLabel: "Lihat",
       ctaTarget: { type: "category" },
       image: null,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test("accepts a real uploaded image", () => {
+    const result = heroContentSchema.safeParse({
+      eyebrow: "",
+      headline: "Headline",
+      ctaLabel: "Lihat",
+      ctaTarget: { type: "anchor" },
+      image: image(),
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test("rejects an image missing required alt text", () => {
+    const result = heroContentSchema.safeParse({
+      eyebrow: "",
+      headline: "Headline",
+      ctaLabel: "Lihat",
+      ctaTarget: { type: "anchor" },
+      image: image({ altText: "" }),
     });
     expect(result.success).toBe(false);
   });
@@ -133,6 +196,17 @@ describe("featureBlockContentSchema", () => {
       image: null,
     });
     expect(result.success).toBe(false);
+  });
+
+  test("accepts a real uploaded image", () => {
+    const result = featureBlockContentSchema.safeParse({
+      title: "Judul",
+      subtitle: "Subjudul",
+      ctaLabel: "Lihat Produk",
+      linkedProduct: { productId: PRODUCT_ID, fabricColorId: null },
+      image: image(),
+    });
+    expect(result.success).toBe(true);
   });
 });
 

@@ -615,9 +615,11 @@ from `lucide-react`, e.g. `LayoutTemplate`).
    **Owner can test:** edit any section's draft text/tiles, confirm nothing changes on the live
    site, click Terbitkan, confirm the draft is now what a fresh `getPublishedHomepageContent()`
    read returns (still no visible homepage yet — that's session 7).
-5. **Admin: content image upload** — ships: hero/feature-block image upload+preview, reusing the
-   existing processing pipeline. **Owner can test:** upload a hero image in the draft editor, see
-   it staged with a preview, confirm it's part of what gets published.
+5. **Admin: content image upload** (✅ done, 2026-10-16) — ships: hero/feature-block image
+   upload+preview, reusing the existing processing pipeline, plus the hero's optional mobile
+   crop and required alt text; storage cleanup only ever deletes an image once neither the draft
+   nor the published content references it anymore. **Owner can test:** upload a hero image in
+   the draft editor, see it staged with a preview, confirm it's part of what gets published.
 6. **`apps/web`: revalidation endpoint + preview route** — ships: `/api/revalidate` (secret-
    gated); `WEB_INTERNAL_URL`/`REVALIDATE_SECRET`/`PREVIEW_SECRET` wired into both env files;
    admin's Terbitkan/product-save actions call it; `/preview/home` with signed-token preview.
@@ -707,6 +709,27 @@ storefront read layer (`storefront/queries.ts`, replacing `getActiveProductBySlu
 tested — nothing visible in admin or web yet, per scope. See the implementation report for what
 was verified and one unrelated bug this work surfaced (a stock-quantity correlation bug in two
 existing `apps/admin` stock queries, left unfixed — out of this plan's scope).
+
+## Status: session 5 implemented (2026-10-16)
+
+Hero/feature-block image upload is built: `contentImageSchema` (required alt text, optional
+all-or-nothing mobile crop) in `homepage-schemas.ts`; `content-image-keys.ts`/
+`content-image-queries.ts` reuse `processUploadedImage`/`getStorageClient()` unchanged, adding
+only a content-specific storage key prefix and minimum-dimension checks (1200×600 desktop,
+750×1000 mobile crop); `uploadContentImageAction` (gated by `content.manage`); the
+`ContentImageField` client component (preview/replace/remove) replacing both placeholders.
+No DB migration — `ContentImage` is a plain JSONB snapshot, same as the rest of a section's
+content.
+
+Reference-safety (draft/publish/discard never deleting a file the other state still needs) is
+implemented as a before/after diff in `homepage.ts` (`content-image-diff.ts`'s
+`diffOrphanedContentImageKeys`), run only after each DB transaction commits, mirroring
+`image-queries.ts`'s existing "database state first, storage cleanup second" rule for product
+photos. Confirmed the existing product-photo pipeline already strips all EXIF/GPS metadata by
+default (no `.withMetadata()` call) and already rejects HEIC the same way (magic-byte sniff, not
+extension/MIME) — no fix needed there; the new content-image input narrows `accept` to
+`image/jpeg,image/png,image/webp` (the existing product-photo input stays `image/*`, unchanged,
+since it already has the same effective protection).
 
 ## Remaining nuances (not blocking, worth a quick look before/while implementing)
 

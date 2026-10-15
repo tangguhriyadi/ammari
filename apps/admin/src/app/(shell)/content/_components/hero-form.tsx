@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { Button, Input, Label, Switch, Textarea } from "@ammari/ui";
 import type { PublishableProductOption } from "@/lib/content/homepage";
 import { saveHeroDraftAction } from "../actions";
+import { ContentImageField, type ContentImageFieldValue } from "./content-image-field";
 import { ProductColorPicker, type ProductColorValue } from "./product-color-picker";
 
 export interface HeroFormValues {
@@ -14,6 +15,23 @@ export interface HeroFormValues {
   ctaLabel: string;
   ctaTargetType: "anchor" | "product";
   ctaProduct: ProductColorValue | null;
+  image: ContentImageFieldValue | null;
+}
+
+/** Strips client-only `previewUrl`/`mobile.previewUrl` and flattens the optional mobile crop
+ * into contentImageSchema's shape — the server re-validates this (required altText, all-or-
+ * nothing mobile fields) independently, this is just the wire shape. */
+function toContentImagePayload(image: ContentImageFieldValue | null) {
+  if (!image) return null;
+  return {
+    storageKey: image.storageKey,
+    altText: image.altText,
+    width: image.width,
+    height: image.height,
+    mobileStorageKey: image.mobile?.storageKey ?? null,
+    mobileWidth: image.mobile?.width ?? null,
+    mobileHeight: image.mobile?.height ?? null,
+  };
 }
 
 export function HeroForm({
@@ -45,7 +63,7 @@ export function HeroForm({
             values.ctaTargetType === "anchor"
               ? { type: "anchor" }
               : { type: "product", productId: values.ctaProduct?.productId ?? "", fabricColorId: values.ctaProduct?.fabricColorId ?? null },
-          image: null,
+          image: toContentImagePayload(values.image),
         },
       });
       if (!result.ok) {
@@ -87,10 +105,14 @@ export function HeroForm({
         <p className="text-sm text-neutral-600">Tekan Enter untuk baris baru.</p>
       </div>
 
-      <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-neutral-300 p-3">
-        <span className="text-sm font-medium text-neutral-700">Gambar hero</span>
-        <p className="text-sm text-neutral-600">Unggah gambar akan tersedia di sesi berikutnya.</p>
-      </div>
+      <ContentImageField
+        sectionKey="hero"
+        label="Gambar hero"
+        value={values.image}
+        onChange={(image) => set("image", image)}
+        allowMobileCrop
+        disabled={pending}
+      />
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="hero-cta-label" required>

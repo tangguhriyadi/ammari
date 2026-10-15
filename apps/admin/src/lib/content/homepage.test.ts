@@ -1,9 +1,13 @@
+import sharp from "sharp";
 import { eq } from "drizzle-orm";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { insertProductVariant } from "@ammari/db/test-fixtures";
 import { auditLog, productVariants, products } from "@ammari/db/schema";
+import { InMemoryStorageClient } from "@ammari/storage";
+import { __setStorageClientForTests } from "@/lib/storage";
 import { ActionError } from "@/lib/errors";
+import { uploadContentImage } from "./content-image-queries";
 import {
   discardHomepageDraft,
   getHomepageSection,
@@ -351,6 +355,170 @@ describe("discardHomepageDraft", () => {
       const section = await getHomepageSection("why_ammari", tx);
       expect(section?.draftContent).toEqual({});
       expect(section?.draftIsVisible).toBe(true);
+    });
+  });
+});
+
+// ---------- Content image reference safety (docs/plans/storefront-cms.md, session 5) ----------
+//
+// Uses a REAL in-memory storage client (not mocked at the function level) so these tests prove
+// the actual objects written by uploadContentImage are kept/deleted by the real diffing logic in
+// writeSectionDraft/publishHomepageSections/discardHomepageDraft — not just that the right
+// ActionError/branch is taken.
+
+async function jpegFixture(): Promise<Buffer> {
+  return sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 10, g: 20, b: 30 } } })
+    .jpeg()
+    .toBuffer();
+}
+
+async function heroImage(storageKey: string, overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    storageKey,
+    altText: "Model memakai gamis",
+    width: 1600,
+    height: 900,
+    mobileStorageKey: null,
+    mobileWidth: null,
+    mobileHeight: null,
+    ...overrides,
+  };
+}
+
+function objectKeysUnder(storage: InMemoryStorageClient, storageKey: string): string[] {
+  return [...storage.objects.keys()].filter((key) => key.startsWith(storageKey));
+}
+
+describe("content image reference safety", () => {
+  let memoryStorage: InMemoryStorageClient;
+
+  beforeEach(() => {
+    memoryStorage = new InMemoryStorageClient();
+    __setStorageClientForTests(memoryStorage);
+  });
+
+  afterEach(() => {
+    __setStorageClientForTests(undefined);
+  });
+
+  test("replacing the draft's image keeps the OLD image's storage objects while PUBLISHED still references it", async () => {
+    await withRollback(async (tx) => {
+      const imageA = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroDraft(
+        {
+          isVisible: true,
+          content: { eyebrow: "", headline: "V1", ctaLabel: "Lihat", ctaTarget: { type: "anchor" }, image: await heroImage(imageA.storageKey) },
+        },
+        ACTOR_ID,
+        tx,
+      );
+      await publishHomepageSections(ACTOR_ID, tx); // published now also references imageA
+
+      const imageB = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroDraft(
+        {
+          isVisible: true,
+          content: { eyebrow: "", headline: "V2", ctaLabel: "Lihat", ctaTarget: { type: "anchor" }, image: await heroImage(imageB.storageKey) },
+        },
+        ACTOR_ID,
+        tx,
+      );
+
+      // imageA's objects survive — PUBLISHED still points at it — even though the DRAFT moved on.
+      expect(objectKeysUnder(memoryStorage, imageA.storageKey)).toHaveLength(3);
+      expect(objectKeysUnder(memoryStorage, imageB.storageKey)).toHaveLength(3);
+
+      const section = await getHomepageSection("hero", tx);
+      expect(section?.draftContent).toMatchObject({ headline: "V2" });
+    });
+  });
+
+  test("publishing deletes the OLD published image once nothing references it anymore", async () => {
+    await withRollback(async (tx) => {
+      const imageA = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroDraft(
+        {
+          isVisible: true,
+          content: { eyebrow: "", headline: "V1", ctaLabel: "Lihat", ctaTarget: { type: "anchor" }, image: await heroImage(imageA.storageKey) },
+        },
+        ACTOR_ID,
+        tx,
+      );
+      await publishHomepageSections(ACTOR_ID, tx);
+
+      const imageB = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroDraft(
+        {
+          isVisible: true,
+          content: { eyebrow: "", headline: "V2", ctaLabel: "Lihat", ctaTarget: { type: "anchor" }, image: await heroImage(imageB.storageKey) },
+        },
+        ACTOR_ID,
+        tx,
+      );
+      expect(objectKeysUnder(memoryStorage, imageA.storageKey)).toHaveLength(3); // still kept, per the test above
+
+      await publishHomepageSections(ACTOR_ID, tx); // promotes draft (imageB) to published
+
+      expect(objectKeysUnder(memoryStorage, imageA.storageKey)).toHaveLength(0); // now orphaned — deleted
+      expect(objectKeysUnder(memoryStorage, imageB.storageKey)).toHaveLength(3); // the live published image
+    });
+  });
+
+  test("discarding the draft deletes an unsaved-and-never-published image, keeping the published one", async () => {
+    await withRollback(async (tx) => {
+      const published = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroDraft(
+        {
+          isVisible: true,
+          content: { eyebrow: "", headline: "Published", ctaLabel: "Lihat", ctaTarget: { type: "anchor" }, image: await heroImage(published.storageKey) },
+        },
+        ACTOR_ID,
+        tx,
+      );
+      await publishHomepageSections(ACTOR_ID, tx);
+
+      const unsaved = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroDraft(
+        {
+          isVisible: true,
+          content: { eyebrow: "", headline: "Unsaved", ctaLabel: "Lihat", ctaTarget: { type: "anchor" }, image: await heroImage(unsaved.storageKey) },
+        },
+        ACTOR_ID,
+        tx,
+      );
+
+      await discardHomepageDraft(ACTOR_ID, tx);
+
+      expect(objectKeysUnder(memoryStorage, unsaved.storageKey)).toHaveLength(0); // never published — gone
+      expect(objectKeysUnder(memoryStorage, published.storageKey)).toHaveLength(3); // the real published image survives
+
+      const section = await getHomepageSection("hero", tx);
+      expect(section?.draftContent).toMatchObject({ headline: "Published" });
+    });
+  });
+
+  test("removing the image entirely (set back to null) deletes the now-unreferenced objects on publish", async () => {
+    await withRollback(async (tx) => {
+      const image = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroDraft(
+        {
+          isVisible: true,
+          content: { eyebrow: "", headline: "V1", ctaLabel: "Lihat", ctaTarget: { type: "anchor" }, image: await heroImage(image.storageKey) },
+        },
+        ACTOR_ID,
+        tx,
+      );
+      await publishHomepageSections(ACTOR_ID, tx);
+
+      await saveHeroDraft(
+        { isVisible: true, content: { eyebrow: "", headline: "V2", ctaLabel: "Lihat", ctaTarget: { type: "anchor" }, image: null } },
+        ACTOR_ID,
+        tx,
+      );
+      expect(objectKeysUnder(memoryStorage, image.storageKey)).toHaveLength(3); // still kept — published still has it
+
+      await publishHomepageSections(ACTOR_ID, tx);
+      expect(objectKeysUnder(memoryStorage, image.storageKey)).toHaveLength(0);
     });
   });
 });

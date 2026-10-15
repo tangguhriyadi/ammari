@@ -1,9 +1,25 @@
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getHomepageSection, listPublishableProducts } from "@/lib/content/homepage";
-import { featureBlockContentSchema } from "@/lib/content/homepage-schemas";
+import { featureBlockContentSchema, type ContentImage } from "@/lib/content/homepage-schemas";
+import { buildContentImagePreviewUrl } from "@/lib/content/content-image-queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { FeatureBlockForm, type FeatureBlockFormValues } from "../_components/feature-block-form";
+import type { ContentImageFieldValue } from "../_components/content-image-field";
+
+function toFieldValue(image: ContentImage | null): ContentImageFieldValue | null {
+  if (!image) return null;
+  // feature_block has no mobile-crop UI, but the shared schema still carries the (always-null,
+  // for this section) mobile* fields — nothing to surface here either way.
+  return {
+    storageKey: image.storageKey,
+    altText: image.altText,
+    width: image.width,
+    height: image.height,
+    previewUrl: buildContentImagePreviewUrl(image.storageKey),
+    mobile: null,
+  };
+}
 
 export default async function ContentFeatureBlockPage() {
   await requirePermission("content.manage");
@@ -17,8 +33,9 @@ export default async function ContentFeatureBlockPage() {
         subtitle: parsed.data.subtitle,
         ctaLabel: parsed.data.ctaLabel,
         linkedProduct: parsed.data.linkedProduct,
+        image: toFieldValue(parsed.data.image),
       }
-    : { isVisible: section?.draftIsVisible ?? true, title: "", subtitle: "", ctaLabel: "", linkedProduct: null };
+    : { isVisible: section?.draftIsVisible ?? true, title: "", subtitle: "", ctaLabel: "", linkedProduct: null, image: null };
 
   return (
     <>

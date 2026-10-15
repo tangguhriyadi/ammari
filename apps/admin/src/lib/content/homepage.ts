@@ -3,6 +3,8 @@ import { and, eq } from "drizzle-orm";
 import { fabricColors, productVariants, products, storefrontHomepageSections, type HomepageSectionKey } from "@ammari/db/schema";
 import { ActionError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
+import { cleanupOrphanedContentImages } from "./content-image-queries";
+import { diffOrphanedContentImageKeys } from "./content-image-diff";
 import type {
   FeatureBlockContent,
   HeroContent,
@@ -138,12 +140,20 @@ export async function listPublishableProducts(db: Database = defaultDb): Promise
 
 // ---------- Draft saves (one per section key) ----------
 
+/** Returns the storage keys (if any) now orphaned by this save — a content image that was in
+ * the OLD draft but is in neither the NEW draft nor the currently-published content. Per
+ * docs/plans/storefront-cms.md's "Image uploads": replacing/removing an image in the draft must
+ * never delete a file still referenced by the published version — excluding
+ * `before.publishedContent` from "still referenced" is exactly that guard. The caller deletes
+ * these AFTER this function's transaction commits, never from inside it (CLAUDE.md-adjacent
+ * "database state first, storage cleanup second" rule apps/admin/src/lib/products/
+ * image-queries.ts's deleteProductImage already follows). */
 async function writeSectionDraft(
   key: HomepageSectionKey,
   input: { isVisible: boolean; content: unknown },
   actorStaffUserId: string | null,
   tx: Database,
-): Promise<void> {
+): Promise<string[]> {
   const [before] = await tx.select(SECTION_COLUMNS).from(storefrontHomepageSections).where(eq(storefrontHomepageSections.key, key)).limit(1);
   if (!before) throw new ActionError("Bagian ini tidak ditemukan.");
 
@@ -162,6 +172,8 @@ async function writeSectionDraft(
     before: { isVisible: before.draftIsVisible, content: before.draftContent },
     after: { isVisible: after.draftIsVisible, content: after.draftContent },
   });
+
+  return diffOrphanedContentImageKeys(before.draftContent, input.content, before.publishedContent ?? {});
 }
 
 export interface SaveSectionInput<T> {
@@ -181,6 +193,8 @@ export async function setHomepageSectionDraftVisibility(
   await db.transaction(async (tx) => {
     const [before] = await tx.select(SECTION_COLUMNS).from(storefrontHomepageSections).where(eq(storefrontHomepageSections.key, key)).limit(1);
     if (!before) throw new ActionError("Bagian ini tidak ditemukan.");
+    // Content is unchanged (only isVisible flips), so writeSectionDraft's own diff is always
+    // empty here — nothing to clean up.
     await writeSectionDraft(key, { isVisible, content: before.draftContent }, actorStaffUserId, tx);
   });
 }
@@ -196,15 +210,16 @@ export async function saveHeroDraft(
   actorStaffUserId: string | null,
   db: Database = defaultDb,
 ): Promise<void> {
-  await db.transaction(async (tx) => {
+  const orphanedKeys = await db.transaction(async (tx) => {
     if (input.content.ctaTarget.type === "product") {
       await assertProductRefIsPublishable(
         { productId: input.content.ctaTarget.productId, fabricColorId: input.content.ctaTarget.fabricColorId },
         tx,
       );
     }
-    await writeSectionDraft("hero", input, actorStaffUserId, tx);
+    return writeSectionDraft("hero", input, actorStaffUserId, tx);
   });
+  await cleanupOrphanedContentImages(orphanedKeys);
 }
 
 export async function saveProductGridDraft(
@@ -225,10 +240,11 @@ export async function saveFeatureBlockDraft(
   actorStaffUserId: string | null,
   db: Database = defaultDb,
 ): Promise<void> {
-  await db.transaction(async (tx) => {
+  const orphanedKeys = await db.transaction(async (tx) => {
     await assertProductRefIsPublishable(input.content.linkedProduct, tx);
-    await writeSectionDraft("feature_block", input, actorStaffUserId, tx);
+    return writeSectionDraft("feature_block", input, actorStaffUserId, tx);
   });
+  await cleanupOrphanedContentImages(orphanedKeys);
 }
 
 export async function saveWhyAmmariDraft(
@@ -253,8 +269,9 @@ export async function saveWhyAmmariDraft(
  * nothing — see getPublishedHomepageContent's own doc comment) without a cross-section "finish
  * everything before you can publish anything" wall that nothing in the plan asks for. */
 export async function publishHomepageSections(actorStaffUserId: string | null, db: Database = defaultDb): Promise<void> {
-  await db.transaction(async (tx) => {
+  const orphanedKeys = await db.transaction(async (tx) => {
     const rows = await tx.select(SECTION_COLUMNS).from(storefrontHomepageSections);
+    const orphaned: string[] = [];
 
     for (const row of byCanonicalKey(rows as HomepageSectionRow[])) {
       const [after] = await tx
@@ -277,8 +294,15 @@ export async function publishHomepageSections(actorStaffUserId: string | null, d
         before: { isVisible: row.publishedIsVisible, content: row.publishedContent },
         after: { isVisible: after.publishedIsVisible, content: after.publishedContent },
       });
+
+      // The OLD published image, if any, is replaced by whatever the (now-published) draft had
+      // — nothing can still reference the old one once this commits, since draft === published
+      // from this point on. Collected here, deleted only after the whole transaction commits.
+      orphaned.push(...diffOrphanedContentImageKeys(row.publishedContent ?? {}, row.draftContent));
     }
+    return orphaned;
   });
+  await cleanupOrphanedContentImages(orphanedKeys);
 }
 
 /** Resets every section's DRAFT back to what's currently published (or to the seeded
@@ -286,8 +310,10 @@ export async function publishHomepageSections(actorStaffUserId: string | null, d
  * The admin's "Batalkan perubahan" action — see docs/plans/storefront-cms.md's "allow discarding
  * the draft back to the published version". */
 export async function discardHomepageDraft(actorStaffUserId: string | null, db: Database = defaultDb): Promise<void> {
-  await db.transaction(async (tx) => {
+  const orphanedKeys = await db.transaction(async (tx) => {
     const rows = await tx.select(SECTION_COLUMNS).from(storefrontHomepageSections);
+    const orphaned: string[] = [];
+
     for (const row of rows as HomepageSectionRow[]) {
       const resetContent = row.publishedContent ?? {};
       const resetVisible = row.publishedIsVisible ?? true;
@@ -307,6 +333,12 @@ export async function discardHomepageDraft(actorStaffUserId: string | null, db: 
         before: { isVisible: row.draftIsVisible, content: row.draftContent },
         after: { isVisible: after.draftIsVisible, content: after.draftContent },
       });
+
+      // The discarded draft's own image, if different from what it was just reset to, is now
+      // unreferenced by anything (the new draft equals published, exactly what resetContent is).
+      orphaned.push(...diffOrphanedContentImageKeys(row.draftContent, resetContent));
     }
+    return orphaned;
   });
+  await cleanupOrphanedContentImages(orphanedKeys);
 }
