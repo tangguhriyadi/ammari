@@ -1,0 +1,187 @@
+# Builds Docker images for apps/admin and apps/web (+ the packages/db migrator when it's
+# affected), pushes them to GHCR tagged with the commit SHA, then deploys to the dev VPS over
+# SSH — migrations first, aborting the whole deploy on failure, then the app containers
+# (docs/plans/deploy-dev.md, docs/deploy.md). Never builds on the VPS itself (docs/SPEC.md §2.3).
+#
+# Manual run with `sha` set is a ROLLBACK: skips the build entirely and redeploys images already
+# pushed under that SHA (never re-runs their migrator — see CLAUDE.md's migration
+# backward-compatibility rule, which is exactly what makes this safe).
+name: Deploy (dev)
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to redeploy (rollback). Leave empty to build and deploy HEAD."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      is_rollback: ${{ steps.resolve.outputs.is_rollback }}
+      images: ${{ steps.affected.outputs.images }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # `${{ inputs.sha }}` is template-substituted into this script as raw text BEFORE bash
+      # parses it — the classic GitHub Actions script-injection sink. Routing it through `env:`
+      # first makes it inert here (a shell *value*, not script text); the strict hex-digest
+      # format check is what makes it inert downstream too, at the actual SSH command this SHA
+      # later gets embedded into (deploy job, `remote-deploy.sh`'s invocation) — a free-form
+      # string there could inject shell commands into that remote command line (security-reviewer
+      # finding). A collaborator with workflow_dispatch access is the only one who could ever
+      # reach this, but that's "push to dev" turning into "root RCE on the VPS", not nothing.
+      - name: Resolve target SHA
+        id: resolve
+        env:
+          RAW_SHA: ${{ inputs.sha }}
+        run: |
+          if [ -n "$RAW_SHA" ]; then
+            if ! [[ "$RAW_SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
+              echo "::error::sha input must be a hex commit SHA (7-40 lowercase hex chars), got: $RAW_SHA"
+              exit 1
+            fi
+            echo "sha=$RAW_SHA" >> "$GITHUB_OUTPUT"
+            echo "is_rollback=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "is_rollback=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Which image(s) actually need rebuilding. A plain path-prefix check over the git diff,
+      # not `turbo run build --affected` — for this repo's shape it's exactly equivalent (every
+      # app transpiles every package in packages/*, so "anything under packages/ changed" is
+      # precisely turbo's own dependency-graph answer here too) and easier to audit than parsing
+      # turbo's dry-run output. Falls back to "build everything" whenever the diff itself can't
+      # be computed (first push to the branch, a force-push, or any other case where
+      # `github.event.before` isn't a commit we actually have) — see docs/plans/deploy-dev.md.
+      - name: Determine affected images
+        id: affected
+        if: steps.resolve.outputs.is_rollback == 'false'
+        run: |
+          build_admin=false
+          build_web=false
+          build_migrator=false
+
+          if git cat-file -e "${{ github.event.before }}" 2>/dev/null && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            changed="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")"
+          else
+            changed=""  # unknown base — fall through to "build everything" below
+          fi
+
+          if [ -z "$changed" ]; then
+            build_admin=true
+            build_web=true
+            build_migrator=true
+          else
+            echo "$changed" | grep -Eq '^(apps/admin/|packages/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|turbo\.json$|\.dockerignore$|\.github/workflows/deploy-dev\.yml$)' && build_admin=true
+            echo "$changed" | grep -Eq '^(apps/web/|packages/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|turbo\.json$|\.dockerignore$|\.github/workflows/deploy-dev\.yml$)' && build_web=true
+            echo "$changed" | grep -Eq '^(packages/db/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|turbo\.json$|\.dockerignore$|\.github/workflows/deploy-dev\.yml$)' && build_migrator=true
+          fi
+
+          images="[]"
+          [ "$build_admin" = true ] && images=$(echo "$images" | jq -c '. + ["admin"]')
+          [ "$build_web" = true ] && images=$(echo "$images" | jq -c '. + ["web"]')
+          [ "$build_migrator" = true ] && images=$(echo "$images" | jq -c '. + ["migrator"]')
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+          echo "Affected images: $images"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.is_rollback == 'false' && needs.plan.outputs.images != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.plan.outputs.images) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Dockerfile path
+        id: dockerfile
+        run: |
+          case "${{ matrix.image }}" in
+            admin) echo "path=apps/admin/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+            web) echo "path=apps/web/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+            migrator) echo "path=packages/db/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # VPS architecture is x86_64 (confirmed via `uname -m` on the VPS,
+      # docs/plans/deploy-dev.md) — building for linux/amd64 only, no QEMU/cross-build needed.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.dockerfile.outputs.path }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/tangguhriyadi/ammari-${{ matrix.image }}:${{ needs.plan.outputs.sha }}
+            ghcr.io/tangguhriyadi/ammari-${{ matrix.image }}:dev-latest
+
+  deploy:
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # Never --delete: deploy/env/ (the REAL admin.env/web.env, hand-maintained on the server),
+      # deploy/caddy/certs/ (the real origin cert+key), and deploy/cloudflare/origin-pull-ca.pem
+      # all exist ONLY on the server, never in this repo (docs/deploy.md) — a sync that deletes
+      # anything missing from the source would destroy them.
+      - name: Sync deploy/ to the server
+        env:
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+        run: |
+          rsync -az \
+            --exclude 'env/' \
+            --exclude 'caddy/certs/' \
+            --exclude 'cloudflare/origin-pull-ca.pem' \
+            -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
+            deploy/ "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST:/opt/ammari/"
+
+      - name: Run remote-deploy.sh
+        env:
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST" \
+            "ADMIN_IMAGE_TAG=$SHA WEB_IMAGE_TAG=$SHA MIGRATOR_IMAGE_TAG=$SHA /opt/ammari/remote-deploy.sh"

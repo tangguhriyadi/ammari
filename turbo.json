@@ -15,7 +15,18 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "env": ["DATABASE_URL"],
+      // BETTER_AUTH_URL: packages/auth's create-{staff,customer}-auth.ts reads this eagerly at
+      // module load (not just at request time), and that module is reachable from every
+      // page/route — `next build`'s page-data-collection step throws without it. Discovered
+      // building apps/admin/Dockerfile/apps/web/Dockerfile, where (unlike a local `pnpm build`,
+      // which Next's own dotenv loading satisfies straight from apps/*/.env regardless of what
+      // turbo passes through) there is no .env file at all, only a real process env var — which
+      // turbo's strict envMode silently drops unless declared here. STAFF_BETTER_AUTH_SECRET/
+      // CUSTOMER_BETTER_AUTH_SECRET: same discovery — `next build` always runs with
+      // NODE_ENV=production (Next sets this itself, regardless of the ambient shell), which
+      // trips create-{staff,customer}-auth.ts's "refuse to start with no secret in production"
+      // check during page-data collection.
+      "env": ["DATABASE_URL", "BETTER_AUTH_URL", "STAFF_BETTER_AUTH_SECRET", "CUSTOMER_BETTER_AUTH_SECRET"],
       "outputs": [".next/**", "!.next/cache/**"]
     },
     "dev": {

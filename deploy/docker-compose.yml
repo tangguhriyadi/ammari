@@ -1,0 +1,69 @@
+# Server-side stack (docs/deploy.md) — synced onto the VPS from this repo on every deploy
+# (deploy/remote-deploy.sh), at /opt/ammari/docker-compose.yml. Only `caddy` publishes ports;
+# `admin`/`web` are reachable only on the internal network, never directly from the internet —
+# this, together with Caddy's own Cloudflare-origin-pull requirement (deploy/Caddyfile), is what
+# makes trusting `cf-connecting-ip` in the apps' own rate limiting (packages/auth) safe
+# (docs/plans/deploy-dev.md).
+#
+# Image tags come from /opt/ammari/.env (ADMIN_IMAGE_TAG, WEB_IMAGE_TAG) — rewritten by
+# deploy/remote-deploy.sh on every deploy; rollback is just rewriting that file to an older SHA
+# and re-running `docker compose up -d`.
+#
+# Log rotation is set here (not relying on a separate, easy-to-forget VPS daemon.json edit) —
+# json-file with a small cap per container matters on a 2GB-RAM/disk-constrained box.
+# Pinned so the compose project (and therefore its network/volume names, e.g. `ammari_internal`)
+# is predictable regardless of which directory this file sits in or what the CWD was when
+# `docker compose` ran it — deploy/remote-deploy.sh's health-check step relies on this name.
+name: ammari
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  caddy:
+    image: caddy:2.10.2
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/certs:/etc/caddy/certs:ro
+      - ./cloudflare:/etc/caddy/cloudflare:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+    depends_on:
+      - admin
+      - web
+
+  admin:
+    image: ghcr.io/tangguhriyadi/ammari-admin:${ADMIN_IMAGE_TAG}
+    restart: unless-stopped
+    logging: *default-logging
+    env_file:
+      - ./env/admin.env
+    networks:
+      - internal
+
+  web:
+    image: ghcr.io/tangguhriyadi/ammari-web:${WEB_IMAGE_TAG}
+    restart: unless-stopped
+    logging: *default-logging
+    env_file:
+      - ./env/web.env
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

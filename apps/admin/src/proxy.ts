@@ -17,7 +17,14 @@ export async function proxy(request: NextRequest) {
   // "/api/test" is the e2e-only sign-in backdoor (app/api/test/login/route.ts) — proxy merely
   // lets the request reach the handler; the real fail-closed gate (NODE_ENV, an explicit opt-in
   // flag, an @e2e.ammari.test email suffix, and a localhost-only check) lives there, not here.
-  if (PUBLIC_PATHS.includes(pathname) || pathname.startsWith("/api/auth") || pathname.startsWith("/api/test")) {
+  // "/api/health" (docs/deploy.md) must stay reachable with no session — Docker Compose's own
+  // healthcheck and the deploy script's post-restart poll both call it unauthenticated.
+  if (
+    PUBLIC_PATHS.includes(pathname) ||
+    pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/test") ||
+    pathname === "/api/health"
+  ) {
     return NextResponse.next();
   }
 

@@ -1,0 +1,29 @@
+# Keeps every real secret file off the Docker build context entirely — this is the actual
+# control point for "images are environment-agnostic" (docs/plans/deploy-dev.md): Next.js's
+# standalone output copies any `.env*` file it finds next to the app at BUILD time into the
+# image, so if a real `.env` ever reached the build context, whatever secrets were in it on the
+# machine that ran `docker build` would ship inside the image layer. `.env.example` files carry
+# no secrets and aren't needed by the build either way.
+.env*
+
+node_modules
+**/node_modules
+.next
+**/.next
+.next-e2e
+**/.next-e2e
+.turbo
+**/.turbo
+
+.git
+
+playwright-report
+test-results
+blob-report
+**/playwright-report
+**/test-results
+**/blob-report
+
+*.log
+.DS_Store
+**/*.tsbuildinfo

@@ -67,6 +67,12 @@ npm dist-tag, because their actual runtime/peer support lags behind:
   `UPDATE ... WHERE ... RETURNING`. Never implement these as check-then-write (a `SELECT` to
   check a condition followed by a separate `INSERT`/`UPDATE`); that pattern race-conditions under
   concurrent requests.
+- **A migration must stay backward-compatible with the previously-deployed release for at least
+  one deploy** (expand/contract: add nullable/defaulted columns, don't drop or rename a column
+  the current release still reads/writes in the same deploy that adds its replacement). Rollback
+  (see `docs/deploy.md`) redeploys an older image against whatever schema is already live — it
+  never reverses or re-runs a migration — so a migration that isn't backward-compatible makes
+  rollback unsafe for exactly the release that needed it.
 - **Reference data the code depends on — permission keys, channel ids, required lookup rows —
   must ship in a migration** (idempotent `INSERT ... ON CONFLICT DO NOTHING`), never only in
   `packages/db/src/seed.ts`. Nothing re-runs `db:seed` against a real database when that kind of

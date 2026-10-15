@@ -1,0 +1,16 @@
+{
+  "_comment": "Template, not yet applied (docs/plans/deploy-dev.md, docs/SPEC.md §11). Mirrors bucket-policy.dev.json but scoped to the PROD bucket's own ARN and prefix (prod uses no S3_KEY_PREFIX — see deploy/env/web.env.example's comment on that var) once that bucket exists. Replace REPLACE_WITH_PROD_BUCKET_NAME below, then apply via the provider's console exactly like the dev policy was.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublicReadProductImages",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::REPLACE_WITH_PROD_BUCKET_NAME/products/*",
+        "arn:aws:s3:::REPLACE_WITH_PROD_BUCKET_NAME/healthcheck/*"
+      ]
+    }
+  ]
+}
