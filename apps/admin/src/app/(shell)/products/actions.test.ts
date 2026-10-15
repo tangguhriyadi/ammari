@@ -19,6 +19,7 @@ const {
   setProductThumbnailAction,
   updateImageAltTextAction,
   saveRecipeAction,
+  updateProductStorefrontAction,
 } = await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
@@ -193,4 +194,53 @@ describe("bulkUpdateVariantsAction field validation", () => {
     expect(Object.keys(result.fieldErrors!)).toEqual(["SKU-INVALID:minStockQty"]);
     expect(result.fieldErrors!["SKU-VALID:minStockQty"]).toBeUndefined();
   });
+});
+
+describe("updateProductStorefrontAction requires content.manage, NOT products.manage", () => {
+  const VALID_INPUT = {
+    isPublishedOnStorefront: false,
+    storefrontDescriptionHtml: "<p>Deskripsi</p>",
+    allsizeFitNote: "",
+    sizeChartId: null,
+  };
+
+  test("rejects a session with no permissions at all", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions([]));
+    await expect(updateProductStorefrontAction("00000000-0000-0000-0000-000000000000", VALID_INPUT)).rejects.toThrow();
+  });
+
+  // The split permission model (docs/plans/storefront-cms.md "Admin UX"/"Security") is the
+  // whole point of this action existing separately from updateProductAction — products.manage
+  // alone must NOT be enough to touch publish status/description/size chart.
+  test("rejects a session holding products.manage but NOT content.manage", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["products.manage"]));
+    await expect(updateProductStorefrontAction("00000000-0000-0000-0000-000000000000", VALID_INPUT)).rejects.toThrow();
+  });
+
+  test("an unauthenticated session (null) redirects rather than proceeding", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(null);
+    await expect(updateProductStorefrontAction("00000000-0000-0000-0000-000000000000", VALID_INPUT)).rejects.toThrow();
+  });
+
+  test("an oversized storefrontDescriptionHtml is rejected by validation before touching the DB", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const result = await updateProductStorefrontAction("00000000-0000-0000-0000-000000000000", {
+      ...VALID_INPUT,
+      storefrontDescriptionHtml: "a".repeat(20_001),
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("an invalid sizeChartId (not a UUID) is rejected by validation before touching the DB", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const result = await updateProductStorefrontAction("00000000-0000-0000-0000-000000000000", {
+      ...VALID_INPUT,
+      sizeChartId: "not-a-uuid",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  // The success/business-rule path (publish-while-inactive, missing size chart, missing alt
+  // text, sanitization) is exercised against a real test db in storefront.test.ts — this file
+  // only verifies the permission + shape-validation rejection paths, which never reach the DB.
 });

@@ -47,6 +47,13 @@ export const E2E_PACKING_STICKERS_EMAIL = "packing-stickers@e2e.ammari.test";
 // in once but runs its edit/reorder flow at both a mobile and a desktop viewport in the same
 // run. Owner role (products.manage), same as products.spec.ts's own E2E_OWNER_EMAIL.
 export const E2E_PRODUCT_HIGHLIGHTS_EMAIL = "product-highlights@e2e.ammari.test";
+// A dedicated email for storefront-section.spec.ts (docs/plans/storefront-cms.md) — same "fresh
+// email, clean OTP throttle" reasoning as every dedicated fixture above; this spec logs in once
+// but runs a full create-fabric/product/photo/size-chart/publish flow at both a mobile and a
+// desktop viewport in the same run, plus visits /content/size-charts. Owner role (products.manage
+// AND content.manage — owner gets every permission except OWNER_EXCLUDED_PERMISSION_KEYS, and
+// content.manage isn't in that list), same as E2E_PRODUCT_HIGHLIGHTS_EMAIL.
+export const E2E_STOREFRONT_EMAIL = "storefront@e2e.ammari.test";
 
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
 // lib/products/queries.ts. A distinct name prefix keeps this from colliding with anything a
@@ -206,6 +213,7 @@ export default async function globalSetup(): Promise<void> {
   await ensureStaffFixture(E2E_PACKING_PRINT_WEBKIT_EMAIL, "E2E Packing Print WebKit", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PACKING_STICKERS_EMAIL, "E2E Packing Stickers", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PRODUCT_HIGHLIGHTS_EMAIL, "E2E Product Highlights", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_STOREFRONT_EMAIL, "E2E Storefront", OWNER_ROLE_KEY);
 
   const [paginationFabric] = await db
     .insert(fabrics)

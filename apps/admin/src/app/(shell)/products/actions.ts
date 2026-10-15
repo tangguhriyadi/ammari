@@ -4,11 +4,13 @@ import { z } from "zod";
 import { PRODUCT_CLOSURES, SIZE_MODES, SIZES } from "@ammari/db/schema";
 import { PRODUCT_HIGHLIGHT_KEYS } from "@ammari/db/highlights";
 import { generateProductCode, generateSlug } from "@ammari/db/catalog";
+import { MAX_STOREFRONT_DESCRIPTION_HTML_LENGTH } from "@ammari/content-sanitize";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/products/action-result";
 import * as productQueries from "@/lib/products/queries";
 import * as imageQueries from "@/lib/products/image-queries";
+import * as storefrontQueries from "@/lib/products/storefront";
 import * as recipeQueries from "@/lib/inventory/recipes";
 
 // ---------- Products ----------
@@ -26,10 +28,22 @@ const highlightsSchema = z
   .refine((keys) => new Set(keys).size === keys.length, "Keunggulan tidak boleh duplikat.")
   .transform((keys) => PRODUCT_HIGHLIGHT_KEYS.filter((key) => keys.includes(key)));
 
+// URL-safe: lowercase letters/digits, hyphen-separated, no leading/trailing/double hyphens —
+// exactly the shape catalog/codes.ts's generateSlug() always produces, so an admin typing their
+// own slug (rather than accepting the auto-suggestion) can't save something that would break
+// `/products/[slug]` (apps/web) or collide oddly with a URL-encoded character.
+const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const productSlugSchema = z
+  .string()
+  .trim()
+  .min(1, "Slug wajib diisi.")
+  .toLowerCase()
+  .refine((slug) => SLUG_PATTERN.test(slug), "Slug hanya boleh huruf kecil, angka, dan tanda hubung (mis. gamis-basic).");
+
 const createProductSchema = z.object({
   name: z.string().trim().min(1, "Nama produk wajib diisi."),
   code: z.string().trim().min(1, "Kode produk wajib diisi.").toUpperCase(),
-  slug: z.string().trim().min(1, "Slug wajib diisi.").toLowerCase(),
+  slug: productSlugSchema,
   fabricId: z.string().uuid("Pilih bahan."),
   closure: z.enum(PRODUCT_CLOSURES),
   sizeMode: z.enum(SIZE_MODES),
@@ -99,6 +113,52 @@ export async function updateProductAction(
  * tests use the exact same derivation. */
 export async function suggestProductIdentifiersAction(name: string): Promise<{ code: string; slug: string }> {
   return { code: generateProductCode(name), slug: generateSlug(name) };
+}
+
+// ---------- Storefront section (content.manage, NOT products.manage) ----------
+//
+// docs/plans/storefront-cms.md's "Admin UX"/"Security" sections — publish status, the
+// storefront description, the all-size fit note, and size chart assignment are gated by
+// `content.manage` specifically, separate from every other product-form field above (gated by
+// `products.manage`). A staff user with one permission but not the other can use exactly one of
+// these two actions, never both.
+
+const updateProductStorefrontSchema = z.object({
+  isPublishedOnStorefront: z.boolean(),
+  // Raw TipTap HTML — NOT sanitized here. `storefrontQueries.updateProductStorefront` does that,
+  // server-side, unconditionally, every time (see @ammari/content-sanitize's own doc comment on
+  // why that boundary belongs to the one function that actually writes the column, not to this
+  // schema). `.max()` here is just a fast, friendly pre-check against the sanitizer's own
+  // internal cap, so an oversized paste fails with a clean message instead of the sanitizer's
+  // own thrown error.
+  storefrontDescriptionHtml: z
+    .string()
+    .max(MAX_STOREFRONT_DESCRIPTION_HTML_LENGTH, "Deskripsi terlalu panjang.")
+    .optional(),
+  allsizeFitNote: z.string().trim().max(300, "Catatan terlalu panjang.").optional(),
+  sizeChartId: z.string().uuid("Size chart tidak valid.").nullable().optional(),
+});
+
+export async function updateProductStorefrontAction(
+  productId: string,
+  input: z.input<typeof updateProductStorefrontSchema>,
+): Promise<ActionResult<{ id: string }>> {
+  const session = await requirePermission("content.manage");
+  const parsed = updateProductStorefrontSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    const product = await storefrontQueries.updateProductStorefront(
+      productId,
+      {
+        isPublishedOnStorefront: parsed.data.isPublishedOnStorefront,
+        storefrontDescriptionHtml: parsed.data.storefrontDescriptionHtml ?? null,
+        allsizeFitNote: parsed.data.allsizeFitNote || null,
+        sizeChartId: parsed.data.sizeChartId ?? null,
+      },
+      session.staffUser.id,
+    );
+    return { id: product.id };
+  });
 }
 
 // ---------- Variants ----------

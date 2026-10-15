@@ -53,6 +53,18 @@ export async function getColorsMissingPhotos(productId: string, db: Database = d
   return rows.filter((row) => row.imageCount === 0).map((row) => ({ id: row.id, name: row.name }));
 }
 
+/** Required-alt-text invariant, checked at storefront-publish time only (never blocks a normal
+ * photo upload/save) — docs/plans/storefront-cms.md's "the per-color ordered images with
+ * required alt text requirement is covered by making alt text required AT PUBLISH TIME
+ * (app-level), not a schema change" — `product_images.alt_text` stays nullable (plenty of
+ * pre-existing rows have none) so this is deliberately NOT a DB CHECK. Returns true if ANY image
+ * of this product (general or per-color) has a null/empty alt text. */
+export async function hasImagesMissingAltText(productId: string, db: Database = defaultDb): Promise<boolean> {
+  const rows = await db.select({ altText: productImages.altText }).from(productImages).where(eq(productImages.productId, productId));
+  if (rows.length === 0) return false;
+  return rows.some((row) => !row.altText || row.altText.trim().length === 0);
+}
+
 export async function getImageCountForColor(
   productId: string,
   fabricColorId: string,

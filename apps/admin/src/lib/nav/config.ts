@@ -9,6 +9,7 @@ import {
   PackageCheck,
   Palette,
   Receipt,
+  Ruler,
   Settings,
   ShieldCheck,
   ShoppingBag,
@@ -110,6 +111,18 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: Tags,
     group: "Katalog",
     permissionKeys: ["inventory.view", "inventory.manage"],
+    mobilePrimary: false,
+  },
+  {
+    // The future "Konten" area (docs/plans/storefront-cms.md) will eventually also hold the
+    // homepage section editors (session 4, not built yet) — this group is created now, with just
+    // this one item, rather than parking size charts under "Katalog" temporarily, so session 4
+    // only has to ADD items here, never rename/move this one later.
+    label: "Ukuran",
+    href: "/content/size-charts",
+    icon: Ruler,
+    group: "Konten",
+    permissionKeys: ["content.manage"],
     mobilePrimary: false,
   },
   {
