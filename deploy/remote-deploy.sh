@@ -10,6 +10,12 @@
 # CLAUDE.md's new migration backward-compatibility rule exists so that an older app SHA is
 # always safe against whatever the CURRENT schema is, and the migrator for that older SHA is
 # never re-run on rollback, only the app images are swapped back).
+#
+# The workflow's `retag` job (docs/deploy.md's "Image tagging scheme") guarantees all three
+# images exist under the same SHA for any commit that reached this script via a normal deploy —
+# but we still verify before pulling: a hand-run rollback to a SHA from before that job existed,
+# or any other way this script gets invoked outside the workflow, could still name a SHA that's
+# missing one of the three.
 set -euo pipefail
 
 : "${ADMIN_IMAGE_TAG:?set ADMIN_IMAGE_TAG to the commit SHA to deploy}"
@@ -18,6 +24,23 @@ set -euo pipefail
 
 REGISTRY="ghcr.io/tangguhriyadi"
 cd "$(dirname "$0")"
+
+echo "==> Verifying images exist before touching anything (admin=$ADMIN_IMAGE_TAG web=$WEB_IMAGE_TAG migrator=$MIGRATOR_IMAGE_TAG)"
+missing=0
+for ref in \
+  "$REGISTRY/ammari-admin:$ADMIN_IMAGE_TAG" \
+  "$REGISTRY/ammari-web:$WEB_IMAGE_TAG" \
+  "$REGISTRY/ammari-migrator:$MIGRATOR_IMAGE_TAG"
+do
+  if ! DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect "$ref" >/dev/null 2>&1; then
+    echo "==> MISSING: $ref does not exist in GHCR" >&2
+    missing=1
+  fi
+done
+if [ "$missing" -ne 0 ]; then
+  echo "==> Aborting before pulling or touching anything: one or more images listed above are missing" >&2
+  exit 1
+fi
 
 echo "==> Pulling images (admin=$ADMIN_IMAGE_TAG web=$WEB_IMAGE_TAG migrator=$MIGRATOR_IMAGE_TAG)"
 docker pull "$REGISTRY/ammari-admin:$ADMIN_IMAGE_TAG"

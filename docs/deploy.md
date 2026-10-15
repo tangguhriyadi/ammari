@@ -216,6 +216,30 @@ UI (`/roles-staff`) once you're logged in, not for re-running this script with d
 Idempotent in the safe sense (re-running never duplicates a row or crashes), but not a "fix this
 person's role" tool. Log in at `https://admin.ammari.my.id` with the email you seeded to confirm.
 
+## Image tagging scheme
+
+Every commit SHA that `deploy-dev.yml` deploys must have all three images
+(`ammari-admin`/`ammari-web`/`ammari-migrator`) pushed to GHCR under that same SHA tag, because
+`remote-deploy.sh` always pulls all three by one SHA — it has no notion of "this app didn't
+change." But the workflow only *rebuilds* the images actually affected by the commit (the
+`plan` job's path-prefix check). To close that gap:
+
+- Every image push (the `build` job) tags **both** `ghcr.io/tangguhriyadi/ammari-<image>:<sha>`
+  and `ghcr.io/tangguhriyadi/ammari-<image>:dev-latest`. `dev-latest` is a moving tag: it always
+  points at the most recently built content for that one image.
+- A separate `retag` job runs after `build` and, for each of admin/web/migrator that **wasn't**
+  rebuilt this run, points this commit's `:<sha>` tag at that image's current `:dev-latest`
+  digest with `docker buildx imagetools create` — a manifest-only copy, no pulling or re-pushing
+  layers.
+- This is safe to do unconditionally because the `deploy-dev` concurrency group serializes runs
+  (no two can race to move `dev-latest`) and `dev` only ever moves forward (no force-push), so
+  for an image that wasn't rebuilt this run, `dev-latest` can never be newer than this commit
+  (nothing later has built it yet) and can never be older than this commit's actual content
+  (nothing has changed that app's inputs since the last build, by definition of "not affected").
+- Rollback (`workflow_dispatch` with `sha` set) skips `build` and `retag` entirely and redeploys
+  whatever was already pushed under that SHA — which, as long as it was deployed after this
+  scheme existed, is guaranteed to have all three tags.
+
 ## Rollback
 
 ```
@@ -240,6 +264,15 @@ the next deploy syncs it to the server and reloads Caddy automatically.
 
 Real failures hit during the first dev rollout, and their fixes:
 
+- **Deploy fails with `failed to resolve reference ... ammari-web:<sha>: not found` (or
+  `ammari-admin`/`ammari-migrator`), even though the build step reported success.** Hit once
+  (commit `85c30f3`, admin-only change): the affected-image detection correctly built and pushed
+  only `ammari-admin:<sha>`, but `remote-deploy.sh` always pulls all three images at that same
+  SHA, and `ammari-web`/`ammari-migrator` were never pushed under it. Fixed by the `retag` job
+  and the "Image tagging scheme" section above — every deploy now gets all three SHA tags
+  regardless of which images were actually rebuilt. `remote-deploy.sh` also now verifies all
+  three images exist (`docker manifest inspect`) before pulling or touching anything, so a
+  missing image fails fast with a clear message instead of aborting mid-pull.
 - **Migrations fail with `28P01 password authentication failed`, but the password is right.**
   Sumopod's direct port (`65434`, §0) expects the username **without** the `.jkt1_003` suffix
   shown elsewhere in Sumopod's dashboard — using the suffixed form on this port authenticates as

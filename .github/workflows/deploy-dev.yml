@@ -3,8 +3,21 @@
 # SSH — migrations first, aborting the whole deploy on failure, then the app containers
 # (docs/plans/deploy-dev.md, docs/deploy.md). Never builds on the VPS itself (docs/SPEC.md §2.3).
 #
-# Manual run with `sha` set is a ROLLBACK: skips the build entirely and redeploys images already
-# pushed under that SHA (never re-runs their migrator — see CLAUDE.md's migration
+# Every deployed commit SHA must end up with all three images (admin/web/migrator) in GHCR, even
+# though only the affected ones are actually rebuilt — `remote-deploy.sh` always pulls all three
+# by that one SHA. The `retag` job below closes that gap for the unaffected ones: each image push
+# in `build` also moves that image's own `dev-latest` tag forward, so `dev-latest` always points
+# at the most recently built content for that image; `retag` then points this commit's SHA tag at
+# whatever `dev-latest` already is for any image that wasn't rebuilt this run, via
+# `docker buildx imagetools create` (copies the manifest only — no pulling/pushing layers). This
+# is safe because the `deploy-dev` concurrency group serializes runs (no two can race to move
+# `dev-latest`) and dev's history is linear (no force-push), so `dev-latest` for an unbuilt image
+# can never be newer than this commit (nothing later has built it yet) or older than this
+# commit's actual content (nothing changed it since the last build, so the old digest IS this
+# commit's content for that image). See docs/deploy.md's "Image tagging scheme" section.
+#
+# Manual run with `sha` set is a ROLLBACK: skips the build (and retag) entirely and redeploys
+# images already pushed under that SHA (never re-runs their migrator — see CLAUDE.md's migration
 # backward-compatibility rule, which is exactly what makes this safe).
 #
 # `runs-on: ubuntu-24.04` (not `ubuntu-latest`) and every action version below pinned to node24:
@@ -150,14 +163,51 @@ jobs:
             ghcr.io/tangguhriyadi/ammari-${{ matrix.image }}:${{ needs.plan.outputs.sha }}
             ghcr.io/tangguhriyadi/ammari-${{ matrix.image }}:dev-latest
 
-  deploy:
+  # Gives every unaffected image (not in needs.plan.outputs.images) a tag for this commit's SHA,
+  # so `remote-deploy.sh` can always pull admin/web/migrator at the same SHA regardless of which
+  # ones were actually rebuilt. Runs even when `build` is entirely skipped (images == '[]') —
+  # that means ALL THREE are unaffected and all three need retagging. See the file-level comment
+  # above for why `dev-latest` is the right, always-in-range source to retag from.
+  retag:
     needs: [plan, build]
-    if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.is_rollback == 'false' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag unaffected images to this commit's SHA
+        env:
+          SHA: ${{ needs.plan.outputs.sha }}
+          IMAGES: ${{ needs.plan.outputs.images }}
+        run: |
+          set -euo pipefail
+          REGISTRY="ghcr.io/tangguhriyadi"
+          for image in admin web migrator; do
+            if echo "$IMAGES" | jq -e --arg img "$image" 'index($img) != null' >/dev/null; then
+              echo "==> $image was rebuilt this run, already tagged $SHA directly"
+              continue
+            fi
+            echo "==> $image unaffected: pointing $SHA at the current dev-latest digest"
+            docker buildx imagetools create \
+              -t "$REGISTRY/ammari-$image:$SHA" \
+              "$REGISTRY/ammari-$image:dev-latest"
+          done
+
+  deploy:
+    needs: [plan, build, retag]
+    if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.retag.result == 'success' || needs.retag.result == 'skipped')
     runs-on: ubuntu-24.04
     # The DEPLOY_SSH_* secrets this job reads are GitHub Environment secrets on the "dev"
     # environment, not repository secrets (docs/deploy.md §3) — prod reuses the same four secret
     # names under its own "production" environment later, with required reviewers gating it.
-    # Applies to the rollback path too: rollback runs this same job, just with `build` skipped.
+    # Applies to the rollback path too: rollback runs this same job, just with `build`/`retag`
+    # skipped.
     environment: dev
     steps:
       - uses: actions/checkout@v7
