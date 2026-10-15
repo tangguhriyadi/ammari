@@ -1,8 +1,9 @@
 # Plan: Storefront Content Management ("Konten") + Product Storefront Data
 
-**Status:** Draft — all 7 open questions from the first round resolved by the owner (see
-"Resolved decisions" at the bottom). Still awaiting final go-ahead to implement; nothing in this
-plan has been built.
+**Status:** In progress. All 7 first-round open questions, plus 3 second-round ones raised right
+before implementation, are resolved by the owner (see "Resolved decisions" at the bottom).
+**Sessions 1–2 (schema + permission, storefront read layer) are built** — see "Status: sessions
+1–2 implemented" near the bottom. Sessions 3–8 are still unbuilt.
 
 ## Summary
 
@@ -270,11 +271,28 @@ false`, size-chart row or not.
 - **`info_pages`**: `id`, `slug` (`CHECK slug IN ('privacy-policy','terms-of-service','returns-exchange','how-to-order','shipping')` —
   fixed set, matches the five pages named in the brief, two of which already have placeholder
   routes in `apps/web`), `title text not null`, `draft_body text not null`, `published_body text`,
-  `draft_updated_at`, `published_at`, `published_by_staff_user_id`. Body is **Markdown**, not a
-  rich-text/WYSIWYG document — far less to build, and rendered through a markdown renderer with
-  raw HTML disabled (no stored-XSS surface from admin-authored content, which matters once this
-  is "anyone with `content.manage`," not just the owner). Each page gets its own draft/publish
-  (independent pages, unlike the homepage's one atomic publish moment).
+  `draft_updated_at`, `published_at`, `published_by_staff_user_id`. **Body format: the SAME
+  rich-text editor/storage as the storefront description — TipTap, sanitized HTML via
+  `@ammari/content-sanitize`** (owner decision, overriding this section's earlier Markdown
+  design below) — not a second, parallel rich-text format for the admin to learn, and not a
+  reason to maintain two different sanitizers. The allowed-tags set may need to be a strict
+  superset of the description's (e.g. headings, for pages like "Cara Belanja") — confirm/extend
+  the allowlist in the session that builds this, rather than assuming the description's exact 7
+  tags are enough for every info page. Each page still gets its own draft/publish (independent
+  pages, unlike the homepage's one atomic publish moment).
+  - ~~Body is **Markdown**, not a rich-text/WYSIWYG document — far less to build, and rendered
+    through a markdown renderer with raw HTML disabled (no stored-XSS surface from
+    admin-authored content, which matters once this is "anyone with `content.manage`," not just
+    the owner).~~ Superseded by the owner decision above.
+  - **`/privacy-policy` and `/terms-of-service` must keep their exact current URLs** — both are
+    registered in the Google OAuth consent screen and will be used for payment-gateway
+    verification, so the route can never move or 404 even for a moment. The session that builds
+    `info_pages` migrates each page's *existing hard-coded content* (today's
+    `apps/web/src/app/privacy-policy/page.tsx` / `terms-of-service/page.tsx`) into the CMS as
+    that row's initial `published_body` (already "published" on day one, not starting from an
+    empty draft the way the homepage sections do) and swaps each route's component to read from
+    `info_pages` instead of its hard-coded JSX — the URL path itself never changes, only where
+    its content comes from.
 - **`store_settings`**: a genuine singleton (`id` fixed to a known constant, or a `CHECK (id = 1)`
   on a plain integer PK — same idiom as any single-row settings table) holding
   `whatsapp_number`, `support_email`, `business_address`. **Save = live**, per the draft/publish
@@ -554,14 +572,14 @@ from `lucide-react`, e.g. `LayoutTemplate`).
 
 ## Suggested implementation order (sessions, each independently deployable)
 
-1. **Schema + permission** — ships: `content.manage` permission + grants (migration-based,
+1. **Schema + permission** (✅ done, 2026-10-15) — ships: `content.manage` permission + grants (migration-based,
    default `super_admin`/`owner`); `storefront_homepage_sections` table + 4 seeded rows;
    `size_charts`/`size_chart_rows` (fixed bust/length/sleeve/height-range columns); products'
    storefront columns (`is_published_on_storefront`, `storefront_description`,
    `allsize_fit_note`, `size_chart_id`). No UI yet. **Owner can test:** nothing visible — verify
    via `db:studio` that the migration applied cleanly and a staff user's permission set includes
    `content.manage`.
-2. **`packages/db` storefront read layer** — ships: the new query module + its cost-leak/
+2. **`packages/db` storefront read layer** (✅ done, 2026-10-15) — ships: the new query module + its cost-leak/
    description-distinctness test; `getActiveProductBySlug` deleted. **Owner can test:** nothing
    UI-visible; verify the new test suite passes (`pnpm --filter @ammari/db test`).
 3. **`@ammari/content-sanitize` + admin: product form "Storefront" section** — ships: the shared
@@ -592,11 +610,15 @@ from `lucide-react`, e.g. `LayoutTemplate`).
    pass). **Owner can test:** the full loop end-to-end — publish a homepage change or a product,
    see it live on `ammari.my.id` within the revalidation window (near-instant via the webhook,
    worst case within the hour via the fallback).
-8. **Phase 2** — ships: `info_pages` (Markdown, own draft/publish per page) + `store_settings`
-   (save = live), their admin editors, and the existing `/privacy-policy`/`/terms-of-service`
-   placeholder routes (plus the three new pages) wired to read from them. **Owner can test:** edit
-   and publish each info page's text, confirm the footer's WhatsApp/email/address reflect a
-   store-settings save immediately.
+8. **Phase 2** — ships: `info_pages` (TipTap rich text, same editor/sanitizer as the storefront
+   description — not Markdown, see the owner decision in "Phase 2" above — own draft/publish per
+   page) + `store_settings` (save = live), their admin editors, and `/privacy-policy`/
+   `/terms-of-service` (migrated from today's hard-coded JSX into the CMS, URLs unchanged —
+   required for Google OAuth consent screen + payment-gateway verification, see "Phase 2" above)
+   plus the three new pages, all wired to read from `info_pages`. **Owner can test:** edit and
+   publish each info page's text (including `/privacy-policy`/`/terms-of-service`, confirming
+   those URLs still resolve and show the migrated content, not a 404 or a blank page), confirm
+   the footer's WhatsApp/email/address reflect a store-settings save immediately.
 
 (Phase 3 — the `/products` catalog index — is intentionally not in this list; it's later,
 separate work, per the resolved scope below.)
@@ -637,6 +659,35 @@ no version log), localization/multi-language (Indonesian-only, per CLAUDE.md).
    created via migration, granted by default to `super_admin`/`owner`, and assignable to any
    other role later purely through the roles/staff admin screen — no hardcoded role-name checks
    anywhere in this feature.
+
+## Resolved decisions (second round, before implementing sessions 1–2)
+
+8. **Confirmed**: the 4 homepage section rows (empty/default content, hidden-until-published —
+   see "Homepage content" above) are created by a **migration** (0019), not `seed.ts` — this was
+   already this plan's design (CLAUDE.md's "reference data the code depends on ships in a
+   migration" rule), and the owner explicitly confirmed it before implementation rather than
+   leaving it implicit. Same for `content.manage`: created and granted to `super_admin`/`owner`
+   in the same migration, never relying on a `db:seed` re-run.
+9. **Phase 2 info pages use TipTap** (the same rich-text editor/sanitizer as the storefront
+   description), **not Markdown** — overrides this doc's earlier Phase 2 design (see the
+   strikethrough in "Phase 2" above). Reason: one rich-text stack to build/maintain/sanitize, not
+   two; the admin only ever learns one editor.
+10. **`/privacy-policy` and `/terms-of-service` must keep their exact current URLs** through the
+    Phase 2 migration into `info_pages` — they're registered in the Google OAuth consent screen
+    and used for payment-gateway verification, so Phase 2 migrates each page's existing
+    hard-coded content into the CMS as that row's initial `published_body`, rather than starting
+    those two pages from an empty draft the way new info pages would. See "Phase 2" above and
+    session 8's updated description.
+
+## Status: sessions 1–2 implemented (2026-10-15)
+
+Migration 0019 (`packages/db/drizzle/0019_storefront_cms_schema_and_permission.sql`), the Drizzle
+schema (`schema/content.ts`, `schema/catalog.ts`'s new product columns, `schema/constants.ts`'s
+`HOMEPAGE_SECTION_KEYS`/`WHY_AMMARI_ICON_KEYS`), the `content.manage` permission, and the
+storefront read layer (`storefront/queries.ts`, replacing `getActiveProductBySlug`) are built and
+tested — nothing visible in admin or web yet, per scope. See the implementation report for what
+was verified and one unrelated bug this work surfaced (a stock-quantity correlation bug in two
+existing `apps/admin` stock queries, left unfixed — out of this plan's scope).
 
 ## Remaining nuances (not blocking, worth a quick look before/while implementing)
 

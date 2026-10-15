@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { fabrics, products } from "../src/schema";
 import { PRODUCT_HIGHLIGHT_KEYS } from "../src/schema/constants";
-import { getActiveProductBySlug } from "../src/queries";
 import { withRollback, type TestTx } from "./helpers";
 
 async function insertFabricFixture(tx: TestTx, overrides: Partial<typeof fabrics.$inferInsert> = {}) {
@@ -108,34 +107,37 @@ describe("products.highlights", () => {
   });
 });
 
-describe("getActiveProductBySlug", () => {
-  test("returns an active product by slug, including its highlights", async () => {
+// getActiveProductBySlug (the old placeholder read, a bare `.select()`) is deleted — replaced by
+// packages/db/src/storefront/queries.ts's getStorefrontProductBySlug, covered by
+// test/storefront-queries.test.ts.
+
+describe("products.is_published_on_storefront", () => {
+  test("defaults to false", async () => {
     await withRollback(async (tx) => {
       const fabric = await insertFabricFixture(tx);
-      const slug = `gamis-active-${randomUUID()}`;
-      await tx.insert(products).values(productValues(fabric.id, { slug, isActive: true, highlights: ["flowy"] }));
-
-      const result = await getActiveProductBySlug(slug, tx);
-      expect(result?.slug).toBe(slug);
-      expect(result?.highlights).toEqual(["flowy"]);
+      const [product] = await tx.insert(products).values(productValues(fabric.id)).returning();
+      expect(product?.isPublishedOnStorefront).toBe(false);
     });
   });
 
-  test("returns null for an inactive product", async () => {
+  // products_is_published_on_storefront_active_check — can't publish an inactive product
+  // (migration 0019).
+  test("rejects publishing an inactive product (products_is_published_on_storefront_active_check)", async () => {
     await withRollback(async (tx) => {
       const fabric = await insertFabricFixture(tx);
-      const slug = `gamis-inactive-${randomUUID()}`;
-      await tx.insert(products).values(productValues(fabric.id, { slug, isActive: false }));
-
-      const result = await getActiveProductBySlug(slug, tx);
-      expect(result).toBeNull();
+      const code = await causeCode(
+        tx.insert(products).values(productValues(fabric.id, { isActive: false, isPublishedOnStorefront: true })),
+      );
+      expect(code).toBe("23514");
     });
   });
 
-  test("returns null for a slug that doesn't exist", async () => {
+  test("allows publishing an active product", async () => {
     await withRollback(async (tx) => {
-      const result = await getActiveProductBySlug(`nonexistent-${randomUUID()}`, tx);
-      expect(result).toBeNull();
+      const fabric = await insertFabricFixture(tx);
+      await expect(
+        tx.insert(products).values(productValues(fabric.id, { isActive: true, isPublishedOnStorefront: true })),
+      ).resolves.not.toThrow();
     });
   });
 });

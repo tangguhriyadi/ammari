@@ -48,6 +48,12 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   { key: "settings.manage", group: "settings", description: "Manage targets, cost assumptions, and settings" },
   { key: "customers.view", group: "customers", description: "View customers" },
   { key: "vouchers.void", group: "vouchers", description: "Void a voucher" },
+  {
+    key: "content.manage",
+    group: "content",
+    description:
+      "Manage storefront content: homepage sections, product publish/description/size chart, size charts",
+  },
   { key: "staff.manage", group: "staff", description: "Manage staff accounts" },
   { key: "roles.manage", group: "roles", description: "Manage roles and role permissions" },
   { key: "audit_log.view", group: "audit_log", description: "View the audit log" },

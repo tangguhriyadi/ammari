@@ -17,6 +17,7 @@ import {
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { checkArraySubset, checkIn, citext, createdAtOnly, timestamps } from "./columns";
+import { sizeCharts } from "./content";
 import {
   COST_COMPONENT_TYPES,
   COST_COMPONENT_UNITS,
@@ -153,6 +154,31 @@ export const products = pgTable(
     // every reader iterates the canonical list rather than trusting storage order, so this is
     // belt-and-suspenders, not a real dependency. Migration 0018.
     highlights: text("highlights").array().notNull().default(sql`'{}'::text[]`),
+    // Storefront fields (docs/plans/storefront-cms.md, migration 0019) — additive/nullable or
+    // defaulted, per CLAUDE.md's expand/contract rule.
+    //
+    // Distinct from `is_active` (sellable/produced) — flipping this IS the publish action for
+    // this one product; there's no separate draft/publish pair for it the way the homepage has,
+    // since there's no multi-field "half-finished" state to protect against (see the plan's
+    // "Products: storefront fields" section). Guarded below by
+    // products_is_published_on_storefront_active_check so an inactive product can never be
+    // published.
+    isPublishedOnStorefront: boolean("is_published_on_storefront").notNull().default(false),
+    // The public "Deskripsi" accordion body — sanitized HTML (packages/content-sanitize, a later
+    // session), deliberately separate from `description` above, which stays internal-only (the
+    // admin's own working note). The storefront read layer (storefront/queries.ts) must NEVER
+    // select `description` at all, not merely exclude it from rendering — see that module's own
+    // doc comment and its dedicated cost-leak/description-distinctness test.
+    storefrontDescription: text("storefront_description"),
+    // Shown on the PDP instead of a size-chart table for `size_mode = 'all_size'` products
+    // (nothing to tabulate for a single size) — plain text, not rich text. Null ⇒ the PDP shows
+    // a generic "Ukuran: All Size" line.
+    allsizeFitNote: text("allsize_fit_note"),
+    // Only meaningful for `size_mode = 'sized'` products; null ⇒ the PDP's "Ukuran" accordion
+    // omits the table. Not required at the DB level even for a `sized` product — a product can
+    // exist mid-setup in admin before it has a chart assigned; "must have a chart before
+    // publishing" is an app-level check at publish time, not a CHECK constraint here.
+    sizeChartId: uuid("size_chart_id").references(() => sizeCharts.id, { onDelete: "restrict" }),
     ...timestamps(),
   },
   (table) => [
@@ -162,6 +188,9 @@ export const products = pgTable(
     // removed) — without this index that check seq-scans all of `products` (database-reviewer
     // finding, migration 0005; verified with EXPLAIN against a 20k-row table).
     index("products_thumbnail_image_id_idx").on(table.thumbnailImageId),
+    // Same "index every RESTRICT-FK column" reasoning as thumbnail_image_id above — an unindexed
+    // check seq-scans `products` on every size_charts delete attempt.
+    index("products_size_chart_id_idx").on(table.sizeChartId),
     check("products_closure_check", checkIn(table.closure, PRODUCT_CLOSURES)),
     check("products_size_mode_check", checkIn(table.sizeMode, SIZE_MODES)),
     check("products_base_price_check", sql`${table.basePrice} >= 0`),
@@ -180,6 +209,14 @@ export const products = pgTable(
     // invariant, same reasoning this schema already applies to plenty of other "belt and
     // suspenders" RESTRICT FKs/CHECKs.
     check("products_highlights_max_check", sql`cardinality(${table.highlights}) <= 5`),
+    // Can't publish an inactive product — mirrors the existing belt-and-suspenders style
+    // elsewhere in this schema. Does NOT prevent later deactivating an already-published
+    // product (that's a legitimate admin action, just an unusual one); it only blocks setting
+    // both columns into the disallowed combination in the same write.
+    check(
+      "products_is_published_on_storefront_active_check",
+      sql`(not ${table.isPublishedOnStorefront}) or ${table.isActive}`,
+    ),
     // Referenced by product_variants' composite FK below (product_id, fabric_id, closure) ->
     // (id, fabric_id, closure) — this is what makes "a product's fabric OR closure can't change
     // once it has variants" a real DB guarantee (ON UPDATE RESTRICT), not just an app-level

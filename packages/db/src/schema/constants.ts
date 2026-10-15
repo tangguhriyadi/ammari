@@ -26,6 +26,34 @@ export type ProductHighlightKey = (typeof PRODUCT_HIGHLIGHT_KEYS)[number];
 export const FABRIC_PRICE_UNITS = ["meter", "yard"] as const;
 export type FabricPriceUnit = (typeof FABRIC_PRICE_UNITS)[number];
 
+// The homepage's 4 fixed sections (docs/plans/storefront-cms.md) — a fixed set, never a generic
+// page-builder set of arbitrary sections. Backs storefront_homepage_sections.key's CHECK
+// constraint (schema/content.ts); the 4 rows themselves are seeded by a migration (0019), not
+// seed.ts, per CLAUDE.md's "reference data the code depends on ships in a migration" rule — the
+// storefront can't render without these rows existing, same category as a permission key or a
+// channel id.
+export const HOMEPAGE_SECTION_KEYS = ["hero", "product_grid", "feature_block", "why_ammari"] as const;
+export type HomepageSectionKey = (typeof HOMEPAGE_SECTION_KEYS)[number];
+
+// A FIXED set of "Kenapa Ammari" icon keys (docs/plans/storefront-cms.md), same "closed set, not
+// free text" reasoning as PRODUCT_HIGHLIGHT_KEYS below — each key maps to one lucide-react icon
+// in apps/web. Not backed by its own DB CHECK: it lives inside a `why_ammari` JSONB content
+// value's `points[].icon` field (storefront_homepage_sections.draft_content/published_content),
+// not a dedicated column, so this set is enforced by the per-key Zod schema at save time instead
+// (a later session), not by Postgres. Labels live in packages/db/src/catalog/why-ammari.ts, same
+// key↔label/key↔icon split PRODUCT_HIGHLIGHT_KEYS already uses.
+export const WHY_AMMARI_ICON_KEYS = [
+  "syari_design",
+  "premium_fabric",
+  "handmade_craftsmanship",
+  "comfortable_fit",
+  "easy_care",
+  "responsive_service",
+  "trusted_by_customers",
+  "bandung_made",
+] as const;
+export type WhyAmmariIconKey = (typeof WHY_AMMARI_ICON_KEYS)[number];
+
 export const STOCK_MOVEMENT_TYPES = ["production", "sale", "return", "adjustment"] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 

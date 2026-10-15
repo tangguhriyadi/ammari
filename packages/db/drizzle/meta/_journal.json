@@ -134,6 +134,13 @@
       "when": 1792057085211,
       "tag": "0018_early_daredevil",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792066867870,
+      "tag": "0019_storefront_cms_schema_and_permission",
+      "breakpoints": true
     }
   ]
 }
