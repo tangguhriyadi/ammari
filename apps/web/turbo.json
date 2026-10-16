@@ -1,0 +1,16 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // @ammari/web and @ammari/admin don't depend on each other as packages, but their test
+      // suites both migrate+seed and then read/write the same shared `ammari_test` Postgres
+      // database (packages/db/test/global-setup.ts) — see the root turbo.json's own comment on
+      // the "test" task for the full picture. The root's `^test` already serializes
+      // @ammari/db -> @ammari/auth -> {@ammari/admin, @ammari/web}; `$TURBO_EXTENDS$` keeps that
+      // ordering and this one extra edge closes the remaining gap between the two siblings, so
+      // the full DB-backed chain runs as db -> auth -> admin -> web, one at a time.
+      "dependsOn": ["$TURBO_EXTENDS$", "@ammari/admin#test"]
+    }
+  }
+}

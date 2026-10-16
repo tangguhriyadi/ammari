@@ -251,6 +251,48 @@ migration to stay backward-compatible with the previously-deployed release: roll
 ever swaps the app images back against whatever schema is currently live, never reverses a
 migration.
 
+## Image retention and disk space
+
+Every deploy pulls three fresh SHA-tagged images (admin/web/migrator). Nothing removed the old
+ones until `deploy/remote-deploy.sh` grew its own cleanup step: after the post-deploy health
+checks pass, it keeps local images for the **currently-deployed SHA plus the previous 4 deployed
+SHAs** (5 total — enough to roll back a few deploys without needing to re-pull anything) and
+removes everything older, plus any dangling (untagged) image layers.
+
+- **What counts as "deployed"**: `/opt/ammari/deploy-history.log`, one SHA per line, appended on
+  every successful deploy (including a rollback — rolling back to an older SHA promotes it back
+  to "current" in this file). Not image creation/pull date — a rollback pulls an *older* SHA,
+  which would otherwise look newest-by-pull-time and evict the images actually still needed.
+- **What it never touches**: the `caddy` image (not an `ammari-*` image, so every command is
+  scoped away from it by construction), and nothing related to volumes —
+  `docker image prune` is run **without** `-a`/`--volumes`, and `docker system prune --volumes`
+  is never run anywhere in this pipeline.
+- **Failure mode**: cleanup runs in its own subshell with `set +e`; any failure inside it only
+  logs a `WARNING` to the deploy log and never fails the deploy (the deploy already succeeded —
+  the health checks ran before cleanup starts).
+
+### Emergency: manually freeing disk space
+
+Safe to run any time, as `deploy` on the VPS (`sudo -iu deploy; cd /opt/ammari`):
+
+```bash
+docker image prune -f                     # dangling (untagged) images only — never a tagged
+                                           # image, never a volume
+docker images 'ghcr.io/tangguhriyadi/ammari-*'   # see what's actually taking space and why
+```
+
+To remove a *specific* older image once you've confirmed (from the list above and
+`deploy-history.log`) that it isn't one of the last 5 deployed SHAs:
+
+```bash
+docker rmi ghcr.io/tangguhriyadi/ammari-admin:<old-sha>
+```
+
+**Never run** `docker system prune --volumes` or `docker volume prune` here — both can remove
+`caddy_data`/`caddy_config` (deploy/docker-compose.yml) or, if ever run from the wrong directory,
+a Postgres data volume elsewhere on the box. If disk is critically full and the above isn't
+enough, stop and look at `docker system df` first rather than reaching for a broader prune.
+
 ## Refreshing Cloudflare's IP ranges
 
 Rare (Cloudflare publishes changes occasionally), but when it happens:

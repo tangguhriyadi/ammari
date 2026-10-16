@@ -104,3 +104,82 @@ poll_health admin
 poll_health web
 
 echo "==> Deploy complete: admin=$ADMIN_IMAGE_TAG web=$WEB_IMAGE_TAG"
+
+# --- Image cleanup (runs only after the health checks above have already passed) --------------
+# Keeps local disk from filling up: every deploy pulls three fresh SHA-tagged images and nothing
+# ever removed the old ones (observed: 34 images, ~10GB, 9.4GB reclaimable after one day of dev
+# deploys on this VPS's 40GB disk). Keeps the currently-deployed SHA plus the previous
+# KEEP_COUNT-1 deployed SHAs (for fast rollback, see docs/deploy.md's Rollback section), and
+# removes older ammari-admin/web/migrator images plus dangling layers. Never touches volumes,
+# never runs `docker system prune --volumes`, and never touches `caddy` (not an `ammari-*`
+# image, so it's outside every command below by construction).
+#
+# "Previously deployed" is tracked explicitly in DEPLOY_HISTORY_FILE (one SHA per successful
+# deploy, appended below) rather than inferred from image creation/pull date: a rollback
+# re-pulls an OLDER sha, which would otherwise look "newest by pull time" and evict the actually-
+# newest images still needed for a fast roll-forward — exactly backwards from what rollback
+# needs. `$(dirname "$0")` at the top of this script already `cd`s here, so this relative path
+# resolves to /opt/ammari/deploy-history.log in the real deploy layout; it's never in the repo
+# (deploy/ has no such file to sync), so the deploy job's `rsync` (no `--delete`) leaves it alone
+# on every sync, same as env/ and caddy/certs/.
+DEPLOY_HISTORY_FILE="deploy-history.log"
+KEEP_COUNT=5
+
+# A failure anywhere in here must only warn, never fail an already-successful deploy — the
+# whole thing runs in its own subshell with `set +e` so no internal command can trip this
+# script's own `set -e`, regardless of how `cleanup_old_images` ends up being invoked below.
+cleanup_old_images() (
+  set +e
+  set -u
+
+  # ADMIN_IMAGE_TAG is the canonical deployed SHA for this run: a normal deploy and a rollback
+  # both set all three *_IMAGE_TAG vars to the same SHA (see the file-level comment on why a mix
+  # is never valid), so recording just this one identifies "this deploy" in history.
+  echo "$ADMIN_IMAGE_TAG" >> "$DEPLOY_HISTORY_FILE"
+
+  # Most-recent-first, deduplicated, capped at KEEP_COUNT: `tac` walks the history newest-line-
+  # first, so the first time a given SHA is seen is always its MOST RECENT deploy — which is
+  # exactly right for a rollback re-deploying an older SHA: it gets promoted back to "current".
+  keep_shas="$(tac "$DEPLOY_HISTORY_FILE" | awk '!seen[$0]++' | head -n "$KEEP_COUNT")"
+
+  # Trim the history file to just what retention needs going forward, so it never grows
+  # unbounded either.
+  printf '%s\n' "$keep_shas" > "${DEPLOY_HISTORY_FILE}.tmp" && mv "${DEPLOY_HISTORY_FILE}.tmp" "$DEPLOY_HISTORY_FILE"
+
+  echo "==> Keeping images for SHAs: $(tr '\n' ' ' <<< "$keep_shas")"
+
+  failed=0
+  for image in ammari-admin ammari-web ammari-migrator; do
+    # Only ever lists LOCAL images already tagged "ghcr.io/tangguhriyadi/$image:<sha>" by a
+    # previous `docker pull` in this script — this is what keeps the scope to exactly the three
+    # images this script itself manages.
+    while IFS=: read -r repo tag; do
+      [ -z "$tag" ] && continue
+      if [ "$tag" = "dev-latest" ]; then
+        continue # this script never pulls :dev-latest, but skip it defensively anyway
+      fi
+      if ! grep -qx "$tag" <<< "$keep_shas"; then
+        echo "==> Removing old image $repo:$tag"
+        if ! docker rmi "$repo:$tag" >/dev/null 2>&1; then
+          echo "==> WARNING: could not remove $repo:$tag (may still be in use)" >&2
+          failed=1
+        fi
+      fi
+    done < <(docker images --format '{{.Repository}}:{{.Tag}}' "ghcr.io/tangguhriyadi/$image")
+  done
+
+  echo "==> Pruning dangling (untagged) images"
+  # No `-a`/`--all` and no `--volumes`: only ever removes dangling images, never a tagged image
+  # (like `caddy:2.10.2` or anything just kept above) and never a volume.
+  if ! docker image prune -f >/dev/null 2>&1; then
+    echo "==> WARNING: docker image prune failed" >&2
+    failed=1
+  fi
+
+  exit "$failed"
+)
+
+echo "==> Cleaning up old local images (keeping current + previous $((KEEP_COUNT - 1)) deployed SHAs)"
+if ! cleanup_old_images; then
+  echo "==> WARNING: image cleanup had errors — deploy still succeeded; check disk usage manually (docs/deploy.md's 'Image retention and disk space')" >&2
+fi

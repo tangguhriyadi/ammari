@@ -47,6 +47,22 @@
       "env": ["DATABASE_URL"]
     },
     "test": {
+      // DB-backed suites (packages/db, packages/auth, apps/admin, apps/web) all migrate+seed
+      // and then read/write the SAME shared `ammari_test` Postgres database
+      // (packages/db/test/global-setup.ts) — running two of them at once races both at setup
+      // time (two concurrent migrate/seed runs) and during the tests themselves (no per-suite
+      // isolation beyond each file's own transaction). `^test` orders a package's test task
+      // after its dependencies' test tasks, which naturally serializes
+      // @ammari/db -> @ammari/auth -> {@ammari/admin, @ammari/web} (both depend on
+      // @ammari/auth and @ammari/db, neither depends on the other). It does NOT serialize
+      // @ammari/admin against @ammari/web, since they're siblings with no package dependency
+      // between them — apps/web/turbo.json adds the one remaining edge
+      // (@ammari/admin#test -> @ammari/web#test) to close that gap. @ammari/ui,
+      // @ammari/storage, and @ammari/content-sanitize touch no database at all, so they're
+      // deliberately left out of this chain and keep running fully in parallel with everything
+      // else — global `concurrency` stays at its default rather than forcing the whole
+      // monorepo serial just for the four packages that actually share a database.
+      "dependsOn": ["^test"],
       "env": ["DATABASE_URL"]
     }
   }
