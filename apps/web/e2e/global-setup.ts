@@ -76,4 +76,9 @@ export default async function globalSetup(): Promise<void> {
   for (const key of ["product_grid", "feature_block", "why_ammari"] as const) {
     await db.update(storefrontHomepageSections).set({ draftIsVisible: false }).where(eq(storefrontHomepageSections.key, key));
   }
+
+  // PUBLISHED storefront fixtures (products, homepage sections) for home.spec.ts and
+  // product-page.spec.ts — a separate module, see its own doc comment.
+  const { seedStorefrontFixtures } = await import("./storefront-fixtures");
+  await seedStorefrontFixtures();
 }

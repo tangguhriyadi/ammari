@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth/client";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "@ammari/auth/otp-timing";
 import { formatCountdown, useCountdown } from "@ammari/ui/lib";
+import { GoogleLogo } from "@ammari/ui";
 
 // One fixed, generic message for every failure mode (wrong code, expired code, too many
 // attempts, unknown email, inactive staff, Google rejection) — the UI never surfaces Better
@@ -234,8 +235,9 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
             <button
               type="button"
               onClick={() => void signInWithGoogle()}
-              className="h-12 w-full rounded-md border border-[#695A5A] text-base font-medium text-[#695A5A]"
+              className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-md border border-[#695A5A] text-base font-medium text-[#695A5A]"
             >
+              <GoogleLogo />
               Masuk dengan Google
             </button>
           )}

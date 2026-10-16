@@ -19,11 +19,17 @@ export async function proxy(request: NextRequest) {
   // flag, an @e2e.ammari.test email suffix, and a localhost-only check) lives there, not here.
   // "/api/health" (docs/deploy.md) must stay reachable with no session — Docker Compose's own
   // healthcheck and the deploy script's post-restart poll both call it unauthenticated.
+  // "/logos" (public/logos/*, e.g. the Google sign-in "G") must stay reachable with no session
+  // too — the matcher below only exempts `_next/static`/`_next/image`/favicon.ico, so without
+  // this an `<img src="/logos/...">` on the unauthenticated /login page itself would 307-redirect
+  // to /login, rendering as a broken image (confirmed by curling it directly). Static brand
+  // assets only — never a path an authorization decision should hang on.
   if (
     PUBLIC_PATHS.includes(pathname) ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/test") ||
-    pathname === "/api/health"
+    pathname === "/api/health" ||
+    pathname.startsWith("/logos/")
   ) {
     return NextResponse.next();
   }

@@ -2,12 +2,63 @@
 @import "@ammari/ui/theme.css";
 @source "../../../../packages/ui/src/**/*.{ts,tsx}";
 
+/* Storefront design tokens (docs/design/storefront.md §3) — layered ON TOP of
+ * @ammari/ui/theme.css's own admin-dashboard tokens, imported above. `--color-brand` is
+ * deliberately NOT redefined here: both specs already agree on #695A5A. `--font-sans`/
+ * `--font-serif` ARE overridden here (Jost/Cormorant Garamond, see lib/fonts.ts) — this is the
+ * one apps/web-wide change that reskins every existing page (claim/account/login/consent/...)
+ * without touching their own markup, per the session 7 brief. */
+@theme {
+  --font-serif: var(--font-cormorant-garamond);
+  --font-sans: var(--font-jost);
+
+  --color-bg: #ffffff;
+  --color-ink: #1e1a1a;
+  --color-ink-muted: #5f5656;
+  --color-ink-soft: #3e3636;
+  --color-pay: #f07a1a;
+  --color-surface: #f6f3f1;
+  --color-image-bg: #eeeae7;
+  --color-line: #ece7e4;
+  --color-line-strong: #d9d2ce;
+  --color-disabled: #8a7f7f;
+  --color-error: #8c1d18;
+  --color-error-border: #b3261e;
+
+  /* Footer sits on --color-brand — its own text/divider/chip tones (docs/design/storefront.md
+   * §3 "Footer (on --color-brand)"), distinct from the page-level neutral scale above. */
+  --color-footer-text: #ffffff;
+  --color-footer-line: #857676;
+  --color-footer-chip-border: #a39595;
+}
+
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-  background: var(--color-neutral-50);
-  color: var(--color-neutral-900);
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+/* docs/design/storefront.md §8 "States and accessibility" — visible focus ring, 2px ink outline,
+ * 2px offset, on every real interactive element (every control on this storefront is a native
+ * <button>/<a>/<label>, never a div with a click handler, so :focus-visible alone covers all of
+ * them). Global, not per-component, so a future control never forgets it. */
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+/* Respect prefers-reduced-motion (docs/design/storefront.md §3 "Motion") — the few transitions
+ * this app uses (button hover, product-tile hover scale, accordion icon swap) all become instant
+ * rather than animated. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

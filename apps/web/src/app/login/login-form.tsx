@@ -3,7 +3,7 @@
 import { useState, useSyncExternalStore, useTransition } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Input, Label } from "@ammari/ui";
+import { Button, GoogleLogo, Input, Label } from "@ammari/ui";
 import { formatCountdown, useCountdown } from "@ammari/ui/lib";
 import { authClient } from "@/lib/auth/client";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "@ammari/auth/otp-timing";
@@ -187,6 +187,7 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
 
           {isGoogleConfigured && (
             <Button type="button" variant="secondary" onClick={() => void signInWithGoogle()}>
+              <GoogleLogo />
               Masuk dengan Google
             </Button>
           )}

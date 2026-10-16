@@ -28,6 +28,10 @@ function e2eDatabaseUrl(): string {
 // PREVIEW_SECRET the running dev server actually has.
 export const E2E_PREVIEW_SECRET = "e2e-test-preview-secret-do-not-use-in-prod";
 
+// Fixed for every e2e run — product-page.spec.ts asserts the "Tanya via WhatsApp" link's href
+// against this exact number (lib/store-settings.ts).
+export const E2E_WHATSAPP_NUMBER = "6281234567890";
+
 export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./e2e/global-setup.ts",
@@ -67,6 +71,15 @@ export default defineConfig({
       // lets login-otp.spec.ts's "expired code rejected" test wait a handful of real seconds
       // instead of 5 real minutes.
       E2E_OTP_EXPIRES_IN_SECONDS: "8",
+      // Images resolve to real, fetchable files during the e2e run: committed fixture WebPs
+      // under apps/web/public/fixtures/*, served by this very dev server, so
+      // `${STORAGE_PUBLIC_BASE_URL}/fixtures/<name>/<size>.webp` is a real URL — never a mock/
+      // placeholder scheme (see storefront-fixtures.ts's own doc comment).
+      STORAGE_PUBLIC_BASE_URL: "http://localhost:3100",
+      // Off — the real shipped default (lib/cart-flag.ts). product-page.spec.ts asserts the
+      // WhatsApp-as-primary-action behaviour this produces, not the cart flow (unbuilt).
+      STOREFRONT_CART_ENABLED: "false",
+      STORE_WHATSAPP_NUMBER: E2E_WHATSAPP_NUMBER,
     },
     timeout: 120_000,
   },
