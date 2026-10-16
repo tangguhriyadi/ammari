@@ -14,7 +14,17 @@ const nextConfig: NextConfig = {
   // webServer.env, see `dev:e2e`) keeps the owner's own `pnpm dev` (:3000) and the e2e dev
   // server (:3100) fully independent. Same fix apps/admin/next.config.ts already applies for
   // its own :3001/:3101 pair — see that file's own doc comment for how this was discovered.
-  distDir: process.env.E2E_TEST_LOGIN === "true" ? ".next-e2e" : ".next",
+  //
+  // DEPLOY_REGRESSION_TEST (set only by test/homepage-deploy-regression.test.ts): that test runs
+  // a real `next build` + `next start`, outside Vitest's module graph, to reproduce the
+  // build-time-DB-unavailable deploy scenario — it needs its own distDir so it never reads or
+  // clobbers the developer's own `.next` (possibly mid-`pnpm dev`) or the Playwright e2e build.
+  distDir:
+    process.env.E2E_TEST_LOGIN === "true"
+      ? ".next-e2e"
+      : process.env.DEPLOY_REGRESSION_TEST === "true"
+        ? ".next-deploy-regression-test"
+        : ".next",
   // `images.remotePatterns` CANNOT be driven by `process.env.STORAGE_PUBLIC_BASE_URL` here, even
   // though that's the normal next/image pattern: per apps/web/Dockerfile, this image is built
   // ONCE in CI with placeholder env (see its "ENV NODE_ENV=production DATABASE_URL=... " block's

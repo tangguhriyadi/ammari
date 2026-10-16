@@ -37,10 +37,10 @@ describe("revalidateHomepage / revalidateProductSlug", () => {
     expect(url).toBe("http://web:3000/api/revalidate");
     expect(init.method).toBe("POST");
     expect(init.headers["x-revalidate-secret"]).toBe("test-secret");
-    expect(JSON.parse(init.body)).toEqual({ paths: ["/"] });
+    expect(JSON.parse(init.body)).toEqual({ tags: ["storefront:homepage"] });
   });
 
-  test("revalidateProductSlug posts the product's slug AND /", async () => {
+  test("revalidateProductSlug posts the product's slug path AND the homepage cache tag", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -49,7 +49,7 @@ describe("revalidateHomepage / revalidateProductSlug", () => {
 
     expect(result).toEqual({ ok: true });
     const [, init] = fetchMock.mock.calls[0]!;
-    expect(JSON.parse(init.body)).toEqual({ paths: ["/products/gamis-basic", "/"] });
+    expect(JSON.parse(init.body)).toEqual({ paths: ["/products/gamis-basic"], tags: ["storefront:homepage"] });
   });
 
   test("resolves ok:false (never throws) when apps/web responds with a non-2xx status", async () => {

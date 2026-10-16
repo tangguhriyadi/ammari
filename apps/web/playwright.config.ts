@@ -54,7 +54,16 @@ export default defineConfig({
     // client-supplied Host header anyone reaching the port could spoof — same reasoning
     // apps/admin/playwright.config.ts gives for its own dev:e2e.
     command: "pnpm dev:e2e",
-    url: "http://localhost:3100",
+    // `/api/health`, NOT `/` — Playwright polls this URL to decide the dev server is "ready,"
+    // which happens BEFORE global-setup.ts seeds ammari_e2e's homepage/product fixtures. Polling
+    // `/` would make that very first (premature, pre-seed) request to the homepage the one that
+    // fills its `unstable_cache` entry (lib/content/homepage-data.ts) — caching "nothing
+    // published yet" for this dev server's entire run (the cache's 1h `revalidate`, with nothing
+    // in an e2e run ever calling `revalidateTag` to bust it), so every real test's `page.goto("/")`
+    // would see that same stale-empty result regardless of what global-setup wrote afterward.
+    // `/api/health` only pings the DB — it reads no application-level cache, so it can't poison
+    // one.
+    url: "http://localhost:3100/api/health",
     reuseExistingServer: false,
     env: {
       E2E_TEST_LOGIN: "true",

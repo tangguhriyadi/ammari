@@ -4,6 +4,7 @@ node_modules/
 # next.js
 .next/
 .next-e2e/
+.next-deploy-regression-test/
 out/
 next-env.d.ts
 

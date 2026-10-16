@@ -1,4 +1,4 @@
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isValidRevalidateSecret } from "@/lib/revalidate/secret";
@@ -15,12 +15,23 @@ import { isValidRevalidateSecret } from "@/lib/revalidate/secret";
 // visitor would still reach this route via the normal reverse_proxy. The internal
 // admin -> web:3000 call bypasses Caddy entirely (same Docker network, no published port
 // involved), so it's never affected by that block.
-const bodySchema = z.object({
-  paths: z
-    .array(z.string().min(1).startsWith("/", "Setiap path harus diawali \"/\"."))
-    .min(1)
-    .max(10),
-});
+// `tags` exists alongside `paths` because `/` (app/page.tsx) is `dynamic = "force-dynamic"` —
+// it has no Full Route Cache entry for `revalidatePath` to invalidate at all, so the homepage's
+// own cached data (lib/content/homepage-data.ts's `unstable_cache` calls) can only be refreshed
+// on demand via its tag. `paths` stays for routes that DO still have a route-level ISR cache
+// entry (e.g. `/products/[slug]`).
+const bodySchema = z
+  .object({
+    paths: z
+      .array(z.string().min(1).startsWith("/", "Setiap path harus diawali \"/\"."))
+      .min(1)
+      .max(10)
+      .optional(),
+    tags: z.array(z.string().min(1)).min(1).max(10).optional(),
+  })
+  .refine((body) => (body.paths?.length ?? 0) + (body.tags?.length ?? 0) > 0, {
+    message: "Provide at least one path or tag.",
+  });
 
 export async function POST(request: Request): Promise<NextResponse> {
   const secret = request.headers.get("x-revalidate-secret");
@@ -40,9 +51,20 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: false, error: "invalid body" }, { status: 400 });
   }
 
-  for (const path of parsed.data.paths) {
+  const paths = parsed.data.paths ?? [];
+  const tags = parsed.data.tags ?? [];
+  for (const path of paths) {
     revalidatePath(path);
   }
+  for (const tag of tags) {
+    // `{ expire: 0 }`, not the (deprecated, TS-error) single-arg form or `"max"` — this call
+    // comes from apps/admin's Route Handler, not a Server Action co-located with the page that
+    // reads the tag, so there is no automatic "revalidate on next navigation to the affected
+    // page" to fall back on; `{ expire: 0 }` forces the very next request for this tag's data to
+    // be a fresh read instead of stale-while-revalidate, matching what `revalidatePath` already
+    // guarantees for `/products/[slug]`.
+    revalidateTag(tag, { expire: 0 });
+  }
 
-  return NextResponse.json({ ok: true, revalidated: parsed.data.paths });
+  return NextResponse.json({ ok: true, revalidated: { paths, tags } });
 }

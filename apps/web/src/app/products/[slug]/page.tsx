@@ -17,8 +17,9 @@ import { RelatedProductsSection } from "@/components/pdp/related-products-sectio
 export const revalidate = 3600;
 // No generateStaticParams — every slug renders on first request and is then ISR-cached
 // (dynamicParams defaults true), which also means this route never needs database access during
-// `next build` itself (confirmed empirically; see lib/build-phase.ts's doc comment on why `/`
-// needs a build-time guard that this dynamic-segment route does not).
+// `next build` itself (confirmed empirically: `next build` produces no HTML for any concrete
+// slug here, unlike `/`, which — before being switched to `dynamic = "force-dynamic"` — had no
+// dynamic segment and so WAS prerendered at build; see app/page.tsx's own comment).
 
 function siteOrigin(): string {
   return (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/+$/, "");

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
 
-const { revalidatePath } = await import("next/cache");
+const { revalidatePath, revalidateTag } = await import("next/cache");
 const { POST } = await import("./route");
 
 const SECRET = "test-revalidate-secret";
@@ -22,6 +22,7 @@ describe("POST /api/revalidate", () => {
     savedSecret = process.env.REVALIDATE_SECRET;
     process.env.REVALIDATE_SECRET = SECRET;
     vi.mocked(revalidatePath).mockClear();
+    vi.mocked(revalidateTag).mockClear();
   });
 
   afterEach(() => {
@@ -64,13 +65,42 @@ describe("POST /api/revalidate", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  test("rejects a body with neither paths nor tags with 400", async () => {
+    const response = await POST(postRequest({}));
+    expect(response.status).toBe(400);
+    expect(revalidatePath).not.toHaveBeenCalled();
+    expect(revalidateTag).not.toHaveBeenCalled();
+  });
+
   test("revalidates every path and returns ok:true with the correct secret", async () => {
     const response = await POST(postRequest({ paths: ["/", "/products/gamis-basic"] }));
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toEqual({ ok: true, revalidated: ["/", "/products/gamis-basic"] });
+    expect(body).toEqual({ ok: true, revalidated: { paths: ["/", "/products/gamis-basic"], tags: [] } });
     expect(revalidatePath).toHaveBeenCalledWith("/");
     expect(revalidatePath).toHaveBeenCalledWith("/products/gamis-basic");
     expect(revalidatePath).toHaveBeenCalledTimes(2);
+    expect(revalidateTag).not.toHaveBeenCalled();
+  });
+
+  test("revalidates every tag (with the immediate-expiry profile) and returns ok:true", async () => {
+    const response = await POST(postRequest({ tags: ["storefront:homepage"] }));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toEqual({ ok: true, revalidated: { paths: [], tags: ["storefront:homepage"] } });
+    expect(revalidateTag).toHaveBeenCalledWith("storefront:homepage", { expire: 0 });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("accepts both paths and tags in the same request", async () => {
+    const response = await POST(postRequest({ paths: ["/products/gamis-basic"], tags: ["storefront:homepage"] }));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toEqual({
+      ok: true,
+      revalidated: { paths: ["/products/gamis-basic"], tags: ["storefront:homepage"] },
+    });
+    expect(revalidatePath).toHaveBeenCalledWith("/products/gamis-basic");
+    expect(revalidateTag).toHaveBeenCalledWith("storefront:homepage", { expire: 0 });
   });
 });
