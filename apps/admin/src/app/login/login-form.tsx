@@ -5,7 +5,7 @@ import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth/client";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "@ammari/auth/otp-timing";
-import { formatCountdown, useCountdown } from "@ammari/ui/lib";
+import { formatCountdown, getRememberedOtpSendAttempt, rememberOtpSendAttempt, useCountdown } from "@ammari/ui/lib";
 import { GoogleLogo } from "@ammari/ui";
 
 // One fixed, generic message for every failure mode (wrong code, expired code, too many
@@ -23,6 +23,12 @@ const RATE_LIMITED_ERROR = "Terlalu banyak percobaan. Coba lagi nanti.";
 // older session never resurrects — `loadStoredSession` below also re-validates against the real
 // expiry before trusting it at all.
 const STORAGE_KEY = "ammari-admin-otp-session";
+
+// Separate from STORAGE_KEY above (sessionStorage, cleared on login success/"Ganti email") —
+// this one lives in localStorage and survives exactly that clearing: see @ammari/ui/lib's
+// otp-send-guard.ts for the bug this fixes (logout, then immediately log back in with the same
+// email, within the server's 60s per-email cooldown).
+const OTP_LAST_SEND_STORAGE_KEY_PREFIX = "ammari-admin-otp-last-send";
 
 interface OtpSession {
   email: string;
@@ -115,28 +121,49 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
   const [sentAt, setSentAt] = useState<number | null>(() => restored?.sentAt ?? null);
   const [sendError, setSendError] = useState<string | undefined>();
   const [verifyError, setVerifyError] = useState<string | undefined>();
+  // True when the most recent "send" didn't actually trigger a new email — a remembered attempt
+  // from this browser (possibly an earlier login session already logged out of) was still inside
+  // the server's 60s per-email cooldown, so the PREVIOUS code is still the live one. Drives the
+  // "Kode sebelumnya masih berlaku" message in place of "Kode telah dikirim ke ..." below.
+  const [skippedResend, setSkippedResend] = useState(false);
   const [sendPending, startSendTransition] = useTransition();
   const [verifyPending, startVerifyTransition] = useTransition();
 
   async function sendOtp(targetEmail: string): Promise<void> {
+    const now = Date.now();
+    // better-auth's own send endpoint always returns `{success: true}` even when
+    // sendVerificationOTP silently no-ops because the per-email cooldown is still active — this
+    // is the one place that can actually tell the difference, by remembering what THIS browser
+    // itself last did, independent of the per-flow session state cleared on login/"Ganti email"
+    // (see @ammari/ui/lib's otp-send-guard.ts for the full bug). Previously this code assumed the
+    // client-side cooldown alone prevented ever hitting this case — true within ONE session, but
+    // not across a logout immediately followed by a fresh login with the same email, which has
+    // no memory of the earlier send at all.
+    const remembered = await getRememberedOtpSendAttempt(OTP_LAST_SEND_STORAGE_KEY_PREFIX, targetEmail, OTP_EXPIRES_IN_SECONDS * 1000);
+    if (remembered !== null && now - remembered < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
+      setSendError(undefined);
+      setVerifyError(undefined);
+      setEmail(targetEmail);
+      setSentAt(remembered); // the REAL sentAt — so the expiry/resend countdowns stay accurate
+      setStep("sent");
+      setSkippedResend(true);
+      storeSession({ email: targetEmail, sentAt: remembered });
+      return;
+    }
+
     const { error } = await authClient.emailOtp.sendVerificationOtp({ email: targetEmail, type: "sign-in" });
     if (error?.status === 429) {
       setSendError(RATE_LIMITED_ERROR);
       return;
     }
-    // Any other outcome (sent, unknown account, throttled, resend-cooldown-suppressed) advances
-    // identically — see GENERIC_ERROR/RATE_LIMITED_ERROR's own comment. The countdown always
-    // restarts here too: if the server actually suppressed this as a too-soon resend, the
-    // PREVIOUS code (and its real expiry) is still the one that's live, so re-deriving the
-    // countdown from "now" would be wrong — but the client-side cooldown already prevents a
-    // normal user from ever triggering that case in the first place.
-    const now = Date.now();
     setSendError(undefined);
     setVerifyError(undefined);
     setEmail(targetEmail);
     setSentAt(now);
     setStep("sent");
+    setSkippedResend(false);
     storeSession({ email: targetEmail, sentAt: now });
+    await rememberOtpSendAttempt(OTP_LAST_SEND_STORAGE_KEY_PREFIX, targetEmail, now);
   }
 
   function handleSendSubmit(event: FormEvent<HTMLFormElement>) {
@@ -248,10 +275,22 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
               and it changes just twice (sent -> expired) instead of once a second — a countdown
               re-announced every second would be unusable with a screen reader. */}
           <p className="sr-only" aria-live="polite">
-            {isExpired ? "Kode sudah kedaluwarsa." : `Kode telah dikirim ke ${email}. Berlaku 5 menit.`}
+            {isExpired
+              ? "Kode sudah kedaluwarsa."
+              : skippedResend
+                ? `Kode sebelumnya masih berlaku, cek email kamu di ${email}. Berlaku 5 menit.`
+                : `Kode telah dikirim ke ${email}. Berlaku 5 menit.`}
           </p>
           <p className="text-sm text-black" aria-hidden="true">
-            Kode telah dikirim ke <span className="font-medium">{email}</span>.
+            {skippedResend ? (
+              <>
+                Kode sebelumnya masih berlaku, cek email kamu di <span className="font-medium">{email}</span>.
+              </>
+            ) : (
+              <>
+                Kode telah dikirim ke <span className="font-medium">{email}</span>.
+              </>
+            )}
           </p>
           <p className="text-sm text-[#695A5A]" aria-hidden="true">
             {isExpired ? "Kode sudah kedaluwarsa" : `Kode berlaku ${formatCountdown(remainingExpiryMs)}`}

@@ -10,7 +10,8 @@
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:refresh-screens": "REFRESH_VISUAL_SCREENS=true playwright test visual-screenshots.spec.ts"
   },
   "dependencies": {
     "@ammari/auth": "workspace:*",

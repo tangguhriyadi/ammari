@@ -1,6 +1,7 @@
 export { formatRupiah, formatNumber, formatDate, formatDateTime, formatShortDate } from "./format";
 export { remainingMs, formatCountdown } from "./countdown";
 export { useCountdown } from "./use-countdown";
+export { rememberOtpSendAttempt, getRememberedOtpSendAttempt } from "./otp-send-guard";
 export {
   resolvePagination,
   PAGE_SIZE_OPTIONS,

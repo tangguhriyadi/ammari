@@ -28,6 +28,8 @@ import {
   getBatchDetail,
   getBatchExtraCosts,
   listBatches,
+  listEligibleSkusForFabric,
+  listProductsUsingFabric,
   postBatch,
   updateDraft,
 } from "./queries";
@@ -864,6 +866,39 @@ describe("cost visibility", () => {
       const extraCosts = await getBatchExtraCosts(batch.id, tx);
       expect(extraCosts).toHaveLength(1);
       expect(extraCosts[0]?.unitPrice).toBe(10_000);
+    });
+  });
+});
+
+describe("listProductsUsingFabric", () => {
+  test("finds the product even when it has zero ACTIVE variants — listEligibleSkusForFabric comes back empty for the same fabric", async () => {
+    await withRollback(async (tx) => {
+      const { fabric, product, variant } = await insertProductVariant(tx);
+      await tx.update(productVariants).set({ isActive: false }).where(eq(productVariants.sku, variant.sku));
+
+      const eligibleSkus = await listEligibleSkusForFabric(fabric.id, tx);
+      expect(eligibleSkus).toEqual([]);
+
+      const productsForFabric = await listProductsUsingFabric(fabric.id, tx);
+      expect(productsForFabric).toEqual([{ id: product.id, name: product.name }]);
+    });
+  });
+
+  test("returns [] for a fabric no product uses at all", async () => {
+    await withRollback(async (tx) => {
+      const [fabric] = await tx.insert(fabrics).values({ name: `Bahan Tanpa Produk ${randomUUID().slice(0, 8)}` }).returning();
+      if (!fabric) throw new Error("failed to insert fabric fixture");
+
+      const productsForFabric = await listProductsUsingFabric(fabric.id, tx);
+      expect(productsForFabric).toEqual([]);
+    });
+  });
+
+  test("still finds the product when its variants ARE active — not just the zero-active-variants case", async () => {
+    await withRollback(async (tx) => {
+      const { fabric, product } = await insertProductVariant(tx);
+      const productsForFabric = await listProductsUsingFabric(fabric.id, tx);
+      expect(productsForFabric).toEqual([{ id: product.id, name: product.name }]);
     });
   });
 });

@@ -64,6 +64,22 @@ export async function listEligibleSkusForFabric(fabricId: string, db: Database =
     .orderBy(products.name, fabricColors.name, productVariants.size);
 }
 
+export interface ProductUsingFabricRow {
+  id: string;
+  name: string;
+}
+
+/** The product(s) tied to this fabric REGARDLESS of variant active-state (`products.fabric_id`
+ * directly, not through `product_variants`) — the "no active variants" messaging's link target.
+ * `listEligibleSkusForFabric` above returning `[]` is ambiguous on its own: it could mean no
+ * product uses this fabric at all, or it could mean a product DOES use it but every one of its
+ * variants is currently deactivated (a very different, fixable-in-admin situation — see
+ * ExtraCostLines' own doc comment). This distinguishes the two without changing
+ * listEligibleSkusForFabric's own contract. */
+export async function listProductsUsingFabric(fabricId: string, db: Database = defaultDb): Promise<ProductUsingFabricRow[]> {
+  return db.select({ id: products.id, name: products.name }).from(products).where(eq(products.fabricId, fabricId)).orderBy(products.name);
+}
+
 // ---------- List ----------
 
 export interface ListBatchesRow {

@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { Button, Input, Label, Select } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import type { CostComponentType, CostComponentUnit } from "@ammari/db/schema";
 import { previewLineTotal } from "@/lib/production/line-total-preview";
+import type { ProductUsingFabricRow } from "@/lib/production/queries";
 
 export interface ActiveCostComponentOption {
   id: string;
@@ -47,6 +49,12 @@ export interface ExtraCostLinesProps {
   /** The batch's current total pcs (summed across its lines) — a 'variable' line's effective
    * quantity for the live preview total below. */
   totalPcs: number;
+  /** The product(s) tied to the currently-selected fabric, regardless of active-variant state —
+   * `[]` when no fabric is selected, when editing an existing draft (fabric fixed, not
+   * re-fetched), or when the fabric genuinely has no product at all. Lets the `totalPcs === 0`
+   * message below distinguish "you haven't filled in quantities yet" from "this product has no
+   * active variants to fill in" — see that message's own comment. */
+  productsUsingFabric: ProductUsingFabricRow[];
 }
 
 function effectiveQuantity(line: ExtraCostLineState, totalPcs: number): number {
@@ -56,7 +64,7 @@ function effectiveQuantity(line: ExtraCostLineState, totalPcs: number): number {
 /** The "Biaya lain" section of a production batch draft — only ever rendered by the caller when
  * the session holds finance.view_profit (see ProductionBatchForm), same gating as the fabric
  * cost estimate right above it. */
-export function ExtraCostLines({ activeComponents, lines, onChange, totalPcs }: ExtraCostLinesProps) {
+export function ExtraCostLines({ activeComponents, lines, onChange, totalPcs, productsUsingFabric }: ExtraCostLinesProps) {
   const componentById = new Map(activeComponents.map((component) => [component.id, component]));
 
   function updateLine(index: number, patch: Partial<ExtraCostLineState>) {
@@ -160,6 +168,37 @@ export function ExtraCostLines({ activeComponents, lines, onChange, totalPcs }: 
             {line.costType === "variable" &&
               (totalPcs > 0 ? (
                 <p className="text-sm text-neutral-600">× {totalPcs} pcs (otomatis, dari total baris produksi)</p>
+              ) : productsUsingFabric.length > 0 ? (
+                // The REAL reason totalPcs is 0 here isn't "not filled in yet" — the fabric's
+                // own product(s) have zero active variants, so BatchLinePicker above has nothing
+                // to show a qty input for at all. The old, single "Isi jumlah pcs (SKU) dulu…"
+                // message was misleading in exactly this case: it told the admin to do something
+                // (fill in a field) that wasn't possible, instead of pointing at the actual fix
+                // (activate the product's variants).
+                <p className="text-sm text-danger-700">
+                  {productsUsingFabric.length === 1 ? (
+                    <>
+                      Produk <span className="font-medium">{productsUsingFabric[0]!.name}</span> tidak memiliki varian aktif.{" "}
+                      <Link href={`/products/${productsUsingFabric[0]!.id}`} className="underline">
+                        Aktifkan di halaman produk
+                      </Link>
+                      .
+                    </>
+                  ) : (
+                    <>
+                      Produk berikut tidak memiliki varian aktif:{" "}
+                      {productsUsingFabric.map((product, index) => (
+                        <span key={product.id}>
+                          {index > 0 && ", "}
+                          <Link href={`/products/${product.id}`} className="underline">
+                            {product.name}
+                          </Link>
+                        </span>
+                      ))}
+                      . Aktifkan varian di halaman produk masing-masing.
+                    </>
+                  )}
+                </p>
               ) : (
                 <p className="text-sm text-danger-700">Isi jumlah pcs (SKU) dulu untuk menghitung biaya variabel ini.</p>
               ))}

@@ -7,6 +7,14 @@ const sendVerificationOtp = vi.fn();
 const signInEmailOtp = vi.fn();
 const push = vi.fn();
 const refresh = vi.fn();
+// Real implementations (packages/ui/test/otp-send-guard.test.ts covers the actual
+// crypto/localStorage behavior) — mocked here purely to keep this file's fake-timer-driven tests
+// deterministic and independent of real Web Crypto/localStorage timing, same reasoning
+// `authClient` itself is mocked. Defaults to "no remembered attempt" (null), i.e. every send in
+// this file's existing tests behaves exactly as it did before the OTP-cooldown fix; the
+// dedicated describe block below overrides it to exercise the new `skippedResend` path.
+const getRememberedOtpSendAttempt = vi.fn();
+const rememberOtpSendAttempt = vi.fn();
 
 vi.mock("@/lib/auth/client", () => ({
   authClient: {
@@ -17,6 +25,15 @@ vi.mock("@/lib/auth/client", () => ({
     },
   },
 }));
+
+vi.mock("@ammari/ui/lib", async () => {
+  const actual = await vi.importActual<typeof import("@ammari/ui/lib")>("@ammari/ui/lib");
+  return {
+    ...actual,
+    getRememberedOtpSendAttempt: (...args: unknown[]) => getRememberedOtpSendAttempt(...args),
+    rememberOtpSendAttempt: (...args: unknown[]) => rememberOtpSendAttempt(...args),
+  };
+});
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, refresh }),
@@ -35,6 +52,8 @@ beforeEach(() => {
   signInEmailOtp.mockReset();
   push.mockReset();
   refresh.mockReset();
+  getRememberedOtpSendAttempt.mockReset().mockResolvedValue(null);
+  rememberOtpSendAttempt.mockReset().mockResolvedValue(undefined);
   window.sessionStorage.clear();
 });
 
@@ -135,5 +154,29 @@ describe("LoginForm (admin)", () => {
     for (const name of ["Masuk", "Ganti email", /Kirim ulang/]) {
       expect(screen.getByRole("button", { name })).toHaveClass("h-12");
     }
+  });
+});
+
+describe("LoginForm (admin) — resend-cooldown fix: a remembered send this browser made within the last 60s", () => {
+  test("shows 'Kode sebelumnya masih berlaku' and skips calling sendVerificationOtp, instead of pretending a new code went out", async () => {
+    const rememberedAt = Date.now() - 10_000; // 10s ago — still well within the 60s cooldown
+    getRememberedOtpSendAttempt.mockResolvedValue(rememberedAt);
+
+    render(<LoginForm isGoogleConfigured={false} />);
+    await sendCode("staff@example.test");
+
+    expect(sendVerificationOtp).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/Kode sebelumnya masih berlaku/)[0]).toHaveTextContent("staff@example.test");
+    expect(screen.getByText("Kode berlaku 4:50")).toBeInTheDocument();
+  });
+
+  test("a remembered send older than 60s (but still under 5 minutes) is NOT treated as still-cooling-down — a real send happens", async () => {
+    getRememberedOtpSendAttempt.mockResolvedValue(Date.now() - 70_000); // 70s ago — cooldown over
+
+    render(<LoginForm isGoogleConfigured={false} />);
+    await sendCode("staff@example.test");
+
+    expect(sendVerificationOtp).toHaveBeenCalledWith({ email: "staff@example.test", type: "sign-in" });
+    expect(screen.getAllByText(/Kode telah dikirim ke/)[0]).toBeInTheDocument();
   });
 });

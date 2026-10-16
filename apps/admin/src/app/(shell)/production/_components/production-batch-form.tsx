@@ -5,11 +5,17 @@ import { useEffect, useState, useTransition } from "react";
 import { Button, Input, Label, Select, Textarea } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
-import type { EligibleSkuRow } from "@/lib/production/queries";
+import type { EligibleSkuRow, ProductUsingFabricRow } from "@/lib/production/queries";
 import { estimateFabricCost } from "@/lib/production/fabric-cost-estimate";
 import type { RawMaterialBalance } from "@/lib/inventory/moving-average";
 import { parseDecimalQuantity } from "@/lib/production/decimal-quantity";
-import { createDraftAction, getFabricBalanceAction, suggestEligibleSkusAction, updateDraftAction } from "../actions";
+import {
+  createDraftAction,
+  getFabricBalanceAction,
+  listProductsUsingFabricAction,
+  suggestEligibleSkusAction,
+  updateDraftAction,
+} from "../actions";
 import { BatchLinePicker } from "./batch-line-picker";
 import { ExtraCostLines, type ActiveCostComponentOption, type ExtraCostLineState } from "./extra-cost-lines";
 
@@ -65,6 +71,13 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
     Object.fromEntries(initialValues.lines.map((line) => [line.sku, line.qty])),
   );
   const [extraCostLines, setExtraCostLines] = useState<ExtraCostLineState[]>(initialExtraCosts ?? []);
+  // Create mode only — which product(s) are tied to the selected fabric, regardless of whether
+  // any of their variants are currently active (see ExtraCostLines' own doc comment: this is
+  // what turns the misleading "Isi jumlah pcs (SKU) dulu…" message into a correct "produk ini
+  // belum punya varian aktif" one, with a link to go fix it). `[]` whenever no fabric is
+  // selected, or (edit mode) always — editing a draft's fabric is fixed and was already past
+  // this exact setup step when the batch was first created.
+  const [productsUsingFabric, setProductsUsingFabric] = useState<ProductUsingFabricRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, startTransition] = useTransition();
   const [, startFabricLoad] = useTransition();
@@ -81,9 +94,10 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
     // already-applied eligible-SKU list/quantities after the user has moved on.
     let ignore = false;
     startFabricLoad(async () => {
-      const [rows, balance] = await Promise.all([
+      const [rows, balance, productsForFabric] = await Promise.all([
         suggestEligibleSkusAction(fabricId),
         canViewProfit ? getFabricBalanceAction(fabricId) : Promise.resolve(null),
+        listProductsUsingFabricAction(fabricId),
       ]);
       if (ignore) return;
       setEligibleSkus(rows);
@@ -91,6 +105,7 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
       // fabric's SKUs) — clear rather than silently carrying over qty for SKUs no longer shown.
       setQuantities({});
       setFabricBalance(balance);
+      setProductsUsingFabric(productsForFabric);
     });
     return () => {
       ignore = true;
@@ -216,7 +231,13 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
               Dihitung dari rata-rata harga beli bahan saat ini × jumlah yard. Nilai final dihitung ulang saat posting.
             </p>
           </div>
-          <ExtraCostLines activeComponents={activeCostComponents} lines={extraCostLines} onChange={setExtraCostLines} totalPcs={totalPcs} />
+          <ExtraCostLines
+            activeComponents={activeCostComponents}
+            lines={extraCostLines}
+            onChange={setExtraCostLines}
+            totalPcs={totalPcs}
+            productsUsingFabric={productsUsingFabric}
+          />
         </>
       )}
       {!canViewProfit && mode === "edit" && (

@@ -4,9 +4,15 @@ import { useState, useSyncExternalStore, useTransition } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button, GoogleLogo, Input, Label } from "@ammari/ui";
-import { formatCountdown, useCountdown } from "@ammari/ui/lib";
+import { formatCountdown, getRememberedOtpSendAttempt, rememberOtpSendAttempt, useCountdown } from "@ammari/ui/lib";
 import { authClient } from "@/lib/auth/client";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "@ammari/auth/otp-timing";
+
+// Separate from STORAGE_KEY below (sessionStorage, cleared on login success/"Ganti email") —
+// this one lives in localStorage and survives exactly that clearing, which is the whole point:
+// see @ammari/ui/lib's otp-send-guard.ts for the bug this fixes (logout, then immediately log
+// back in with the same email, within the server's 60s per-email cooldown).
+const OTP_LAST_SEND_STORAGE_KEY_PREFIX = "ammari-web-otp-last-send";
 
 // One fixed, generic message for every OTP failure mode (wrong code, expired code, too many
 // attempts, unknown email) — self sign-up means there's no account-existence distinction to
@@ -83,6 +89,11 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
   const [sentAt, setSentAt] = useState<number | null>(() => restored?.sentAt ?? null);
   const [sendError, setSendError] = useState<string | undefined>();
   const [verifyError, setVerifyError] = useState<string | undefined>();
+  // True when the most recent "send" didn't actually trigger a new email — a remembered attempt
+  // from this browser (possibly an earlier login session already logged out of) was still inside
+  // the server's 60s per-email cooldown, so the PREVIOUS code is still the live one. Drives the
+  // "Kode sebelumnya masih berlaku" message in place of "Kode telah dikirim ke ..." below.
+  const [skippedResend, setSkippedResend] = useState(false);
   const [sendPending, startSendTransition] = useTransition();
   const [verifyPending, startVerifyTransition] = useTransition();
 
@@ -93,18 +104,38 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
   }
 
   async function sendOtp(targetEmail: string): Promise<void> {
+    const now = Date.now();
+    // better-auth's own send endpoint always returns `{success: true}` even when
+    // sendVerificationOTP silently no-ops because the per-email cooldown is still active (see
+    // @ammari/ui/lib's otp-send-guard.ts for the full bug this guards against) — so THIS is the
+    // one place that can actually tell the difference, by remembering what THIS browser itself
+    // last did, independent of the per-flow session state that gets cleared on login/"Ganti
+    // email".
+    const remembered = await getRememberedOtpSendAttempt(OTP_LAST_SEND_STORAGE_KEY_PREFIX, targetEmail, OTP_EXPIRES_IN_SECONDS * 1000);
+    if (remembered !== null && now - remembered < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
+      setSendError(undefined);
+      setVerifyError(undefined);
+      setEmail(targetEmail);
+      setSentAt(remembered); // the REAL sentAt — so the expiry/resend countdowns stay accurate
+      setStep("sent");
+      setSkippedResend(true);
+      storeSession({ email: targetEmail, sentAt: remembered });
+      return;
+    }
+
     const { error } = await authClient.emailOtp.sendVerificationOtp({ email: targetEmail, type: "sign-in" });
     if (error?.status === 429) {
       setSendError(RATE_LIMITED_ERROR);
       return;
     }
-    const now = Date.now();
     setSendError(undefined);
     setVerifyError(undefined);
     setEmail(targetEmail);
     setSentAt(now);
     setStep("sent");
+    setSkippedResend(false);
     storeSession({ email: targetEmail, sentAt: now });
+    await rememberOtpSendAttempt(OTP_LAST_SEND_STORAGE_KEY_PREFIX, targetEmail, now);
   }
 
   function handleSendSubmit(event: FormEvent<HTMLFormElement>) {
@@ -197,10 +228,22 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
           {/* Two separate elements on purpose: this one is the ONLY thing screen readers hear,
               and it changes just twice (sent -> expired) instead of once a second. */}
           <p className="sr-only" aria-live="polite">
-            {isExpired ? "Kode sudah kedaluwarsa." : `Kode telah dikirim ke ${email}. Berlaku 5 menit.`}
+            {isExpired
+              ? "Kode sudah kedaluwarsa."
+              : skippedResend
+                ? `Kode sebelumnya masih berlaku, cek email kamu di ${email}. Berlaku 5 menit.`
+                : `Kode telah dikirim ke ${email}. Berlaku 5 menit.`}
           </p>
           <p className="text-sm text-neutral-700" aria-hidden="true">
-            Kode telah dikirim ke <span className="font-medium">{email}</span>.
+            {skippedResend ? (
+              <>
+                Kode sebelumnya masih berlaku, cek email kamu di <span className="font-medium">{email}</span>.
+              </>
+            ) : (
+              <>
+                Kode telah dikirim ke <span className="font-medium">{email}</span>.
+              </>
+            )}
           </p>
           <p className="text-sm text-neutral-700" aria-hidden="true">
             {isExpired ? "Kode sudah kedaluwarsa" : `Kode berlaku ${formatCountdown(remainingExpiryMs)}`}

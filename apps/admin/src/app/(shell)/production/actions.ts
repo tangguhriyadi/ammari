@@ -148,6 +148,14 @@ export async function suggestEligibleSkusAction(fabricId: string) {
   return productionQueries.listEligibleSkusForFabric(fabricId);
 }
 
+/** The "no active variants" messaging's link target (ExtraCostLines) — only called when
+ * `suggestEligibleSkusAction` already came back empty for this fabric, to tell the admin WHY:
+ * no product uses this fabric at all, or a product does but has zero active variants right now. */
+export async function listProductsUsingFabricAction(fabricId: string) {
+  await requirePermission("production.manage");
+  return productionQueries.listProductsUsingFabric(fabricId);
+}
+
 /** Cost data (a moving-average cost is derived from it) — gated behind finance.view_profit, not
  * just production.manage, same discipline every other cost figure in this feature follows. Feeds
  * the draft form's read-only fabric-cost ESTIMATE only (see fabric-cost-estimate.ts) — never
