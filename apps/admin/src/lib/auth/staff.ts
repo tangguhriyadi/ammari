@@ -44,19 +44,45 @@ const baseURL = requiredEnv("BETTER_AUTH_URL");
 const secret = process.env.STAFF_BETTER_AUTH_SECRET ?? "";
 const google = googleConfig();
 
+// Optional — createStaffAuth falls back to DEFAULT_OTP_GLOBAL_HOURLY_CAP when unset. Lets the
+// whole-system OTP circuit breaker be tuned per environment without a code change once real
+// send volume is known.
+const rawGlobalHourlyCap = process.env.OTP_GLOBAL_HOURLY_CAP;
+const globalHourlyCap = rawGlobalHourlyCap ? Number(rawGlobalHourlyCap) : undefined;
+
+// Gated behind isE2eTestLoginEnabled (not just "is this env var set"), so this can't shrink the
+// real 5-minute expiry even if E2E_OTP_EXPIRES_IN_SECONDS were somehow set outside an actual e2e
+// run — see e2e/login-otp.spec.ts's "expired code rejected" test, the one and only reason this
+// exists.
+const expiresInSecondsOverride =
+  isE2eTestLoginEnabled && process.env.E2E_OTP_EXPIRES_IN_SECONDS
+    ? Number(process.env.E2E_OTP_EXPIRES_IN_SECONDS)
+    : undefined;
+
 export const staffAuth = createStaffAuth({
   db,
   emailSender: emailSender(),
   baseURL,
   secret,
   google,
+  globalHourlyCap,
+  expiresInSecondsOverride,
   extraPlugins: [nextCookies()],
   // Runs sendVerificationOTP's whole body (throttle check + staff lookup + email send) after the
   // HTTP response is already sent, so an unknown/inactive/throttled email and a real one take
   // the same (near-zero) time from the caller's perspective — closes the timing side-channel a
   // synchronously-awaited email send would otherwise open. Next's after() works in Route
   // Handlers on a self-hosted Node server, not just serverless platforms.
-  backgroundTaskHandler: (promise) => after(() => promise),
+  //
+  // Skipped in e2e mode (see isE2eTestLoginEnabled): app/api/test/otp/route.ts reads the
+  // captured OTP right after driving the REAL `/login` form, in the same spirit as
+  // e2eSignInAuth's own comment below — an after()-deferred send wouldn't have run yet at that
+  // point. Only reachable at all when E2E_TEST_LOGIN is explicitly "true" and NODE_ENV isn't
+  // "production", same four-gate posture as the rest of this test-only surface.
+  ...(isE2eTestLoginEnabled ? {} : { backgroundTaskHandler: (promise: Promise<unknown>) => after(() => promise) }),
+  ...(isE2eTestLoginEnabled && capturingEmailSender
+    ? { onOtpGenerated: (params: { email: string; otp: string }) => capturingEmailSender.capture(params) }
+    : {}),
 });
 
 /** e2e-only (see app/api/test/login/route.ts, the one and only caller). Same db/baseURL/secret/
@@ -66,7 +92,12 @@ export const staffAuth = createStaffAuth({
  * request, and an `after()`-deferred send would not have run yet at that point (after() tasks
  * only run once this request's own response has already been sent). Skipping the deferral here
  * also skips the timing-side-channel protection it exists for, which is fine: this instance is
- * only ever reached through the quadruple-gated test backdoor, never by a real sign-in attempt. */
+ * only ever reached through the quadruple-gated test backdoor, never by a real sign-in attempt.
+ * `disableSendThrottle: true` for the same reason: this route can legitimately resend for the
+ * SAME e2e fixture email well within the real 60s cooldown (a WebKit retry, or several specs
+ * sharing a role's fixture back to back), which the real cooldown would otherwise silently
+ * suppress — that's the real behavior login-otp.spec.ts tests against the ORDINARY `staffAuth`
+ * instance below, not this one. */
 export const e2eSignInAuth =
   isE2eTestLoginEnabled && capturingEmailSender
     ? createStaffAuth({
@@ -77,5 +108,6 @@ export const e2eSignInAuth =
         google,
         extraPlugins: [nextCookies()],
         onOtpGenerated: (params) => capturingEmailSender.capture(params),
+        disableSendThrottle: true,
       })
     : null;

@@ -56,6 +56,17 @@ export default defineConfig({
       E2E_TEST_LOGIN: "true",
       DATABASE_URL: e2eDatabaseUrl(),
       PREVIEW_SECRET: E2E_PREVIEW_SECRET,
+      // .env's BETTER_AUTH_URL is the real dev port (3000) — Better Auth's own origin check
+      // (createCustomerAuth's `trustedOrigins: [baseURL]`) rejects every request that doesn't
+      // match it exactly, and this server actually runs on 3100. See
+      // apps/admin/playwright.config.ts's own identical fix for the same issue, surfaced the
+      // same way: login-otp.spec.ts is the first web spec to drive the real `/api/auth/*`
+      // endpoint instead of a backdoor that bypasses it.
+      BETTER_AUTH_URL: "http://localhost:3100",
+      // E2E_OTP_EXPIRES_IN_SECONDS: only honored behind E2E_TEST_LOGIN (lib/auth/customer.ts) —
+      // lets login-otp.spec.ts's "expired code rejected" test wait a handful of real seconds
+      // instead of 5 real minutes.
+      E2E_OTP_EXPIRES_IN_SECONDS: "8",
     },
     timeout: 120_000,
   },

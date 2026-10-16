@@ -97,6 +97,6 @@ export async function markStaffLastLogin(db: Database, staffAuthUserId: string):
   await db.update(staffUsers).set({ lastLoginAt: new Date() }).where(eq(staffUsers.id, row.staffUserId));
 }
 
-// recordEmailThrottleAttemptAndCount moved to ../shared/email-throttle.ts — auth_email_throttle
-// is shared with the customer Better Auth instance (see that table's own doc comment), so the
+// recordEmailThrottleAttempt lives in ../shared/email-throttle.ts — auth_email_throttle is
+// shared with the customer Better Auth instance (see that table's own doc comment), so the
 // function that writes to it is hoisted out of this staff-only module rather than duplicated.

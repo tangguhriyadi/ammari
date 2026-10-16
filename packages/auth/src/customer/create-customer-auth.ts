@@ -5,14 +5,21 @@ import { emailOTP } from "better-auth/plugins/email-otp";
 import type { GoogleOptions } from "better-auth/social-providers";
 import * as schema from "@ammari/db/schema";
 import type { EmailSender } from "../email-sender";
-import { recordEmailThrottleAttemptAndCount } from "../shared/email-throttle";
+import { recordEmailThrottleAttempt } from "../shared/email-throttle";
+import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "../shared/otp-timing";
 import { type Database, loadOrCreateCustomerForEmail } from "./customer-data";
 
-// 5 minutes / 6 digits / 5 attempts: CLAUDE.md's OTP rules — same hardening as staff.
-const OTP_EXPIRES_IN_SECONDS = 5 * 60;
+// 6 digits / 5 attempts: CLAUDE.md's OTP rules — same hardening as staff. Expiry comes from
+// shared/otp-timing.ts (see staff's own factory for why). Every other constant/comment below
+// mirrors staff's own factory exactly — see that file for the full reasoning (CGNAT-safe per-IP
+// sizing, the global circuit breaker, why the cooldown is per-email not per-IP).
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_SEND_WINDOW_SECONDS = 5 * 60;
 const OTP_SEND_MAX_PER_WINDOW = 5;
+const OTP_GLOBAL_WINDOW_SECONDS = 60 * 60;
+export const DEFAULT_OTP_GLOBAL_HOURLY_CAP = 300;
+const OTP_IP_ABUSE_WINDOW_SECONDS = 10 * 60;
+const OTP_IP_ABUSE_MAX = 20;
 const VERIFY_RATE_LIMIT_WINDOW_SECONDS = 5 * 60;
 const VERIFY_RATE_LIMIT_MAX = 10;
 
@@ -46,10 +53,32 @@ export interface CreateCustomerAuthOptions {
   /** Test-only escape hatch — hands a freshly generated sign-in OTP to the caller as a
    * structured value, same purpose as staff's own `onOtpGenerated`. Never set in production. */
   onOtpGenerated?: (params: { email: string; otp: string }) => void;
+  /** Whole-system OTP-send cap per hour, shared with the staff instance's own sends (same
+   * `auth_email_throttle` table) — see staff's own factory for the full reasoning. Defaults to
+   * DEFAULT_OTP_GLOBAL_HOURLY_CAP. */
+  globalHourlyCap?: number;
+  /** Test-only escape hatch — see staff's own factory for the full reasoning. Never set in
+   * production. */
+  expiresInSecondsOverride?: number;
+  /** Test-only escape hatch — see staff's own factory for the full reasoning. Never set in
+   * production. */
+  disableSendThrottle?: boolean;
 }
 
 export function createCustomerAuth(options: CreateCustomerAuthOptions) {
-  const { db, emailSender, baseURL, secret, google, extraPlugins = [], backgroundTaskHandler, onOtpGenerated } = options;
+  const {
+    db,
+    emailSender,
+    baseURL,
+    secret,
+    google,
+    extraPlugins = [],
+    backgroundTaskHandler,
+    onOtpGenerated,
+    globalHourlyCap = DEFAULT_OTP_GLOBAL_HOURLY_CAP,
+    expiresInSecondsOverride,
+    disableSendThrottle = false,
+  } = options;
 
   if (process.env.NODE_ENV === "production" && !secret) {
     throw new Error(
@@ -93,7 +122,10 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
       enabled: true,
       storage: "database",
       customRules: {
-        "/email-otp/send-verification-otp": { window: OTP_SEND_WINDOW_SECONDS, max: OTP_SEND_MAX_PER_WINDOW },
+        // Per-IP abuse guard only — NOT the resend cooldown. See staff's own factory for why a
+        // tight per-IP rule is unsafe here (Indonesian CGNAT); the real cooldown is per-email,
+        // inside sendVerificationOTP below.
+        "/email-otp/send-verification-otp": { window: OTP_IP_ABUSE_WINDOW_SECONDS, max: OTP_IP_ABUSE_MAX },
         "/sign-in/email-otp": { window: VERIFY_RATE_LIMIT_WINDOW_SECONDS, max: VERIFY_RATE_LIMIT_MAX },
       },
     },
@@ -130,16 +162,31 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
     plugins: [
       emailOTP({
         otpLength: 6,
-        expiresIn: OTP_EXPIRES_IN_SECONDS,
+        expiresIn: expiresInSecondsOverride ?? OTP_EXPIRES_IN_SECONDS,
         allowedAttempts: OTP_MAX_ATTEMPTS,
         storeOTP: "hashed",
         sendVerificationOTP: async ({ email, otp, type }) => {
           if (type !== "sign-in") return; // customers have no password/email-change flow here either
-          // Same throttle table/helper the staff instance uses (see shared/email-throttle.ts) —
-          // no "unknown email" no-op branch needed here, unlike staff: self sign-up means every
-          // email is eligible, so the OTP is always actually sent once under the throttle cap.
-          const priorAttempts = await recordEmailThrottleAttemptAndCount(db, email, OTP_SEND_WINDOW_SECONDS);
-          if (priorAttempts >= OTP_SEND_MAX_PER_WINDOW) return;
+          // Same throttle table/helper the staff instance uses (see shared/email-throttle.ts and
+          // that factory's own doc comments on each of these three outcomes) — no "unknown
+          // email" no-op branch needed here, unlike staff: self sign-up means every email is
+          // eligible, so the OTP is always actually sent once under the throttle/cooldown/cap.
+          // disableSendThrottle: see staff's own factory for the full reasoning (test-only).
+          if (!disableSendThrottle) {
+            const decision = await recordEmailThrottleAttempt(db, email, {
+              cooldownSeconds: OTP_RESEND_COOLDOWN_SECONDS,
+              capWindowSeconds: OTP_SEND_WINDOW_SECONDS,
+              globalWindowSeconds: OTP_GLOBAL_WINDOW_SECONDS,
+            });
+            if (decision.priorGlobalAttempts >= globalHourlyCap) {
+              console.error(
+                `[customer-auth] GLOBAL OTP send cap reached (${globalHourlyCap}/${OTP_GLOBAL_WINDOW_SECONDS}s) — suppressing send for ${email}`,
+              );
+              return;
+            }
+            if (decision.cooldownActive) return; // resent sooner than OTP_RESEND_COOLDOWN_SECONDS
+            if (decision.priorAttemptsInCapWindow >= OTP_SEND_MAX_PER_WINDOW) return;
+          }
 
           try {
             await emailSender.send({

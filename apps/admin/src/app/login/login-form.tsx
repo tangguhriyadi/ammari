@@ -1,8 +1,11 @@
 "use client";
 
-import { useActionState } from "react";
+import { useState, useSyncExternalStore, useTransition } from "react";
+import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth/client";
+import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "@ammari/auth/otp-timing";
+import { formatCountdown, useCountdown } from "@ammari/ui/lib";
 
 // One fixed, generic message for every failure mode (wrong code, expired code, too many
 // attempts, unknown email, inactive staff, Google rejection) — the UI never surfaces Better
@@ -14,50 +17,185 @@ import { authClient } from "@/lib/auth/client";
 const GENERIC_ERROR = "Kode tidak valid atau akun tidak ditemukan.";
 const RATE_LIMITED_ERROR = "Terlalu banyak percobaan. Coba lagi nanti.";
 
-type SendOtpState = { step: "email" | "sent"; email: string; error?: string };
-type VerifyOtpState = { error?: string };
+// sessionStorage, not localStorage: this is one login attempt's own in-flight state, not
+// something that should outlive the tab. Scoped to this one key so a stale entry from a much
+// older session never resurrects — `loadStoredSession` below also re-validates against the real
+// expiry before trusting it at all.
+const STORAGE_KEY = "ammari-admin-otp-session";
 
-const initialSendState: SendOtpState = { step: "email", email: "" };
-const initialVerifyState: VerifyOtpState = {};
+interface OtpSession {
+  email: string;
+  /** Epoch ms when the code currently in flight was (re)sent — the ONE value the expiry and
+   * resend countdowns are both derived from (see OTP_EXPIRES_IN_SECONDS/
+   * OTP_RESEND_COOLDOWN_SECONDS), and the ONE value persisted across a refresh. */
+  sentAt: number;
+}
 
-async function sendOtp(_prev: SendOtpState, formData: FormData): Promise<SendOtpState> {
-  const email = String(formData.get("email") ?? "").trim();
-  if (!email) return { step: "email", email: "", error: "Masukkan email terlebih dahulu." };
+function loadStoredSession(): OtpSession | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      typeof (parsed as Partial<OtpSession>).email !== "string" ||
+      typeof (parsed as Partial<OtpSession>).sentAt !== "number"
+    ) {
+      return null;
+    }
+    const session = parsed as OtpSession;
+    // Don't resurrect a session whose code has already expired server-side — same cutoff the
+    // server itself enforces (OTP_EXPIRES_IN_SECONDS), so a stale tab reopened well after
+    // sending just falls back to the plain email step instead of showing a dead countdown.
+    if (Date.now() - session.sentAt > OTP_EXPIRES_IN_SECONDS * 1000) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
 
-  const { error } = await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
-  if (error?.status === 429) return { step: "email", email, error: RATE_LIMITED_ERROR };
-  // Any other outcome (sent, unknown account, throttled) advances identically — see GENERIC_ERROR.
-  return { step: "sent", email };
+function storeSession(session: OtpSession | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (session) window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    else window.sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // sessionStorage can throw (private-mode quirks, storage disabled) — losing refresh
+    // persistence is a UX nicety, not a correctness requirement, so this stays a no-op.
+  }
+}
+
+// `useSyncExternalStore`, not a `useEffect` + `setState` pair, for reading sessionStorage once at
+// mount: React special-cases this hook's `getServerSnapshot` precisely so a client-only value can
+// differ from the server-rendered HTML without that being a hydration error — a manual
+// `useEffect` doing the equivalent `setState` runs into both an eslint
+// `react-hooks/set-state-in-effect` violation and, more importantly, the exact "cascading
+// render" cost that rule warns about. No real subscription needed (this repo has no multi-tab
+// sync requirement for a login screen), so `subscribe` is a stable no-op that never calls back —
+// we only ever want the ONE read this hook performs at mount; everything after that is this
+// component's own state.
+function subscribeNever(): () => void {
+  return () => {};
+}
+
+// `getSnapshot` must return a referentially stable value when nothing's changed — otherwise
+// React would see a "new" value on every render and either re-render in a loop or warn that the
+// snapshot isn't cached. Computed (and cached) once per page load, which is exactly the one
+// moment this needs to reflect sessionStorage's current content; the component's OWN state is
+// the source of truth for everything after that.
+let cachedInitialSession: OtpSession | null | undefined;
+
+function getSnapshot(): OtpSession | null {
+  if (cachedInitialSession === undefined) cachedInitialSession = loadStoredSession();
+  return cachedInitialSession;
+}
+
+function getServerSnapshot(): OtpSession | null {
+  return null;
 }
 
 async function signInWithGoogle() {
   await authClient.signIn.social({ provider: "google", callbackURL: "/" });
 }
 
+type Step = "email" | "sent";
+
 export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean }) {
   const router = useRouter();
-  const [sendState, sendAction, sendPending] = useActionState(sendOtp, initialSendState);
-  const [verifyState, verifyAction, verifyPending] = useActionState(
-    async (_prev: VerifyOtpState, formData: FormData): Promise<VerifyOtpState> => {
-      const email = String(formData.get("email") ?? "").trim();
-      const otp = String(formData.get("otp") ?? "").trim();
-      if (!email || !otp) return { error: GENERIC_ERROR };
+  // Restores a still-valid in-flight OTP session after a refresh. `getServerSnapshot` returning
+  // `null` is what keeps the server-rendered HTML (always the email step) consistent with
+  // hydration — React is specifically built to reconcile a client-only value like this one
+  // without treating it as a mismatch, unlike computing it from a plain `useState` initializer.
+  const restored = useSyncExternalStore(subscribeNever, getSnapshot, getServerSnapshot);
+  const [step, setStep] = useState<Step>(() => (restored ? "sent" : "email"));
+  const [email, setEmail] = useState(() => restored?.email ?? "");
+  const [sentAt, setSentAt] = useState<number | null>(() => restored?.sentAt ?? null);
+  const [sendError, setSendError] = useState<string | undefined>();
+  const [verifyError, setVerifyError] = useState<string | undefined>();
+  const [sendPending, startSendTransition] = useTransition();
+  const [verifyPending, startVerifyTransition] = useTransition();
 
+  async function sendOtp(targetEmail: string): Promise<void> {
+    const { error } = await authClient.emailOtp.sendVerificationOtp({ email: targetEmail, type: "sign-in" });
+    if (error?.status === 429) {
+      setSendError(RATE_LIMITED_ERROR);
+      return;
+    }
+    // Any other outcome (sent, unknown account, throttled, resend-cooldown-suppressed) advances
+    // identically — see GENERIC_ERROR/RATE_LIMITED_ERROR's own comment. The countdown always
+    // restarts here too: if the server actually suppressed this as a too-soon resend, the
+    // PREVIOUS code (and its real expiry) is still the one that's live, so re-deriving the
+    // countdown from "now" would be wrong — but the client-side cooldown already prevents a
+    // normal user from ever triggering that case in the first place.
+    const now = Date.now();
+    setSendError(undefined);
+    setVerifyError(undefined);
+    setEmail(targetEmail);
+    setSentAt(now);
+    setStep("sent");
+    storeSession({ email: targetEmail, sentAt: now });
+  }
+
+  function handleSendSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const targetEmail = String(new FormData(event.currentTarget).get("email") ?? "").trim();
+    if (!targetEmail) {
+      setSendError("Masukkan email terlebih dahulu.");
+      return;
+    }
+    startSendTransition(() => sendOtp(targetEmail));
+  }
+
+  function handleResend() {
+    startSendTransition(() => sendOtp(email));
+  }
+
+  // Returns to the email step with the previous email prefilled (the email step's own input
+  // below reads it via `defaultValue`) and the OTP input cleared (that step remounts fresh) —
+  // never a network call, and the anti-enumeration behavior above is untouched: sending from
+  // here goes through the exact same sendOtp() path, which always advances to "sent" the same
+  // way regardless of whether the email turns out to be valid.
+  function handleChangeEmail() {
+    setStep("email");
+    setSentAt(null);
+    setSendError(undefined);
+    setVerifyError(undefined);
+    storeSession(null);
+  }
+
+  function handleVerifySubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const otp = String(new FormData(event.currentTarget).get("otp") ?? "").trim();
+    if (!otp) {
+      setVerifyError(GENERIC_ERROR);
+      return;
+    }
+    startVerifyTransition(async () => {
       const { error } = await authClient.signIn.emailOtp({ email, otp });
-      if (error) return { error: error.status === 429 ? RATE_LIMITED_ERROR : GENERIC_ERROR };
-
+      if (error) {
+        setVerifyError(error.status === 429 ? RATE_LIMITED_ERROR : GENERIC_ERROR);
+        return;
+      }
+      storeSession(null);
       router.push("/");
       router.refresh();
-      return {};
-    },
-    initialVerifyState,
-  );
+    });
+  }
+
+  const expiresAt = sentAt !== null ? sentAt + OTP_EXPIRES_IN_SECONDS * 1000 : null;
+  const resendAvailableAt = sentAt !== null ? sentAt + OTP_RESEND_COOLDOWN_SECONDS * 1000 : null;
+  const remainingExpiryMs = useCountdown(expiresAt);
+  const remainingResendMs = useCountdown(resendAvailableAt);
+  const isExpired = step === "sent" && expiresAt !== null && remainingExpiryMs <= 0;
+  const canResend = step === "sent" && resendAvailableAt !== null && remainingResendMs <= 0;
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-white px-4 py-10">
       <h1 className="text-2xl font-semibold text-[#695A5A]">Ammari Admin</h1>
 
-      {sendState.step === "email" ? (
+      {step === "email" ? (
         // key="send"/"verify" below — without it, React reconciles these two <form>s as the
         // SAME element across the step transition (both are a <form> at the same tree position),
         // diffing their children instead of unmounting/remounting. The email <input> here (no
@@ -65,7 +203,7 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
         // controlled) then collide into one DOM node going from uncontrolled to controlled,
         // which is exactly the "A component is changing an uncontrolled input to be controlled"
         // warning. A `key` forces a real remount instead.
-        <form key="send" action={sendAction} className="flex w-full max-w-sm flex-col gap-3">
+        <form key="send" onSubmit={handleSendSubmit} className="flex w-full max-w-sm flex-col gap-3">
           <label htmlFor="email" className="text-sm font-medium text-black">
             Email
           </label>
@@ -75,12 +213,13 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
             type="email"
             required
             autoComplete="email"
+            defaultValue={email}
             className="h-12 w-full rounded-md border border-[#695A5A] px-3 text-base text-black"
             placeholder="nama@ammari.id"
           />
-          {sendState.error && (
+          {sendError && (
             <p role="alert" className="text-sm text-[#8a3b3b]">
-              {sendState.error}
+              {sendError}
             </p>
           )}
           <button
@@ -102,18 +241,29 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
           )}
         </form>
       ) : (
-        <form key="verify" action={verifyAction} className="flex w-full max-w-sm flex-col gap-3">
-          {/* aria-live announces the step change itself; autoFocus below (fired once, on this
-              form's single mount from the key="verify" remount) moves keyboard focus into the
-              new form so users don't have to tab up from the top of the page to find it. */}
-          <p className="text-sm text-black" aria-live="polite">
-            Kode telah dikirim ke <span className="font-medium">{sendState.email}</span>.
+        <form key="verify" onSubmit={handleVerifySubmit} className="flex w-full max-w-sm flex-col gap-3">
+          {/* Two separate elements on purpose: this one is the ONLY thing screen readers hear,
+              and it changes just twice (sent -> expired) instead of once a second — a countdown
+              re-announced every second would be unusable with a screen reader. */}
+          <p className="sr-only" aria-live="polite">
+            {isExpired ? "Kode sudah kedaluwarsa." : `Kode telah dikirim ke ${email}. Berlaku 5 menit.`}
           </p>
-          <input type="hidden" name="email" value={sendState.email} />
+          <p className="text-sm text-black" aria-hidden="true">
+            Kode telah dikirim ke <span className="font-medium">{email}</span>.
+          </p>
+          <p className="text-sm text-[#695A5A]" aria-hidden="true">
+            {isExpired ? "Kode sudah kedaluwarsa" : `Kode berlaku ${formatCountdown(remainingExpiryMs)}`}
+          </p>
+
           <label htmlFor="otp" className="text-sm font-medium text-black">
             Kode (6 digit)
           </label>
+          {/* key={sentAt}: a resend keeps this SAME form mounted (no step change), but the OTP
+              input must still clear back to empty — an uncontrolled input only reads
+              `defaultValue` on mount, so remounting it on every new `sentAt` is what makes that
+              happen, same remount trick as the step-level `key` above. */}
           <input
+            key={sentAt}
             id="otp"
             name="otp"
             inputMode="numeric"
@@ -125,18 +275,36 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
             className="h-12 w-full rounded-md border border-[#695A5A] px-3 text-center text-xl tracking-[0.5em] text-black"
             placeholder="______"
           />
-          {verifyState.error && (
+          {verifyError && (
             <p role="alert" className="text-sm text-[#8a3b3b]">
-              {verifyState.error}
+              {verifyError}
             </p>
           )}
           <button
             type="submit"
-            disabled={verifyPending}
+            disabled={verifyPending || isExpired}
             className="h-12 w-full rounded-md bg-[#695A5A] text-base font-medium text-white disabled:opacity-60"
           >
             {verifyPending ? "Memeriksa..." : "Masuk"}
           </button>
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={handleChangeEmail}
+              className="h-12 flex-1 rounded-md border border-[#695A5A] text-base font-medium text-[#695A5A]"
+            >
+              Ganti email
+            </button>
+            <button
+              type="button"
+              onClick={handleResend}
+              disabled={!canResend || sendPending}
+              className="h-12 flex-1 rounded-md border border-[#695A5A] text-base font-medium text-[#695A5A] disabled:opacity-60"
+            >
+              {canResend ? "Kirim ulang kode" : `Kirim ulang dalam ${formatCountdown(remainingResendMs)}`}
+            </button>
+          </div>
         </form>
       )}
     </div>

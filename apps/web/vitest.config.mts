@@ -25,6 +25,9 @@ export default defineConfig({
     // the consent gate today) pays the cost too, same accepted trade-off apps/admin's own
     // vitest.config.mts documents.
     globalSetup: "@ammari/db/test-global-setup",
+    // Component tests opt into jsdom per-file via a `// @vitest-environment jsdom` pragma
+    // (mirrors apps/admin's/packages/ui's own convention) — the default above stays "node".
+    setupFiles: ["./test/setup.ts"],
     testTimeout: 20_000,
     hookTimeout: 20_000,
     fileParallelism: false,

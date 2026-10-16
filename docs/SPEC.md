@@ -381,10 +381,12 @@ sibling schema files.
   rejected Google sign-in. The OTP-send step always returns the same response regardless of
   whether the email belongs to an active staff member, an inactive one, or no one at all; the
   actual email is only ever sent for a genuine match.
-- **OTP rules** (CLAUDE.md): 6 digits, expires in 5 minutes, max 5 verify attempts, stored
-  **hashed** (Better Auth's `storeOTP: "hashed"`, in `staff_auth_verifications`, which fully
-  replaces `otp_codes` for staff login — `otp_codes` is kept only for the voucher claim flow,
-  which isn't Better Auth-backed yet).
+- **OTP rules** (CLAUDE.md): 6 digits, expires in exactly 5 minutes
+  (`@ammari/auth/otp-timing`'s `OTP_EXPIRES_IN_SECONDS` — the one place the server config and
+  the login UI's own countdown both read this from, so they can't drift apart), max 5 verify
+  attempts, stored **hashed** (Better Auth's `storeOTP: "hashed"`, in `staff_auth_verifications`,
+  which fully replaces `otp_codes` for staff login — `otp_codes` is kept only for the voucher
+  claim flow, which isn't Better Auth-backed yet).
 - **Login UI calls real HTTP endpoints, not `staffAuth.api.*` from a server action:**
   `app/login/login-form.tsx` is a client component using Better Auth's React client
   (`lib/auth/client.ts`) against `/api/auth/*`. This is deliberate, not incidental: Better Auth's
@@ -392,18 +394,52 @@ sibling schema files.
   calling `.api.sendVerificationOTP()`/`.api.signInEmailOTP()`/`.api.signInSocial()` directly from
   a server action would silently skip both. (A 429 from the per-IP limiter gets its own UI
   message, not the generic one — that's a legitimate, non-enumerating signal.)
-- **Rate limiting — two independent mechanisms:**
-  - Per IP, via Better Auth's own limiter, backed by the database (`staff_auth_rate_limits`, so
-    limits survive restarts/deploys) and keyed off the `CF-Connecting-IP` header — not
-    `X-Forwarded-For` — so a client cannot spoof it. See the Pre-deploy checklist below for the
-    infrastructure half of this guarantee. Only reachable because the login UI goes through the
-    real HTTP endpoint (previous bullet).
-  - Per destination email, via a dedicated `auth_email_throttle` table: one atomic
-    `INSERT ... RETURNING (SELECT count(*) ...)` per send attempt (not a separate count-then-
-    insert — CLAUDE.md requires atomic handling for anything concurrent). This exists because
-    Better Auth's own `emailOTP` plugin deletes and recreates its single verification row per
-    `(type, email)` on every send, so counting rows in that table can never see more than one —
-    it cannot back a per-destination limit on its own.
+- **Login UI:** a "Ganti email" button on the OTP step returns to the email step with the
+  previous email prefilled and the OTP input cleared — purely client-side, no network call, and
+  the anti-enumeration behavior above is untouched (resending from there goes through the exact
+  same send path). Two live countdowns, both derived from a `sentAt` timestamp captured the
+  moment the send call resolves and persisted to `sessionStorage` (so they survive a refresh —
+  always recomputed from that absolute timestamp, never a decrementing tick counter, so they're
+  also correct after the tab was backgrounded/suspended, e.g. an iPhone screen lock):
+  "Kode berlaku m:ss" → "Kode sudah kedaluwarsa" (disables submit) at the real 5-minute mark, and
+  "Kirim ulang dalam m:ss" → "Kirim ulang kode" at the 60s mark (see the cooldown below). The
+  countdown math (`remainingMs`/`formatCountdown`/`useCountdown`) lives in `@ammari/ui/lib`,
+  shared by both apps. The visible countdown text is `aria-hidden`; a separate
+  `aria-live="polite"` region announces only the two discrete state changes (sent → expired),
+  never once a second.
+- **Rate limiting and throttling — four independent mechanisms**, all configured in
+  `packages/auth`'s two Better Auth factories:
+  - **Per IP, abuse guard only** (20 sends per 10 minutes), via Better Auth's own limiter, backed
+    by the database (`staff_auth_rate_limits`, so limits survive restarts/deploys — see
+    `rateLimit: { storage: "database" }` in both factories) and keyed off the `CF-Connecting-IP`
+    header — not `X-Forwarded-For` — so a client cannot spoof it (`advanced.ipAddress.
+    ipAddressHeaders: ["cf-connecting-ip"]`; confirmed directly against Better Auth's own
+    `getIP()`, which checks ONLY the configured header list, with no `X-Forwarded-For` fallback
+    when a list is given). See the Pre-deploy checklist below for the infrastructure half of
+    this guarantee. Deliberately generous, not the resend cooldown itself: Indonesian mobile
+    carriers use CGNAT, where thousands of real customers/staff can share one public IP — a
+    tight per-IP rule (closer to "1 per minute") would block legitimate users at launch. Only
+    reachable because the login UI goes through the real HTTP endpoint (previous bullet).
+  - **Per destination email, a 60-second resend cooldown** — the UI mechanism above this one is
+    the real line of defense for a normal user; this is the server-side backstop, enforced via
+    `auth_email_throttle` (see below) and a **silent no-op** when violated (same anti-enumeration
+    posture as every other throttle outcome here, not a visible error — it's keyed by email, not
+    IP, so showing a distinct message would itself be a timing-independent signal about that one
+    address).
+  - **Per destination email, a 5-per-5-minutes send cap** — unchanged from before, and still
+    compatible with the 60s cooldown above: 5 sends 60s apart span 240s, comfortably inside the
+    300s window.
+  - **Whole-system circuit breaker** — a configurable cap (`globalHourlyCap`, env
+    `OTP_GLOBAL_HOURLY_CAP`, default 300/hour) on TOTAL OTP sends across BOTH the staff and
+    customer instances (same shared table), protecting the Resend sending quota and
+    `mail.ammari.id`'s sender reputation from ever being exhausted. Logs loudly
+    (`console.error`) when tripped — this is an operational alarm, not an enumeration boundary.
+  - The per-email cooldown/cap/global-cap all share one table, `auth_email_throttle`: one atomic
+    `INSERT ... RETURNING` per send attempt computing all three outcomes from the same pre-insert
+    snapshot (not a separate count-then-insert — CLAUDE.md requires atomic handling for anything
+    concurrent). This exists because Better Auth's own `emailOTP` plugin deletes and recreates
+    its single verification row per `(type, email)` on every send, so counting rows in THAT table
+    can never see more than one — it cannot back any of these limits on its own.
 - **No timing side-channel on OTP-send:** `sendVerificationOTP`'s entire body (throttle check,
   staff lookup, and the actual email send) runs via Next's `after()` — after the HTTP response is
   already sent — so an unknown/inactive/throttled email and a real one are not just
@@ -467,8 +503,12 @@ itself (`/claim/[token]`) is session 2, not yet built.
 - Schema: separate `customer_auth_*` tables (mirroring `staff_auth_*`), own cookie prefix
   (`ammari_customer`), own secret (`CUSTOMER_BETTER_AUTH_SECRET`), ~60-day sliding session.
   Nothing in the staff instance needed to change to add this; `auth_email_throttle` (the
-  per-destination OTP-send throttle) is shared by both instances via a hoisted helper in
-  `packages/auth/src/shared/email-throttle.ts`.
+  per-destination OTP-send cooldown/cap, and the whole-system circuit breaker) is shared by both
+  instances via a hoisted helper in `packages/auth/src/shared/email-throttle.ts` — see §10.1's
+  "Rate limiting and throttling" for the full mechanism list, unchanged here except that the
+  per-email message is the plain `GENERIC_ERROR` (no account-existence distinction to protect).
+  The login UI itself (Ganti email, both countdowns) is identical to staff's — same
+  `@ammari/ui/lib` countdown hook, same `sessionStorage` persistence.
 - Email delivery: `ResendEmailSender` (see §10.2) is shared with the staff instance — same
   `RESEND_API_KEY`/`EMAIL_FROM` env vars, selected the same way in both apps.
 

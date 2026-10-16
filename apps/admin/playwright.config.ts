@@ -86,7 +86,25 @@ export default defineConfig({
     // database — see e2eDatabaseUrl() above. MAIN_SITE_URL is a harmless placeholder — e2e never
     // exercises the real apps/web, only that lib/main-site-url.ts's validation passes and the
     // packing claim URL builds from SOME configured value (see lib/packing/token.ts).
-    env: { E2E_TEST_LOGIN: "true", STORAGE_DRIVER: "memory", DATABASE_URL: e2eDatabaseUrl(), MAIN_SITE_URL: "http://localhost:3000" },
+    // E2E_OTP_EXPIRES_IN_SECONDS: only honored behind E2E_TEST_LOGIN (lib/auth/staff.ts) — lets
+    // login-otp.spec.ts's "expired code rejected" test wait a handful of real seconds instead of
+    // 5 real minutes. Every OTHER spec signs in through the instant backdoor (never actually
+    // waits near an expiry), so shrinking it here is safe for the whole suite, not just that one
+    // spec.
+    env: {
+      E2E_TEST_LOGIN: "true",
+      STORAGE_DRIVER: "memory",
+      DATABASE_URL: e2eDatabaseUrl(),
+      MAIN_SITE_URL: "http://localhost:3000",
+      E2E_OTP_EXPIRES_IN_SECONDS: "8",
+      // .env's BETTER_AUTH_URL is the real dev port (3001) — Better Auth's own origin check
+      // (createStaffAuth's `trustedOrigins: [baseURL]`) rejects every request that doesn't
+      // match it exactly, and this server actually runs on 3101. Every OTHER spec never hit
+      // this because the sign-in backdoor calls `.api.*` directly, bypassing that HTTP-level
+      // check entirely (see lib/auth/client.ts's own comment) — login-otp.spec.ts is the first
+      // to drive the real endpoint, which is exactly what surfaced this.
+      BETTER_AUTH_URL: "http://localhost:3101",
+    },
     timeout: 120_000,
   },
 });

@@ -1,9 +1,12 @@
 "use client";
 
-import { useActionState } from "react";
+import { useState, useSyncExternalStore, useTransition } from "react";
+import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Input, Label } from "@ammari/ui";
+import { formatCountdown, useCountdown } from "@ammari/ui/lib";
 import { authClient } from "@/lib/auth/client";
+import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "@ammari/auth/otp-timing";
 
 // One fixed, generic message for every OTP failure mode (wrong code, expired code, too many
 // attempts, unknown email) — self sign-up means there's no account-existence distinction to
@@ -13,23 +16,75 @@ import { authClient } from "@/lib/auth/client";
 const GENERIC_ERROR = "Kode tidak valid. Coba lagi.";
 const RATE_LIMITED_ERROR = "Terlalu banyak percobaan. Coba lagi nanti.";
 
-type SendOtpState = { step: "email" | "sent"; email: string; error?: string };
-type VerifyOtpState = { error?: string };
+// See apps/admin's own login-form.tsx for the full reasoning behind every piece of this file —
+// this is the same design, just restyled with @ammari/ui's own components.
+const STORAGE_KEY = "ammari-web-otp-session";
 
-const initialSendState: SendOtpState = { step: "email", email: "" };
-const initialVerifyState: VerifyOtpState = {};
-
-async function sendOtp(_prev: SendOtpState, formData: FormData): Promise<SendOtpState> {
-  const email = String(formData.get("email") ?? "").trim();
-  if (!email) return { step: "email", email: "", error: "Masukkan email terlebih dahulu." };
-
-  const { error } = await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
-  if (error?.status === 429) return { step: "email", email, error: RATE_LIMITED_ERROR };
-  return { step: "sent", email };
+interface OtpSession {
+  email: string;
+  sentAt: number;
 }
+
+function loadStoredSession(): OtpSession | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      typeof (parsed as Partial<OtpSession>).email !== "string" ||
+      typeof (parsed as Partial<OtpSession>).sentAt !== "number"
+    ) {
+      return null;
+    }
+    const session = parsed as OtpSession;
+    if (Date.now() - session.sentAt > OTP_EXPIRES_IN_SECONDS * 1000) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function storeSession(session: OtpSession | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (session) window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    else window.sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // sessionStorage can throw (private-mode quirks, storage disabled) — losing refresh
+    // persistence is a UX nicety, not a correctness requirement, so this stays a no-op.
+  }
+}
+
+function subscribeNever(): () => void {
+  return () => {};
+}
+
+let cachedInitialSession: OtpSession | null | undefined;
+
+function getSnapshot(): OtpSession | null {
+  if (cachedInitialSession === undefined) cachedInitialSession = loadStoredSession();
+  return cachedInitialSession;
+}
+
+function getServerSnapshot(): OtpSession | null {
+  return null;
+}
+
+type Step = "email" | "sent";
 
 export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: boolean; next: string }) {
   const router = useRouter();
+  const restored = useSyncExternalStore(subscribeNever, getSnapshot, getServerSnapshot);
+  const [step, setStep] = useState<Step>(() => (restored ? "sent" : "email"));
+  const [email, setEmail] = useState(() => restored?.email ?? "");
+  const [sentAt, setSentAt] = useState<number | null>(() => restored?.sentAt ?? null);
+  const [sendError, setSendError] = useState<string | undefined>();
+  const [verifyError, setVerifyError] = useState<string | undefined>();
+  const [sendPending, startSendTransition] = useTransition();
+  const [verifyPending, startVerifyTransition] = useTransition();
 
   async function signInWithGoogle() {
     // `next` was already sanitized by the server page before being handed to this client
@@ -37,39 +92,93 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
     await authClient.signIn.social({ provider: "google", callbackURL: next });
   }
 
-  const [sendState, sendAction, sendPending] = useActionState(sendOtp, initialSendState);
-  const [verifyState, verifyAction, verifyPending] = useActionState(
-    async (_prev: VerifyOtpState, formData: FormData): Promise<VerifyOtpState> => {
-      const email = String(formData.get("email") ?? "").trim();
-      const otp = String(formData.get("otp") ?? "").trim();
-      if (!email || !otp) return { error: GENERIC_ERROR };
+  async function sendOtp(targetEmail: string): Promise<void> {
+    const { error } = await authClient.emailOtp.sendVerificationOtp({ email: targetEmail, type: "sign-in" });
+    if (error?.status === 429) {
+      setSendError(RATE_LIMITED_ERROR);
+      return;
+    }
+    const now = Date.now();
+    setSendError(undefined);
+    setVerifyError(undefined);
+    setEmail(targetEmail);
+    setSentAt(now);
+    setStep("sent");
+    storeSession({ email: targetEmail, sentAt: now });
+  }
 
+  function handleSendSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const targetEmail = String(new FormData(event.currentTarget).get("email") ?? "").trim();
+    if (!targetEmail) {
+      setSendError("Masukkan email terlebih dahulu.");
+      return;
+    }
+    startSendTransition(() => sendOtp(targetEmail));
+  }
+
+  function handleResend() {
+    startSendTransition(() => sendOtp(email));
+  }
+
+  function handleChangeEmail() {
+    setStep("email");
+    setSentAt(null);
+    setSendError(undefined);
+    setVerifyError(undefined);
+    storeSession(null);
+  }
+
+  function handleVerifySubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const otp = String(new FormData(event.currentTarget).get("otp") ?? "").trim();
+    if (!otp) {
+      setVerifyError(GENERIC_ERROR);
+      return;
+    }
+    startVerifyTransition(async () => {
       const { error } = await authClient.signIn.emailOtp({ email, otp });
-      if (error) return { error: error.status === 429 ? RATE_LIMITED_ERROR : GENERIC_ERROR };
-
+      if (error) {
+        setVerifyError(error.status === 429 ? RATE_LIMITED_ERROR : GENERIC_ERROR);
+        return;
+      }
+      storeSession(null);
       router.push(next);
       router.refresh();
-      return {};
-    },
-    initialVerifyState,
-  );
+    });
+  }
+
+  const expiresAt = sentAt !== null ? sentAt + OTP_EXPIRES_IN_SECONDS * 1000 : null;
+  const resendAvailableAt = sentAt !== null ? sentAt + OTP_RESEND_COOLDOWN_SECONDS * 1000 : null;
+  const remainingExpiryMs = useCountdown(expiresAt);
+  const remainingResendMs = useCountdown(resendAvailableAt);
+  const isExpired = step === "sent" && expiresAt !== null && remainingExpiryMs <= 0;
+  const canResend = step === "sent" && resendAvailableAt !== null && remainingResendMs <= 0;
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-8 bg-neutral-50 px-4 py-10">
       <h1 className="font-serif text-4xl font-light text-brand">AMMARI</h1>
 
-      {sendState.step === "email" ? (
+      {step === "email" ? (
         // key="send"/"verify" forces a real remount across the step transition — see
         // apps/admin's own login-form.tsx for why (an uncontrolled email input here colliding
         // with the verify form's controlled hidden input at the same tree position otherwise).
-        <form key="send" action={sendAction} className="flex w-full max-w-sm flex-col gap-4">
+        <form key="send" onSubmit={handleSendSubmit} className="flex w-full max-w-sm flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="email">Email</Label>
-            <Input id="email" name="email" type="email" required autoComplete="email" placeholder="nama@email.com" />
+            <Input
+              id="email"
+              name="email"
+              type="email"
+              required
+              autoComplete="email"
+              defaultValue={email}
+              placeholder="nama@email.com"
+            />
           </div>
-          {sendState.error && (
+          {sendError && (
             <p role="alert" className="text-sm text-danger-700">
-              {sendState.error}
+              {sendError}
             </p>
           )}
           <Button type="submit" loading={sendPending}>
@@ -83,14 +192,26 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
           )}
         </form>
       ) : (
-        <form key="verify" action={verifyAction} className="flex w-full max-w-sm flex-col gap-4">
-          <p className="text-sm text-neutral-700" aria-live="polite">
-            Kode telah dikirim ke <span className="font-medium">{sendState.email}</span>.
+        <form key="verify" onSubmit={handleVerifySubmit} className="flex w-full max-w-sm flex-col gap-4">
+          {/* Two separate elements on purpose: this one is the ONLY thing screen readers hear,
+              and it changes just twice (sent -> expired) instead of once a second. */}
+          <p className="sr-only" aria-live="polite">
+            {isExpired ? "Kode sudah kedaluwarsa." : `Kode telah dikirim ke ${email}. Berlaku 5 menit.`}
           </p>
-          <input type="hidden" name="email" value={sendState.email} />
+          <p className="text-sm text-neutral-700" aria-hidden="true">
+            Kode telah dikirim ke <span className="font-medium">{email}</span>.
+          </p>
+          <p className="text-sm text-neutral-700" aria-hidden="true">
+            {isExpired ? "Kode sudah kedaluwarsa" : `Kode berlaku ${formatCountdown(remainingExpiryMs)}`}
+          </p>
+
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="otp">Kode (6 digit)</Label>
+            {/* key={sentAt}: a resend keeps this SAME form mounted, but the OTP input must still
+                clear back to empty — remounting it on every new `sentAt` is what makes that
+                happen (same remount trick as the step-level `key` above). */}
             <Input
+              key={sentAt}
               id="otp"
               name="otp"
               inputMode="numeric"
@@ -103,14 +224,29 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
               placeholder="______"
             />
           </div>
-          {verifyState.error && (
+          {verifyError && (
             <p role="alert" className="text-sm text-danger-700">
-              {verifyState.error}
+              {verifyError}
             </p>
           )}
-          <Button type="submit" loading={verifyPending}>
+          <Button type="submit" loading={verifyPending} disabled={isExpired}>
             Masuk
           </Button>
+
+          <div className="flex gap-3">
+            <Button type="button" variant="secondary" className="flex-1" onClick={handleChangeEmail}>
+              Ganti email
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="flex-1"
+              disabled={!canResend || sendPending}
+              onClick={handleResend}
+            >
+              {canResend ? "Kirim ulang kode" : `Kirim ulang dalam ${formatCountdown(remainingResendMs)}`}
+            </Button>
+          </div>
         </form>
       )}
     </div>

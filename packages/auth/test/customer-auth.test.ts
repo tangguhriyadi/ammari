@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { eq } from "drizzle-orm";
-import { customerAuthUsers, customers } from "@ammari/db/schema";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { eq, sql } from "drizzle-orm";
+import { authEmailThrottle, customerAuthUsers, customers } from "@ammari/db/schema";
 import {
   buildCustomerAuth,
   cleanupCustomerAuthTables,
@@ -8,6 +8,14 @@ import {
   createCommittedCustomer,
   testDb,
 } from "./customer-setup";
+
+/** Same technique as staff-auth.test.ts's own `backdateThrottleRows` — see that file for why. */
+async function backdateThrottleRows(email: string, seconds: number): Promise<void> {
+  await testDb
+    .update(authEmailThrottle)
+    .set({ createdAt: sql`now() - make_interval(secs => ${seconds})` })
+    .where(eq(authEmailThrottle.email, email));
+}
 
 let customerIds: string[] = [];
 
@@ -81,6 +89,7 @@ describe("email OTP sign-in — customer self sign-up (link-vs-create hook)", ()
     const [firstAuthUser] = await testDb.select().from(customerAuthUsers).where(eq(customerAuthUsers.email, email));
     customerIds.push(firstAuthUser!.customerId!);
 
+    await backdateThrottleRows(email, 61); // clear the 60s per-email resend cooldown
     await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
     const secondOtp = emailSender.sent[1]!.body.match(/\d{6}/)?.[0]!;
     await auth.api.signInEmailOTP({ body: { email, otp: secondOtp } });
@@ -91,5 +100,84 @@ describe("email OTP sign-in — customer self sign-up (link-vs-create hook)", ()
 
     const matchingCustomers = await testDb.select().from(customers).where(eq(customers.email, email));
     expect(matchingCustomers).toHaveLength(1);
+  });
+});
+
+describe("OTP code rules — same hardening as staff (allowedAttempts, expiry)", () => {
+  test("6th wrong OTP attempt is rejected (allowedAttempts: 5)", async () => {
+    const email = `wrong-attempts-${Date.now()}@example.test`;
+    const { auth } = buildCustomerAuth();
+    await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await expect(auth.api.signInEmailOTP({ body: { email, otp: "000000" } })).rejects.toThrow();
+    }
+    // A 6th attempt — even if it somehow guessed right — must still be rejected because the
+    // code itself is invalidated once allowedAttempts is reached, not just rate-limited.
+    const [authUser] = await testDb.select().from(customerAuthUsers).where(eq(customerAuthUsers.email, email));
+    expect(authUser).toBeUndefined(); // never actually got created — no sign-in ever succeeded
+  });
+
+  test("an expired OTP is rejected", async () => {
+    const email = `expired-${Date.now()}@example.test`;
+    const { auth, emailSender } = buildCustomerAuth();
+    await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+    const otp = emailSender.sent[0]!.body.match(/\d{6}/)?.[0]!;
+
+    // Force the stored verification row into the past rather than waiting 5 real minutes.
+    await testDb.execute(
+      `update customer_auth_verifications set expires_at = now() - interval '1 second' where identifier like '%sign-in%'`,
+    );
+
+    await expect(auth.api.signInEmailOTP({ body: { email, otp } })).rejects.toThrow();
+  });
+});
+
+describe("per-email OTP send cooldown + cap (auth_email_throttle, shared with staff)", () => {
+  test("resending within 60s is a silent no-op; past 60s it succeeds and restarts the code", async () => {
+    const email = `cooldown-${Date.now()}@example.test`;
+    const { auth, emailSender } = buildCustomerAuth();
+
+    await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+    const immediate = await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+    expect(immediate).toEqual({ success: true });
+    expect(emailSender.sent).toHaveLength(1);
+
+    await backdateThrottleRows(email, 61);
+    await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+    expect(emailSender.sent).toHaveLength(2);
+  });
+
+  test("a 6th send within the 5-per-5-minute cap is suppressed even once the cooldown has cleared", async () => {
+    const email = `cap-${Date.now()}@example.test`;
+    const { auth, emailSender } = buildCustomerAuth();
+
+    // See staff-auth.test.ts's own equivalent test for why these ages are seeded directly
+    // rather than fired as 5 real sends spaced by the cooldown.
+    for (const ageSeconds of [250, 200, 150, 100, 65]) {
+      await testDb.insert(authEmailThrottle).values({ email, createdAt: sql`now() - make_interval(secs => ${ageSeconds})` });
+    }
+
+    const response = await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+    expect(response).toEqual({ success: true });
+    expect(emailSender.sent).toHaveLength(0);
+  });
+});
+
+describe("whole-system OTP send cap (circuit breaker, shared with staff)", () => {
+  test("suppresses a send even for a fresh email with no prior attempts of its own, and logs loudly", async () => {
+    const email = `global-cap-${Date.now()}@example.test`;
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { auth, emailSender } = buildCustomerAuth({ globalHourlyCap: 3 });
+
+    for (const otherEmail of ["x@example.test", "y@example.test", "z@example.test"]) {
+      await testDb.insert(authEmailThrottle).values({ email: otherEmail });
+    }
+
+    const response = await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+    expect(response).toEqual({ success: true });
+    expect(emailSender.sent).toHaveLength(0);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("GLOBAL OTP send cap reached"));
+    consoleErrorSpy.mockRestore();
   });
 });

@@ -54,6 +54,21 @@ export const E2E_PRODUCT_HIGHLIGHTS_EMAIL = "product-highlights@e2e.ammari.test"
 // AND content.manage — owner gets every permission except OWNER_EXCLUDED_PERMISSION_KEYS, and
 // content.manage isn't in that list), same as E2E_PRODUCT_HIGHLIGHTS_EMAIL.
 export const E2E_STOREFRONT_EMAIL = "storefront@e2e.ammari.test";
+// Dedicated emails for login-otp.spec.ts — it drives the REAL `/login` OTP form (not the
+// instant-sign-in backdoor every other spec uses), which legitimately sends real OTPs and is the
+// one spec that actually exercises the per-email 60s resend cooldown. TWO emails, not one: the
+// same "wrong email -> Ganti email -> correct email" flow runs once at a mobile viewport and
+// once at desktop in the same suite run, each sending to the "correct" email — sharing one email
+// between them would have the desktop run's send land inside the mobile run's own 60s cooldown
+// window and get silently suppressed. Owner role — this spec only needs to reach the dashboard
+// after signing in, nothing permission-specific.
+export const E2E_LOGIN_OTP_EMAIL = "login-otp@e2e.ammari.test";
+export const E2E_LOGIN_OTP_MOBILE_EMAIL = "login-otp-mobile@e2e.ammari.test";
+// Separate again from the two above: the resend-countdown check and the expired-code check each
+// send their own OTP too, and all of these specs can run within 60s of each other in one suite
+// run — sharing an email risks one test's send landing inside another's cooldown window.
+export const E2E_LOGIN_OTP_RESEND_EMAIL = "login-otp-resend@e2e.ammari.test";
+export const E2E_LOGIN_OTP_EXPIRY_EMAIL = "login-otp-expiry@e2e.ammari.test";
 
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
 // lib/products/queries.ts. A distinct name prefix keeps this from colliding with anything a
@@ -214,6 +229,10 @@ export default async function globalSetup(): Promise<void> {
   await ensureStaffFixture(E2E_PACKING_STICKERS_EMAIL, "E2E Packing Stickers", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PRODUCT_HIGHLIGHTS_EMAIL, "E2E Product Highlights", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_STOREFRONT_EMAIL, "E2E Storefront", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_LOGIN_OTP_EMAIL, "E2E Login OTP", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_LOGIN_OTP_MOBILE_EMAIL, "E2E Login OTP Mobile", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_LOGIN_OTP_RESEND_EMAIL, "E2E Login OTP Resend", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_LOGIN_OTP_EXPIRY_EMAIL, "E2E Login OTP Expiry", OWNER_ROLE_KEY);
 
   const [paginationFabric] = await db
     .insert(fabrics)

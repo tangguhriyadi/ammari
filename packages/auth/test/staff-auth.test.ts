@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { eq } from "drizzle-orm";
-import { staffAuthUsers, staffUsers } from "@ammari/db/schema";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { eq, sql } from "drizzle-orm";
+import { authEmailThrottle, staffAuthUsers, staffUsers } from "@ammari/db/schema";
 import { isActiveStaffAuthUser, loadStaffSessionData } from "../src/staff";
 import {
   buildStaffAuth,
@@ -9,6 +9,17 @@ import {
   createCommittedStaffUser,
   testDb,
 } from "./setup";
+
+/** Backdates every existing throttle row for `email` by `seconds` — simulates real elapsed time
+ * between sends without a real wait, same technique the "expired OTP" test below uses on
+ * `expires_at`. Needed because the cooldown/cap windows are computed against Postgres's own
+ * `now()` (see shared/email-throttle.ts), which vitest's fake timers can't reach. */
+async function backdateThrottleRows(email: string, seconds: number): Promise<void> {
+  await testDb
+    .update(authEmailThrottle)
+    .set({ createdAt: sql`now() - make_interval(secs => ${seconds})` })
+    .where(eq(authEmailThrottle.email, email));
+}
 
 let staffUserIds: string[] = [];
 
@@ -110,35 +121,135 @@ describe("email OTP sign-in — the staff gate", () => {
   });
 });
 
-describe("per-email OTP send throttle (auth_email_throttle)", () => {
-  test("6 send requests for the same email in the window: exactly 5 delivered, all 6 responses identical", async () => {
+describe("per-email OTP send cooldown + cap (auth_email_throttle)", () => {
+  test("resending within 60s is a silent no-op; past 60s it succeeds and restarts the code", async () => {
     const staff = await createCommittedStaffUser({ isActive: true });
     staffUserIds.push(staff.id);
     const { auth, emailSender } = buildStaffAuth();
 
-    const responses = [];
-    for (let i = 0; i < 6; i++) {
-      responses.push(await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } }));
-    }
+    await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    const firstOtp = emailSender.sent[0]!.body.match(/\d{6}/)?.[0]!;
 
-    expect(emailSender.sent).toHaveLength(5);
-    for (const response of responses) {
-      expect(response).toEqual({ success: true });
-    }
+    // Immediate resend: cooldown still active — same silent-no-op shape as every other
+    // throttle outcome, no email actually sent a second time.
+    const immediate = await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    expect(immediate).toEqual({ success: true });
+    expect(emailSender.sent).toHaveLength(1);
+
+    await backdateThrottleRows(staff.email, 61);
+    await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    expect(emailSender.sent).toHaveLength(2);
+    const secondOtp = emailSender.sent[1]!.body.match(/\d{6}/)?.[0]!;
+    expect(secondOtp).not.toBe(firstOtp);
+
+    // The resend invalidated the first code (unique index on `identifier` — see
+    // packages/db/src/schema/staff-auth.ts), it didn't just add a second valid one alongside it.
+    await expect(auth.api.signInEmailOTP({ body: { email: staff.email, otp: firstOtp } })).rejects.toThrow();
+    const result = await auth.api.signInEmailOTP({ body: { email: staff.email, otp: secondOtp } });
+    expect(result.user.email).toBe(staff.email.toLowerCase());
   });
 
-  test("the throttle counts attempts for unknown emails identically (no enumeration signal)", async () => {
+  test("a 6th send within the 5-per-5-minute cap is suppressed even once the cooldown has cleared", async () => {
+    const staff = await createCommittedStaffUser({ isActive: true });
+    staffUserIds.push(staff.id);
     const { auth, emailSender } = buildStaffAuth();
-    const responses = [];
-    for (let i = 0; i < 6; i++) {
-      responses.push(
-        await auth.api.sendVerificationOTP({ body: { email: "nobody@example.test", type: "sign-in" } }),
-      );
+
+    // Directly seed 5 prior attempts rather than firing 5 real sendVerificationOTP calls 60s
+    // apart: 5 sends spaced exactly at the 60s cooldown boundary span exactly 240s, leaving the
+    // very first row right at the edge of also aging out of the 300s cap window by the time a
+    // 6th, cooldown-clear attempt could fire — seeding deterministic ages isolates the CAP from
+    // the COOLDOWN instead of fighting that boundary.
+    for (const ageSeconds of [250, 200, 150, 100, 65]) {
+      await testDb.insert(authEmailThrottle).values({ email: staff.email, createdAt: sql`now() - make_interval(secs => ${ageSeconds})` });
     }
-    expect(emailSender.sent).toHaveLength(0); // never a real staff member — 0, not 5
-    for (const response of responses) {
-      expect(response).toEqual({ success: true }); // identical shape regardless
+
+    const response = await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    expect(response).toEqual({ success: true });
+    expect(emailSender.sent).toHaveLength(0); // the cap suppressed it, not the (already-clear) cooldown
+  });
+
+  test("the cooldown/cap counts attempts for unknown emails identically (no enumeration signal)", async () => {
+    const { auth, emailSender } = buildStaffAuth();
+    const first = await auth.api.sendVerificationOTP({ body: { email: "nobody@example.test", type: "sign-in" } });
+    const second = await auth.api.sendVerificationOTP({ body: { email: "nobody@example.test", type: "sign-in" } });
+    expect(emailSender.sent).toHaveLength(0); // never a real staff member — 0 either way
+    expect(first).toEqual({ success: true });
+    expect(second).toEqual({ success: true }); // cooldown-suppressed, identical shape regardless
+  });
+});
+
+describe("whole-system OTP send cap (circuit breaker, shared across staff + customer)", () => {
+  test("suppresses a send even for a fresh email with no prior attempts of its own, and logs loudly", async () => {
+    const staff = await createCommittedStaffUser({ isActive: true });
+    staffUserIds.push(staff.id);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { auth, emailSender } = buildStaffAuth({ globalHourlyCap: 3 });
+
+    // 3 unrelated attempts (different emails) within the last hour trips the cap for ANY email.
+    for (const email of ["a@example.test", "b@example.test", "c@example.test"]) {
+      await testDb.insert(authEmailThrottle).values({ email });
     }
+
+    const response = await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    expect(response).toEqual({ success: true });
+    expect(emailSender.sent).toHaveLength(0);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("GLOBAL OTP send cap reached"));
+    consoleErrorSpy.mockRestore();
+  });
+});
+
+describe("per-IP send abuse guard — CF-Connecting-IP only, never X-Forwarded-For", () => {
+  // Exercises the real HTTP handler (not `auth.api.*`, which bypasses Better Auth's own
+  // rate-limit middleware entirely — see lib/auth/client.ts's own comment on why the login UI
+  // calls real HTTP endpoints for exactly this reason). No Origin/Referer/Sec-Fetch/Cookie
+  // headers are sent, so Better Auth's form-CSRF check no-ops (confirmed by reading
+  // dist/api/middlewares/origin-check.mjs's `validateFormCsrf`) without needing to fake a
+  // trusted origin for every call.
+  function sendOtpRequest(auth: ReturnType<typeof buildStaffAuth>["auth"], email: string, headers: Record<string, string>) {
+    return auth.handler(
+      new Request("http://localhost:3001/api/auth/email-otp/send-verification-otp", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({ email, type: "sign-in" }),
+      }),
+    );
+  }
+
+  test("20 sends from the same CF-Connecting-IP succeed, the 21st is rate-limited", async () => {
+    const { auth } = buildStaffAuth();
+    const ip = "203.0.113.10";
+    for (let i = 0; i < 20; i++) {
+      const response = await sendOtpRequest(auth, `cf-ip-${i}@example.test`, { "cf-connecting-ip": ip });
+      expect(response.status).toBe(200);
+    }
+    const response = await sendOtpRequest(auth, "cf-ip-20@example.test", { "cf-connecting-ip": ip });
+    expect(response.status).toBe(429);
+  });
+
+  test("varying X-Forwarded-For alone never grants a fresh IP bucket", async () => {
+    const { auth } = buildStaffAuth();
+    // No cf-connecting-ip on any of these — if X-Forwarded-For were used as the rate-limit key,
+    // each distinct value below would get its own bucket and none of this would ever trip the
+    // limit. It's ignored, so all 21 share whatever single fallback IP getIP() resolves to
+    // absent a configured header, and the 21st is still blocked.
+    for (let i = 0; i < 20; i++) {
+      const response = await sendOtpRequest(auth, `xff-${i}@example.test`, { "x-forwarded-for": `198.51.100.${i}` });
+      expect(response.status).toBe(200);
+    }
+    const response = await sendOtpRequest(auth, "xff-20@example.test", { "x-forwarded-for": "198.51.100.20" });
+    expect(response.status).toBe(429);
+  });
+
+  test("a different CF-Connecting-IP gets its own, unblocked bucket", async () => {
+    const { auth } = buildStaffAuth();
+    for (let i = 0; i < 20; i++) {
+      await sendOtpRequest(auth, `busy-ip-${i}@example.test`, { "cf-connecting-ip": "203.0.113.20" });
+    }
+    const blocked = await sendOtpRequest(auth, "busy-ip-20@example.test", { "cf-connecting-ip": "203.0.113.20" });
+    expect(blocked.status).toBe(429);
+
+    const fresh = await sendOtpRequest(auth, "fresh-ip@example.test", { "cf-connecting-ip": "203.0.113.30" });
+    expect(fresh.status).toBe(200);
   });
 });
 
