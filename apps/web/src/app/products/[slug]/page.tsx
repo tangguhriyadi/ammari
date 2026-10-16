@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getRelatedStorefrontProducts, getStorefrontProductBySlug } from "@ammari/db/storefront";
 import { sanitizeStorefrontDescriptionHtml } from "@ammari/content-sanitize";
 import { buildProductView, resolveSelectedColorId } from "@/lib/content/product-view";
 import { getStoragePublicBaseUrl, storageImageUrl } from "@/lib/storage/public-url";
 import { isCartEnabled } from "@/lib/cart-flag";
-import { getWhatsappNumber } from "@/lib/store-settings";
+import { getStoreContact, getWhatsappNumber } from "@/lib/store-settings";
 import { Container } from "@/components/container";
 import { ProductPurchasePanel } from "@/components/pdp/product-purchase-panel";
 import { TrustRow } from "@/components/pdp/trust-row";
@@ -66,7 +67,11 @@ export default async function ProductPage({
   const product = await loadProduct(slug);
   const view = buildProductView(product);
   const selectedColorId = resolveSelectedColorId(view, requestedColor);
-  const related = await getRelatedStorefrontProducts({ excludeSlug: slug, limit: 2 });
+  const [related, whatsappNumber, storeContact] = await Promise.all([
+    getRelatedStorefrontProducts({ excludeSlug: slug, limit: 2 }),
+    getWhatsappNumber(),
+    getStoreContact(),
+  ]);
 
   const sanitizedDescription = product.storefrontDescription ? sanitizeStorefrontDescriptionHtml(product.storefrontDescription) : null;
   const pageUrl = `${siteOrigin()}/products/${slug}${selectedColorId ? `?color=${selectedColorId}` : ""}`;
@@ -105,11 +110,23 @@ export default async function ProductPage({
     {
       id: "pengiriman",
       title: "Pengiriman & Pengembalian",
+      // Session 8 — was hard-coded text; now reads from the Pengiriman/Pengembalian info pages
+      // (docs/plans/storefront-cms.md Phase 2). Merging two independent published HTML bodies
+      // into one accordion pane would force an arbitrary pick of order/truncation, so this links
+      // out to each page's own full content instead of inlining either — a short, static,
+      // non-origin-revealing intro (never names the shipping city, CLAUDE.md / design spec §2)
+      // plus two links, needing no new field and no HTML-merging logic.
       content: (
         <p>
-          Pesanan diproses dan dikirim menggunakan jasa kurir pilihan. Ongkos kirim dihitung otomatis saat
-          checkout berdasarkan alamat tujuan. Penukaran ukuran dapat diajukan sesuai syarat &amp; ketentuan
-          yang berlaku.
+          Ongkos kirim dihitung otomatis saat checkout berdasarkan alamat tujuan.{" "}
+          <Link href="/shipping" className="underline">
+            Lihat kebijakan pengiriman
+          </Link>
+          . Penukaran ukuran dapat diajukan sesuai syarat yang berlaku —{" "}
+          <Link href="/returns-exchange" className="underline">
+            lihat kebijakan pengembalian &amp; penukaran
+          </Link>
+          .
         </p>
       ),
     },
@@ -143,11 +160,11 @@ export default async function ProductPage({
           initialColorId={selectedColorId}
           cartEnabled={isCartEnabled()}
           storageBaseUrl={getStoragePublicBaseUrl()}
-          whatsappNumber={getWhatsappNumber()}
+          whatsappNumber={whatsappNumber}
           pageUrl={pageUrl}
           afterActions={
             <div className="flex flex-col">
-              <TrustRow />
+              <TrustRow returnPolicySummary={storeContact.returnPolicySummary} />
               <KeunggulanSection highlights={view.highlights} />
               <Accordions items={accordionItems} />
             </div>

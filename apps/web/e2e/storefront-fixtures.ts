@@ -17,12 +17,21 @@ export const E2E_HOMEPAGE_TITLE = "Koleksi perdana E2E";
 export const E2E_WHY_AMMARI_HEADING = "Nyaman dipakai seharian, tetap syar'i E2E";
 export const E2E_FEATURE_BLOCK_TITLE = "Outer Dress Tali Depan E2E";
 
+// Session 8 (info pages + store settings) fixtures — info-pages.spec.ts.
+export const E2E_SUPPORT_EMAIL = "halo-e2e@ammari.id";
+export const E2E_BUSINESS_ADDRESS = "Jl. Contoh E2E No. 1, Bandung";
+export const E2E_SHIPPING_BODY_TEXT = "Pengiriman E2E dikirim via kurir pilihan.";
+// "shipping" is published; "how-to-order"/"returns-exchange" are left at migration 0020's seeded
+// (unpublished) state on purpose — info-pages.spec.ts asserts BOTH the published and the
+// "sedang disiapkan" states, and this fixture only needs to cover one of each.
+
 export async function seedStorefrontFixtures(): Promise<void> {
   const { eq } = await import("drizzle-orm");
   const { db } = await import("@ammari/db");
   const {
     fabricColors,
     fabrics,
+    infoPages,
     productImages,
     products,
     productVariants,
@@ -30,6 +39,7 @@ export async function seedStorefrontFixtures(): Promise<void> {
     sizeChartRows,
     stockMovements,
     storefrontHomepageSections,
+    storeSettings,
   } = await import("@ammari/db/schema");
 
   const [fabric] = await db
@@ -237,4 +247,23 @@ export async function seedStorefrontFixtures(): Promise<void> {
       publishedAt: new Date(),
     })
     .where(eq(storefrontHomepageSections.key, "feature_block"));
+
+  // --- Session 8: store settings (save = live) + one published info page. ---
+  await db
+    .update(storeSettings)
+    .set({
+      whatsappNumber: "6281234567890",
+      supportEmail: E2E_SUPPORT_EMAIL,
+      businessAddress: E2E_BUSINESS_ADDRESS,
+      returnPolicySummary: "Tukar ukuran gratis dalam 3 hari E2E",
+    })
+    .where(eq(storeSettings.id, 1));
+
+  await db
+    .update(infoPages)
+    .set({
+      publishedBody: `<p>${E2E_SHIPPING_BODY_TEXT}</p>`,
+      publishedAt: new Date(),
+    })
+    .where(eq(infoPages.slug, "shipping"));
 }

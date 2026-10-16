@@ -70,3 +70,12 @@ export function revalidateHomepage(): Promise<RevalidateOutcome> {
 export function revalidateProductSlug(slug: string): Promise<RevalidateOutcome> {
   return postRevalidate({ paths: [`/products/${slug}`], tags: [HOMEPAGE_CACHE_TAG] });
 }
+
+// Info pages (session 8) and store settings (session 8) are NOT revalidated here — on purpose.
+// Both read directly from the database on every request on apps/web (no `unstable_cache`, no
+// route-level ISR): info pages are `dynamic = "force-dynamic"` with a plain, uncached
+// `getPublishedInfoPage` call, and store settings is read fresh on every layout render. An
+// earlier version of this plan cached both with `unstable_cache`, matching the homepage's own
+// pattern — reverted (see this session's own implementation report) after it did not reliably
+// reflect a fresh publish/save within the same apps/web server lifetime. With nothing cached,
+// there is nothing to revalidate: a publish or save is visible on the very next request.

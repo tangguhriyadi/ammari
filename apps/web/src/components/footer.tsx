@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Mail, MapPin, MessageCircle } from "lucide-react";
+import { buildWhatsappUrl } from "@/lib/whatsapp";
 import { Container } from "./container";
 import { Wordmark } from "./wordmark";
 
@@ -38,14 +40,23 @@ const PAYMENT_METHODS: { label: string; logo: string; width: number; height: num
   { label: "ShopeePay", logo: "/logos/shopeepay.svg", width: 27, height: 20 },
 ];
 
+export interface FooterContact {
+  whatsappNumber: string | null;
+  supportEmail: string | null;
+  businessAddress: string | null;
+}
+
 /** docs/design/storefront.md §4 "Footer" — brand-coloured background, white text. The contact
- * block (WhatsApp/email/address) is OMITTED entirely: it reads from `store_settings`, which
- * doesn't exist until docs/plans/storefront-cms.md's Phase 2 (session 8) — the design spec
- * itself says to hide it until then, same as the PDP's WhatsApp CTA (see
- * lib/whatsapp.ts). Never names the payment gateway (CLAUDE.md / design spec §2) — the chips
- * below are generic payment-method labels, not a provider name. */
-export function Footer() {
+ * block (WhatsApp/email/address) now reads from `store_settings` (docs/plans/storefront-cms.md
+ * Phase 2, session 8) — the caller fetches it once (root layout.tsx) and passes it down, same
+ * "page/layout awaits, pure component renders" split as the PDP's TrustRow. Still hidden
+ * entirely when every field is empty (the owner hasn't filled in settings yet) — the design
+ * spec's own "hide until it exists" rule, just no longer permanently true. Never names the
+ * payment gateway (CLAUDE.md / design spec §2) — the chips below are generic payment-method
+ * labels, not a provider name. */
+export function Footer({ contact }: { contact: FooterContact }) {
   const year = new Date().getFullYear();
+  const hasContact = Boolean(contact.whatsappNumber || contact.supportEmail || contact.businessAddress);
 
   return (
     <footer className="bg-brand text-footer-text">
@@ -62,6 +73,36 @@ export function Footer() {
             </Link>
           ))}
         </nav>
+
+        {hasContact && (
+          <div className="flex flex-col gap-3 border-t border-footer-line pt-6">
+            <p className="text-[11px] font-medium tracking-[0.24em] text-footer-text/70 uppercase">Hubungi kami</p>
+            <ul className="flex flex-col gap-2 text-sm text-footer-text">
+              {contact.whatsappNumber && (
+                <li className="flex items-center gap-2">
+                  <MessageCircle className="size-4 shrink-0" strokeWidth={1.4} aria-hidden="true" />
+                  <a href={buildWhatsappUrl(contact.whatsappNumber, "Halo, saya mau tanya tentang Ammari.")} className="hover:text-footer-text/80">
+                    WhatsApp
+                  </a>
+                </li>
+              )}
+              {contact.supportEmail && (
+                <li className="flex items-center gap-2">
+                  <Mail className="size-4 shrink-0" strokeWidth={1.4} aria-hidden="true" />
+                  <a href={`mailto:${contact.supportEmail}`} className="hover:text-footer-text/80">
+                    {contact.supportEmail}
+                  </a>
+                </li>
+              )}
+              {contact.businessAddress && (
+                <li className="flex items-start gap-2">
+                  <MapPin className="mt-0.5 size-4 shrink-0" strokeWidth={1.4} aria-hidden="true" />
+                  <span className="whitespace-pre-line">{contact.businessAddress}</span>
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
 
         <div className="flex flex-col gap-3 border-t border-footer-line pt-6">
           <p className="text-[11px] font-medium tracking-[0.24em] text-footer-text/70 uppercase">Pembayaran</p>
