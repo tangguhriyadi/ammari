@@ -1,11 +1,13 @@
 // Seeds realistic, PUBLISHED storefront data for the `/` and `/products/[slug]` e2e specs
 // (home.spec.ts, product-page.spec.ts) — separate from global-setup.ts's own draft-only hero
 // seeding (used only by preview-home.spec.ts), called from the SAME globalSetup run. Image
-// `storageKey`s point at apps/web/public/fixtures/* (committed, tiny solid-colour WebP files —
-// see that directory's own generation script), resolved against STORAGE_PUBLIC_BASE_URL, which
-// playwright.config.ts's webServer.env points at this very e2e server's own origin
-// (http://localhost:3100) — so these URLs are real, fetchable images during the e2e run, not
-// broken `<img>` tags.
+// `storageKey`s are "api/test/fixtures/<name>", resolved against STORAGE_PUBLIC_BASE_URL (which
+// playwright.config.ts's webServer.env points at this very e2e server's own origin,
+// http://localhost:3100) into a real, fetchable URL served by
+// app/api/test/fixtures/[...path]/route.ts — an e2e-only backdoor reading the committed,
+// tiny solid-colour WebP files under apps/web/e2e/fixtures/*. Deliberately NOT under
+// apps/web/public/*: that directory ships verbatim into the production Docker image
+// (Dockerfile COPYs it directly), and these are test-only fixtures, not real product assets.
 
 export const E2E_PRODUCT_SLUG = "gamis-flowy-straight-e2e";
 export const E2E_RELATED_PRODUCT_SLUG = "outer-dress-tali-depan-e2e";
@@ -79,9 +81,9 @@ export async function seedStorefrontFixtures(): Promise<void> {
 
   // General (no colour) + one image per colour, for the gallery-grouping / colour-switch specs.
   await db.insert(productImages).values([
-    { productId: productA.id, fabricId: fabric.id, fabricColorId: null, storageKey: "fixtures/general", altText: "Gamis Flowy Straight", width: 800, height: 1200, sortOrder: 0 },
-    { productId: productA.id, fabricId: fabric.id, fabricColorId: beige.id, storageKey: "fixtures/beige", altText: "Gamis Flowy Straight Beige", width: 800, height: 1200, sortOrder: 0 },
-    { productId: productA.id, fabricId: fabric.id, fabricColorId: navy.id, storageKey: "fixtures/navy", altText: "Gamis Flowy Straight Navy", width: 800, height: 1200, sortOrder: 0 },
+    { productId: productA.id, fabricId: fabric.id, fabricColorId: null, storageKey: "api/test/fixtures/general", altText: "Gamis Flowy Straight", width: 800, height: 1200, sortOrder: 0 },
+    { productId: productA.id, fabricId: fabric.id, fabricColorId: beige.id, storageKey: "api/test/fixtures/beige", altText: "Gamis Flowy Straight Beige", width: 800, height: 1200, sortOrder: 0 },
+    { productId: productA.id, fabricId: fabric.id, fabricColorId: navy.id, storageKey: "api/test/fixtures/navy", altText: "Gamis Flowy Straight Navy", width: 800, height: 1200, sortOrder: 0 },
   ]);
 
   // Beige: S available, M available, L OUT OF STOCK (net zero) — exercises the struck-through
@@ -135,7 +137,7 @@ export async function seedStorefrontFixtures(): Promise<void> {
     productId: productB.id,
     fabricId: fabric.id,
     fabricColorId: taupe.id,
-    storageKey: "fixtures/taupe",
+    storageKey: "api/test/fixtures/taupe",
     altText: "Outer Dress Tali Depan Taupe",
     width: 800,
     height: 1200,
@@ -174,11 +176,11 @@ export async function seedStorefrontFixtures(): Promise<void> {
         ctaLabel: "LIHAT KOLEKSI",
         ctaTarget: { type: "anchor" },
         image: {
-          storageKey: "fixtures/hero",
+          storageKey: "api/test/fixtures/hero",
           altText: "Hero Ammari E2E",
           width: 1600,
           height: 2400,
-          mobileStorageKey: "fixtures/hero-mobile",
+          mobileStorageKey: "api/test/fixtures/hero-mobile",
           mobileWidth: 750,
           mobileHeight: 1000,
         },
@@ -230,7 +232,7 @@ export async function seedStorefrontFixtures(): Promise<void> {
         subtitle: "Dalam dan luar satu warna",
         ctaLabel: "LIHAT",
         linkedProduct: { productId: productB.id, fabricColorId: null },
-        image: { storageKey: "fixtures/feature", altText: "Outer Dress Tali Depan E2E", width: 1600, height: 1600, mobileStorageKey: null, mobileWidth: null, mobileHeight: null },
+        image: { storageKey: "api/test/fixtures/feature", altText: "Outer Dress Tali Depan E2E", width: 1600, height: 1600, mobileStorageKey: null, mobileWidth: null, mobileHeight: null },
       },
       publishedAt: new Date(),
     })

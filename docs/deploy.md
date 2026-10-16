@@ -216,6 +216,53 @@ UI (`/roles-staff`) once you're logged in, not for re-running this script with d
 Idempotent in the safe sense (re-running never duplicates a row or crashes), but not a "fix this
 person's role" tool. Log in at `https://admin.ammari.my.id` with the email you seeded to confirm.
 
+## Bucket policy: public-read for product/content images
+
+The storefront renders product and homepage-content images as plain `<img>` URLs
+(`STORAGE_PUBLIC_BASE_URL` + `storageKey` + size — `apps/web/src/lib/storage/public-url.ts`), so
+the bucket needs a policy allowing anonymous `s3:GetObject` under exactly those two prefixes.
+Without it, every image request comes back `AccessDenied`. `packages/storage/bucket-policy.dev.json`
+and `bucket-policy.prod.json` are the source of truth for which prefixes are public — keep both
+in sync with whatever `apps/admin/src/lib/products/image-keys.ts` and
+`apps/admin/src/lib/content/content-image-keys.ts` actually write under (currently `products/*`
+and `content/*`; everything else in the bucket stays private by default, since a bucket policy
+only ever adds allow rules). `packages/storage`'s own `storage:check` script covers
+`local/healthcheck/*` the same way.
+
+**Dev — run this now** (the dev env already has a real bucket: the shared `ammaridev-uc1gfp`
+bucket, split by the `local/`/`dev/` key prefix):
+
+```bash
+# 1. Review exactly what would be sent — no credentials needed, no write.
+pnpm --filter @ammari/storage policy:apply -- --env dev --dry-run
+
+# 2. Apply it for real. Reads S3_* credentials from apps/admin/.env (the same vars
+#    apps/admin's own storage.ts requires) — point that file's S3_BUCKET/S3_ENDPOINT/etc at
+#    the real dev bucket before running this, same credentials used for local dev image
+#    upload/delete. Applies via PutBucketPolicy, then verifies with two anonymous (unsigned)
+#    HTTP requests — a temporary object under products/ must come back 200, a temporary
+#    object outside every public prefix must come back 403 — and deletes both test objects
+#    afterward either way.
+pnpm --filter @ammari/storage policy:apply -- --env dev
+
+# 3. Anytime after: read back what's actually live on the bucket, without writing anything.
+pnpm --filter @ammari/storage policy:show
+```
+
+If the provider rejects `PutBucketPolicy` outright (some S3-compatible providers don't
+implement it), the script prints the exact error from `--dry-run`'s JSON and stops — in that
+case, apply that same JSON by hand through the provider's console (Cloudeka: bucket settings →
+policy), then run `policy:apply -- --env dev --dry-run` again just to compare, or `policy:show`
+to confirm what's live.
+
+**Prod — later**, once the real prod bucket exists: fill in the real bucket name in
+`bucket-policy.prod.json` (replacing `REPLACE_WITH_PROD_BUCKET_NAME` in both the ARNs and the
+`_comment`), point `apps/admin/.env`'s `S3_*` vars at that bucket's credentials, then run the
+same three commands with `--env prod`. `policy:apply` refuses to run against the prod file at
+all while the placeholder is still unfilled, and separately refuses to apply a policy file
+whose bucket name doesn't match the configured `S3_BUCKET` — so it can't be pointed at the
+wrong bucket by mistake. See `docs/SPEC.md §11`'s pre-deploy checklist entry for this.
+
 ## Image tagging scheme
 
 Every commit SHA that `deploy-dev.yml` deploys must have all three images

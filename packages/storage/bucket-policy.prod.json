@@ -1,14 +1,15 @@
 {
-  "_comment": "Template, not yet applied (docs/plans/deploy-dev.md, docs/SPEC.md §11). Mirrors bucket-policy.dev.json but scoped to the PROD bucket's own ARN and prefix (prod uses no S3_KEY_PREFIX — see deploy/env/web.env.example's comment on that var) once that bucket exists. Replace REPLACE_WITH_PROD_BUCKET_NAME below, then apply via the provider's console exactly like the dev policy was.",
+  "_comment": "Template, not yet applied (docs/SPEC.md §11, docs/deploy.md). Mirrors bucket-policy.dev.json but scoped to the PROD bucket's own ARN and prefix (prod uses no S3_KEY_PREFIX — see deploy/env/web.env.example's comment on that var) once that bucket exists. Public GetObject is scoped to exactly the prefixes apps/web's storefront renders publicly (products/* and content/*) plus healthcheck/* (packages/storage's storage:check script). Everything else stays private. Replace REPLACE_WITH_PROD_BUCKET_NAME below, then apply with `pnpm --filter @ammari/storage policy:apply -- --env prod` (see docs/deploy.md). This _comment key is stripped by the apply script before calling PutBucketPolicy.",
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "PublicReadProductImages",
+      "Sid": "PublicReadProductAndContentImages",
       "Effect": "Allow",
       "Principal": "*",
       "Action": "s3:GetObject",
       "Resource": [
         "arn:aws:s3:::REPLACE_WITH_PROD_BUCKET_NAME/products/*",
+        "arn:aws:s3:::REPLACE_WITH_PROD_BUCKET_NAME/content/*",
         "arn:aws:s3:::REPLACE_WITH_PROD_BUCKET_NAME/healthcheck/*"
       ]
     }

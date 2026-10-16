@@ -72,9 +72,10 @@ export default defineConfig({
       // instead of 5 real minutes.
       E2E_OTP_EXPIRES_IN_SECONDS: "8",
       // Images resolve to real, fetchable files during the e2e run: committed fixture WebPs
-      // under apps/web/public/fixtures/*, served by this very dev server, so
-      // `${STORAGE_PUBLIC_BASE_URL}/fixtures/<name>/<size>.webp` is a real URL — never a mock/
-      // placeholder scheme (see storefront-fixtures.ts's own doc comment).
+      // under apps/web/e2e/fixtures/*, served by this very dev server through the e2e-only
+      // app/api/test/fixtures/[...path] route, so
+      // `${STORAGE_PUBLIC_BASE_URL}/api/test/fixtures/<name>/<size>.webp` is a real URL — never
+      // a mock/placeholder scheme (see storefront-fixtures.ts's own doc comment).
       STORAGE_PUBLIC_BASE_URL: "http://localhost:3100",
       // Off — the real shipped default (lib/cart-flag.ts). product-page.spec.ts asserts the
       // WhatsApp-as-primary-action behaviour this produces, not the cart flow (unbuilt).

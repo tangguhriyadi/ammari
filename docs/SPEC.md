@@ -549,9 +549,11 @@ step-by-step runbook) before the *first* deploy to any given environment (dev or
   through exactly how this was diagnosed) — don't assume a future Next version still needs the
   workaround, but don't remove it on faith either.
 - **Prod bucket policy:** the prod S3 bucket needs its own public-read policy for `products/*`
-  (and the `healthcheck/*` prefix used by `packages/storage`'s own check) — template at
-  `packages/storage/bucket-policy.prod.json` (mirrors `bucket-policy.dev.json`, not yet
-  applied — needs the real prod bucket's ARN filled in once that bucket exists).
+  and `content/*` (and the `healthcheck/*` prefix used by `packages/storage`'s own check) —
+  template at `packages/storage/bucket-policy.prod.json` (mirrors `bucket-policy.dev.json`, not
+  yet applied — needs the real prod bucket's ARN filled in once that bucket exists). Apply and
+  verify with `pnpm --filter @ammari/storage policy:apply` — see docs/deploy.md's "Bucket
+  policy" section.
 - **`MAIN_SITE_URL` (apps/admin):** apps/web's own public base URL — `https://ammari.my.id` on
   dev, `https://ammari.id` in production (no trailing slash; must be `https://` once
   `NODE_ENV=production`, enforced by `apps/admin/src/lib/main-site-url.ts`). Every thank-you-card
