@@ -1,9 +1,11 @@
 "use server";
 
 import { z } from "zod";
+import { INFO_PAGE_SLUGS, type InfoPageSlug } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import * as homepage from "@/lib/content/homepage";
+import * as infoPages from "@/lib/content/info-pages";
 import {
   featureBlockContentSchema,
   heroContentSchema,
@@ -11,6 +13,7 @@ import {
   productGridContentSchema,
   whyAmmariContentSchema,
 } from "@/lib/content/homepage-schemas";
+import { saveInfoPageDraftSchema } from "@/lib/content/info-pages-schemas";
 import { uploadContentImage, type UploadedContentImage } from "@/lib/content/content-image-queries";
 import { revalidateHomepage } from "@/lib/revalidate";
 import { getMainSiteUrl } from "@/lib/main-site-url";
@@ -155,4 +158,49 @@ export async function uploadContentImageAction(formData: FormData): Promise<Acti
     const fileBuffer = Buffer.from(await file.arrayBuffer());
     return uploadContentImage({ sectionKey: parsed.data.sectionKey, variant: parsed.data.variant, fileBuffer });
   });
+}
+
+// ---------- Info pages (session 8) ----------
+//
+// Each page's draft save / publish / discard is independent — no atomic-all-5 action the way the
+// homepage's publishHomepageAction promotes all 4 sections together (see lib/content/
+// info-pages.ts's own doc comment for why that's the right model here).
+
+const infoPageSlugSchema = z.enum(INFO_PAGE_SLUGS);
+
+function parseInfoPageSlug(slug: string): InfoPageSlug | null {
+  const parsed = infoPageSlugSchema.safeParse(slug);
+  return parsed.success ? parsed.data : null;
+}
+
+export async function saveInfoPageDraftAction(slug: string, input: z.input<typeof saveInfoPageDraftSchema>): Promise<ActionResult> {
+  const session = await requirePermission("content.manage");
+  const parsedSlug = parseInfoPageSlug(slug);
+  if (!parsedSlug) return { ok: false, error: "Halaman tidak valid." };
+  const parsed = saveInfoPageDraftSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    await infoPages.saveInfoPageDraft(parsedSlug, parsed.data, session.staffUser.id);
+    return undefined;
+  });
+}
+
+// No revalidation call here — unlike the homepage, apps/web's info-page routes read
+// `info_pages` uncached on every request (see lib/revalidate.ts's own comment), so a publish is
+// visible on the very next request with nothing to invalidate.
+export async function publishInfoPageAction(slug: string): Promise<ActionResult> {
+  const session = await requirePermission("content.manage");
+  const parsedSlug = parseInfoPageSlug(slug);
+  if (!parsedSlug) return { ok: false, error: "Halaman tidak valid." };
+  return runAction(async () => {
+    await infoPages.publishInfoPage(parsedSlug, session.staffUser.id);
+    return undefined;
+  });
+}
+
+export async function discardInfoPageDraftAction(slug: string): Promise<ActionResult<{ bodyHtml: string }>> {
+  const session = await requirePermission("content.manage");
+  const parsedSlug = parseInfoPageSlug(slug);
+  if (!parsedSlug) return { ok: false, error: "Halaman tidak valid." };
+  return runAction(() => infoPages.discardInfoPageDraft(parsedSlug, session.staffUser.id));
 }

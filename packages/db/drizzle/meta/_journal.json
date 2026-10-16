@@ -141,6 +141,13 @@
       "when": 1792066867870,
       "tag": "0019_storefront_cms_schema_and_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792161025807,
+      "tag": "0020_info_pages_and_store_settings",
+      "breakpoints": true
     }
   ]
 }

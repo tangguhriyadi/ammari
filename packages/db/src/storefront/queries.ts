@@ -3,14 +3,24 @@ import { db as defaultDb } from "../client";
 import {
   fabricColors,
   fabrics,
+  infoPages,
   productImages,
   products,
   productVariants,
   sizeChartRows,
   stockMovements,
   storefrontHomepageSections,
+  storeSettings,
 } from "../schema";
-import { CUTTING_SIZES, HOMEPAGE_SECTION_KEYS, type CuttingSize, type HomepageSectionKey, type Size, type SizeMode } from "../schema/constants";
+import {
+  CUTTING_SIZES,
+  HOMEPAGE_SECTION_KEYS,
+  type CuttingSize,
+  type HomepageSectionKey,
+  type InfoPageSlug,
+  type Size,
+  type SizeMode,
+} from "../schema/constants";
 import { qualifiedColumn } from "../sql-helpers";
 
 // Replaces the old `getActiveProductBySlug` placeholder (deleted — it was a bare `.select()`,
@@ -421,6 +431,56 @@ export async function getStorefrontProductTiles(
  * duplicated image/colour-resolution logic. Returns `[]` for an unknown/unpublished slug or when
  * there's simply nothing else published yet — the PDP renders however many related tiles it gets
  * (possibly zero), never pads or throws. */
+// ---------- Info pages + store settings (docs/plans/storefront-cms.md Phase 2, session 8) ----------
+
+export interface StorefrontInfoPage {
+  slug: InfoPageSlug;
+  title: string;
+  /** Sanitized HTML — the CALLER (apps/web's info-page route) must still sanitize again at render
+   * time with @ammari/content-sanitize's sanitizeInfoPageHtml immediately before
+   * `dangerouslySetInnerHTML`, same defense-in-depth posture the storefront description already
+   * uses. Never the draft body — this function reads published_body only. */
+  body: string;
+}
+
+/** Backs apps/web's 5 info-page routes. Returns `null` for a page that has never been published
+ * (published_body/published_at are null until the first "Terbitkan") or an unknown slug — never
+ * throws for either; the caller renders a "sedang disiapkan" state instead of a 500. */
+export async function getPublishedInfoPage(slug: string, db: Database = defaultDb): Promise<StorefrontInfoPage | null> {
+  const [row] = await db
+    .select({ slug: infoPages.slug, title: infoPages.title, body: infoPages.publishedBody })
+    .from(infoPages)
+    .where(eq(infoPages.slug, slug))
+    .limit(1);
+  if (!row || row.body === null) return null;
+  return { slug: row.slug as InfoPageSlug, title: row.title, body: row.body };
+}
+
+export interface StorefrontSettings {
+  whatsappNumber: string | null;
+  supportEmail: string | null;
+  businessAddress: string | null;
+  returnPolicySummary: string | null;
+}
+
+/** The one `store_settings` row (migration 0020 guarantees it always exists — see that
+ * migration's own comment). Every field is nullable: the owner fills them in via the admin
+ * settings form after this ships, and every web caller (footer, PDP WhatsApp CTA, PDP trust row)
+ * must already treat `null` as "hide this," never a broken link/blank line — same contract
+ * apps/web/src/lib/store-settings.ts's pre-existing env-var stand-in already uses. */
+export async function getStoreSettings(db: Database = defaultDb): Promise<StorefrontSettings> {
+  const [row] = await db
+    .select({
+      whatsappNumber: storeSettings.whatsappNumber,
+      supportEmail: storeSettings.supportEmail,
+      businessAddress: storeSettings.businessAddress,
+      returnPolicySummary: storeSettings.returnPolicySummary,
+    })
+    .from(storeSettings)
+    .limit(1);
+  return row ?? { whatsappNumber: null, supportEmail: null, businessAddress: null, returnPolicySummary: null };
+}
+
 export async function getRelatedStorefrontProducts(
   params: { excludeSlug: string; limit: number },
   db: Database = defaultDb,

@@ -10,6 +10,7 @@ vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMoc
 // (confirmed by reading every test below). Only the new "publish still succeeds when
 // revalidation fails" test configures these mocks' return values.
 vi.mock("@/lib/content/homepage");
+vi.mock("@/lib/content/info-pages");
 vi.mock("@/lib/revalidate");
 
 const {
@@ -22,6 +23,9 @@ const {
   retryHomepageRevalidationAction,
   createHomepagePreviewLinkAction,
   discardHomepageDraftAction,
+  saveInfoPageDraftAction,
+  publishInfoPageAction,
+  discardInfoPageDraftAction,
 } = await import("./actions");
 const homepageMock = await import("@/lib/content/homepage");
 const revalidateMock = await import("@/lib/revalidate");
@@ -183,4 +187,42 @@ describe("homepage content action validation (shape only — never reaches the D
     const result = await setHomepageSectionVisibilityAction("not_a_real_key", true);
     expect(result.ok).toBe(false);
   });
+});
+
+describe("info page actions require content.manage, NOT products.manage (session 8)", () => {
+  test.each([
+    ["saveInfoPageDraftAction", () => saveInfoPageDraftAction("shipping", { title: "Pengiriman", bodyHtml: "<p>Isi</p>" })],
+    ["publishInfoPageAction", () => publishInfoPageAction("shipping")],
+    ["discardInfoPageDraftAction", () => discardInfoPageDraftAction("shipping")],
+  ] as const)("%s rejects a session holding products.manage but NOT content.manage", async (_name, run) => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["products.manage"]));
+    await expect(run()).rejects.toThrow();
+  });
+
+  test("an unauthenticated session (null) redirects rather than proceeding", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(null);
+    await expect(saveInfoPageDraftAction("shipping", { title: "Pengiriman", bodyHtml: "<p>Isi</p>" })).rejects.toThrow();
+  });
+});
+
+describe("info page action validation (shape + slug only — never reaches the DB)", () => {
+  test("saveInfoPageDraftAction rejects a blank title", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const result = await saveInfoPageDraftAction("shipping", { title: "   ", bodyHtml: "<p>Isi</p>" });
+    expect(result.ok).toBe(false);
+  });
+
+  test.each(["saveInfoPageDraftAction", "publishInfoPageAction", "discardInfoPageDraftAction"] as const)(
+    "%s rejects a slug outside INFO_PAGE_SLUGS",
+    async (name) => {
+      getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+      const result =
+        name === "saveInfoPageDraftAction"
+          ? await saveInfoPageDraftAction("not-a-real-slug", { title: "x", bodyHtml: "<p>Isi</p>" })
+          : name === "publishInfoPageAction"
+            ? await publishInfoPageAction("not-a-real-slug")
+            : await discardInfoPageDraftAction("not-a-real-slug");
+      expect(result.ok).toBe(false);
+    },
+  );
 });

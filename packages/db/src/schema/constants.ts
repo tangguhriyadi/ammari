@@ -35,6 +35,17 @@ export type FabricPriceUnit = (typeof FABRIC_PRICE_UNITS)[number];
 export const HOMEPAGE_SECTION_KEYS = ["hero", "product_grid", "feature_block", "why_ammari"] as const;
 export type HomepageSectionKey = (typeof HOMEPAGE_SECTION_KEYS)[number];
 
+// Phase 2 (docs/plans/storefront-cms.md, session 8) — a fixed set of 5 info-page slugs, not a
+// generic page builder, same "closed set, seeded by migration" reasoning as
+// HOMEPAGE_SECTION_KEYS above. "privacy-policy"/"terms-of-service" already exist as hard-coded
+// routes in apps/web (registered in the Google OAuth consent screen) and MUST keep these exact
+// slugs/URLs; "returns-exchange"/"how-to-order"/"shipping" already exist as placeholder routes
+// from session 7. Backs info_pages.slug's CHECK constraint (schema/content.ts); the 5 rows are
+// seeded by migration 0020, not seed.ts, per CLAUDE.md's "reference data the code depends on
+// ships in a migration" rule.
+export const INFO_PAGE_SLUGS = ["privacy-policy", "terms-of-service", "returns-exchange", "how-to-order", "shipping"] as const;
+export type InfoPageSlug = (typeof INFO_PAGE_SLUGS)[number];
+
 // A FIXED set of "Kenapa Ammari" icon keys (docs/plans/storefront-cms.md), same "closed set, not
 // free text" reasoning as PRODUCT_HIGHLIGHT_KEYS below — each key maps to one lucide-react icon
 // in apps/web. Not backed by its own DB CHECK: it lives inside a `why_ammari` JSONB content

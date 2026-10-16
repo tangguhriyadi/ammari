@@ -5,6 +5,7 @@ import {
   costComponents,
   fabricColors,
   fabrics,
+  infoPages,
   productImages,
   products,
   productionBatchCosts,
@@ -15,11 +16,14 @@ import {
   sizeCharts,
   stockMovements,
   storefrontHomepageSections,
+  storeSettings,
 } from "../src/schema";
 import {
   getDraftHomepageContent,
   getPublishedHomepageContent,
+  getPublishedInfoPage,
   getStorefrontProductBySlug,
+  getStoreSettings,
 } from "../src/storefront/queries";
 import { insertStaffUser } from "./fixtures";
 import { withRollback, type TestTx } from "./helpers";
@@ -347,6 +351,77 @@ describe("getPublishedHomepageContent / getDraftHomepageContent", () => {
       expect(draftHero?.content).toEqual(draftPayload);
 
       expect(published.map((s) => s.key)).toEqual(draft.map((s) => s.key));
+    });
+  });
+});
+
+describe("getPublishedInfoPage", () => {
+  test("returns the published body/title, never the draft one", async () => {
+    await withRollback(async (tx) => {
+      const draftOnly = `draft-only-${randomUUID()}`;
+      const published = `<p>published-${randomUUID()}</p>`;
+      await tx
+        .update(infoPages)
+        .set({ draftBody: draftOnly, publishedBody: published, title: "Cara Pemesanan", publishedAt: new Date() })
+        .where(eq(infoPages.slug, "how-to-order"));
+
+      const result = await getPublishedInfoPage("how-to-order", tx);
+      expect(result).not.toBeNull();
+      expect(result?.body).toBe(published);
+      expect(result?.body).not.toContain(draftOnly);
+      expect(result?.title).toBe("Cara Pemesanan");
+    });
+  });
+
+  test("returns null for a slug that has never been published (published_body still null)", async () => {
+    await withRollback(async (tx) => {
+      // migration 0020 seeds returns-exchange/how-to-order/shipping with a null published_body —
+      // nothing to update here, this asserts the seeded state itself resolves to null.
+      const result = await getPublishedInfoPage("shipping", tx);
+      expect(result).toBeNull();
+    });
+  });
+
+  test("returns null for an unknown slug — never throws", async () => {
+    await withRollback(async (tx) => {
+      const result = await getPublishedInfoPage("not-a-real-slug", tx);
+      expect(result).toBeNull();
+    });
+  });
+});
+
+describe("getStoreSettings", () => {
+  test("returns every field once saved", async () => {
+    await withRollback(async (tx) => {
+      await tx
+        .update(storeSettings)
+        .set({
+          whatsappNumber: "6281234567890",
+          supportEmail: "halo@ammari.id",
+          businessAddress: "Jl. Contoh No. 1",
+          returnPolicySummary: "Tukar ukuran dalam 3 hari",
+        })
+        .where(eq(storeSettings.id, 1));
+
+      const result = await getStoreSettings(tx);
+      expect(result).toEqual({
+        whatsappNumber: "6281234567890",
+        supportEmail: "halo@ammari.id",
+        businessAddress: "Jl. Contoh No. 1",
+        returnPolicySummary: "Tukar ukuran dalam 3 hari",
+      });
+    });
+  });
+
+  test("every field is null before the owner fills anything in — never throws, never a missing row", async () => {
+    await withRollback(async (tx) => {
+      const result = await getStoreSettings(tx);
+      expect(result).toEqual({
+        whatsappNumber: null,
+        supportEmail: null,
+        businessAddress: null,
+        returnPolicySummary: null,
+      });
     });
   });
 });

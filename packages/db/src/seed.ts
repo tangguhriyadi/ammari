@@ -5,11 +5,13 @@ import {
   costAssumptions,
   costComponents,
   HOMEPAGE_SECTION_KEYS,
+  infoPages,
   permissions,
   rolePermissions,
   roles,
   staffUsers,
   storefrontHomepageSections,
+  storeSettings,
 } from "./schema";
 import type { ChannelId } from "./schema";
 import {
@@ -55,6 +57,40 @@ async function seedHomepageSections(db: Database) {
   for (const key of HOMEPAGE_SECTION_KEYS) {
     await db.insert(storefrontHomepageSections).values({ key }).onConflictDoNothing({ target: storefrontHomepageSections.key });
   }
+}
+
+// Same "migration ships it, seed.ts also keeps a truncate-and-reseed test db in sync" dual
+// mechanism as seedHomepageSections above — migration 0020's own idempotent INSERT seeds these
+// 5 rows for dev/prod, but packages/db/test/e2e-db.ts's TRUNCATE wipes them on every e2e run and
+// relies on THIS function (not a migration replay) to restore them. onConflictDoNothing, not
+// onConflictDoUpdate — a row that already exists may hold a real owner edit (a published page),
+// which a reseed must never clobber. Text matches migration 0020's seed EXACTLY (the current
+// hard-coded placeholder apps/web/src/app/privacy-policy/page.tsx and terms-of-service/page.tsx
+// used before this CMS existed) — keep the two in sync by hand if either ever changes.
+const PRIVACY_POLICY_PLACEHOLDER_HTML =
+  "<p>Konten kebijakan privasi Ammari akan dilengkapi di sini sebelum peluncuran. Halaman ini menjelaskan bagaimana Ammari mengumpulkan, menggunakan, dan melindungi data pribadimu sesuai Undang-Undang Pelindungan Data Pribadi (UU PDP).</p>";
+const TERMS_OF_SERVICE_PLACEHOLDER_HTML =
+  "<p>Syarat dan ketentuan penggunaan layanan Ammari, termasuk aturan voucher dan belanja di ammari.id, akan dilengkapi di sini sebelum peluncuran.</p>";
+
+async function seedInfoPages(db: Database) {
+  const rows: (typeof infoPages.$inferInsert)[] = [
+    { slug: "privacy-policy", title: "Kebijakan Privasi", draftBody: PRIVACY_POLICY_PLACEHOLDER_HTML, publishedBody: PRIVACY_POLICY_PLACEHOLDER_HTML, publishedAt: new Date() },
+    { slug: "terms-of-service", title: "Syarat & Ketentuan", draftBody: TERMS_OF_SERVICE_PLACEHOLDER_HTML, publishedBody: TERMS_OF_SERVICE_PLACEHOLDER_HTML, publishedAt: new Date() },
+    { slug: "returns-exchange", title: "Pengembalian & Penukaran", draftBody: "" },
+    { slug: "how-to-order", title: "Cara Pemesanan", draftBody: "" },
+    { slug: "shipping", title: "Pengiriman", draftBody: "" },
+  ];
+  for (const row of rows) {
+    await db.insert(infoPages).values(row).onConflictDoNothing({ target: infoPages.slug });
+  }
+}
+
+// Same reasoning as seedInfoPages above — store_settings is a singleton (id fixed to 1 by its
+// own CHECK), migration 0020 inserts the one row with every field null, and this function
+// restores that same row after a truncate-and-reseed test run. onConflictDoNothing: a row that
+// already exists may hold the owner's real WhatsApp/email/address, never overwritten here.
+async function seedStoreSettings(db: Database) {
+  await db.insert(storeSettings).values({ id: 1 }).onConflictDoNothing({ target: storeSettings.id });
 }
 
 async function syncPermissionCatalog(db: Database) {
@@ -190,6 +226,8 @@ async function seedStaffUsers(db: Database) {
 export async function seed(db: Database = defaultDb) {
   await upsertChannels(db);
   await seedHomepageSections(db);
+  await seedInfoPages(db);
+  await seedStoreSettings(db);
   await syncPermissionCatalog(db);
   await seedSystemRoles(db);
   await seedInitialCostAssumptions(db);

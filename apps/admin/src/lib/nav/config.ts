@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Boxes,
   Factory,
+  FileText,
   History,
   Home,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import {
   Settings,
   ShieldCheck,
   ShoppingBag,
+  Store,
   Tags,
   Upload,
   Users,
@@ -128,6 +130,26 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Tabel Ukuran",
     href: "/content/size-charts",
     icon: Ruler,
+    group: "Konten",
+    permissionKeys: ["content.manage"],
+    mobilePrimary: false,
+  },
+  {
+    // Phase 2 (docs/plans/storefront-cms.md, session 8) — Syarat & ketentuan, Kebijakan
+    // privasi, Cara pemesanan, Pengiriman, Pengembalian & penukaran. Same `content.manage` gate
+    // as every other Konten item, not a new permission (see this session's own implementation
+    // report for why).
+    label: "Halaman Info",
+    href: "/content/pages",
+    icon: FileText,
+    group: "Konten",
+    permissionKeys: ["content.manage"],
+    mobilePrimary: false,
+  },
+  {
+    label: "Pengaturan Toko",
+    href: "/content/settings",
+    icon: Store,
     group: "Konten",
     permissionKeys: ["content.manage"],
     mobilePrimary: false,

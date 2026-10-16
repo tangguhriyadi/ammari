@@ -6,11 +6,13 @@ import { testDb } from "./helpers";
 import {
   channels,
   costAssumptions,
+  infoPages,
   permissions,
   rolePermissions,
   roles,
   staffUsers,
   storefrontHomepageSections,
+  storeSettings,
 } from "../src/schema";
 
 async function count(table: PgTable) {
@@ -115,6 +117,64 @@ describe("db:seed", () => {
           publishedByStaffUserId: before.publishedByStaffUserId,
         })
         .where(eq(storefrontHomepageSections.key, "hero"));
+    }
+  });
+
+  // Session 8 — same reasoning/pattern as the homepage-sections test above: a
+  // packages/db/test/e2e-db.ts TRUNCATE-and-reseed run must restore these 5 rows (seedInfoPages),
+  // but re-running the seed against an EXISTING, already-edited-by-the-owner row must never
+  // clobber it.
+  test("the 5 info_pages rows exist after seeding, and re-running the seed never overwrites an owner's published page", async () => {
+    const [before] = await testDb.select().from(infoPages).where(eq(infoPages.slug, "shipping")).limit(1);
+    if (!before) throw new Error('"shipping" row missing — migration 0020 / seedInfoPages did not run');
+
+    const ownerBody = "<p>Ditulis pemilik, jangan ditimpa seed</p>";
+    try {
+      await testDb.update(infoPages).set({ draftBody: ownerBody, publishedBody: ownerBody, publishedAt: new Date() }).where(eq(infoPages.slug, "shipping"));
+
+      await seed(testDb);
+      await seed(testDb);
+
+      const rows = await testDb.select({ slug: infoPages.slug }).from(infoPages);
+      expect(rows.map((r) => r.slug).sort()).toEqual(["how-to-order", "privacy-policy", "returns-exchange", "shipping", "terms-of-service"]);
+
+      const [after] = await testDb.select().from(infoPages).where(eq(infoPages.slug, "shipping")).limit(1);
+      expect(after?.draftBody).toBe(ownerBody);
+      expect(after?.publishedBody).toBe(ownerBody);
+    } finally {
+      await testDb
+        .update(infoPages)
+        .set({ draftBody: before.draftBody, publishedBody: before.publishedBody, publishedAt: before.publishedAt, publishedByStaffUserId: before.publishedByStaffUserId })
+        .where(eq(infoPages.slug, "shipping"));
+    }
+  });
+
+  test("privacy-policy/terms-of-service are seeded already-published with their placeholder text", async () => {
+    const rows = await testDb
+      .select({ slug: infoPages.slug, publishedBody: infoPages.publishedBody })
+      .from(infoPages)
+      .where(eq(infoPages.slug, "privacy-policy"));
+    expect(rows[0]?.publishedBody).toContain("Undang-Undang Pelindungan Data Pribadi");
+  });
+
+  test("the store_settings singleton row exists after seeding, and re-running the seed never overwrites the owner's saved settings", async () => {
+    const [before] = await testDb.select().from(storeSettings).where(eq(storeSettings.id, 1)).limit(1);
+    if (!before) throw new Error("store_settings row missing — migration 0020 / seedStoreSettings did not run");
+
+    try {
+      await testDb.update(storeSettings).set({ whatsappNumber: "6281234567890", supportEmail: "owner@ammari.id" }).where(eq(storeSettings.id, 1));
+
+      await seed(testDb);
+      await seed(testDb);
+
+      const [after] = await testDb.select().from(storeSettings).where(eq(storeSettings.id, 1)).limit(1);
+      expect(after?.whatsappNumber).toBe("6281234567890");
+      expect(after?.supportEmail).toBe("owner@ammari.id");
+    } finally {
+      await testDb
+        .update(storeSettings)
+        .set({ whatsappNumber: before.whatsappNumber, supportEmail: before.supportEmail, businessAddress: before.businessAddress, returnPolicySummary: before.returnPolicySummary })
+        .where(eq(storeSettings.id, 1));
     }
   });
 });

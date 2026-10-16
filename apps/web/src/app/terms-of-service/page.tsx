@@ -1,19 +1,16 @@
 import type { Metadata } from "next";
+import { getPublishedInfoPage } from "@ammari/db/storefront";
+import { InfoPageBody } from "@/components/info-page";
 
 export const metadata: Metadata = {
   title: "Syarat & Ketentuan — Ammari",
 };
 
-// Placeholder content for the owner to fill in before launch — publicly accessible (linked from
-// /consent and /login before any sign-in), English path per CLAUDE.md's URL convention.
-export default function TermsOfServicePage() {
-  return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-10">
-      <h1 className="font-serif text-2xl font-light text-brand">Syarat & Ketentuan</h1>
-      <p className="text-sm text-neutral-700">
-        Syarat dan ketentuan penggunaan layanan Ammari, termasuk aturan voucher dan belanja di
-        ammari.id, akan dilengkapi di sini sebelum peluncuran.
-      </p>
-    </div>
-  );
+// Same pattern as privacy-policy/page.tsx's own comment — this URL also keeps its exact path
+// (Google OAuth consent screen, payment-gateway verification), and is deliberately uncached too.
+export const dynamic = "force-dynamic";
+
+export default async function TermsOfServicePage() {
+  const page = await getPublishedInfoPage("terms-of-service");
+  return <InfoPageBody title="Syarat & Ketentuan" body={page?.body ?? null} />;
 }
