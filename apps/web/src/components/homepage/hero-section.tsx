@@ -3,10 +3,10 @@ import { cn } from "@ammari/ui";
 import type { ResolvedHero } from "@/lib/content/homepage-resolve";
 import { storageImageUrl } from "@/lib/storage/public-url";
 import { Eyebrow } from "@/components/eyebrow";
-import { PrimaryLink } from "@/components/buttons";
+import { HeroCtaLink } from "@/components/buttons";
 
 /** docs/design/storefront.md §5 item 1 — full-bleed image (620px mobile, 85vh desktop), optional
- * separate mobile crop, eyebrow+H1 overlay top-left, full-width primary button bottom. */
+ * separate mobile crop, eyebrow+H1 overlay top-left, full-width outlined-to-filled CTA bottom. */
 export function HeroSection({ hero }: { hero: ResolvedHero }) {
   return (
     <section className="relative h-[620px] w-full overflow-hidden bg-surface md:h-[85vh]">
@@ -36,9 +36,9 @@ export function HeroSection({ hero }: { hero: ResolvedHero }) {
           <h1 className="font-serif text-[40px] leading-[1.05] font-light whitespace-pre-line text-ink">{hero.headline}</h1>
         </div>
         {hero.ctaLabel && (
-          <PrimaryLink href={hero.ctaHref} className="w-full">
+          <HeroCtaLink href={hero.ctaHref} className="w-full">
             {hero.ctaLabel}
-          </PrimaryLink>
+          </HeroCtaLink>
         )}
       </div>
     </section>

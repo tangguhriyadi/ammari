@@ -41,12 +41,19 @@ Footer (on `--color-brand`): text `#FFFFFF`, dividers `#857676`, chip borders `#
 | Role | Font | Size / weight | Notes |
 |---|---|---|---|
 | Wordmark "AMMARI" | Alta (NOT licensed yet — see §9) | 22 px header, 26 px footer | letter-spacing 0.34em, colour `--color-brand` (white in footer) |
-| Display / headings | Cormorant Garamond | H1 hero 40 px / 300, line-height 1.05; page H1 30 px / 400; section H2 24–28 px / 400 | Load weights 300/400/500/600 only |
+| Display / headings | Cormorant Garamond | H1 hero 40 px / 300, line-height 1.05; page H1 30 px / 400; section H2 24–28 px / 400 | Load weights 300/400/500/600/700 only |
 | UI + body | Jost | body 13–15 px / 400; emphasis 500 | Load 300/400/500 |
 | Eyebrow / labels | Jost | 11 px / 500, letter-spacing 0.24em, uppercase | e.g. "KOLEKSI PERDANA", "KEUNGGULAN" |
 | Buttons | Jost | 12 px / 500, letter-spacing 0.16–0.2em, uppercase | |
 
 Use `next/font` (self-hosted, `display: swap`). No Inter/Roboto/Arial.
+
+Button variants (`apps/web/src/components/buttons.tsx`): `PrimaryLink`/`PrimaryButton` (solid
+`--color-brand`, white text — PDP, cart, checkout), `OutlineLink` (static outline, no hover-fill
+— PDP secondary action), `HeroCtaLink` (Hero only — outlined by default, fills to the solid look
+on hover/focus, see §5 item 1). The hero variant's hover-fill only applies on devices that
+support hover (`can-hover:`, a custom variant in `globals.css`) so a tap on a touch screen never
+leaves it stuck filled; touch gets its own brief fill on `:active` instead.
 
 ### Spacing, shape, motion
 - Base unit 4 px. Page gutter 16 px on mobile, 24 px on hero overlays; desktop container max-width 1440 px with 40 px gutter.
@@ -61,11 +68,11 @@ Use `next/font` (self-hosted, `display: swap`). No Inter/Roboto/Arial.
 Mobile: menu button (left) · wordmark centred · search + cart (right, cart shows count). Desktop (≥ 1024 px): wordmark left, nav links centre, search/account/cart right. Sticky on scroll.
 
 ### Footer (`--color-brand` background, white text)
-Wordmark + tagline "Graceful in every thread"; help links (Cara pemesanan, Pengiriman, Pengembalian & penukaran, Panduan ukuran, Syarat & ketentuan → `/terms-of-service`, Kebijakan privasi → `/privacy-policy`); contact (WhatsApp, email, business address — from store settings, CMS session 8; until then hide the block); payment-method chips (QRIS, Virtual Account, GoPay, ShopeePay, Kartu kredit) without naming the gateway; "© 2026 Ammari".
+Wordmark + tagline "Graceful in every thread"; help links (Cara pemesanan, Pengiriman, Pengembalian & penukaran, Panduan ukuran, Syarat & ketentuan → `/terms-of-service`, Kebijakan privasi → `/privacy-policy`); contact (WhatsApp — shown as the formatted number, e.g. "+62 888 0854 1442", linking to wa.me — email, business address — from store settings, CMS session 8; until then hide the block); payment-method chips (QRIS, Virtual Account, GoPay, ShopeePay, Kartu kredit) without naming the gateway; "© 2026 Ammari".
 
 ## 5. Homepage `/` (all content from the published CMS sections; a hidden or empty section is not rendered)
 
-1. **Hero** — full-bleed image (mobile ~620 px tall, desktop ~85vh), optional separate mobile crop. Top-left overlay: eyebrow + H1 headline (keep CMS line breaks). Bottom: full-width primary button (CTA label → target). Text sits on the image; the CMS image should be light behind the text (document this for the owner).
+1. **Hero** — full-bleed image (mobile ~620 px tall, desktop ~85vh), optional separate mobile crop. Top-left overlay: eyebrow + H1 headline (keep CMS line breaks). Bottom: full-width CTA (CTA label → target), outlined by default (transparent background, `--color-brand` border/text) and filling to the solid `--color-brand`/white look on hover or focus — hover-fill only on hover-capable devices, touch gets a brief fill on tap instead (`HeroCtaLink`, §3 Typography). Text sits on the image; the CMS image should be light behind the text (document this for the owner).
 2. **Product grid** — H2 section title + count ("6 produk"). Tiles: image 2:3, then name (12 px), colour name (12 px muted), price (13 px / 500). 2 columns mobile with 2 px column gap and 20 px row gap; 3 columns ≥ 768 px; 4 columns ≥ 1280 px. Whole tile is a link to `/products/[slug]` (with `?color=` when the tile is a colour variant). Filter chips are out of scope.
 3. **Kenapa Ammari** — `--color-surface` band; eyebrow + H2; up to 4 points in a 2-column grid (4 columns on desktop): icon (from the fixed icon-key map), title 14 px / 500, short text 12 px muted.
 4. **Feature block** — large image (~600 px mobile); white caption bar at the bottom: title (Cormorant 22 px) + subtitle (muted) and an underlined text-link CTA ("LIHAT") to the linked product.
@@ -106,4 +113,4 @@ Checkout (single page, numbered sections 1 Kontak · 2 Alamat pengiriman · 3 Pe
 
 ## 9. Wordmark (temporary)
 
-The Alta font is not licensed yet. Until the owner buys a licence: render "AMMARI" as text in Cormorant Garamond 400, letter-spacing 0.34em, colour `--color-brand`, inside a component (`<Wordmark />`) so it can later be swapped for an SVG logo without touching pages. Do NOT add any Alta font file to the repo.
+The Alta font is not licensed yet. Until the owner buys a licence: render "AMMARI" as text in Cormorant Garamond 700, letter-spacing 0.34em, colour `--color-brand`, inside a component (`<Wordmark />`) so it can later be swapped for an SVG logo without touching pages. Do NOT add any Alta font file to the repo.

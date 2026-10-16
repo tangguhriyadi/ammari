@@ -7,10 +7,10 @@ import { Cormorant_Garamond, Jost } from "next/font/google";
 // local to apps/web rather than added to the shared @ammari/ui font module, since admin's own
 // fonts must stay untouched.
 
-/** Display/headings — weights 300/400/500/600 only, per the spec's typography table. */
+/** Display/headings — weights 300/400/500/600/700 only, per the spec's typography table. */
 export const cormorantGaramond = Cormorant_Garamond({
   subsets: ["latin"],
-  weight: ["300", "400", "500", "600"],
+  weight: ["300", "400", "500", "600", "700"],
   variable: "--font-cormorant-garamond",
   display: "swap",
 });

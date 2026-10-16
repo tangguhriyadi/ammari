@@ -2,6 +2,18 @@
 @import "@ammari/ui/theme.css";
 @source "../../../../packages/ui/src/**/*.{ts,tsx}";
 
+/* Hover state gated to devices that actually support hover (docs/design/storefront.md §5 Hero
+ * CTA) — without this, a tap on a touch device leaves `:hover` styles "stuck" filled until the
+ * next tap elsewhere. Used only by the Hero CTA's outline-to-filled transition; :active covers
+ * the touch-tap feedback instead (see HeroCtaLink in components/buttons.tsx). */
+@custom-variant can-hover {
+  @media (hover: hover) and (pointer: fine) {
+    &:hover {
+      @slot;
+    }
+  }
+}
+
 /* Storefront design tokens (docs/design/storefront.md §3) — layered ON TOP of
  * @ammari/ui/theme.css's own admin-dashboard tokens, imported above. `--color-brand` is
  * deliberately NOT redefined here: both specs already agree on #695A5A. `--font-sans`/

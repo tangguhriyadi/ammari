@@ -15,7 +15,7 @@ export function Wordmark({ className, size = "header" }: WordmarkProps) {
   return (
     <span
       className={cn(
-        "font-serif font-normal tracking-[0.34em]",
+        "font-serif font-bold tracking-[0.34em]",
         size === "header" ? "text-[22px] text-brand" : "text-[26px] text-footer-text",
         className,
       )}

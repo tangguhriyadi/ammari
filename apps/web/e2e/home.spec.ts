@@ -43,6 +43,22 @@ test.describe("/ renders the published homepage", () => {
     await expect(page.getByRole("heading", { level: 3, name: E2E_FEATURE_BLOCK_TITLE })).toBeVisible();
   });
 
+  test("Hero CTA is outlined by default and fills to the solid brand colour on hover, at 390px and 1280px", async ({ page }) => {
+    for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/");
+      const cta = page.getByRole("link", { name: "LIHAT KOLEKSI" });
+
+      await expect(cta).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+      await expect(cta).toHaveCSS("border-color", "rgb(105, 90, 90)");
+      await expect(cta).toHaveCSS("color", "rgb(105, 90, 90)");
+
+      await cta.hover();
+      await expect(cta).toHaveCSS("background-color", "rgb(105, 90, 90)");
+      await expect(cta).toHaveCSS("color", "rgb(255, 255, 255)");
+    }
+  });
+
   test("a product grid tile links to its product, with ?color= only when the tile pins a colour", async ({ page }) => {
     await page.goto("/");
     const unpinnedTile = page.getByRole("link", { name: /Gamis Flowy Straight E2E/ }).first();

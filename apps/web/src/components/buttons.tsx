@@ -28,3 +28,24 @@ export function PrimaryButton({ className, disabled, ...props }: ComponentProps<
 export function OutlineLink({ className, ...props }: ComponentProps<typeof Link>) {
   return <Link {...props} className={cn(BASE, "border border-ink bg-bg text-ink hover:bg-surface", className)} />;
 }
+
+// Hero CTA only (docs/design/storefront.md §5 Hero) — outlined by default, fills to the solid
+// `--color-brand` look on hover/focus. `can-hover:` (globals.css) keeps the fill off on touch, so
+// a tap doesn't leave it "stuck" filled; `active:` gives touch its own brief fill instead. Scoped
+// transition properties (not `transition-colors`) + 400ms/ease per spec; prefers-reduced-motion
+// is handled globally in globals.css.
+export function HeroCtaLink({ className, ...props }: ComponentProps<typeof Link>) {
+  return (
+    <Link
+      {...props}
+      className={cn(
+        BASE,
+        "border border-brand bg-transparent text-brand transition-[background-color,color,border-color] duration-[400ms] [transition-timing-function:ease]",
+        "can-hover:border-brand can-hover:bg-brand can-hover:text-white",
+        "focus-visible:border-brand focus-visible:bg-brand focus-visible:text-white",
+        "active:border-brand active:bg-brand active:text-white",
+        className,
+      )}
+    />
+  );
+}

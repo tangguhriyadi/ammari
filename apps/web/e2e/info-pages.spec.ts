@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { E2E_BUSINESS_ADDRESS, E2E_SHIPPING_BODY_TEXT, E2E_SUPPORT_EMAIL } from "./storefront-fixtures";
+import { E2E_BUSINESS_ADDRESS, E2E_SHIPPING_BODY_TEXT, E2E_SUPPORT_EMAIL, E2E_WHATSAPP_FORMATTED, E2E_WHATSAPP_NUMBER } from "./storefront-fixtures";
 
 // docs/plans/storefront-cms.md Phase 2 (session 8): the 5 info pages read from `info_pages`
 // instead of hard-coded JSX, an unpublished page shows "sedang disiapkan" (never a 500), and the
@@ -58,17 +58,20 @@ test.describe("info pages — published vs unpublished", () => {
 });
 
 test.describe("footer contact block (store_settings)", () => {
-  test("renders WhatsApp/email/address once store_settings is filled in, at 390px and 1280px", async ({ page }) => {
+  test("renders the formatted WhatsApp number (not the bare word)/email/address once store_settings is filled in, at 390px and 1280px", async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
     await expect(page.getByText("Hubungi kami")).toBeVisible();
-    await expect(page.getByRole("link", { name: "WhatsApp" })).toHaveAttribute("href", /^https:\/\/wa\.me\/6281234567890/);
+    await expect(page.getByRole("link", { name: E2E_WHATSAPP_FORMATTED })).toHaveAttribute("href", new RegExp(`^https://wa\\.me/${E2E_WHATSAPP_NUMBER}`));
     await expect(page.getByRole("link", { name: E2E_SUPPORT_EMAIL })).toHaveAttribute("href", `mailto:${E2E_SUPPORT_EMAIL}`);
     await expect(page.getByText(E2E_BUSINESS_ADDRESS)).toBeVisible();
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto("/");
     await expect(page.getByText("Hubungi kami")).toBeVisible();
+    await expect(page.getByRole("link", { name: E2E_WHATSAPP_FORMATTED })).toHaveAttribute("href", new RegExp(`^https://wa\\.me/${E2E_WHATSAPP_NUMBER}`));
     await expect(page.getByText(E2E_BUSINESS_ADDRESS)).toBeVisible();
   });
 

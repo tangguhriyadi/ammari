@@ -18,6 +18,10 @@ export const E2E_WHY_AMMARI_HEADING = "Nyaman dipakai seharian, tetap syar'i E2E
 export const E2E_FEATURE_BLOCK_TITLE = "Outer Dress Tali Depan E2E";
 
 // Session 8 (info pages + store settings) fixtures — info-pages.spec.ts.
+export const E2E_WHATSAPP_NUMBER = "6281234567890";
+// formatWhatsappNumber's output for E2E_WHATSAPP_NUMBER (lib/whatsapp.ts) — spelled out here
+// rather than imported so this fixture file stays a plain data file, no app-code dependency.
+export const E2E_WHATSAPP_FORMATTED = "+62 812 3456 7890";
 export const E2E_SUPPORT_EMAIL = "halo-e2e@ammari.id";
 export const E2E_BUSINESS_ADDRESS = "Jl. Contoh E2E No. 1, Bandung";
 export const E2E_SHIPPING_BODY_TEXT = "Pengiriman E2E dikirim via kurir pilihan.";
@@ -252,7 +256,7 @@ export async function seedStorefrontFixtures(): Promise<void> {
   await db
     .update(storeSettings)
     .set({
-      whatsappNumber: "6281234567890",
+      whatsappNumber: E2E_WHATSAPP_NUMBER,
       supportEmail: E2E_SUPPORT_EMAIL,
       businessAddress: E2E_BUSINESS_ADDRESS,
       returnPolicySummary: "Tukar ukuran gratis dalam 3 hari E2E",

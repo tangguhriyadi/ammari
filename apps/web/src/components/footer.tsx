@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Mail, MapPin, MessageCircle } from "lucide-react";
-import { buildWhatsappUrl } from "@/lib/whatsapp";
+import { buildWhatsappUrl, formatWhatsappNumber } from "@/lib/whatsapp";
 import { Container } from "./container";
 import { Wordmark } from "./wordmark";
 
@@ -82,7 +82,7 @@ export function Footer({ contact }: { contact: FooterContact }) {
                 <li className="flex items-center gap-2">
                   <MessageCircle className="size-4 shrink-0" strokeWidth={1.4} aria-hidden="true" />
                   <a href={buildWhatsappUrl(contact.whatsappNumber, "Halo, saya mau tanya tentang Ammari.")} className="hover:text-footer-text/80">
-                    WhatsApp
+                    {formatWhatsappNumber(contact.whatsappNumber)}
                   </a>
                 </li>
               )}
