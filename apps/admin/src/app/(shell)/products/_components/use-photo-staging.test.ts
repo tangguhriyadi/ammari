@@ -9,8 +9,10 @@ vi.mock("next/navigation", () => ({
 }));
 
 const uploadProductImageAction = vi.fn();
+const revalidateProductAction = vi.fn();
 vi.mock("../actions", () => ({
   uploadProductImageAction: (formData: FormData) => uploadProductImageAction(formData),
+  revalidateProductAction: (productId: string) => revalidateProductAction(productId),
 }));
 
 // The real downscaler needs createImageBitmap + <canvas>, neither available in jsdom — staging
@@ -33,6 +35,8 @@ describe("usePhotoStaging", () => {
   beforeEach(() => {
     refresh.mockClear();
     uploadProductImageAction.mockReset();
+    revalidateProductAction.mockReset();
+    revalidateProductAction.mockResolvedValue({ ok: true, data: { revalidationOk: true } });
     vi.stubGlobal("URL", {
       ...URL,
       createObjectURL: vi.fn(() => "blob:mock-url"),
@@ -130,6 +134,11 @@ describe("usePhotoStaging", () => {
     expect(result.current.pending).toHaveLength(0);
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledTimes(1);
+    // ONE revalidation call for the whole batch (docs/plans/storefront-cms.md session 6), not
+    // one per uploaded file.
+    expect(revalidateProductAction).toHaveBeenCalledTimes(1);
+    expect(revalidateProductAction).toHaveBeenCalledWith("product-1");
+    expect(result.current.revalidationOk).toBe(true);
   });
 
   it("a failed upload stays in the pending list with its error, so it can be retried", async () => {
@@ -147,6 +156,31 @@ describe("usePhotoStaging", () => {
     expect(result.current.pending).toHaveLength(1);
     expect(result.current.pending[0]?.state).toBe("error");
     expect(result.current.pending[0]?.error).toBe("Gagal mengunggah foto.");
+    // Nothing actually uploaded — never fails the save, but never pays for a pointless
+    // revalidation call either.
+    expect(revalidateProductAction).not.toHaveBeenCalled();
+  });
+
+  it("surfaces revalidationOk:false (never failing the save itself) when the batch's revalidation call fails", async () => {
+    uploadProductImageAction.mockResolvedValue({ ok: true, data: { id: "img-1" } });
+    revalidateProductAction.mockResolvedValue({ ok: true, data: { revalidationOk: false } });
+    const { result } = renderHook(() => usePhotoStaging({ productId: "product-1", onSaved: vi.fn() }));
+
+    await act(async () => {
+      await result.current.addFiles(null, makeFileList([makeFile("front.jpg")]));
+    });
+    await act(async () => {
+      await result.current.saveAll();
+    });
+
+    expect(result.current.pending).toHaveLength(0); // the upload itself still succeeded
+    expect(result.current.revalidationOk).toBe(false);
+
+    revalidateProductAction.mockResolvedValue({ ok: true, data: { revalidationOk: true } });
+    await act(async () => {
+      await result.current.retryRevalidation();
+    });
+    expect(result.current.revalidationOk).toBe(true);
   });
 
   it("removing a file while saveAll is uploading an earlier one skips it instead of uploading it anyway", async () => {

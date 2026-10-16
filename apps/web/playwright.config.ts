@@ -1,0 +1,62 @@
+import { existsSync } from "node:fs";
+import { defineConfig, devices } from "@playwright/test";
+
+if (existsSync(".env")) process.loadEnvFile(".env");
+
+// Same derivation as apps/admin/playwright.config.ts's own e2eDatabaseUrl() — kept in sync with
+// that copy rather than imported (Playwright only transpiles this config file itself, not its
+// workspace dependencies — a static import of an ESM-only sibling package fails under Node's
+// plain `require()` when Playwright loads this file).
+function e2eDatabaseUrl(): string {
+  const baseUrl = process.env.DATABASE_URL;
+  if (!baseUrl) throw new Error("DATABASE_URL is not set");
+  const url = new URL(baseUrl);
+  url.pathname = "/ammari_e2e";
+  const isLocalHost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (!isLocalHost) {
+    throw new Error(
+      `Refusing to point the e2e dev server at "${url.hostname}${url.pathname}" — e2e only ever runs against ` +
+        `host localhost/127.0.0.1, database "ammari_e2e". Check DATABASE_URL.`,
+    );
+  }
+  return url.toString();
+}
+
+// Fixed only for the e2e run (never a real deployed value) — global-setup.ts and the spec files
+// both need to agree on this exact string: global-setup seeds nothing secret-dependent, but the
+// spec mints tokens through the real /api/test/preview-token backdoor, which signs with whatever
+// PREVIEW_SECRET the running dev server actually has.
+export const E2E_PREVIEW_SECRET = "e2e-test-preview-secret-do-not-use-in-prod";
+
+export default defineConfig({
+  testDir: "./e2e",
+  globalSetup: "./e2e/global-setup.ts",
+  fullyParallel: false,
+  workers: 1,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  reporter: "html",
+  use: {
+    baseURL: "http://localhost:3100",
+    trace: "on-first-retry",
+  },
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "webkit", use: { ...devices["Desktop Safari"] } },
+  ],
+  webServer: {
+    // "dev:e2e" (not "dev"): binds to 127.0.0.1 only, so the e2e-token backdoor's localhost
+    // check (lib/preview/e2e-gate.ts) is backed by an actual network-layer guarantee, not just a
+    // client-supplied Host header anyone reaching the port could spoof — same reasoning
+    // apps/admin/playwright.config.ts gives for its own dev:e2e.
+    command: "pnpm dev:e2e",
+    url: "http://localhost:3100",
+    reuseExistingServer: false,
+    env: {
+      E2E_TEST_LOGIN: "true",
+      DATABASE_URL: e2eDatabaseUrl(),
+      PREVIEW_SECRET: E2E_PREVIEW_SECRET,
+    },
+    timeout: 120_000,
+  },
+});

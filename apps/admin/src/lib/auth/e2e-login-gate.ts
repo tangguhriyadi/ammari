@@ -1,7 +1,16 @@
 /** Pure, unit-testable gate for app/api/test/login/route.ts. Four independent fail-closed
  * conditions must ALL hold before the e2e sign-in backdoor does anything:
- *   1. NODE_ENV is never "production" (Next sets this at build/start — not overridable by a
- *      stray env var in a real deploy).
+ *   1. NODE_ENV is never "production" — the deployed image bakes `ENV NODE_ENV=production`
+ *      into the Dockerfile's runtime stage, but this is NOT un-overridable: Docker's env_file
+ *      mechanism (deploy/docker-compose.yml's `env_file: ./env/admin.env`) DOES override a
+ *      Dockerfile-baked ENV at container start (confirmed empirically — a stray NODE_ENV=...
+ *      line accidentally pasted into the real admin.env on the server would flip this). Never
+ *      documented or referenced in any deploy/ file (grep this repo for NODE_ENV/E2E_TEST_LOGIN
+ *      under deploy/ to confirm), but that's a matter of nobody having typed it there, not a
+ *      structural guarantee — deploy/Caddyfile's own api/test block (a separate file) is
+ *      the layer that actually holds even if this one is defeated by a misconfigured env
+ *      file: it rejects the path outright at the network edge, before any app code
+ *      (including this gate) ever runs, regardless of what NODE_ENV/E2E_TEST_LOGIN are.
  *   2. E2E_TEST_LOGIN must be explicitly "true" (never set in the deployed dev environment,
  *      only in local/CI Playwright runs).
  *   3. The email must end in "@e2e.ammari.test" — this route can never be used to sign in as a

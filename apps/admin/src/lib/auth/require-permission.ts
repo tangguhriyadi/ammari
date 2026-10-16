@@ -16,3 +16,15 @@ export async function requirePermission(permissionKey: PermissionKey): Promise<S
   if (!session.permissionKeys.includes(permissionKey)) forbidden();
   return session;
 }
+
+/** Same as `requirePermission`, but passes if the session holds ANY of the given keys — for an
+ * action reached from more than one permission-gated surface (e.g. revalidateProductAction,
+ * called after both a `products.manage`-gated save and a `content.manage`-gated one). Prefer
+ * `requirePermission` for anything gated by exactly one permission; this is for the rare action
+ * that genuinely serves two different gates at once. */
+export async function requireAnyPermission(permissionKeys: readonly PermissionKey[]): Promise<StaffSessionData> {
+  const session = await getStaffSession();
+  if (!session) redirect("/login");
+  if (!permissionKeys.some((key) => session.permissionKeys.includes(key))) forbidden();
+  return session;
+}

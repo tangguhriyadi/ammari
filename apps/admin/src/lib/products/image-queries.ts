@@ -320,8 +320,8 @@ export async function deleteProductImage(
   imageId: string,
   actorStaffUserId: string | null,
   db: Database = defaultDb,
-): Promise<void> {
-  const { storageKey } = await db.transaction(async (tx) => {
+): Promise<{ productId: string }> {
+  const { storageKey, productId } = await db.transaction(async (tx) => {
     const [image] = await tx.select().from(productImages).where(eq(productImages.id, imageId)).limit(1);
     if (!image) throw new ActionError("Foto tidak ditemukan.");
 
@@ -347,10 +347,11 @@ export async function deleteProductImage(
     await tx.delete(productImages).where(eq(productImages.id, image.id));
     await writeAuditLog(tx, { actorStaffUserId, action: "delete", entityType: "product_image", entityId: image.id, before: image });
 
-    return { storageKey: image.storageKey };
+    return { storageKey: image.storageKey, productId: image.productId };
   });
 
   await deleteObjectsLogged(storageKey, imageId);
+  return { productId };
 }
 
 export interface ReorderProductImagesInput {
@@ -428,12 +429,13 @@ export async function updateImageAltText(
   altText: string | null,
   actorStaffUserId: string | null,
   db: Database = defaultDb,
-): Promise<void> {
+): Promise<{ productId: string }> {
   return db.transaction(async (tx) => {
     const [before] = await tx.select().from(productImages).where(eq(productImages.id, imageId)).limit(1);
     if (!before) throw new ActionError("Foto tidak ditemukan.");
     const [after] = await tx.update(productImages).set({ altText }).where(eq(productImages.id, imageId)).returning();
     if (!after) throw new Error("failed to update product image");
     await writeAuditLog(tx, { actorStaffUserId, action: "update", entityType: "product_image", entityId: imageId, before, after });
+    return { productId: after.productId };
   });
 }

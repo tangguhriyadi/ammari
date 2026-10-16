@@ -6,7 +6,7 @@ import { Button, Input, Label, Select, Switch, Textarea } from "@ammari/ui";
 import type { ProductClosure, SizeMode } from "@ammari/db/schema";
 import type { ProductHighlightKey } from "@ammari/db/highlights";
 import { generateProductCode, generateSlug } from "@ammari/db/catalog";
-import { createProductAction, updateProductAction } from "../actions";
+import { createProductAction, revalidateProductAction, updateProductAction } from "../actions";
 import { HighlightsEditor } from "./highlights-editor";
 
 export interface Fabric {
@@ -62,6 +62,11 @@ export function ProductForm({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Soft warning — the save itself succeeded; only the on-demand storefront cache invalidation
+  // failed (docs/plans/storefront-cms.md session 6). Shown once, right after a successful
+  // update, cleared again on the next save attempt.
+  const [revalidationWarning, setRevalidationWarning] = useState(false);
+  const [retryPending, startRetry] = useTransition();
 
   function handleNameChange(name: string) {
     setValues((prev) => ({
@@ -79,6 +84,7 @@ export function ProductForm({
   function handleSubmit() {
     setFormError(null);
     setFieldErrors({});
+    setRevalidationWarning(false);
 
     startTransition(async () => {
       const common = {
@@ -106,8 +112,19 @@ export function ProductForm({
         if (productId && initialValues) set("isActive", initialValues.isActive);
         return;
       }
+      // Only updateProductAction's result carries `revalidationOk` — createProductAction has
+      // nothing to revalidate yet (a brand-new product is never published on the storefront).
+      if ("revalidationOk" in result.data) setRevalidationWarning(!result.data.revalidationOk);
       router.push(`/products/${result.data.id}`);
       router.refresh();
+    });
+  }
+
+  function handleRetryRevalidation() {
+    if (!productId) return;
+    startRetry(async () => {
+      const result = await revalidateProductAction(productId);
+      setRevalidationWarning(!(result.ok && result.data.revalidationOk));
     });
   }
 
@@ -267,6 +284,15 @@ export function ProductForm({
       {formError && (
         <p role="alert" className="text-sm text-danger-700">
           {formError}
+        </p>
+      )}
+
+      {revalidationWarning && (
+        <p className="flex flex-wrap items-center gap-2 text-sm text-amber-800" data-testid="revalidation-warning">
+          Perubahan tersimpan, tetapi toko online belum diperbarui.
+          <button type="button" onClick={handleRetryRevalidation} disabled={retryPending} className="font-medium underline disabled:opacity-60">
+            Coba lagi
+          </button>
         </p>
       )}
 

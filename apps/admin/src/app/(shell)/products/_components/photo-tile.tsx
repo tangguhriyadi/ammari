@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "rea
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Loader2, MoreHorizontal, Pencil, Star, Trash2 } from "lucide-react";
 import { cn, Dialog, Input } from "@ammari/ui";
-import { deleteProductImageAction, setProductThumbnailAction, updateImageAltTextAction } from "../actions";
+import { deleteProductImageAction, revalidateProductAction, setProductThumbnailAction, updateImageAltTextAction } from "../actions";
 import { ProductImage } from "./product-image";
 import type { PhotoImage } from "./photo-types";
 
@@ -164,6 +164,7 @@ export function PhotoTile({
   const [altDraft, setAltDraft] = useState(image.altText ?? "");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [revalidationWarning, setRevalidationWarning] = useState(false);
   const [pending, startTransition] = useTransition();
 
   // Resyncs the draft with the server value whenever it actually changes for a reason OTHER
@@ -183,6 +184,7 @@ export function PhotoTile({
 
   function makeThumbnail() {
     setError(null);
+    setRevalidationWarning(false);
     startTransition(async () => {
       try {
         const result = await setProductThumbnailAction({ productId, imageId: image.id });
@@ -190,6 +192,7 @@ export function PhotoTile({
           setError(result.error);
           return;
         }
+        setRevalidationWarning(!result.data.revalidationOk);
         router.refresh();
       } catch {
         setError("Gagal menjadikan foto ini sebagai thumbnail. Coba lagi.");
@@ -199,6 +202,7 @@ export function PhotoTile({
 
   function saveAltText() {
     setError(null);
+    setRevalidationWarning(false);
     startTransition(async () => {
       try {
         const result = await updateImageAltTextAction({ imageId: image.id, altText: altDraft || undefined });
@@ -207,6 +211,7 @@ export function PhotoTile({
           setError(result.error);
           return;
         }
+        setRevalidationWarning(!result.data.revalidationOk);
         router.refresh();
       } catch {
         setAltDialogOpen(false);
@@ -216,6 +221,7 @@ export function PhotoTile({
   }
 
   function handleDelete() {
+    setRevalidationWarning(false);
     startTransition(async () => {
       try {
         const result = await deleteProductImageAction({ imageId: image.id });
@@ -224,11 +230,19 @@ export function PhotoTile({
           setError(result.error);
           return;
         }
+        setRevalidationWarning(!result.data.revalidationOk);
         router.refresh();
       } catch {
         setDeleteDialogOpen(false);
         setError("Gagal menghapus foto. Coba lagi.");
       }
+    });
+  }
+
+  function retryRevalidation() {
+    startTransition(async () => {
+      const result = await revalidateProductAction(productId);
+      setRevalidationWarning(!(result.ok && result.data.revalidationOk));
     });
   }
 
@@ -303,6 +317,15 @@ export function PhotoTile({
       {error && (
         <p role="alert" className="absolute inset-x-1.5 bottom-1.5 rounded-md bg-danger-50 px-2 py-1 text-xs text-danger-700">
           {error}
+        </p>
+      )}
+
+      {revalidationWarning && (
+        <p className="absolute inset-x-1.5 bottom-1.5 flex flex-wrap items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-800" data-testid="revalidation-warning">
+          Toko online belum diperbarui.
+          <button type="button" onClick={retryRevalidation} className="font-medium underline">
+            Coba lagi
+          </button>
         </p>
       )}
 

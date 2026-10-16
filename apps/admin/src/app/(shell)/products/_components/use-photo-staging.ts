@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { downscaleImageForUpload } from "@/lib/products/client-image-resize";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
-import { uploadProductImageAction } from "../actions";
+import { revalidateProductAction, uploadProductImageAction } from "../actions";
 import type { PendingPhoto } from "./photo-types";
 
 let nextLocalId = 0;
@@ -23,6 +23,9 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
   const router = useRouter();
   const [pending, setPending] = useState<PendingPhoto[]>([]);
   const [saving, setSaving] = useState(false);
+  // Set once per `saveAll()` batch (not per file — one revalidation call for the whole batch,
+  // not N), null until the first save; docs/plans/storefront-cms.md session 6.
+  const [revalidationOk, setRevalidationOk] = useState<boolean | null>(null);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -123,10 +126,16 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
     setPending([]);
   }
 
+  async function retryRevalidation() {
+    const result = await revalidateProductAction(productId);
+    if (mountedRef.current) setRevalidationOk(result.ok && result.data.revalidationOk);
+  }
+
   async function saveAll() {
     const toSave = pendingRef.current.filter((item) => item.state !== "uploading");
     if (toSave.length === 0) return;
     setSaving(true);
+    let anyUploaded = false;
 
     for (const item of toSave) {
       if (!mountedRef.current) return;
@@ -148,6 +157,7 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
         if (!result.ok) {
           setPending((prev) => prev.map((p) => (p.localId === item.localId ? { ...p, state: "error", error: result.error } : p)));
         } else {
+          anyUploaded = true;
           if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
           setPending((prev) => prev.filter((p) => p.localId !== item.localId));
         }
@@ -159,6 +169,13 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
       }
     }
 
+    // One revalidation call for the whole batch (not per file) — only when at least one file
+    // actually uploaded; a batch that was entirely rejected has nothing to revalidate.
+    if (anyUploaded && mountedRef.current) {
+      const result = await revalidateProductAction(productId);
+      if (mountedRef.current) setRevalidationOk(result.ok && result.data.revalidationOk);
+    }
+
     if (mountedRef.current) {
       setSaving(false);
       onSaved();
@@ -166,5 +183,5 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
     }
   }
 
-  return { pending, saving, addFiles, removeFile, discardAll, saveAll };
+  return { pending, saving, revalidationOk, addFiles, removeFile, discardAll, saveAll, retryRevalidation };
 }

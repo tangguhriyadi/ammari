@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Image as ImageIcon, Plus } from "lucide-react";
 import { Badge, Button, ColorSwatch, Dialog } from "@ammari/ui";
-import { reorderProductImagesAction } from "../actions";
+import { reorderProductImagesAction, revalidateProductAction } from "../actions";
 import { PhotoTile } from "./photo-tile";
 import { PendingPhotoTile } from "./pending-photo-tile";
 import { usePhotoStaging } from "./use-photo-staging";
@@ -25,7 +25,14 @@ function AddPhotoTile({
     <>
       <input
         type="file"
-        accept="image/*"
+        // Narrowed from "image/*" to the 3 formats the server actually accepts (matches
+        // content-image-field.tsx's own input) — this is what makes iPhone/iPad Safari convert
+        // a HEIC photo to JPEG before it ever reaches the browser's file list, rather than
+        // offering HEIC as a pickable option that would only get rejected server-side
+        // afterward. image-processing.ts's magic-byte HEIC rejection stays in place regardless,
+        // as the real server-side guarantee — this is purely a better client-side experience on
+        // top of it.
+        accept="image/jpeg,image/png,image/webp"
         multiple
         className="sr-only"
         tabIndex={-1}
@@ -78,7 +85,9 @@ function PhotoGroup({
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
+  const [revalidationWarning, setRevalidationWarning] = useState(false);
   const [reordering, startReorderTransition] = useTransition();
+  const [retryPending, startRetry] = useTransition();
   const sorted = [...images].sort((a, b) => a.sortOrder - b.sortOrder);
 
   // useTransition, not a plain useState+try/finally flag — router.refresh() returns void (it
@@ -98,6 +107,7 @@ function PhotoGroup({
     reordered[target] = temp;
 
     setError(null);
+    setRevalidationWarning(false);
     startReorderTransition(async () => {
       try {
         const result = await reorderProductImagesAction({
@@ -109,10 +119,18 @@ function PhotoGroup({
           setError(result.error);
           return;
         }
+        setRevalidationWarning(!result.data.revalidationOk);
         router.refresh();
       } catch {
         setError("Gagal mengubah urutan foto. Coba lagi.");
       }
+    });
+  }
+
+  function retryRevalidation() {
+    startRetry(async () => {
+      const result = await revalidateProductAction(productId);
+      setRevalidationWarning(!(result.ok && result.data.revalidationOk));
     });
   }
 
@@ -134,6 +152,15 @@ function PhotoGroup({
       {error && (
         <p role="alert" className="text-sm text-danger-700">
           {error}
+        </p>
+      )}
+
+      {revalidationWarning && (
+        <p className="flex flex-wrap items-center gap-2 text-sm text-amber-800" data-testid="revalidation-warning">
+          Perubahan tersimpan, tetapi toko online belum diperbarui.
+          <button type="button" onClick={retryRevalidation} disabled={retryPending} className="font-medium underline disabled:opacity-60">
+            Coba lagi
+          </button>
         </p>
       )}
 
@@ -173,7 +200,7 @@ export function ProductPhotosSection({
   images: PhotoImage[];
 }) {
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
-  const { pending, saving, addFiles, removeFile, discardAll, saveAll } = usePhotoStaging({
+  const { pending, saving, revalidationOk, addFiles, removeFile, discardAll, saveAll, retryRevalidation } = usePhotoStaging({
     productId,
     onSaved: () => {},
   });
@@ -187,6 +214,14 @@ export function ProductPhotosSection({
   return (
     <div className="flex flex-col gap-8 pb-36 sm:pb-0">
       <h2 className="text-lg font-semibold text-neutral-900">Foto</h2>
+      {revalidationOk === false && (
+        <p className="flex flex-wrap items-center gap-2 text-sm text-amber-800" data-testid="revalidation-warning">
+          Perubahan tersimpan, tetapi toko online belum diperbarui.
+          <button type="button" onClick={() => void retryRevalidation()} className="font-medium underline">
+            Coba lagi
+          </button>
+        </p>
+      )}
       <PhotoGroup
         title="Foto umum (semua warna)"
         isGeneral

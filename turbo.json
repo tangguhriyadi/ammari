@@ -10,7 +10,15 @@
     "S3_SECRET_ACCESS_KEY",
     "S3_KEY_PREFIX",
     "STORAGE_PUBLIC_BASE_URL",
-    "STORAGE_DRIVER"
+    "STORAGE_DRIVER",
+    // REVALIDATE_SECRET/PREVIEW_SECRET/WEB_INTERNAL_URL (docs/plans/storefront-cms.md session 6):
+    // same "lazy, request-time only" shape as the S3 vars above — read inside a function body
+    // (lib/revalidate.ts, lib/web-internal-url.ts, app/api/revalidate/route.ts,
+    // lib/preview/token.ts), never at module load, so `next build`'s page-data collection never
+    // needs them — only the running server does, at request time.
+    "REVALIDATE_SECRET",
+    "PREVIEW_SECRET",
+    "WEB_INTERNAL_URL"
   ],
   "tasks": {
     "build": {

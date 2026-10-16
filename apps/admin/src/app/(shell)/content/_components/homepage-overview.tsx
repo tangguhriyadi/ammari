@@ -9,7 +9,13 @@ import {
   sectionHasUnpublishedChanges,
   type HomepageSectionRow,
 } from "@/lib/content/homepage-types";
-import { discardHomepageDraftAction, publishHomepageAction, setHomepageSectionVisibilityAction } from "../actions";
+import {
+  createHomepagePreviewLinkAction,
+  discardHomepageDraftAction,
+  publishHomepageAction,
+  retryHomepageRevalidationAction,
+  setHomepageSectionVisibilityAction,
+} from "../actions";
 
 /** The /content overview — a persistent "Ada perubahan belum diterbitkan" banner (visible the
  * moment ANY section's draft differs from what's live) with a single atomic "Terbitkan", plus
@@ -23,6 +29,15 @@ export function HomepageOverview({ initialSections }: { initialSections: Homepag
   const [visibilityPending, startVisibilityTransition] = useTransition();
   const [publishPending, startPublish] = useTransition();
   const [discardPending, startDiscard] = useTransition();
+  // A SOFT warning, separate from `error` above — the publish itself succeeded; only the
+  // on-demand cache invalidation on apps/web failed (docs/plans/storefront-cms.md session 6).
+  // The 1-hour time-based fallback on apps/web's own pages still catches this eventually, so
+  // this is "try again now if you want it instant," never a reason to treat the publish as
+  // failed.
+  const [revalidationWarning, setRevalidationWarning] = useState(false);
+  const [retryPending, startRetry] = useTransition();
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewPending, startPreview] = useTransition();
 
   const hasChanges = sections.some(sectionHasUnpublishedChanges);
 
@@ -42,6 +57,7 @@ export function HomepageOverview({ initialSections }: { initialSections: Homepag
 
   function handlePublish() {
     setError(null);
+    setRevalidationWarning(false);
     startPublish(async () => {
       const result = await publishHomepageAction();
       if (!result.ok) {
@@ -64,6 +80,26 @@ export function HomepageOverview({ initialSections }: { initialSections: Homepag
           publishedAt,
         })),
       );
+      setRevalidationWarning(!result.data.revalidationOk);
+    });
+  }
+
+  function handleRetryRevalidation() {
+    startRetry(async () => {
+      const result = await retryHomepageRevalidationAction();
+      setRevalidationWarning(!(result.ok && result.data.revalidationOk));
+    });
+  }
+
+  function handlePreview() {
+    setPreviewError(null);
+    startPreview(async () => {
+      const result = await createHomepagePreviewLinkAction();
+      if (!result.ok) {
+        setPreviewError(result.error);
+        return;
+      }
+      window.open(result.data.url, "_blank", "noopener,noreferrer");
     });
   }
 
@@ -88,6 +124,17 @@ export function HomepageOverview({ initialSections }: { initialSections: Homepag
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex justify-end">
+        <Button variant="secondary" onClick={handlePreview} loading={previewPending} data-testid="preview-homepage-button">
+          Pratinjau
+        </Button>
+      </div>
+      {previewError && (
+        <p role="alert" className="text-sm text-danger-700">
+          {previewError}
+        </p>
+      )}
+
       {hasChanges && (
         <Card className="flex flex-col gap-3 border-brand bg-brand/5 sm:flex-row sm:items-center sm:justify-between" data-testid="unpublished-changes-banner">
           <p className="text-base text-neutral-900">Ada perubahan yang belum diterbitkan.</p>
@@ -105,6 +152,15 @@ export function HomepageOverview({ initialSections }: { initialSections: Homepag
       {error && (
         <p role="alert" className="text-sm text-danger-700">
           {error}
+        </p>
+      )}
+
+      {revalidationWarning && (
+        <p className="flex flex-wrap items-center gap-2 text-sm text-amber-800" data-testid="revalidation-warning">
+          Perubahan tersimpan, tetapi toko online belum diperbarui.
+          <button type="button" onClick={handleRetryRevalidation} disabled={retryPending} className="font-medium underline disabled:opacity-60">
+            Coba lagi
+          </button>
         </p>
       )}
 

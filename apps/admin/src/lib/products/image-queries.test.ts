@@ -238,7 +238,7 @@ describe("deleteProductImage", () => {
       const image = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
       await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
 
-      await expect(deleteProductImage(image.id, ACTOR_ID, tx)).resolves.toBeUndefined();
+      await expect(deleteProductImage(image.id, ACTOR_ID, tx)).resolves.toEqual({ productId: product.id });
     });
   });
 
@@ -251,7 +251,7 @@ describe("deleteProductImage", () => {
       // No variants at all for this color — the required-photo rule only bites colors that
       // actually have an active variant.
 
-      await expect(deleteProductImage(image.id, ACTOR_ID, tx)).resolves.toBeUndefined();
+      await expect(deleteProductImage(image.id, ACTOR_ID, tx)).resolves.toEqual({ productId: product.id });
     });
   });
 });

@@ -731,6 +731,42 @@ extension/MIME) — no fix needed there; the new content-image input narrows `ac
 `image/jpeg,image/png,image/webp` (the existing product-photo input stays `image/*`, unchanged,
 since it already has the same effective protection).
 
+## Status: session 6 implemented (2026-10-16)
+
+Revalidation + preview are built:
+
+- `apps/web`: `POST /api/revalidate` (secret-gated via `x-revalidate-secret` + `REVALIDATE_SECRET`,
+  constant-time comparison in `lib/revalidate/secret.ts`), blocked at the public hostname in
+  `deploy/Caddyfile` (defense in depth — see that file's own comment for why AOP alone doesn't
+  cover this); `/preview/home` (signed-token HMAC+expiry in `lib/preview/token.ts`, structural
+  rendering only via `structural-sections.tsx`, `noindex`/`no-store` via `next.config.ts`'s
+  `headers()` + `metadata.robots`). New e2e harness for apps/web (first one — mirrors
+  apps/admin's own `dev:e2e`/`global-setup.ts`/`playwright.config.ts` shape, port 3100, an
+  `/api/test/preview-token` backdoor gated the same way apps/admin's login backdoor is).
+- `apps/admin`: `lib/revalidate.ts` (never throws — logs and returns `{ok:false}` on failure,
+  called from `publishHomepageAction`, `updateProductAction`, `updateProductStorefrontAction`,
+  and every photo/alt-text/thumbnail/reorder action, batched once per upload in
+  `use-photo-staging.ts`'s `saveAll`); every one of those surfaces a soft "Perubahan tersimpan,
+  tetapi toko online belum diperbarui" warning with a "Coba lagi" retry
+  (`revalidateProductAction`/`retryHomepageRevalidationAction`) instead of failing the save;
+  "Pratinjau" button in `/content` mints a short-lived signed link via
+  `createHomepagePreviewLinkAction` (signing duplicated into `lib/content/preview-token.ts` —
+  apps/admin has no access to apps/web's `src/` tree, same reasoning the claim-token duplication
+  already in this codebase gives).
+- New env vars (`WEB_INTERNAL_URL`, `REVALIDATE_SECRET` on admin; `REVALIDATE_SECRET`,
+  `PREVIEW_SECRET` on web) documented in both `.env.example` files and `deploy/env/*.env.example`,
+  passed through in `turbo.json` (lazy-read, like the S3 vars — never needed at `next build`
+  time).
+- Small fix from session 5's review: the product-form photo input's `accept` now matches the
+  content-image uploader (`image/jpeg,image/png,image/webp`), so iPhone Safari converts HEIC to
+  JPEG client-side; the server-side magic-byte HEIC rejection is unchanged as the real guarantee.
+
+**Owner can test:** click "Pratinjau" in `/content` and see the (still unstyled) draft content
+at a private, expiring link; confirm a stale/tampered link 404s. Edit a product's price/photos/
+storefront fields or publish the homepage and confirm the save still succeeds even without
+`REVALIDATE_SECRET`/`WEB_INTERNAL_URL` configured (logs an error, shows the soft warning) — this
+was exercised directly by running the existing admin e2e suite with those env vars unset.
+
 ## Remaining nuances (not blocking, worth a quick look before/while implementing)
 
 - **The proposed "Kenapa Ammari" icon key list** (8 keys, above) is a first draft for you to

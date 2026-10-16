@@ -100,6 +100,14 @@ export async function getProductById(id: string, db: Database = defaultDb) {
   return product ?? null;
 }
 
+/** Just the slug — the one column every revalidation call in actions.ts needs to build
+ * `/products/[slug]` (docs/plans/storefront-cms.md session 6), without pulling the whole product
+ * row for call sites that only have a productId in hand (e.g. after a photo delete). */
+export async function getProductSlug(id: string, db: Database = defaultDb): Promise<string | null> {
+  const [row] = await db.select({ slug: products.slug }).from(products).where(eq(products.id, id)).limit(1);
+  return row?.slug ?? null;
+}
+
 export async function getVariantCount(productId: string, db: Database = defaultDb): Promise<number> {
   const [row] = await db.select({ total: count() }).from(productVariants).where(eq(productVariants.productId, productId));
   return row?.total ?? 0;

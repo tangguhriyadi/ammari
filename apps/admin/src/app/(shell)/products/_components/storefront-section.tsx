@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Label, Select, Switch, Textarea } from "@ammari/ui";
 import type { SizeMode } from "@ammari/db/schema";
-import { updateProductStorefrontAction } from "../actions";
+import { revalidateProductAction, updateProductStorefrontAction } from "../actions";
 import { RichTextEditor } from "./rich-text-editor";
 
 export interface SizeChartOption {
@@ -40,6 +40,8 @@ export function StorefrontSection({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [revalidationWarning, setRevalidationWarning] = useState(false);
+  const [retryPending, startRetry] = useTransition();
 
   function set<K extends keyof StorefrontSectionValues>(key: K, value: StorefrontSectionValues[K]) {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -48,6 +50,7 @@ export function StorefrontSection({
   function handleSave() {
     setFormError(null);
     setFieldErrors({});
+    setRevalidationWarning(false);
     startTransition(async () => {
       const result = await updateProductStorefrontAction(productId, {
         isPublishedOnStorefront: values.isPublishedOnStorefront,
@@ -64,7 +67,15 @@ export function StorefrontSection({
         set("isPublishedOnStorefront", initialValues.isPublishedOnStorefront);
         return;
       }
+      setRevalidationWarning(!result.data.revalidationOk);
       router.refresh();
+    });
+  }
+
+  function handleRetryRevalidation() {
+    startRetry(async () => {
+      const result = await revalidateProductAction(productId);
+      setRevalidationWarning(!(result.ok && result.data.revalidationOk));
     });
   }
 
@@ -133,6 +144,15 @@ export function StorefrontSection({
       {formError && (
         <p role="alert" className="text-sm text-danger-700">
           {formError}
+        </p>
+      )}
+
+      {revalidationWarning && (
+        <p className="flex flex-wrap items-center gap-2 text-sm text-amber-800" data-testid="revalidation-warning">
+          Perubahan tersimpan, tetapi toko online belum diperbarui.
+          <button type="button" onClick={handleRetryRevalidation} disabled={retryPending} className="font-medium underline disabled:opacity-60">
+            Coba lagi
+          </button>
         </p>
       )}
 

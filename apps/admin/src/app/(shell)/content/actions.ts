@@ -12,6 +12,9 @@ import {
   whyAmmariContentSchema,
 } from "@/lib/content/homepage-schemas";
 import { uploadContentImage, type UploadedContentImage } from "@/lib/content/content-image-queries";
+import { revalidateHomepage } from "@/lib/revalidate";
+import { getMainSiteUrl } from "@/lib/main-site-url";
+import { generateHomepagePreviewToken } from "@/lib/content/preview-token";
 
 // ---------- Homepage section drafts + publish (docs/plans/storefront-cms.md, session 4) ----------
 //
@@ -79,11 +82,36 @@ export async function setHomepageSectionVisibilityAction(key: string, isVisible:
   });
 }
 
-export async function publishHomepageAction(): Promise<ActionResult> {
+export async function publishHomepageAction(): Promise<ActionResult<{ revalidationOk: boolean }>> {
   const session = await requirePermission("content.manage");
   return runAction(async () => {
     await homepage.publishHomepageSections(session.staffUser.id);
-    return undefined;
+    // revalidateHomepage() never throws (lib/revalidate.ts) — a failure here can only ever
+    // surface as `revalidationOk: false`, never as a failed publish (CLAUDE.md/the plan: "a
+    // failed revalidation must never fail the admin action").
+    const revalidationOk = (await revalidateHomepage()).ok;
+    return { revalidationOk };
+  });
+}
+
+/** Re-runs ONLY the revalidation call, for the "Coba lagi" button the UI shows when
+ * `publishHomepageAction` reports `revalidationOk: false`. Does not touch the DB. */
+export async function retryHomepageRevalidationAction(): Promise<ActionResult<{ revalidationOk: boolean }>> {
+  await requirePermission("content.manage");
+  return runAction(async () => ({ revalidationOk: (await revalidateHomepage()).ok }));
+}
+
+/** Mints a short-lived signed link to the DRAFT homepage on apps/web, for the "Pratinjau" button
+ * (docs/plans/storefront-cms.md session 6). Server-side only — the token is never generated
+ * client-side and never stored anywhere; the admin's browser just opens the returned URL in a
+ * new tab. Points at `getMainSiteUrl()` (the PUBLIC origin) deliberately, not WEB_INTERNAL_URL:
+ * unlike /api/revalidate (machine-to-machine, internal-only), this link is opened by the owner's
+ * OWN browser, which has no route to the internal Docker network at all. */
+export async function createHomepagePreviewLinkAction(): Promise<ActionResult<{ url: string }>> {
+  await requirePermission("content.manage");
+  return runAction(async () => {
+    const token = generateHomepagePreviewToken();
+    return { url: `${getMainSiteUrl()}/preview/home?token=${encodeURIComponent(token)}` };
   });
 }
 

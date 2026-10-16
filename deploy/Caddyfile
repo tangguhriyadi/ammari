@@ -38,6 +38,25 @@ ammari.my.id, www.ammari.my.id {
 		}
 	}
 	header X-Robots-Tag "noindex, nofollow"
+	# /api/revalidate is called ONLY over the INTERNAL Docker network (apps/admin ->
+	# http://web:3000, bypassing Caddy entirely — see deploy/docker-compose.yml) and never needs
+	# the public domain. Blocked here too, defense in depth: Authenticated Origin Pulls above
+	# only proves a request came THROUGH Cloudflare, not that it's a legitimate admin request —
+	# every ordinary public visitor is proxied through Cloudflare the same way, so without this
+	# block a leaked REVALIDATE_SECRET would still work from the public internet. See
+	# docs/plans/storefront-cms.md session 6.
+	@revalidate path /api/revalidate*
+	respond @revalidate 404
+	# /api/test/* (apps/web's e2e preview-token backdoor) must NEVER be reachable from the
+	# public internet, full stop — it is gated in code (NODE_ENV != production AND
+	# E2E_TEST_LOGIN=true, see src/lib/preview/e2e-gate.ts), but that gate lives in an env var
+	# that this Caddy config has no visibility into, so this block is NOT conditional on
+	# whether the gate currently happens to be closed. It is the one layer that holds even if
+	# E2E_TEST_LOGIN were ever mistakenly set in the real web.env on this server (env_file
+	# entries DO override a Dockerfile's baked NODE_ENV=production — confirmed empirically,
+	# this is standard Docker behavior, not something to assume).
+	@apitest path /api/test/*
+	respond @apitest 404
 	reverse_proxy web:3000
 }
 
@@ -52,5 +71,10 @@ admin.ammari.my.id {
 		}
 	}
 	header X-Robots-Tag "noindex, nofollow"
+	# Same reasoning as web's own /api/test/* block above — apps/admin's e2e sign-in backdoor
+	# (/api/test/login) must never be reachable from the public internet regardless of what its
+	# own code-level gate currently evaluates to.
+	@apitest path /api/test/*
+	respond @apitest 404
 	reverse_proxy admin:3000
 }

@@ -5,13 +5,41 @@ import { PRODUCT_CLOSURES, SIZE_MODES, SIZES } from "@ammari/db/schema";
 import { PRODUCT_HIGHLIGHT_KEYS } from "@ammari/db/highlights";
 import { generateProductCode, generateSlug } from "@ammari/db/catalog";
 import { MAX_STOREFRONT_DESCRIPTION_HTML_LENGTH } from "@ammari/content-sanitize";
-import { requirePermission } from "@/lib/auth/require-permission";
+import { requireAnyPermission, requirePermission } from "@/lib/auth/require-permission";
 import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/products/action-result";
 import * as productQueries from "@/lib/products/queries";
 import * as imageQueries from "@/lib/products/image-queries";
 import * as storefrontQueries from "@/lib/products/storefront";
 import * as recipeQueries from "@/lib/inventory/recipes";
+import { revalidateProductSlug } from "@/lib/revalidate";
+
+// ---------- Storefront revalidation (docs/plans/storefront-cms.md session 6) ----------
+//
+// Every save below that could change what a product's storefront page shows (base fields,
+// storefront fields, photos/alt text) revalidates that product's slug afterward. NEVER gates on
+// `is_published_on_storefront`: that would miss the unpublish transition (published -> hidden
+// must ALSO clear the live page), so it's simplest and safest to just always call this — an
+// internal-network POST is cheap, and revalidating a slug that was never published is a harmless
+// no-op. `revalidateProductSlug` itself never throws (see lib/revalidate.ts) — a failure here can
+// only ever show up as `revalidationOk: false` in the action's own returned data, never as a
+// failed save. `revalidateProductAction` below is the SAME logic exposed as its own action, for
+// the UI's "Coba lagi" retry button and for the photo-staging batch upload flow (one call after
+// all files finish, not one per file).
+async function revalidateByProductId(productId: string): Promise<boolean> {
+  const slug = await productQueries.getProductSlug(productId);
+  if (!slug) return true; // product no longer exists — nothing to revalidate
+  const result = await revalidateProductSlug(slug);
+  return result.ok;
+}
+
+export async function revalidateProductAction(productId: string): Promise<ActionResult<{ revalidationOk: boolean }>> {
+  // Reachable after either a `products.manage`-gated save (base fields, photos) or a
+  // `content.manage`-gated one (the Storefront section) — this action itself doesn't change
+  // anything, it only re-triggers a cache invalidation, so either permission is enough.
+  await requireAnyPermission(["products.manage", "content.manage"]);
+  return runAction(async () => ({ revalidationOk: await revalidateByProductId(productId) }));
+}
 
 // ---------- Products ----------
 
@@ -84,7 +112,7 @@ export async function createProductAction(
 export async function updateProductAction(
   id: string,
   input: z.input<typeof updateProductSchema>,
-): Promise<ActionResult<{ id: string }>> {
+): Promise<ActionResult<{ id: string; revalidationOk: boolean }>> {
   const session = await requirePermission("products.manage");
   const parsed = updateProductSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
@@ -103,7 +131,8 @@ export async function updateProductAction(
       },
       session.staffUser.id,
     );
-    return { id: product.id };
+    const revalidationOk = (await revalidateProductSlug(product.slug)).ok;
+    return { id: product.id, revalidationOk };
   });
 }
 
@@ -142,7 +171,7 @@ const updateProductStorefrontSchema = z.object({
 export async function updateProductStorefrontAction(
   productId: string,
   input: z.input<typeof updateProductStorefrontSchema>,
-): Promise<ActionResult<{ id: string }>> {
+): Promise<ActionResult<{ id: string; revalidationOk: boolean }>> {
   const session = await requirePermission("content.manage");
   const parsed = updateProductStorefrontSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
@@ -157,7 +186,8 @@ export async function updateProductStorefrontAction(
       },
       session.staffUser.id,
     );
-    return { id: product.id };
+    const revalidationOk = (await revalidateProductSlug(product.slug)).ok;
+    return { id: product.id, revalidationOk };
   });
 }
 
@@ -313,13 +343,15 @@ export async function uploadProductImageAction(
 
 const deleteProductImageSchema = z.object({ imageId: z.string().uuid() });
 
-export async function deleteProductImageAction(input: z.input<typeof deleteProductImageSchema>): Promise<ActionResult> {
+export async function deleteProductImageAction(
+  input: z.input<typeof deleteProductImageSchema>,
+): Promise<ActionResult<{ revalidationOk: boolean }>> {
   const session = await requirePermission("products.manage");
   const parsed = deleteProductImageSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
-    await imageQueries.deleteProductImage(parsed.data.imageId, session.staffUser.id);
-    return undefined;
+    const { productId } = await imageQueries.deleteProductImage(parsed.data.imageId, session.staffUser.id);
+    return { revalidationOk: await revalidateByProductId(productId) };
   });
 }
 
@@ -331,7 +363,7 @@ const reorderProductImagesSchema = z.object({
 
 export async function reorderProductImagesAction(
   input: z.input<typeof reorderProductImagesSchema>,
-): Promise<ActionResult> {
+): Promise<ActionResult<{ revalidationOk: boolean }>> {
   const session = await requirePermission("products.manage");
   const parsed = reorderProductImagesSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
@@ -340,7 +372,7 @@ export async function reorderProductImagesAction(
       { productId: parsed.data.productId, fabricColorId: parsed.data.fabricColorId, orderedImageIds: parsed.data.orderedImageIds },
       session.staffUser.id,
     );
-    return undefined;
+    return { revalidationOk: await revalidateByProductId(parsed.data.productId) };
   });
 }
 
@@ -348,13 +380,13 @@ const setProductThumbnailSchema = z.object({ productId: z.string().uuid(), image
 
 export async function setProductThumbnailAction(
   input: z.input<typeof setProductThumbnailSchema>,
-): Promise<ActionResult> {
+): Promise<ActionResult<{ revalidationOk: boolean }>> {
   const session = await requirePermission("products.manage");
   const parsed = setProductThumbnailSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await imageQueries.setProductThumbnail(parsed.data.productId, parsed.data.imageId, session.staffUser.id);
-    return undefined;
+    return { revalidationOk: await revalidateByProductId(parsed.data.productId) };
   });
 }
 
@@ -362,13 +394,13 @@ const updateImageAltTextSchema = z.object({ imageId: z.string().uuid(), altText:
 
 export async function updateImageAltTextAction(
   input: z.input<typeof updateImageAltTextSchema>,
-): Promise<ActionResult> {
+): Promise<ActionResult<{ revalidationOk: boolean }>> {
   const session = await requirePermission("products.manage");
   const parsed = updateImageAltTextSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
-    await imageQueries.updateImageAltText(parsed.data.imageId, parsed.data.altText || null, session.staffUser.id);
-    return undefined;
+    const { productId } = await imageQueries.updateImageAltText(parsed.data.imageId, parsed.data.altText || null, session.staffUser.id);
+    return { revalidationOk: await revalidateByProductId(productId) };
   });
 }
 
