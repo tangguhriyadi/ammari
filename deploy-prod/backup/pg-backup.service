@@ -1,0 +1,15 @@
+[Unit]
+Description=Ammari prod: nightly encrypted Postgres backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/opt/ammari-prod/backup
+ExecStart=/opt/ammari-prod/backup/pg-backup.sh
+# Everything this script prints is safe to keep in the journal — pg-backup.sh never echoes a
+# secret value (see its own header comment). `journalctl -u pg-backup.service` is the way to
+# check a run's output; no separate log file to manage or rotate.
+StandardOutput=journal
+StandardError=journal

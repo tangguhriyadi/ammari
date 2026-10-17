@@ -17,13 +17,19 @@
 # What it reads (never echoed):
 #   ~/ammari-secrets/prod-resend-api-key   Required. Raw key value, no "KEY=" prefix, no
 #                                          trailing newline required either way (step 8).
-#   ~/ammari-secrets/dev-admin.env         Optional. If GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/
-#                                          S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY exist there with
+#   ~/ammari-secrets/dev-admin.env         Optional, and ONLY for Google OAuth. If
+#                                          GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET exist there with
 #                                          non-empty values, reused as-is (same Google OAuth
-#                                          client, same Cloudeka account — docs/plans/
-#                                          prod-deploy.md §4 steps 7/9). Any one not found there
-#                                          is asked for interactively with a hidden prompt
-#                                          (`read -s`) instead — never echoed, never logged.
+#                                          client — docs/plans/prod-deploy.md §4 step 9). Either
+#                                          one not found there is asked for interactively with a
+#                                          hidden prompt (`read -s`) instead — never echoed,
+#                                          never logged.
+#
+#                                          S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY are NEVER read
+#                                          from this file, even if present — prod's Cloudeka
+#                                          bucket (step 7) has its OWN access key, separate from
+#                                          dev's. These two are ALWAYS asked for interactively
+#                                          with a hidden prompt, every run.
 #
 # What it generates fresh (openssl rand), one secret, many destinations where the plan requires
 # the SAME value in more than one file:
@@ -202,11 +208,13 @@ if [[ -z "$resend_key" ]]; then
   exit 1
 fi
 
-# --- Google OAuth + S3 (reused from dev-admin.env if present, else hidden prompt) -----------
+# --- Google OAuth (reused from dev-admin.env if present, else hidden prompt) ----------------
 google_client_id="$(resolve_from_dev_or_prompt "Google OAuth client ID" "GOOGLE_CLIENT_ID")"
 google_client_secret="$(resolve_from_dev_or_prompt "Google OAuth client secret" "GOOGLE_CLIENT_SECRET")"
-s3_access_key_id="$(resolve_from_dev_or_prompt "S3 access key ID" "S3_ACCESS_KEY_ID")"
-s3_secret_access_key="$(resolve_from_dev_or_prompt "S3 secret access key" "S3_SECRET_ACCESS_KEY")"
+
+# --- S3 (prod's OWN Cloudeka access key — NEVER dev's, always a hidden prompt) ---------------
+s3_access_key_id="$(prompt_secret "Enter prod S3 access key ID (ammariprod-cdy2yf — NOT dev's key, won't echo)")"
+s3_secret_access_key="$(prompt_secret "Enter prod S3 secret access key (ammariprod-cdy2yf — NOT dev's key, won't echo)")"
 
 # --- Fresh secrets (openssl rand, generated ONCE where shared across files) ----------------
 staff_better_auth_secret="$(openssl rand -base64 32)"

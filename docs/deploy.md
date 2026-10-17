@@ -255,13 +255,15 @@ case, apply that same JSON by hand through the provider's console (Cloudeka: buc
 policy), then run `policy:apply -- --env dev --dry-run` again just to compare, or `policy:show`
 to confirm what's live.
 
-**Prod — later**, once the real prod bucket exists: fill in the real bucket name in
-`bucket-policy.prod.json` (replacing `REPLACE_WITH_PROD_BUCKET_NAME` in both the ARNs and the
-`_comment`), point `apps/admin/.env`'s `S3_*` vars at that bucket's credentials, then run the
-same three commands with `--env prod`. `policy:apply` refuses to run against the prod file at
-all while the placeholder is still unfilled, and separately refuses to apply a policy file
-whose bucket name doesn't match the configured `S3_BUCKET` — so it can't be pointed at the
-wrong bucket by mistake. See `docs/SPEC.md §11`'s pre-deploy checklist entry for this.
+**Prod — done** (`docs/plans/prod-deploy.md` §4 step 7, §3 Session 7): the real prod bucket
+(`ammariprod-cdy2yf`) already exists, and `bucket-policy.prod.json`'s `REPLACE_WITH_PROD_BUCKET_NAME`
+placeholder is already filled in with it. Re-running `policy:apply`/`policy:show -- --env prod`
+(same three commands as above) requires the real `S3_*` credentials — these live only in
+`/opt/ammari-prod/env/admin.env` on the prod VPS, never in this repo or on a developer's own
+machine, so that run only ever happens from there (or against a copy of that one env file,
+never committed). `policy:apply` still refuses to apply a policy file whose bucket name doesn't
+match the configured `S3_BUCKET`, so it can't be pointed at the wrong bucket by mistake even by
+hand. See `docs/SPEC.md §11`'s pre-deploy checklist entry for this.
 
 ## Image tagging scheme
 

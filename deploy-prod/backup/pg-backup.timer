@@ -1,0 +1,12 @@
+[Unit]
+Description=Run pg-backup.service daily at 02:15 Asia/Jakarta
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 Asia/Jakarta
+# Catches up on a missed run (VPS reboot/maintenance window spanning 02:15) instead of silently
+# waiting a full 24h for the next scheduled time.
+Persistent=true
+Unit=pg-backup.service
+
+[Install]
+WantedBy=timers.target

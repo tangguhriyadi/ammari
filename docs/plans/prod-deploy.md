@@ -376,19 +376,26 @@ a dev-runbook step already exists almost verbatim, it's marked **[dev-style]** �
 prompt, terminal echo, or pasted by hand between files** — every secret is generated with
 `openssl` straight into a file and moved between machines as a file (`scp`), per steps 10/12.
 
-**Status as of 2026-10-17:** steps 1, 3, 4, 6, 7, 8, 9 done; step 5 partially done (cert/key
-uploaded, toggle still OFF). **Remaining:** DNS A records (step 2), the AOP toggle (step 5), env
-files (step 10), GitHub environment (step 11), and everything from step 12 onward.
+**Status as of 2026-10-17:** steps 1–16 done — DNS switched (A records for `ammari.id`,
+`www.ammari.id`, `admin.ammari.id` all proxied to `43.173.52.121`), the zone-level AOP toggle is
+ON (a direct `curl --resolve` to the VPS IP is verified rejected with a TLS `certificate_required`
+error), `www.ammari.id`'s 301 redirect is verified, `/robots.txt`'s `allow: /` is verified (so
+`DEPLOY_ENV=production` is confirmed live, not just in the env file), the GitHub `production`
+environment exists under that exact name, the first prod deploy has run successfully, the first
+`super_admin` is seeded, and the prod bucket policy is applied and verified (200 on
+`products/*`/`content/*`, 403 elsewhere) using the real `prod-admin.env` credentials. The VPS's
+own clock/timezone is confirmed `Asia/Jakarta` (relevant to Session 5's nightly backup timer,
+below). **Remaining:** install the nightly backup + monitoring timers (step 17 — Session 5 ships
+the scripts/units; this step is the owner actually installing them on the VPS), UptimeRobot (step
+18), entering real products/content (step 19), and the real-backup restore drill (step 20).
 
 1. **Buy the VPS.** ✅ **Done.** Sumopod, Jakarta region, **IP `43.173.52.121`**, Ubuntu 24.04,
    `x86_64` confirmed, **2 vCPU / 3.6 GiB RAM / 60 GB SSD** (the actual provisioned specs —
    `free -h`/`df -h` on the box, not the original 4 GB/80 GB planning estimate; §1's memory
    budget and §2's VPS row are both updated to match).
-2. **DNS.** *Remaining.* Cloudflare dashboard → the `ammari.id` zone (add it to Cloudflare first
-   if it isn't there yet) → add **A** records for `ammari.id`, `www.ammari.id`,
-   `admin.ammari.id` pointing at `43.173.52.121`, **proxied** (orange cloud). `www` still needs
-   its own DNS record even though it will only ever 301-redirect — Cloudflare/Caddy still need to
-   receive that request to issue the redirect.
+2. **DNS.** ✅ **Done.** Cloudflare dashboard → the `ammari.id` zone → **A** records for
+   `ammari.id`, `www.ammari.id`, `admin.ammari.id` all point at `43.173.52.121`, **proxied**
+   (orange cloud). `www`'s 301-redirect (Session 2's Caddyfile) is verified working end to end.
 3. **SSH + VPS one-time setup.** ✅ **Done** (with extra hardening beyond the original
    **[dev-style]** steps below — recorded as actually performed):
    - Docker + the `docker compose` plugin confirmed installed and working.
@@ -402,18 +409,21 @@ files (step 10), GitHub environment (step 11), and everything from step 12 onwar
      extra hardening).
    - Password authentication and root SSH login both disabled (extra hardening beyond the
      original plan text).
-   - *Still remaining from this step:* the GitHub PAT / `docker login ghcr.io` on the VPS as
-     `deploy` (needed before the first real image pull, step 14) — do this once GitHub
-     environment secrets (step 11) are set up, no need to do it in isolation now.
+   - Server clock/timezone confirmed `Asia/Jakarta` — relevant now that Session 5's
+     `pg-backup.timer` schedules against that zone explicitly (`OnCalendar=... Asia/Jakarta`, so
+     this doesn't actually depend on the host's local time matching it, but confirmed as a fact
+     regardless).
+   - The GitHub PAT / `docker login ghcr.io` on the VPS as `deploy` is also done — confirmed by
+     step 14's successful first deploy, which pulls from GHCR.
 4. **Cloudflare — TLS mode.** ✅ **Done.** `ammari.id` zone → **SSL/TLS → Overview** → set to
    **Full (strict)**.
 5. **Cloudflare — zone-level Authenticated Origin Pulls (the part that differs from dev).**
-   ⚠️ **Partially done:** the leaf certificate + private key are generated and uploaded to the
-   zone-level AOP slot, and the CA root is already placed on the VPS at
-   `/opt/ammari-prod/cloudflare/origin-pull-ca.pem`. **The AOP toggle itself is still OFF** —
-   flipping it on is in the *Remaining* list below, deliberately left for later (enabling it
-   before the prod Caddyfile/`trust_pool` exists, Session 2, would just make the origin
-   unreachable with no app behind it to notice). Steps already done, for reference:
+   ✅ **Done**, including the toggle itself: the leaf certificate + private key were generated
+   and uploaded to the zone-level AOP slot, the CA root sits on the VPS at
+   `/opt/ammari-prod/cloudflare/origin-pull-ca.pem`, **the AOP toggle is now ON**, and a direct
+   `curl --resolve ...` to the VPS IP (bypassing Cloudflare) is verified rejected with a TLS
+   `certificate_required` error — confirming the origin is only reachable through Cloudflare, not
+   directly. Steps already done, for reference:
    - On your own machine (not the VPS), generate a CA, then a **leaf** certificate signed by it
      (note `basicConstraints=CA:FALSE` on the leaf — it must not itself be usable as a CA):
      ```bash
@@ -480,7 +490,7 @@ files (step 10), GitHub environment (step 11), and everything from step 12 onwar
    `https://admin.ammari.id/api/auth/callback/google` as **Authorized redirect URIs**, and the
    **consent screen** is already **"In production."** No **Authorized JavaScript origins** are
    needed — this is a server-side OAuth flow, so the client has none listed and none to add.
-10. **Build the secrets files, on your Mac, never displayed or typed by hand.** *Remaining.*
+10. **Build the secrets files, on your Mac, never displayed or typed by hand.** ✅ **Done.**
     `deploy-prod/make-prod-env.sh` does this: builds `~/ammari-secrets/prod-admin.env`,
     `prod-web.env`, `prod-db.env` and `prod-backup.env` from `deploy-prod/env/*.example`,
     generating fresh secrets with `openssl rand` (both `BETTER_AUTH` secrets, `REVALIDATE_SECRET`
@@ -491,9 +501,11 @@ files (step 10), GitHub environment (step 11), and everything from step 12 onwar
     `STOREFRONT_CART_ENABLED=false`, the `ammariprod-cdy2yf`/`kencana` bucket settings, the
     alert-recipient addresses). It reads the already-provisioned prod Resend key from
     `~/ammari-secrets/prod-resend-api-key` (step 8), and reuses the Google OAuth client id/
-    secret and S3 access key/secret from `~/ammari-secrets/dev-admin.env` when the variable
-    names exist there (same Google client, same Cloudeka account — step 9, step 7), asking for
-    anything it can't find with a hidden prompt instead. It never prints a secret to the
+    secret from `~/ammari-secrets/dev-admin.env` when the variable names exist there (same
+    Google client — step 9), asking for anything it can't find with a hidden prompt instead.
+    The S3 access key ID/secret are **never** read from `dev-admin.env` even if present —
+    prod's Cloudeka bucket (step 7) has its own separate access key, so these two are always
+    asked for interactively with a hidden prompt. It never prints a secret to the
     terminal, never writes one into this repo, and refuses to overwrite an existing
     `~/ammari-secrets/prod-*.env` unless you pass `--force` (which backs the old file up with a
     timestamp first):
@@ -507,7 +519,8 @@ files (step 10), GitHub environment (step 11), and everything from step 12 onwar
     the plan's own text): `EMAIL_FROM` and `STORAGE_PUBLIC_BASE_URL` in both app files, and
     `STORE_WHATSAPP_NUMBER` in `prod-web.env` (optional fallback only — see step 19). **Never**
     add `NODE_ENV` or `E2E_TEST_LOGIN` to any of these files — the script never does either.
-11. **GitHub repo settings.** *Remaining.*
+11. **GitHub repo settings.** ✅ **Done.** The environment is named exactly `production`
+    (confirmed).
     - **Settings → Actions → General → Workflow permissions** → "Read and write permissions"
       (should already be set from dev's setup; confirm it still is).
     - **Settings → Environments → New environment**, name it exactly `production`.
@@ -518,7 +531,7 @@ files (step 10), GitHub environment (step 11), and everything from step 12 onwar
       - **Environment secrets** on `production`: `DEPLOY_SSH_HOST` (new VPS IP),
         `DEPLOY_SSH_USER` (`deploy`), `DEPLOY_SSH_KEY` (the **prod** private key from step 3),
         `DEPLOY_SSH_KNOWN_HOSTS` (step 3's `ssh-keyscan` output).
-12. **Copy the secrets files onto the VPS, then fill in the real env files.** *Remaining.*
+12. **Copy the secrets files onto the VPS, then fill in the real env files.** ✅ **Done.**
     `deploy-prod/upload-prod-env.sh` does this: `scp`s all four files from `~/ammari-secrets`
     (`prod-admin.env`, `prod-web.env`, `prod-db.env`, `prod-backup.env`) to
     `deploy@43.173.52.121:/opt/ammari-prod/env/` as `admin.env`/`web.env`/`db.env`/`backup.env`
@@ -553,22 +566,29 @@ files (step 10), GitHub environment (step 11), and everything from step 12 onwar
     `git push origin main` above will be rejected; in that case use
     `gh pr create --base main --head dev` and merge it with **"Rebase and merge"** (not a merge
     commit) to keep the same linear fast-forward-equivalent history, then proceed.
-14. **First deploy.** **Actions → Deploy (prod) → Run workflow** → branch dropdown ("Use workflow
+14. **First deploy.** ✅ **Done.** **Actions → Deploy (prod) → Run workflow** → branch dropdown ("Use workflow
     from") set to **`main`** (the workflow refuses to run against anything else — Session 4's
     guard) → leave **`sha`** empty (deploys `main`'s current HEAD) → leave **`skip_migrate`**
     unchecked (that input is rollback-only — see the Rollback plan, §7) → **Run workflow**. Watch
     the run; its job summary reports the deployed sha, which images were built vs. reused from
     GHCR, each app's active slot after the run, and whether migrations ran.
-15. **Bootstrap the first `super_admin`.** **[dev-style]**, against the prod migrator image —
+15. **Bootstrap the first `super_admin`.** ✅ **Done.** **[dev-style]**, against the prod migrator image —
     same `docker run --rm --env-file /opt/ammari-prod/env/admin.env ... tsx src/seed.ts` command
     as `docs/deploy.md` §7, with `SEED_SUPER_ADMIN_EMAIL`/`SEED_SUPER_ADMIN_NAME` set to you.
-16. **Apply the prod bucket policy.** `pnpm --filter @ammari/storage policy:apply -- --env prod
-    --dry-run` first, then without `--dry-run` (the bucket name is already filled in
-    `bucket-policy.prod.json`, step 7). After it applies, confirm an anonymous `curl` to an
-    object under `backups/` in `ammariprod-cdy2yf` returns **403** — the policy must never grant
-    that prefix public read, since it shares the bucket with `products/*`/`content/*`.
-17. **Set up the nightly backup timer and monitoring timers** (Sessions 5–6's systemd units) —
-    `systemctl enable --now pg-backup.timer disk-alert.timer backup-check.timer`.
+16. **Apply the prod bucket policy.** ✅ **Done.** Applied with `pnpm --filter @ammari/storage
+    policy:apply -- --env prod` using the real `prod-admin.env` credentials; the script's own
+    built-in verification passed (a `products/*` test object returns 200, a bucket-root test
+    object with no matching statement returns 403 — see `policy-apply.ts`'s `verify()`). This
+    confirms the policy itself is correctly scoped; it does **not** yet include a check against
+    an actual object under `backups/` specifically, since none exists until Session 5's backup
+    timer has run at least once (step 17) — that specific check is still owed, both here and at
+    §7's go-live checklist.
+17. **Set up the nightly backup timer and monitoring timers** (Sessions 5–6's systemd units).
+    For the backup timer (Session 5, shipped): on your Mac, `scp -i
+    ~/ammari-secrets/ammari_prod_deploy_key -r deploy-prod/backup
+    deploy@43.173.52.121:/opt/ammari-prod/`, then on the VPS, `cd /opt/ammari-prod/backup &&
+    sudo ./install-backup-timer.sh`. For the monitoring timers (Session 6, not yet shipped):
+    `systemctl enable --now disk-alert.timer backup-check.timer` once those land.
 18. **Set up UptimeRobot (free tier).**
     - Sign up at uptimerobot.com (free plan is enough — up to 50 monitors, 5-minute interval).
     - **Add New Monitor** → Monitor Type: **HTTP(s)** → Friendly Name "Ammari web health" →
@@ -715,11 +735,16 @@ nothing gets submitted half-filled.
 ### Rollback plan
 
 - **App-layer rollback** (bad admin/web release): `workflow_dispatch` on `deploy-prod.yml` with
-  an older `sha` — same shape as dev's rollback, skips `build`/`retag`, redeploys the
-  already-pushed images under that SHA via the blue-green script, **never re-runs the migrator**.
-  This is exactly why every migration must stay backward-compatible with the previously-deployed
-  release (`CLAUDE.md`'s existing rule) — it's now load-bearing for prod's own DB too, not just a
-  managed provider's.
+  an older `sha`, **and `skip_migrate` ticked explicitly** — same shape as dev's rollback, skips
+  `build`/`retag`, redeploys the already-pushed images under that SHA via the blue-green script.
+  `skip_migrate` defaults to `false` and is never set automatically just because an older `sha`
+  was chosen (Session 4) — dispatching an older `sha` **without** ticking it would still run the
+  migrator from that older image against whatever schema is currently live, which is normally a
+  harmless no-op (drizzle's migrator skips already-applied migrations) but isn't the guarantee
+  this rollback path is meant to give. Ticking `skip_migrate` is what actually guarantees the
+  migrator never runs on rollback — this is exactly why every migration must stay
+  backward-compatible with the previously-deployed release (`CLAUDE.md`'s existing rule) — it's
+  now load-bearing for prod's own DB too, not just a managed provider's.
 - **DB-layer disaster recovery** (data corruption, bad manual change, etc. — rare, not a normal
   deploy rollback): stop the app containers, restore the most recent good backup into the `db`
   container's volume (or a fresh volume) per `docs/runbooks/restore-drill.md`, confirm row counts,

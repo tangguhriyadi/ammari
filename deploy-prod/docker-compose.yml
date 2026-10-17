@@ -90,7 +90,12 @@ services:
       - internal
 
   admin-blue:
-    image: ghcr.io/tangguhriyadi/ammari-admin:${ADMIN_BLUE_IMAGE_TAG}
+    # `:-bootstrap` only silences Compose's "variable is not set" warning for whichever slot
+    # hasn't been deployed to yet (remote-deploy.sh's set_image_tag_env only ever writes the
+    # slot it's actually flipping to) — it never changes slot behaviour: `:bootstrap` is not a
+    # real pushed tag, so this service simply can't be started until remote-deploy.sh writes a
+    # real sha into .env for it, exactly as before.
+    image: ghcr.io/tangguhriyadi/ammari-admin:${ADMIN_BLUE_IMAGE_TAG:-bootstrap}
     restart: unless-stopped
     logging: *default-logging
     mem_limit: 450m
@@ -108,7 +113,7 @@ services:
       - internal
 
   admin-green:
-    image: ghcr.io/tangguhriyadi/ammari-admin:${ADMIN_GREEN_IMAGE_TAG}
+    image: ghcr.io/tangguhriyadi/ammari-admin:${ADMIN_GREEN_IMAGE_TAG:-bootstrap}
     restart: unless-stopped
     logging: *default-logging
     mem_limit: 450m
@@ -122,7 +127,7 @@ services:
       - internal
 
   web-blue:
-    image: ghcr.io/tangguhriyadi/ammari-web:${WEB_BLUE_IMAGE_TAG}
+    image: ghcr.io/tangguhriyadi/ammari-web:${WEB_BLUE_IMAGE_TAG:-bootstrap}
     restart: unless-stopped
     logging: *default-logging
     mem_limit: 450m
@@ -136,7 +141,7 @@ services:
       - internal
 
   web-green:
-    image: ghcr.io/tangguhriyadi/ammari-web:${WEB_GREEN_IMAGE_TAG}
+    image: ghcr.io/tangguhriyadi/ammari-web:${WEB_GREEN_IMAGE_TAG:-bootstrap}
     restart: unless-stopped
     logging: *default-logging
     mem_limit: 450m
