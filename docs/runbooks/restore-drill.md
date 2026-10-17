@@ -77,13 +77,20 @@ docker run -d --name ammari-restore-drill-db \
   -e POSTGRES_USER=ammari -e POSTGRES_PASSWORD=drill -e POSTGRES_DB=ammari_scratch \
   pgvector/pgvector:pg16
 
-# wait for it to be ready
-until docker exec ammari-restore-drill-db pg_isready -U ammari -d ammari_scratch >/dev/null 2>&1; do
+# wait for it to be ready — NOT pg_isready: the postgres/pgvector entrypoint runs a TEMPORARY
+# server (unix socket only) to create ammari_scratch and run init scripts, then stops it and
+# starts the real one; pg_isready reports "accepting connections" as soon as EITHER server is
+# up, including during the gap between them, before ammari_scratch is guaranteed queryable.
+# Confirmed with a real timing run (deploy-prod/restore-drill-local.sh's own fix): pg_isready hit
+# rc=0 about half a second before a real query against ammari_scratch could actually connect — a
+# pg_restore racing into that half-second window is exactly how "database ammari_scratch does
+# not exist" (or a socket connection error) shows up right after a successful decrypt.
+until docker exec ammari-restore-drill-db psql -U ammari -d ammari_scratch -c 'select 1' >/dev/null 2>&1; do
   sleep 1
 done
 
 docker cp "$WORKDIR/dump.custom" ammari-restore-drill-db:/tmp/dump.custom
-docker exec ammari-restore-drill-db pg_restore -U ammari -d ammari_scratch --no-owner --no-acl /tmp/dump.custom
+docker exec ammari-restore-drill-db pg_restore -U ammari -d ammari_scratch --no-owner --no-privileges /tmp/dump.custom
 ```
 
 ### 4. Spot-check row counts

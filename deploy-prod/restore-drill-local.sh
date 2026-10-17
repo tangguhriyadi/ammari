@@ -214,20 +214,37 @@ fi
 HOST_PORT="$(docker port "$CONTAINER_NAME" 5432/tcp | head -n1 | cut -d: -f2)"
 echo "==> Disposable Postgres listening on 127.0.0.1:${HOST_PORT:-unknown} (container: $CONTAINER_NAME, db: $DB_NAME)"
 
+# NOT pg_isready: the postgres/pgvector entrypoint runs a TEMPORARY server (on the unix socket
+# only) to create $POSTGRES_DB and run init scripts, then stops it and starts the real server —
+# pg_isready reports "accepting connections" as soon as EITHER server is up, including during
+# the gap between the temp server stopping and the real one starting, before $DB_NAME is
+# guaranteed queryable. Confirmed with a real timing run: pg_isready went to rc=0 half a second
+# before `psql -d ammari_scratch -c 'select 1'` could actually connect, and a pg_restore that
+# raced into that half-second window is exactly the failure this is fixing ("connection to
+# server on socket ... failed: FATAL: database \"ammari_scratch\" does not exist" / a socket
+# connection error, depending on exactly which half of the gap it lands in). Polling the ACTUAL
+# target database with a real query is self-validating — it only ever succeeds once that
+# database genuinely exists and the real server is the one serving it.
 ready=0
 for attempt in $(seq 1 30); do
-  if docker exec "$CONTAINER_NAME" pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
+  if docker exec "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -c 'select 1' >/dev/null 2>&1; then
     ready=1
     break
   fi
-  echo "==> waiting for Postgres to accept connections (attempt $attempt/30)..."
+  echo "==> waiting for ${DB_NAME} to accept queries (attempt $attempt/30)..."
   sleep 2
 done
-[ "$ready" -eq 1 ] || fail "disposable Postgres never became ready"
+[ "$ready" -eq 1 ] || fail "disposable Postgres never became ready to accept queries against ${DB_NAME} (timed out after 60s)"
 
 echo "==> Restoring the dump"
 docker cp "$WORKDIR/dump.custom" "$CONTAINER_NAME:/tmp/dump.custom"
-if ! docker exec "$CONTAINER_NAME" pg_restore -U "$DB_USER" -d "$DB_NAME" --no-owner --no-acl /tmp/dump.custom; then
+RESTORE_LOG="$WORKDIR/pg_restore.log"
+if ! docker exec "$CONTAINER_NAME" pg_restore -U "$DB_USER" -d "$DB_NAME" --no-owner --no-privileges /tmp/dump.custom \
+  >"$RESTORE_LOG" 2>&1; then
+  cat "$RESTORE_LOG" >&2
+  if grep -qi 'extension "vector"' "$RESTORE_LOG"; then
+    fail "pg_restore failed because the pgvector extension is missing in the disposable Postgres — this script pins $PG_IMAGE, which should already include it; if that image changed, pin one that still does"
+  fi
   fail "pg_restore failed — see its own output above"
 fi
 
