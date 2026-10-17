@@ -97,17 +97,20 @@ load_env_file() {
 
 # Sends ONE alert email via Resend, run inside a throwaway curl container. The API key and the
 # JSON body never touch argv or a log line — both are written to 0600 temp files, mounted
-# read-only into the container, and read by curl via `@file`. Degrades to a loud stderr warning
-# (never a hard failure of its own) when alerting isn't configured at all, so a missing
-# ALERT_EMAIL_TO/RESEND_API_KEY/EMAIL_FROM never masks the real failure that triggered this call.
+# read-only into the container, and read by curl via `@file`. Returns 0 ONLY on a confirmed 2xx
+# from Resend; returns 1 on anything else (not configured, curl couldn't run, non-2xx) — the one
+# caller below (fail()) is about to `exit 1` regardless, so a failed send here never masks the
+# real backup failure that triggered the call, but it's still checked explicitly (not assumed)
+# so the exit path and its logging are intentional rather than an incidental side effect of a
+# bare statement under `set -e`.
 send_alert() {
   local subject="$1" body="$2"
   if [ -z "${ALERT_EMAIL_TO:-}" ] || [ -z "${RESEND_API_KEY:-}" ] || [ -z "${EMAIL_FROM:-}" ]; then
     echo "==> WARNING: cannot send alert email — ALERT_EMAIL_TO/RESEND_API_KEY/EMAIL_FROM not all set" >&2
-    return 0
+    return 1
   fi
 
-  local tmp_dir headers_file body_file to_json esc_subject esc_body addr
+  local tmp_dir headers_file body_file to_json esc_subject esc_body addr http_code
   tmp_dir="$(mktemp -d)"
   track_tmp "$tmp_dir"
   headers_file="$tmp_dir/headers.txt"
@@ -135,23 +138,37 @@ send_alert() {
     "$EMAIL_FROM" "$to_json" "$esc_subject" "$esc_body" > "$body_file"
   chmod 600 "$body_file"
 
-  if ! docker run --rm \
+  # --user "$(id -u):$(id -g)": curlimages/curl's image defaults to its OWN built-in non-root
+  # user (uid 100, confirmed via `docker inspect curlimages/curl:8.11.1`), which cannot read
+  # files just created above as this script's own caller (deploy, mode 600) — confirmed as a
+  # real failure on the prod VPS (a genuine Linux host enforces this; local testing on Docker
+  # Desktop for Mac missed it because its bind-mount translation doesn't). Running the container
+  # AS the uid/gid that owns the files fixes it without loosening any permission.
+  if ! http_code="$(docker run --rm \
+      --user "$(id -u):$(id -g)" \
       -v "$tmp_dir:/alert:ro" \
       "$CURL_IMAGE" \
-      -sf -X POST "$RESEND_API_URL" \
+      -s -o /dev/null -w '%{http_code}' -X POST "$RESEND_API_URL" \
       -H @/alert/headers.txt \
-      --data-binary @/alert/body.json \
-      -o /dev/null; then
-    echo "==> WARNING: failed to send alert email via Resend" >&2
+      --data-binary @/alert/body.json 2>/dev/null)"; then
+    http_code="000"
   fi
 
   rm -rf "$tmp_dir"
+
+  if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+    return 0
+  fi
+  echo "==> WARNING: failed to send alert email via Resend (HTTP ${http_code:-unknown})" >&2
+  return 1
 }
 
 fail() {
   local msg="$1"
   echo "==> FAILED: $msg" >&2
-  send_alert "[Ammari] Nightly backup FAILED" "$msg"
+  if ! send_alert "[Ammari] Nightly backup FAILED" "$msg"; then
+    echo "==> WARNING: the failure alert email itself did not go out — see the warning above" >&2
+  fi
   exit 1
 }
 

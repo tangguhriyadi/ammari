@@ -72,18 +72,22 @@ json_escape() {
   printf '%s' "$s"
 }
 
-# Sends ONE email via Resend, run inside a throwaway curl container. Degrades to a loud stderr
-# warning (never a hard failure) when alerting isn't configured at all, so a missing
-# ALERT_EMAIL_TO/RESEND_API_KEY/EMAIL_FROM never masks the real condition that triggered this call
-# — the caller's own exit status/journal output is still the source of truth either way.
+# Sends ONE email via Resend, run inside a throwaway curl container. Returns 0 ONLY on a
+# confirmed 2xx response from Resend; returns 1 on anything else (not configured, curl couldn't
+# even run, or a non-2xx response) — callers must check this, never assume success. Never calls
+# `exit` itself: a caller with its own job to do (a disk/backup/health check) must keep running
+# even when alerting is broken; only a caller whose ENTIRE job is "did the email actually go out"
+# (send-test-alert.sh) should turn a non-zero return here into a hard failure of its own.
 send_alert() {
   local subject="$1" body="$2"
   if [ -z "${ALERT_EMAIL_TO:-}" ] || [ -z "${RESEND_API_KEY:-}" ] || [ -z "${EMAIL_FROM:-}" ]; then
     echo "==> WARNING: cannot send alert email — ALERT_EMAIL_TO/RESEND_API_KEY/EMAIL_FROM not all set" >&2
-    return 0
+    return 1
   fi
 
-  local tmp_dir headers_file body_file to_json esc_subject esc_body addr
+  local tmp_dir headers_file body_file to_json esc_subject esc_body addr http_code
+  # mktemp -d already creates with mode 0700 regardless of umask (GNU/BSD both guarantee this) —
+  # no separate chmod needed for the directory itself.
   tmp_dir="$(mktemp -d)"
   headers_file="$tmp_dir/headers.txt"
   body_file="$tmp_dir/body.json"
@@ -110,32 +114,58 @@ send_alert() {
     "$EMAIL_FROM" "$to_json" "$esc_subject" "$esc_body" > "$body_file"
   chmod 600 "$body_file"
 
-  if ! docker run --rm \
+  # --user "$(id -u):$(id -g)": curlimages/curl's image defaults to its OWN built-in non-root
+  # user (uid 100, confirmed via `docker inspect curlimages/curl:8.11.1` — not uid 0), which
+  # cannot read files created above as this script's own caller (deploy, mode 600) — confirmed on
+  # the real prod VPS: an actual Linux host enforces this; Docker Desktop for Mac's bind-mount
+  # translation silently let a mismatched uid read the files anyway, which is why local-only
+  # testing missed this. Running the container AS the uid/gid that owns the files is the fix —
+  # it needs no corresponding /etc/passwd entry inside the container, and the files stay mode 600
+  # (no permission loosening).
+  #
+  # -w '%{http_code}' (not just `-f`): captures the actual status so a non-2xx is distinguishable
+  # from "curl couldn't even run" in the warning below, and so this function can return a real
+  # pass/fail the caller can act on instead of silently assuming success.
+  if ! http_code="$(docker run --rm \
+      --user "$(id -u):$(id -g)" \
       -v "$tmp_dir:/alert:ro" \
       "$ALERT_CURL_IMAGE" \
-      -sf -X POST "$RESEND_API_URL" \
+      -s -o /dev/null -w '%{http_code}' -X POST "$RESEND_API_URL" \
       -H @/alert/headers.txt \
-      --data-binary @/alert/body.json \
-      -o /dev/null; then
-    echo "==> WARNING: failed to send alert email via Resend" >&2
+      --data-binary @/alert/body.json 2>/dev/null)"; then
+    http_code="000"
   fi
 
   rm -rf "$tmp_dir"
+
+  if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+    return 0
+  fi
+  echo "==> WARNING: failed to send alert email via Resend (HTTP ${http_code:-unknown})" >&2
+  return 1
 }
 
 # Tracks one named condition (e.g. "disk", "backup", "health-db") across runs and decides whether
 # this run should actually send an email:
 #   ok=1 (condition is fine):
 #     - a state file exists (it was previously failing)  -> send ONE "RECOVERED" email, delete
-#       the state file.
+#       the state file ONLY if that email actually went out (see below).
 #     - no state file (it was already fine)               -> nothing to do, no email.
 #   ok=0 (condition is failing):
-#     - no state file, OR the last alert for it was sent >= ALERT_DEDUP_SECONDS ago -> send the
-#       alert, (re)write the state file with this run's timestamp.
-#     - state file exists and is still within the dedup window                    -> log to
-#       stdout/journal only, no repeat email.
-# Never exits non-zero itself — a caller's own overall exit status is driven by whether the
-# CHECK found a real problem, not by whether sending/suppressing an email succeeded.
+#     - no state file, OR the LAST CONFIRMED SEND for it was >= ALERT_DEDUP_SECONDS ago -> try to
+#       send the alert.
+#     - state file exists and a send within the dedup window was CONFIRMED delivered -> log to
+#       stdout/journal only, no repeat attempt.
+# Every call to send_alert here is guarded by `if`, never a bare statement — send_alert can now
+# return 1 (e.g. HTTP delivery failure), and a bare call would trip this script's own `set -e`
+# the instant alerting itself is broken, aborting the real check that has nothing to do with it.
+#
+# Dedup only ever advances past a CONFIRMED delivery, never a mere attempt: if send_alert fails,
+# LAST_ALERT_EPOCH is deliberately left unchanged (0 the first time), so the very next run retries
+# immediately instead of silently going quiet for up to 12h for an alert nobody actually received
+# — this is what actually happened in prod once (Resend delivery was broken; every check "sent"
+# successfully by this function's own old bookkeeping, so the owner got zero emails for the whole
+# dedup window even though every run kept finding the same real problem).
 monitoring_alert_check() {
   local name="$1" ok="$2" subject="$3" body="$4"
   local state_file="$STATE_DIR/$name.state"
@@ -143,9 +173,12 @@ monitoring_alert_check() {
 
   if [ "$ok" = "1" ]; then
     if [ -f "$state_file" ]; then
-      send_alert "[Ammari] RECOVERED: $subject" "$body"$'\n\n'"(this condition has cleared)"
-      rm -f "$state_file"
-      echo "==> [$name] recovered"
+      if send_alert "[Ammari] RECOVERED: $subject" "$body"$'\n\n'"(this condition has cleared)"; then
+        rm -f "$state_file"
+        echo "==> [$name] recovered"
+      else
+        echo "==> [$name] condition cleared, but the RECOVERED email FAILED to send — will retry next run" >&2
+      fi
     fi
     return 0
   fi
@@ -165,15 +198,19 @@ monitoring_alert_check() {
     first_fail_epoch="${first_fail_epoch:-$now}"
   fi
 
-  if [ -f "$state_file" ] && [ "$(( now - last_alert_epoch ))" -lt "$ALERT_DEDUP_SECONDS" ]; then
-    echo "==> [$name] still failing, suppressing repeat alert (last sent $(( (now - last_alert_epoch) / 60 )) min ago)"
+  if [ "$last_alert_epoch" -gt 0 ] && [ "$(( now - last_alert_epoch ))" -lt "$ALERT_DEDUP_SECONDS" ]; then
+    echo "==> [$name] still failing, suppressing repeat alert (last CONFIRMED sent $(( (now - last_alert_epoch) / 60 )) min ago)"
     return 0
   fi
 
-  send_alert "$subject" "$body"
+  if send_alert "$subject" "$body"; then
+    last_alert_epoch="$now"
+    echo "==> [$name] alert sent"
+  else
+    echo "==> [$name] FAILED to send alert email — will retry next run (not counted as delivered for dedup purposes)" >&2
+  fi
   {
     echo "FIRST_FAIL_EPOCH=$first_fail_epoch"
-    echo "LAST_ALERT_EPOCH=$now"
+    echo "LAST_ALERT_EPOCH=$last_alert_epoch"
   } > "$state_file"
-  echo "==> [$name] alert sent"
 }

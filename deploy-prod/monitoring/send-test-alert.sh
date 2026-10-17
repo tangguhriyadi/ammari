@@ -30,11 +30,16 @@ for v in ALERT_EMAIL_TO RESEND_API_KEY EMAIL_FROM; do
 done
 
 echo "==> Sending a test alert to: $ALERT_EMAIL_TO"
-send_alert "[Ammari] Monitoring test alert" \
+if send_alert "[Ammari] Monitoring test alert" \
   "This is a one-off test from send-test-alert.sh, sent by hand on $(TZ=Asia/Jakarta date). It did
 not come from a real disk/backup/health check — if you weren't expecting it, someone just ran
 this script on the VPS.
 
-If this arrived, Resend delivery for the monitoring alerts is working."
-
-echo "==> Sent (send_alert only warns on a real delivery failure — check your inbox, and this script's own stderr above for any warning)."
+If this arrived, Resend delivery for the monitoring alerts is working."; then
+  echo "==> Sent — Resend confirmed a 2xx response. Check your inbox at: $ALERT_EMAIL_TO"
+else
+  echo "==> FAILED to send the test alert — see the WARNING above for the HTTP status/reason." >&2
+  echo "    Check RESEND_API_KEY and EMAIL_FROM in env/admin.env, that the sending domain is" >&2
+  echo "    still verified in Resend's dashboard, and that this VPS can reach api.resend.com." >&2
+  exit 1
+fi

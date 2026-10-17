@@ -367,6 +367,38 @@ hand per §4.
   one "RECOVERED" email and leaves `monitoring/state/` empty again. `shellcheck -x` clean on all
   five scripts. Everything created for the test (containers, network, temp files) was torn down;
   no real server was touched.
+  - **Real-server bug found post-install, now fixed:** `send-test-alert.sh` failed on the actual
+    VPS with `curl: option -H: error encountered when reading a file`, while it had passed this
+    same local test. Root cause: `curlimages/curl:8.11.1` defaults to its own built-in non-root
+    user (`curl_user`, uid 100 — confirmed via `docker inspect`), which cannot read the
+    mode-600 header/body files `send_alert` creates as `deploy`'s own uid. **Docker Desktop for
+    macOS's bind-mount translation silently granted that read anyway, which is exactly why local
+    testing with a plain bind-mounted temp dir missed it** — a real Linux host (the VPS) enforces
+    the permission correctly. Fixed in both `alert-lib.sh` and `pg-backup.sh`'s own copy of
+    `send_alert` by adding `--user "$(id -u):$(id -g)"` to the curl `docker run` (runs the
+    container as the exact uid/gid that owns the files — no permission loosened, no `/etc/passwd`
+    entry needed inside the container). `amazon/aws-cli:2.27.49` was checked too and needs no
+    change: it defaults to **root** (confirmed via `docker inspect`), which bypasses Unix
+    permission checks entirely, and its `--env-file` credentials are parsed by the Docker daemon
+    on the host, never read inside the container — so neither of pg-backup.sh's/backup-check.sh's
+    aws-cli invocations were ever exposed to this bug class.
+    `send_alert` now also returns a real pass/fail (checked via `-w '%{http_code}'`, a confirmed
+    2xx only) instead of always succeeding silently; `monitoring_alert_check`'s dedup clock now
+    only advances past a **confirmed delivery**, never a mere attempt — otherwise a broken Resend
+    path would "successfully" go quiet for the full 12h dedup window on every check, exactly as
+    happened here. `send-test-alert.sh` now exits non-zero and prints the failure reason instead
+    of always printing "Sent".
+    **Re-verified** with a Linux-realistic repro: a named Docker volume (not a bind mount —
+    Docker Desktop for Mac only mistranslates *bind-mount* ownership; a named volume's actual
+    storage lives inside the Linux VM and enforces real Unix permissions even from the Mac host)
+    seeded with mode-600 files owned by a stand-in uid reproduced the exact error with the old
+    code and confirmed the fix resolves it; the full disk-alert/send-test-alert regression suite
+    was re-run against the fixed `alert-lib.sh`, including a new case — Resend forced to return
+    500 — confirming a failed send neither advances dedup nor masks as a success, and retries
+    delivery on the very next run instead of going quiet. **Lesson for future local verification
+    of any script that hands mounted files to a sibling container with a non-default user: use a
+    named volume for the test fixture, not a bind-mounted host path, or Docker Desktop for Mac
+    will hide exactly this class of bug.**
 - **Rollback:** scripts/timers only; nothing destructive by construction (every check is
   read-only against the real stack — it only ever reads container/file/bucket state and sends
   email, never writes to `db`, the bucket, or any app container).
