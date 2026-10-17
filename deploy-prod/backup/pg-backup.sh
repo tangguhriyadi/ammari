@@ -296,6 +296,14 @@ prune "backups/weekly/" "${KEEP_WEEKLY}"
 echo "S3 operations complete"
 EOS
 
+# AWS_REQUEST_CHECKSUM_CALCULATION/AWS_RESPONSE_CHECKSUM_VALIDATION=when_required below: this
+# aws-cli version (2.27.49, pinned since this script's introduction) defaults to computing a
+# flexible checksum (CRC32, streamed as an aws-chunked trailer) on every S3 request. Cloudeka
+# (the current S3-compatible provider) doesn't handle that trailer correctly and stalls instead
+# of rejecting it — a 176KB upload took ~23s; an admin-upload PUT elsewhere hit 113s. Forcing
+# when_required (checksum only when an operation actually needs one — none of the ones this
+# script uses do) restores pre-default-change behavior. See docs/deploy-prod.md's
+# troubleshooting section.
 AWS_ENV_FILE="$(mktemp)"
 track_tmp "$AWS_ENV_FILE"
 chmod 600 "$AWS_ENV_FILE"
@@ -309,6 +317,8 @@ DAILY_KEY=${DAILY_KEY}
 WEEKLY_KEY=${WEEKLY_KEY}
 KEEP_DAILY=${KEEP_DAILY}
 KEEP_WEEKLY=${KEEP_WEEKLY}
+AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 ENVEOF
 
 if ! docker run --rm \

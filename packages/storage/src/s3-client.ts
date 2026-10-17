@@ -1,5 +1,21 @@
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { StorageClient } from "./client";
+
+// A 7.6KB admin image upload PUT to Cloudeka (the current S3-compatible provider) was observed
+// taking 113s instead of failing fast (see docs/deploy-prod.md's troubleshooting section) — this
+// SDK version (3.1144.0, pinned since this package's introduction, already far past the ~3.729
+// release where AWS SDK v3 changed its default) calculates a flexible checksum (CRC32) and
+// streams it as an aws-chunked trailer on every request by default; some S3-compatible providers
+// don't handle that trailer correctly and stall instead of rejecting it outright. WHEN_REQUIRED
+// only computes/validates a checksum when the operation actually requires one (PutObject/
+// DeleteObject don't), matching the pre-3.729 default. The timeouts+retries below turn a stall
+// like that into a fast, clear failure (surfaced as the existing Indonesian "Gagal mengunggah ...
+// ke penyimpanan. Coba lagi." error — see image-queries.ts/content-image-queries.ts) instead of
+// hanging for minutes.
+const CONNECTION_TIMEOUT_MS = 5_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_ATTEMPTS = 3;
 
 export interface S3StorageClientConfig {
   endpoint: string;
@@ -30,6 +46,13 @@ export class S3StorageClient implements StorageClient {
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
       },
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
+      maxAttempts: MAX_ATTEMPTS,
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: CONNECTION_TIMEOUT_MS,
+        requestTimeout: REQUEST_TIMEOUT_MS,
+      }),
     });
     this.bucket = config.bucket;
     this.publicBaseUrl = config.publicBaseUrl.replace(/\/+$/, "");

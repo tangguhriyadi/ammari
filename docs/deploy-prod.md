@@ -512,6 +512,24 @@ their own host being down).
   `environment: production` key only picks up that environment's secrets on an exact match. Also
   confirm the environment's deployment-branch rule allows `main` (it's the actual protection
   here, since required-reviewer rules aren't offered on a private repo).
+- **An S3 upload (admin image upload, nightly backup, restore drill) takes 20s-2min instead of
+  failing or finishing quickly.** Confirmed against Cloudeka: a 7.6KB admin image upload PUT took
+  113s, a 176KB backup upload took ~23s — not a network issue (IPv4 connects in ~5ms, TLS in
+  ~30ms from both VPSes; the host has no AAAA record, so IPv6 isn't involved either). Cause: the
+  AWS SDK for JS v3 (`@aws-sdk/client-s3`, pinned `3.1144.0`) and aws-cli v2 (pinned `2.27.49`)
+  at these versions both default to computing/validating a flexible checksum (CRC32, streamed as
+  an `aws-chunked` trailer) on every S3 request — Cloudeka doesn't handle that trailer correctly
+  and stalls instead of rejecting it outright, until the client's own timeout (previously: none,
+  for the JS SDK — a request could hang indefinitely) finally gives up. Fixed by forcing
+  `WHEN_REQUIRED` checksum calculation/validation (`packages/storage/src/s3-client.ts` for the
+  admin app's uploads; `AWS_REQUEST_CHECKSUM_CALCULATION`/`AWS_RESPONSE_CHECKSUM_VALIDATION=
+  when_required` in the env file passed to the throwaway aws-cli container for
+  `backup/pg-backup.sh`, `monitoring/backup-check.sh`, and `restore-drill-local.sh`) plus a 5s
+  connect / 30s request timeout and `maxAttempts: 3` on the JS SDK client, so a provider-side
+  stall now fails fast with the existing Indonesian "Gagal mengunggah ... Coba lagi." error
+  instead of hanging. If uploads are STILL slow after this, check the `[upload-timing]` log line
+  each admin upload now prints (`sharp=`/`s3=` ms, input/output bytes) to see which stage is
+  actually slow before assuming it's the same checksum issue again.
 
 ---
 

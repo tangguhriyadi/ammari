@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 
 const sendMock = vi.fn().mockResolvedValue({});
 const s3ClientConstructorArgs: unknown[] = [];
+const nodeHttpHandlerConstructorArgs: unknown[] = [];
 
 vi.mock("@aws-sdk/client-s3", () => {
   class FakeS3Client {
@@ -18,6 +19,18 @@ vi.mock("@aws-sdk/client-s3", () => {
     PutObjectCommand: FakeCommand,
     DeleteObjectCommand: FakeCommand,
   };
+});
+
+// A real NodeHttpHandler instance is a fine value to pass through untouched (S3StorageClient
+// never calls into it directly, just hands it to the FakeS3Client above) — only the CONSTRUCTOR
+// args matter here, which is what this records.
+vi.mock("@smithy/node-http-handler", () => {
+  class FakeNodeHttpHandler {
+    constructor(args: unknown) {
+      nodeHttpHandlerConstructorArgs.push(args);
+    }
+  }
+  return { NodeHttpHandler: FakeNodeHttpHandler };
 });
 
 const { S3StorageClient } = await import("../src/s3-client");
@@ -38,6 +51,34 @@ describe("S3StorageClient", () => {
     new S3StorageClient(baseConfig());
     const lastArgs = s3ClientConstructorArgs.at(-1) as { forcePathStyle: boolean };
     expect(lastArgs.forcePathStyle).toBe(true);
+  });
+
+  // Regression coverage for the Cloudeka stall (a 7.6KB PUT took 113s instead of failing) — the
+  // AWS SDK's flexible-checksum default (a CRC32 trailer some S3-compatible providers mishandle)
+  // plus no request-level timeout combined to hang instead of erroring. See this file's own doc
+  // comment in s3-client.ts for the full story.
+  test("requests WHEN_REQUIRED checksum calculation/validation, not the SDK's WHEN_SUPPORTED default", () => {
+    new S3StorageClient(baseConfig());
+    const lastArgs = s3ClientConstructorArgs.at(-1) as {
+      requestChecksumCalculation: string;
+      responseChecksumValidation: string;
+    };
+    expect(lastArgs.requestChecksumCalculation).toBe("WHEN_REQUIRED");
+    expect(lastArgs.responseChecksumValidation).toBe("WHEN_REQUIRED");
+  });
+
+  test("caps retries at 3 attempts", () => {
+    new S3StorageClient(baseConfig());
+    const lastArgs = s3ClientConstructorArgs.at(-1) as { maxAttempts: number };
+    expect(lastArgs.maxAttempts).toBe(3);
+  });
+
+  test("uses a NodeHttpHandler with a short connect timeout and a bounded request timeout, so a stalled request fails fast instead of hanging", () => {
+    new S3StorageClient(baseConfig());
+    expect(s3ClientConstructorArgs.at(-1)).toMatchObject({ requestHandler: expect.anything() });
+    const lastHandlerArgs = nodeHttpHandlerConstructorArgs.at(-1) as { connectionTimeout: number; requestTimeout: number };
+    expect(lastHandlerArgs.connectionTimeout).toBe(5_000);
+    expect(lastHandlerArgs.requestTimeout).toBe(30_000);
   });
 
   test("publicUrl joins the base URL and key with exactly one slash", () => {

@@ -90,12 +90,17 @@ BUCKET_TS=""
 if [ -n "${S3_BUCKET:-}" ]; then
   AWS_ENV_FILE="$(mktemp)"
   chmod 600 "$AWS_ENV_FILE"
+  # when_required (not the aws-cli default): see pg-backup.sh's own comment above its matching
+  # AWS_ENV_FILE block — this aws-cli version's flexible-checksum default stalls against
+  # Cloudeka instead of failing fast.
   cat > "$AWS_ENV_FILE" <<ENVEOF
 AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
 AWS_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
 AWS_DEFAULT_REGION=${S3_REGION:-}
 S3_BUCKET=${S3_BUCKET:-}
 S3_ENDPOINT=${S3_ENDPOINT:-}
+AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 ENVEOF
 
   LIST_SCRIPT="$(mktemp)"

@@ -130,11 +130,16 @@ track_tmp "$WORKDIR"
 
 # Single 0600 env file for every throwaway aws-cli container below — never passed via `-e` on
 # argv (which would show up in `docker inspect`/`ps`), same pattern pg-backup.sh itself uses.
+# AWS_REQUEST_CHECKSUM_CALCULATION/AWS_RESPONSE_CHECKSUM_VALIDATION=when_required: see
+# pg-backup.sh's own comment above its matching AWS_ENV_FILE block — this aws-cli version's
+# flexible-checksum default stalls against Cloudeka instead of failing fast.
 AWS_ENV_FILE="$WORKDIR/aws.env"
 cat >"$AWS_ENV_FILE" <<ENVEOF
 AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
 AWS_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
 AWS_DEFAULT_REGION=${S3_REGION}
+AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 ENVEOF
 chmod 600 "$AWS_ENV_FILE"
 
