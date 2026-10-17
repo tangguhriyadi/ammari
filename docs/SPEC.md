@@ -62,10 +62,14 @@ pnpm workspaces + Turborepo:
 
 - Branch-based deploys via GitHub Actions:
   - `dev` branch → auto-deploys to the dev environment (`ammari.my.id`, `admin.ammari.my.id`,
-    Sumopod dev database).
-  - `main` branch → auto-deploys to prod (`ammari.id`, `admin.ammari.id`, prod database).
+    Sumopod dev database) on every push.
+  - `main` branch → does **not** auto-deploy. Prod (`ammari.id`, `admin.ammari.id`, prod
+    database) only ever deploys via a human manually running the "Deploy (prod)"
+    `workflow_dispatch` workflow against `main` — there is no `push` trigger for it at all. A
+    rollback is the same workflow dispatched with an older `sha` and `skip_migrate` ticked. Full
+    procedure: `docs/deploy-prod.md` §1–2.
   - All work happens on `dev` (small features may use short-lived branches merged into `dev`).
-    A release is a merge from `dev` into `main`.
+    A release is a merge from `dev` into `main`, fast-forwarded (never a merge commit).
   - `main` is protected on GitHub: no direct pushes.
 - Two separate Docker images, one per app, built in GitHub Actions and pushed to GHCR.
 - Runtime: a VPS running Docker Compose + Caddy.
@@ -81,9 +85,14 @@ pnpm workspaces + Turborepo:
   self-hosted in a container.
 - **Prod:** a self-hosted `pgvector/pgvector:pg16` container on the prod VPS itself (separate
   from dev's managed instance above), not exposed publicly — reachable only from other
-  containers on the same VPS's internal Docker network. Nightly encrypted `pg_dump` to a
-  dedicated, private object storage bucket, with a documented restore drill. Dev and prod
-  databases are always separate. See `docs/plans/prod-deploy.md` for the full design.
+  containers on the same VPS's internal Docker network. Nightly encrypted `pg_dump` (AES-256,
+  encrypted client-side before it ever leaves the VPS) to the private `backups/` prefix of the
+  **same** prod object storage bucket used for product/content images — not a separate dedicated
+  backup bucket; it reuses the app's own S3 access key (a deliberate, accepted scope-down for
+  this early launch, not an oversight — a dedicated backup bucket with its own key is listed as
+  a later improvement once revenue justifies it, see `docs/plans/prod-deploy.md` §9). Documented
+  restore drill. Dev and prod databases are always separate. Full operational runbook:
+  `docs/deploy-prod.md`; design: `docs/plans/prod-deploy.md`.
 - **Local:** Postgres 16 + pgvector via the root `docker-compose.yml`, for local development and
   automated tests only. A laptop never connects to the Sumopod dev database directly — local
   work always talks to the local container.

@@ -115,9 +115,13 @@ npm dist-tag, because their actual runtime/peer support lags behind:
 
 ## Git
 
-- Branch model: `dev` auto-deploys to the dev environment; `main` auto-deploys to prod. All work
-  happens on `dev` (small features may use short-lived branches merged into `dev`). A release is
-  a merge from `dev` into `main`. `main` is protected on GitHub — no direct pushes.
+- Branch model: `dev` auto-deploys to the dev environment on every push. `main` does **not**
+  auto-deploy — prod only ever deploys via a human manually running the "Deploy (prod)"
+  `workflow_dispatch` workflow against `main`, after `main` is fast-forwarded from `dev`.
+  Rollback is the same workflow with an older `sha` and `skip_migrate` ticked. See
+  `docs/deploy-prod.md` §1–2. All work happens on `dev` (small features may use short-lived
+  branches merged into `dev`). A release is a merge from `dev` into `main`. `main` is protected
+  on GitHub — no direct pushes.
 - The human commits and pushes. The agent never commits, pushes, merges, or creates branches
   unless explicitly asked to do so in that prompt.
 - The agent works directly in the main working tree, on whatever branch is currently checked
