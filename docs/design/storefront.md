@@ -40,7 +40,7 @@ Footer (on `--color-brand`): text `#FFFFFF`, dividers `#857676`, chip borders `#
 ### Typography
 | Role | Font | Size / weight | Notes |
 |---|---|---|---|
-| Wordmark "AMMARI" | Alta (NOT licensed yet — see §9) | 22 px header, 26 px footer | letter-spacing 0.34em, colour `--color-brand` (white in footer) |
+| Wordmark "AMMARI" | Alta (NOT licensed yet — see §9) | 22 px header, 26 px footer | letter-spacing 0.34em, colour `--color-brand` (white in footer); brand logo mark to its left, see §9 |
 | Display / headings | Cormorant Garamond | H1 hero 40 px / 300, line-height 1.05; page H1 30 px / 400; section H2 24–28 px / 400 | Load weights 300/400/500/600/700 only |
 | UI + body | Jost | body 13–15 px / 400; emphasis 500 | Load 300/400/500 |
 | Eyebrow / labels | Jost | 11 px / 500, letter-spacing 0.24em, uppercase | e.g. "KOLEKSI PERDANA", "KEUNGGULAN" |
@@ -65,10 +65,10 @@ leaves it stuck filled; touch gets its own brief fill on `:active` instead.
 ## 4. Global layout
 
 ### Header (56 px, white, bottom hairline)
-Mobile: menu button (left) · wordmark centred · search + cart (right, cart shows count). Desktop (≥ 1024 px): wordmark left, nav links centre, search/account/cart right. Sticky on scroll.
+Mobile: menu button (left) · wordmark (logo mark + "AMMARI") centred · search + cart (right, cart shows count). Desktop (≥ 1024 px): wordmark left, nav links centre, search/account/cart right. Sticky on scroll. The wordmark's logo mark renders `tone="primary"` here (brand-coloured mark on white), ~24 px.
 
 ### Footer (`--color-brand` background, white text)
-Wordmark + tagline "Graceful in every thread"; help links (Cara pemesanan, Pengiriman, Pengembalian & penukaran, Panduan ukuran, Syarat & ketentuan → `/terms-of-service`, Kebijakan privasi → `/privacy-policy`); contact (WhatsApp — shown as the formatted number, e.g. "+62 888 0854 1442", linking to wa.me — email, business address — from store settings, CMS session 8; until then hide the block); payment-method chips (QRIS, Virtual Account, GoPay, ShopeePay, Kartu kredit) without naming the gateway; "© 2026 Ammari".
+Wordmark (logo mark + "AMMARI", `tone="white"`, ~28 px) + tagline "Graceful in every thread"; help links (Cara pemesanan, Pengiriman, Pengembalian & penukaran, Panduan ukuran, Syarat & ketentuan → `/terms-of-service`, Kebijakan privasi → `/privacy-policy`); contact (WhatsApp — shown as the formatted number, e.g. "+62 888 0854 1442", linking to wa.me — email, business address — from store settings, CMS session 8; until then hide the block); payment-method chips (QRIS, Virtual Account, GoPay, ShopeePay, Kartu kredit) without naming the gateway; "© 2026 Ammari".
 
 ## 5. Homepage `/` (all content from the published CMS sections; a hidden or empty section is not rendered)
 
@@ -111,6 +111,16 @@ Checkout (single page, numbered sections 1 Kontak · 2 Alamat pengiriman · 3 Pe
 - Text contrast ≥ 4.5:1 (≥ 3:1 for ≥ 24 px).
 - Must work and be checked at 390 px and 1280 px (Playwright screenshots), Chromium + WebKit; real iPhone Safari check by the owner.
 
-## 9. Wordmark (temporary)
+## 9. Wordmark (temporary) + logo mark
 
 The Alta font is not licensed yet. Until the owner buys a licence: render "AMMARI" as text in Cormorant Garamond 700, letter-spacing 0.34em, colour `--color-brand`, inside a component (`<Wordmark />`) so it can later be swapped for an SVG logo without touching pages. Do NOT add any Alta font file to the repo.
+
+The real Ammari logo mark (not a placeholder) renders immediately to the left of the text, vertically centred, 8 px gap (`gap-2`) — `<Wordmark />` takes a `tone` prop (`"primary" | "white"`) selecting which generated PNG to show, defaulting to match `size` the same way the text colour already does: `size="header"` → `tone="primary"` (`/logos/ammari-primary.png`, displayed 24 px tall), `size="footer"` → `tone="white"` (`/logos/ammari-white.png`, displayed 28 px tall). Both are `next/image` with explicit intrinsic `width`/`height` (94×112, the generated files' own real pixel size — not a 1:1 square) and a `style={{ height, width: "auto" }}` override for the displayed size, so there's no layout shift and no distortion; `alt=""` since the logo is decorative next to the text, the surrounding `<Link>` already carries the accessible name ("Ammari — beranda").
+
+The two served files are GENERATED, not copied verbatim, by `packages/ui/assets/copy-brand-logos.mjs` (`node packages/ui/assets/copy-brand-logos.mjs` from the repo root — re-run after replacing the source art):
+- Source: `packages/ui/assets/logo-ammari-primary.png` only (1254×1254, true alpha cutout). `logo-ammari-white.png` in that same directory is kept only as a reference source file — it is NEVER used to produce a served file (see below).
+- The script trims the source's transparent padding, resizes to 112 px tall (4x the largest displayed size, 28 px, for crisp 2x/3x-DPI phone screens), and writes an optimized PNG — `ammari-primary.png`, currently ~94×112 px, ~4.7 KB.
+- `ammari-white.png` is DERIVED from the trimmed/resized primary's own alpha channel (every opaque pixel repainted pure `#FFFFFF`, alpha untouched) rather than from the source `logo-ammari-white.png` file, which is not a clean cutout — every pixel across its canvas carries a translucent white alpha wash (roughly 20–25%) instead of true `alpha=0` outside the mark, which showed as a faint whitish box behind the mark against the footer's `--color-brand` background before this fix. Currently ~94×112 px, ~3.2 KB. This recolour technique is only valid because the primary mark is a single flat colour (verified by sampling: every fully-opaque pixel falls within R 90–106/G 73–88/B 72–86, consistent with anti-aliasing noise around one colour) — re-verify that by hand before reusing the technique if the source art ever becomes multi-colour.
+- Both generated files are written to both apps' `public/logos/` (not committed from a manual edit) — never hand-edit them, always regenerate via the script.
+
+Checked at 390 px: menu button, logo+wordmark, and account icon keep a comfortable ~50 px gap on each side at the current sizes — no collision, no mobile-only size reduction needed. Checked at 1280 px: the footer's white mark has no whitish-box artifact.
