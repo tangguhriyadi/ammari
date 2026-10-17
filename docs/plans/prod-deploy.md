@@ -240,22 +240,43 @@ hand per §4.
   `CLAUDE.md`'s migration backward-compatibility rule matters here too).
 
 ### Session 4 — `deploy-prod.yml` GitHub Actions workflow
-- **Scope:** mirror `.github/workflows/deploy-dev.yml`'s `plan`/`build`/`retag`/`deploy`
-  structure, parameterized for the `production` environment + `prod-latest` tag — but **trigger
-  on `workflow_dispatch` only**, no `push` trigger of any kind. Inputs: `sha` (optional — empty
-  means "build and deploy whatever `main` currently points at," identical semantics to dev's own
-  empty-input case, since `github.sha` already resolves to the dispatched ref's HEAD; a non-empty
-  value is a rollback to that exact SHA, same as dev). Running this workflow always means
-  explicitly selecting `main` as the ref to dispatch against in the Actions UI — there's no
-  branch picker ambiguity to get wrong since no other trigger exists. The `deploy` job keeps
-  `environment: production` for its **secrets** (and so the environment's deployment branch
-  rule, set up in §4 step 11, actually applies to it) — not for a reviewer gate, which GitHub
-  doesn't offer on a private repo (§8 item 3).
+- **Scope:** `plan`/`build`/`retag`/`deploy` jobs, triggered on **`workflow_dispatch` only** — no
+  `push` trigger of any kind. Inputs: `sha` (optional — empty means "deploy whatever `main`
+  currently points at," since `github.sha` already resolves to the dispatched ref's HEAD) and
+  `skip_migrate` (boolean, default `false` — **ROLLBACK ONLY**, skips the migrator; never set on
+  a normal forward deploy). `plan` guards before anything else runs: (a) the run must be
+  dispatched with `main` selected as the branch, failing otherwise — the workflow file is
+  reachable from `dev` too (it has to be, to get merged there first), so this is an explicit
+  check, not something implied by "no push trigger exists"; (b) `sha` must match the same strict
+  hex-digest regex `deploy-dev.yml`'s own "Resolve target SHA" step uses, carried over unchanged;
+  (c) the resolved sha must additionally be an ancestor of (or equal to) `origin/main`
+  (`git merge-base --is-ancestor`, after fetching both `main` and `dev` so the check has a real
+  answer either way) — a commit that only ever lived on `dev` can never be deployed to prod, even
+  by hash. Unlike `deploy-dev.yml`, `plan` does **not** decide what to build from a git diff —
+  since `main` only ever fast-forwards from `dev`, images for the target sha normally already
+  exist in GHCR from dev's own pipeline; `plan` checks GHCR directly (`docker manifest inspect`)
+  for each of admin/web/migrator and only ever hands `build` the ones actually missing. `retag`
+  then always points `:prod-latest` at `:<sha>` for **all three** images (whether just-built or
+  already-existing) via `docker buildx imagetools create` (manifest-only copy, no layer
+  pull/push). `deploy` keeps `environment: production` for its secrets (so the environment's
+  deployment branch rule, §4 step 11, actually applies) and checks out **current `main` HEAD**
+  (not the target sha) for the `deploy-prod/` scaffolding it rsyncs — a rollback redeploys an
+  older app sha through the current deploy tooling, the same split dev's own rollback already
+  relies on. The rsync excludes carry over dev's three (`env/`, `caddy/certs/`,
+  `cloudflare/origin-pull-ca.pem`) plus prod-only additions: `backup/` (Session 5, once it lands)
+  and every piece of `remote-deploy.sh`'s own on-disk state (`active-slot-*`, `deployed-sha-*`,
+  `deploy-history.log`, `.env`, and the generated `caddy/active-upstream.caddy` — the checked-in
+  copy in this repo is a committed default/explainer, not the live state, so a sync must never
+  overwrite it with that default). The `deploy` job writes a job summary: the deployed sha, which
+  images were built vs. reused from GHCR, each app's active slot after the run, and whether
+  migrations ran.
 - **Files:** `.github/workflows/deploy-prod.yml`.
-- **Verification:** `act`/dry inspection of the YAML (no real GHCR push in this session — no
-  secrets exist yet); confirm the SHA-regex injection guard from dev's workflow is carried over
-  unchanged (same security-reviewer finding applies here); confirm there is no `on: push:` key
-  anywhere in the file.
+- **Verification:** `actionlint` (which runs `shellcheck` against every `run:` block) clean; a
+  separate manual `shellcheck` pass against each extracted inline script, also clean; confirmed
+  there is no `on: push:` key anywhere in the file; confirmed the SHA-regex injection guard
+  matches `deploy-dev.yml`'s unchanged; walked the guard logic by hand against four cases (`main`
+  HEAD, an older `main` sha, a `dev`-only sha, a malformed sha). No real workflow run was
+  triggered and no server was touched.
 - **Rollback:** delete the workflow file; nothing has deployed yet at this point.
 
 ### Session 5 — Backup + restore drill
@@ -546,8 +567,12 @@ files (step 10), GitHub environment (step 11), and everything from step 12 onwar
     `git push origin main` above will be rejected; in that case use
     `gh pr create --base main --head dev` and merge it with **"Rebase and merge"** (not a merge
     commit) to keep the same linear fast-forward-equivalent history, then proceed.
-14. **First deploy.** **Actions → Deploy (prod) → Run workflow**, branch/ref `main`, leave `sha`
-    empty (deploys `main`'s current HEAD). Watch the run.
+14. **First deploy.** **Actions → Deploy (prod) → Run workflow** → branch dropdown ("Use workflow
+    from") set to **`main`** (the workflow refuses to run against anything else — Session 4's
+    guard) → leave **`sha`** empty (deploys `main`'s current HEAD) → leave **`skip_migrate`**
+    unchecked (that input is rollback-only — see the Rollback plan, §7) → **Run workflow**. Watch
+    the run; its job summary reports the deployed sha, which images were built vs. reused from
+    GHCR, each app's active slot after the run, and whether migrations ran.
 15. **Bootstrap the first `super_admin`.** **[dev-style]**, against the prod migrator image —
     same `docker run --rm --env-file /opt/ammari-prod/env/admin.env ... tsx src/seed.ts` command
     as `docs/deploy.md` §7, with `SEED_SUPER_ADMIN_EMAIL`/`SEED_SUPER_ADMIN_NAME` set to you.

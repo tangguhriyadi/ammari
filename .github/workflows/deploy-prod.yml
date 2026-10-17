@@ -1,0 +1,339 @@
+# Deploys to the PROD VPS (docs/plans/prod-deploy.md Session 4, docs/deploy-prod.md once Session 7
+# lands). `workflow_dispatch` ONLY — there is deliberately no `push` trigger of any kind. Prod's
+# deploy-protection story isn't a required-reviewer gate (GitHub doesn't offer that on a private
+# repo — docs/plans/prod-deploy.md §8 item 3); instead "no automatic trigger exists at all" is the
+# substitute: a human must explicitly open the Actions tab and click "Run workflow" against `main`.
+#
+# Unlike deploy-dev.yml, this workflow does NOT decide what to build from a git diff. `main` only
+# ever fast-forwards from `dev` (CLAUDE.md's branch model), so by the time anyone dispatches this
+# workflow, admin/web/migrator images for the target sha normally already exist in GHCR — dev's own
+# pipeline (deploy-dev.yml) already built and pushed them under that exact sha when the commit was
+# on `dev`. The `plan` job below checks GHCR directly (not the git history) for each of the three
+# images at the target sha; `build` only ever rebuilds the ones actually missing (e.g. dev's own
+# path-prefix "affected images" skip logic chose not to build one, or GHCR's retention policy ever
+# evicted it) — "never rebuild an image that already exists" per docs/plans/prod-deploy.md Session 4.
+# `retag` then always points `:prod-latest` at `:<sha>` for all three images, whether they were just
+# built or already existed, via `docker buildx imagetools create` (copies the manifest only, no
+# pulling/pushing layers — same mechanism deploy-dev.yml's own `retag` job already uses).
+#
+# Guards before anything else runs (`plan` job):
+#   1. This run must be dispatched with `main` selected as the branch — refused otherwise. The
+#      workflow file is reachable from `dev` too (it has to be, to even get merged there first), so
+#      without this check someone could dispatch it against `dev` and it would "work" by accident;
+#      that would defeat the whole "prod only ever deploys what's on main" guarantee.
+#   2. The `sha` input (optional — empty means "whatever `main` currently points at", i.e.
+#      `github.sha`, which for a workflow_dispatch run already resolves to the dispatched ref's
+#      HEAD) must match the SAME strict hex-digest regex deploy-dev.yml's "Resolve target SHA" step
+#      uses, carried over unchanged — this value is later embedded directly into an SSH command
+#      line (the `deploy` job's "Run remote-deploy.sh" step) and a Docker image tag, so a free-form
+#      string here is a command-injection sink, not just a cosmetic format check.
+#   3. The resolved sha must additionally be an ancestor of (or equal to) `origin/main` — a commit
+#      that only ever existed on `dev` (never fast-forwarded into `main`) must never be deployable
+#      to prod, even by someone who can guess/paste its hash. Checked with
+#      `git merge-base --is-ancestor`, after fetching both `main` and `dev` so the check has a real
+#      answer either way (object truly unknown vs. known-but-not-an-ancestor) rather than failing
+#      only by accident because the object was never fetched.
+#
+# `runs-on: ubuntu-24.04` and every action version below pinned to the same node24-runtime versions
+# deploy-dev.yml already uses and documents (`actions/checkout@v7`, `docker/setup-buildx-action@v4`,
+# `docker/login-action@v4`, `docker/build-push-action@v7`) — see that file's header comment for why.
+name: Deploy (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to deploy. Leave empty to deploy current main HEAD."
+        required: false
+        type: string
+      skip_migrate:
+        description: "Skip running the migrator. ROLLBACK ONLY — never set this on a normal forward deploy."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      missing: ${{ steps.images.outputs.missing }}
+      reused: ${{ steps.images.outputs.reused }}
+    steps:
+      - name: Require this run was dispatched against main
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::deploy-prod.yml must be dispatched with 'main' selected as the branch (Actions tab -> Run workflow -> Use workflow from). Got ref: ${{ github.ref }}. Prod only ever deploys main; dispatching against any other branch (e.g. dev) is refused." >&2
+            exit 1
+          fi
+          echo "==> dispatched from refs/heads/main, continuing"
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Same injection-guard reasoning as deploy-dev.yml's "Resolve target SHA" step: ${{ inputs.sha
+      # }} is routed through `env:` first so it's a shell *value* here, never script text, and the
+      # regex is what makes it inert downstream too, at the SSH command line this sha later gets
+      # embedded into (deploy job).
+      - name: Resolve and validate target sha
+        id: resolve
+        env:
+          RAW_SHA: ${{ inputs.sha }}
+        run: |
+          if [ -n "$RAW_SHA" ]; then
+            if ! [[ "$RAW_SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
+              echo "::error::sha input must be a hex commit SHA (7-40 lowercase hex chars), got: $RAW_SHA"
+              exit 1
+            fi
+            echo "sha=$RAW_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch main and dev history for the ancestor check below
+        run: git fetch origin main dev --quiet
+
+      # A commit that only ever lived on dev (never fast-forwarded into main) must never be
+      # deployable to prod. Fetching both branches above (not just main) means an unknown/dev-only
+      # sha fails this check for the real semantic reason ("not an ancestor of origin/main"), not
+      # merely because the object was never fetched.
+      - name: Verify sha is reachable and is an ancestor of (or equal to) origin/main
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${SHA}^{commit}" 2>/dev/null; then
+            echo "::error::sha $SHA does not exist in this repository (checked main and dev history)" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::sha $SHA is not an ancestor of (or equal to) origin/main — it may only exist on dev. A commit that was never promoted to main can never be deployed to prod." >&2
+            exit 1
+          fi
+          echo "==> sha $SHA confirmed reachable and an ancestor of origin/main"
+
+      - name: Log in to GHCR (to inspect existing manifests)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Checks GHCR directly, not the git diff — main only ever fast-forwards from dev, so these
+      # images normally already exist from dev's own pipeline. "missing" is the only thing `build`
+      # (below) ever rebuilds; "reused" is reported in the deploy job's summary.
+      - name: Check which images already exist in GHCR at this sha
+        id: images
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          missing="[]"
+          reused="[]"
+          for image in admin web migrator; do
+            ref="ghcr.io/tangguhriyadi/ammari-$image:$SHA"
+            if DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect "$ref" >/dev/null 2>&1; then
+              echo "==> $ref already exists — reusing, will not rebuild"
+              reused=$(echo "$reused" | jq -c --arg img "$image" '. + [$img]')
+            else
+              echo "==> $ref missing — will build"
+              missing=$(echo "$missing" | jq -c --arg img "$image" '. + [$img]')
+            fi
+          done
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+          echo "reused=$reused" >> "$GITHUB_OUTPUT"
+          echo "Missing images: $missing"
+          echo "Reused images: $reused"
+
+  # Only ever runs for images `plan` found missing from GHCR. Same build steps as deploy-dev.yml's
+  # own `build` job (same Dockerfile resolution, same linux/amd64-only platform, same push
+  # mechanics) — just matrixed over `missing` instead of a git-diff-derived "affected" list, and
+  # tagged only with this commit's sha (`retag` below adds `:prod-latest` afterward, uniformly, for
+  # every image regardless of whether it was built here or already existed).
+  build:
+    needs: plan
+    if: needs.plan.outputs.missing != '[]'
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.plan.outputs.missing) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Dockerfile path
+        id: dockerfile
+        run: |
+          case "${{ matrix.image }}" in
+            admin) echo "path=apps/admin/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+            web) echo "path=apps/web/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+            migrator) echo "path=packages/db/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # VPS architecture is x86_64 (same confirmed fact deploy-dev.yml already documents) —
+      # linux/amd64 only, no QEMU/cross-build needed.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ steps.dockerfile.outputs.path }}
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/tangguhriyadi/ammari-${{ matrix.image }}:${{ needs.plan.outputs.sha }}
+
+  # Always points :prod-latest at :<sha> for all three images — whether an image was just built
+  # above or already existed in GHCR from dev's pipeline. `docker buildx imagetools create` only
+  # copies the manifest (no pulling/pushing layers), same mechanism deploy-dev.yml's own `retag`
+  # job already uses for the opposite direction (sha <- dev-latest instead of prod-latest <- sha).
+  retag:
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag prod-latest for all three images at this sha
+        env:
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          set -euo pipefail
+          REGISTRY="ghcr.io/tangguhriyadi"
+          for image in admin web migrator; do
+            docker buildx imagetools create \
+              -t "$REGISTRY/ammari-$image:prod-latest" \
+              "$REGISTRY/ammari-$image:$SHA"
+          done
+
+  deploy:
+    needs: [plan, build, retag]
+    if: always() && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.retag.result == 'success'
+    runs-on: ubuntu-24.04
+    # DEPLOY_SSH_* are GitHub Environment secrets on the "production" environment (not repository
+    # secrets) — scoped to main via that environment's deployment-branch rule
+    # (docs/plans/prod-deploy.md §4 step 11), which is the actual protection here since
+    # required-reviewer rules aren't offered on a private repo (§8 item 3).
+    environment: production
+    steps:
+      # Checked out WITHOUT `ref:` (unlike `build` above) — this intentionally takes deploy-prod/
+      # (docker-compose.yml, Caddyfile, remote-deploy.sh, etc.) from current main HEAD, not from the
+      # possibly-older target `sha`. A rollback redeploys an OLDER app image through the CURRENT
+      # deploy tooling, same as dev's own rollback already does — the app sha and the infra scripts
+      # that deploy it are versioned independently.
+      - uses: actions/checkout@v7
+
+      - name: Set up SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # Never --delete, and explicitly excludes everything that exists ONLY on the server, never in
+      # this repo: env/ (the real admin.env/web.env/db.env — this repo only has the .example
+      # files, which the owner copies by hand per docs/plans/prod-deploy.md §4 step 10, never
+      # through this sync), caddy/certs/ (the real origin cert+key), cloudflare/origin-pull-ca.pem
+      # (the AOP CA root), and backup/ (Session 5's encryption key/env, once it lands). Also
+      # excludes every piece of remote-deploy.sh's own on-disk state so a sync can never clobber it:
+      # active-slot-*/deployed-sha-* (which slot + sha is live per app), deploy-history.log (image
+      # retention), .env (Compose's per-slot image tags), and caddy/active-upstream.caddy (the
+      # generated Caddy snippet reflecting whichever slots are ACTUALLY live right now — the
+      # checked-in copy in this repo is a committed default/explainer, not the live state; letting
+      # a sync overwrite it with that default is exactly the "overwrite a state file" case this
+      # guards against, even though remote-deploy.sh regenerates it on any flip anyway).
+      - name: Sync deploy-prod/ to the server
+        env:
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+        run: |
+          rsync -az \
+            --exclude 'env/' \
+            --exclude 'caddy/certs/' \
+            --exclude 'caddy/active-upstream.caddy' \
+            --exclude 'cloudflare/origin-pull-ca.pem' \
+            --exclude 'backup/' \
+            --exclude '.env' \
+            --exclude 'active-slot-*' \
+            --exclude 'deployed-sha-*' \
+            --exclude 'deploy-history.log' \
+            -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
+            deploy-prod/ "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST:/opt/ammari-prod/"
+
+      # $SHA was already validated against the strict hex regex in the `plan` job above, and
+      # $SKIP_MIGRATE is a `boolean`-typed workflow input (GitHub coerces it to the literal string
+      # "true"/"false", never free-form text) — both are safe to embed directly into this remote
+      # command line, same reasoning deploy-dev.yml's own equivalent step already documents.
+      - name: Run remote-deploy.sh
+        env:
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SKIP_MIGRATE: ${{ inputs.skip_migrate }}
+        run: |
+          extra_arg=""
+          if [ "$SKIP_MIGRATE" = "true" ]; then
+            extra_arg="--skip-migrate"
+          fi
+          ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST" \
+            "/opt/ammari-prod/remote-deploy.sh $SHA $extra_arg"
+
+      - name: Read active slots after deploy
+        id: slots
+        env:
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+        run: |
+          admin_slot="$(ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST" 'cat /opt/ammari-prod/active-slot-admin')"
+          web_slot="$(ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST" 'cat /opt/ammari-prod/active-slot-web')"
+          echo "admin_slot=$admin_slot" >> "$GITHUB_OUTPUT"
+          echo "web_slot=$web_slot" >> "$GITHUB_OUTPUT"
+
+      - name: Write job summary
+        env:
+          SHA: ${{ needs.plan.outputs.sha }}
+          MISSING: ${{ needs.plan.outputs.missing }}
+          REUSED: ${{ needs.plan.outputs.reused }}
+          SKIP_MIGRATE: ${{ inputs.skip_migrate }}
+          ADMIN_SLOT: ${{ steps.slots.outputs.admin_slot }}
+          WEB_SLOT: ${{ steps.slots.outputs.web_slot }}
+        run: |
+          {
+            echo "## Prod deploy summary"
+            echo ""
+            echo "- **SHA:** \`$SHA\`"
+            echo "- **Images built this run:** $MISSING"
+            echo "- **Images reused (already in GHCR):** $REUSED"
+            echo "- **Active slots after deploy:** admin=\`$ADMIN_SLOT\`, web=\`$WEB_SLOT\`"
+            if [ "$SKIP_MIGRATE" = "true" ]; then
+              echo "- **Migrations:** skipped (--skip-migrate, rollback)"
+            else
+              echo "- **Migrations:** ran"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
