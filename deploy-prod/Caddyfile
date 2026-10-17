@@ -40,6 +40,63 @@
 
 import cloudflare/cloudflare-only.caddy
 
+# Security headers for every PUBLIC site block below (never the bare :8080/:8081 internal-only
+# health listeners — HSTS etc. are meaningless over plain internal HTTP and would just be noise
+# there). No Content-Security-Policy yet — deliberately deferred, see docs/deploy-prod.md.
+# `-Server` drops Caddy's own default `Server: Caddy` response header (confirmed present by
+# default via a local `caddy run` + curl — see docs/deploy-prod.md for how this was verified).
+#
+# Each of these is imported TWICE in its site block below: once for the normal response path,
+# and again inside a `handle_errors` block. This is not redundant — confirmed empirically (local
+# `caddy run` against a deliberately-unreachable upstream): a `header` directive alone does NOT
+# reliably survive a reverse_proxy failure (502) — Caddy's built-in error-response path re-adds
+# `Server: Caddy` and drops HSTS/nosniff/Referrer-Policy on that path specifically, even though
+# the SAME `header` directive works fine on every normal/404 response. Without the second import
+# inside `handle_errors`, an upstream outage would silently serve the one response an attacker is
+# most likely to see without these protections.
+(web_security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# SAMEORIGIN, not DENY: nothing in this codebase frames web in an iframe today (admin's
+		# own draft-preview flow opens /preview/home in a new tab, not an iframe — see
+		# apps/admin/src/app/(shell)/content/_components/homepage-overview.tsx), but SAMEORIGIN
+		# still allows web to frame ITS OWN pages later without another Caddyfile change, which
+		# DENY would block.
+		X-Frame-Options "SAMEORIGIN"
+		# geolocation stays fully off — no map-pin/checkout geolocation feature exists in code or
+		# docs/plans/*.md yet; flip to `geolocation=(self)` here (and only here) if that ships.
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		-Server
+	}
+}
+
+(admin_security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# DENY — admin is never framed, by itself or anyone else; no iframe exists anywhere in
+		# this codebase (confirmed by search), so there's no same-origin framing use case to
+		# preserve here the way web's own pages might frame each other later.
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		-Server
+	}
+}
+
+# www.ammari.id only ever redirects — no reverse_proxy, so no frame/permissions policy need —
+# but keep the same common headers + -Server for consistency.
+(www_security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
 # Session 3's generated snippet — defines (active_upstream_web) and (active_upstream_admin),
 # each a `reverse_proxy` to whichever slot is currently active. The file checked into this repo
 # is a sensible DEFAULT pointing at the blue slots (see deploy-prod/caddy/active-upstream.caddy's
@@ -77,6 +134,11 @@ ammari.id {
 			}
 		}
 	}
+	import web_security_headers
+	handle_errors {
+		import web_security_headers
+		respond "{http.error.status_code}"
+	}
 	# /api/revalidate is called ONLY over the INTERNAL Docker network (apps/admin ->
 	# http://web:3000, bypassing Caddy entirely — see deploy-prod/docker-compose.yml) and never
 	# needs the public domain. Blocked here too, defense in depth: Authenticated Origin Pulls
@@ -113,6 +175,11 @@ www.ammari.id {
 			}
 		}
 	}
+	import www_security_headers
+	handle_errors {
+		import www_security_headers
+		respond "{http.error.status_code}"
+	}
 	redir https://ammari.id{uri} 301
 }
 
@@ -125,6 +192,11 @@ admin.ammari.id {
 				pem_file /etc/caddy/cloudflare/origin-pull-ca.pem
 			}
 		}
+	}
+	import admin_security_headers
+	handle_errors {
+		import admin_security_headers
+		respond "{http.error.status_code}"
 	}
 	# Same reasoning as web's own /api/test/* block above — apps/admin's e2e sign-in backdoor
 	# (/api/test/login) must never be reachable from the public internet regardless of what its

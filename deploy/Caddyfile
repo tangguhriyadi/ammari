@@ -27,6 +27,43 @@
 
 import cloudflare/cloudflare-only.caddy
 
+# Security headers for every PUBLIC site block below. No Content-Security-Policy yet —
+# deliberately deferred, see docs/deploy-prod.md (prod's own copy of this snippet, which dev's
+# Caddyfile should keep matching). `-Server` drops Caddy's own default `Server: Caddy` response
+# header. Each of these is imported TWICE in its site block below: once for the normal response
+# path, and again inside a `handle_errors` block — confirmed empirically (local `caddy run`
+# against a deliberately-unreachable upstream) that a `header` directive alone does NOT reliably
+# survive a reverse_proxy failure (502): Caddy's built-in error-response path re-adds
+# `Server: Caddy` and drops the rest on that path specifically. See deploy-prod/Caddyfile's own
+# copy of this comment for the full explanation.
+(web_security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# SAMEORIGIN + geolocation disabled — same reasoning as deploy-prod/Caddyfile's own copy
+		# of this block (no iframe embedding anywhere in this codebase, no geolocation/map-pin
+		# feature in code or docs/plans/*.md yet).
+		X-Frame-Options "SAMEORIGIN"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+}
+
+(admin_security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# DENY — admin is never framed anywhere in this codebase (confirmed by search).
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+}
+
 ammari.my.id, www.ammari.my.id {
 	import cloudflare_only
 	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key {
@@ -37,7 +74,11 @@ ammari.my.id, www.ammari.my.id {
 			}
 		}
 	}
-	header X-Robots-Tag "noindex, nofollow"
+	import web_security_headers
+	handle_errors {
+		import web_security_headers
+		respond "{http.error.status_code}"
+	}
 	# /api/revalidate is called ONLY over the INTERNAL Docker network (apps/admin ->
 	# http://web:3000, bypassing Caddy entirely — see deploy/docker-compose.yml) and never needs
 	# the public domain. Blocked here too, defense in depth: Authenticated Origin Pulls above
@@ -70,7 +111,11 @@ admin.ammari.my.id {
 			}
 		}
 	}
-	header X-Robots-Tag "noindex, nofollow"
+	import admin_security_headers
+	handle_errors {
+		import admin_security_headers
+		respond "{http.error.status_code}"
+	}
 	# Same reasoning as web's own /api/test/* block above — apps/admin's e2e sign-in backdoor
 	# (/api/test/login) must never be reachable from the public internet regardless of what its
 	# own code-level gate currently evaluates to.

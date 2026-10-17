@@ -167,6 +167,34 @@ fi
 echo "==> Bringing up caddy (no-op if already running)"
 docker compose up -d caddy
 
+# A Caddyfile/cloudflare-snippet-only change (no admin/web image change) reaches this VPS via the
+# workflow's rsync step same as everything else, but `process_app` below only calls `reload_caddy`
+# as a SIDE EFFECT of an actual blue/green slot flip — if neither app's deployed SHA changes this
+# run (e.g. this exact change: new security headers, no app code touched), neither process_app
+# call below reloads Caddy at all, and the new file would sit on disk, unread by the running
+# `caddy` process, until some LATER deploy happens to flip a slot for an unrelated reason. Hash
+# the files Caddy actually imports (Caddyfile + the cloudflare/*.caddy snippets rsync keeps in
+# sync — NOT cloudflare/origin-pull-ca.pem or caddy/active-upstream.caddy, both excluded from
+# rsync and already covered by every flip's own reload_caddy call) against the hash recorded last
+# time THIS script ran, and reload only when it actually changed. `caddy validate` first means a
+# syntax error here fails loudly before touching the live config — `caddy reload` itself also
+# validates and refuses a broken config, but checking explicitly gives a clearer error message
+# and exit code than parsing reload's own output would.
+CADDY_CONFIG_HASH_FILE=".caddy-config-hash"
+new_caddy_hash="$(cat Caddyfile cloudflare/*.caddy 2>/dev/null | sha256sum | cut -d' ' -f1)"
+old_caddy_hash="$(cat "$CADDY_CONFIG_HASH_FILE" 2>/dev/null || true)"
+if [ "$new_caddy_hash" != "$old_caddy_hash" ]; then
+  echo "==> Caddyfile/cloudflare snippet changed since the last deploy — validating and reloading Caddy"
+  if ! docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
+    echo "==> Caddyfile is INVALID — aborting before reloading (the currently-running config is untouched)" >&2
+    exit 1
+  fi
+  docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+  echo "$new_caddy_hash" > "$CADDY_CONFIG_HASH_FILE"
+else
+  echo "==> Caddyfile/cloudflare snippets unchanged since the last deploy — no reload needed here (a slot flip below, if any, still reloads Caddy itself)"
+fi
+
 write_snippet() {
   local admin_slot="$1" web_slot="$2"
   cat > caddy/active-upstream.caddy <<EOF
