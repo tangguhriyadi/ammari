@@ -72,7 +72,7 @@ as `ubuntu` instead — see §0 below. If SSH is completely unreachable, Sumopod
 | SSH — `deploy` | Automation account, **no sudo**, in the `docker` group, owns `/opt/ammari-prod`. Key: `~/ammari-secrets/ammari_prod_deploy_key` on your Mac — the same key GitHub Actions uses (`DEPLOY_SSH_KEY` environment secret). Use for routine ops: `docker compose ps/logs`, running a backup by hand, `send-test-alert.sh`. |
 | SSH hardening | Password authentication and root login are both disabled. Only the two keys above work. |
 | Emergency access | Sumopod's own web console (provider dashboard) if SSH is unreachable for any reason. |
-| Directory layout | `/opt/ammari-prod/` — `docker-compose.yml`, `Caddyfile`, `remote-deploy.sh`, `active-slot-{admin,web}`, `deployed-sha-{admin,web}`, `deploy-history.log`, `.env` (per-slot image tags) all at the root; `env/` (real secrets, never in git), `caddy/certs/` (origin cert), `caddy/active-upstream.caddy` (generated, see §1), `cloudflare/` (AOP CA root + IP-range snippets), `backup/`, `monitoring/` as subdirectories. |
+| Directory layout | `/opt/ammari-prod/` — `docker-compose.yml`, `Caddyfile`, `remote-deploy.sh`, `active-slot-{admin,web}`, `deployed-sha-{admin,web}`, `deploy-history.log`, `.env` (per-slot image tags), `.caddy-config-hash` (hash of the last Caddyfile/cloudflare-snippet content `remote-deploy.sh` reloaded — see §1) all at the root; `env/` (real secrets, never in git), `caddy/certs/` (origin cert), `caddy/active-upstream.caddy` (generated, see §1), `cloudflare/` (AOP CA root + IP-range snippets), `backup/`, `monitoring/` as subdirectories. |
 | Env files — source of truth | **Your Mac**, `~/ammari-secrets/prod-{admin,web,db,backup}.env`. The VPS's own `/opt/ammari-prod/env/*.env` are copies pushed there by `upload-prod-env.sh` — never edit them directly on the VPS (§3). |
 | Cloudflare | `ammari.id` zone, SSL/TLS mode **Full (strict)**. **Zone-level** Authenticated Origin Pulls (not Global) — our own CA, leaf cert valid to **2036**. Separate Cloudflare **origin certificate** (Caddy's TLS identity, 15-year validity, valid to **~2041**) — two unrelated cert pairs, see `deploy-prod/cloudflare/README.md`. `www.ammari.id` 301-redirects to the apex. |
 | Bucket | `ammariprod-cdy2yf`, Cloudeka, endpoint `https://kencana.basic.box.cloudeka.id`, region `kencana`. Public-read: `products/*`, `content/*`, `healthcheck/*`. Private (no policy statement — default-deny): `backups/daily/*`, `backups/weekly/*`. One bucket, one S3 access key for both the app and backups (`docs/plans/prod-deploy.md` §9 "Later" list — a deliberate, accepted scope-down, not an oversight). |
@@ -142,6 +142,22 @@ ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 \
 A deploy is **blue-green and sequential**: admin's old/new slots briefly overlap, flip, and the
 old one stops — fully — before web's flip starts. At most one app ever runs two slots at once;
 there's no visible downtime for either app during a routine deploy.
+
+### 1.5 Caddyfile/cloudflare-snippet-only changes (no admin/web image change)
+
+`remote-deploy.sh` reloads Caddy as a side effect of a slot flip, but if this deploy's
+`Caddyfile` or `cloudflare/*.caddy` content changed while neither app's image did (e.g. a
+security-header tweak with no code change), there's no flip to trigger that reload from. The
+script handles this itself: it hashes those files on every run and, if the hash differs from the
+last run it recorded (`.caddy-config-hash`), runs `caddy validate` then `caddy reload` before
+touching either app — so the normal "Deploy (prod)" workflow is always enough, even for a
+Caddyfile-only change. If you ever need to force it by hand instead:
+```bash
+ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121
+cd /opt/ammari-prod
+docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+```
 
 ---
 
@@ -318,6 +334,12 @@ prod `DATABASE_URL`). Pass `--object backups/daily/<key>` to restore a specific 
 the newest one. Run this periodically, and after any change to `pg-backup.sh`'s own dump/encrypt
 format. See `docs/runbooks/restore-drill.md` for the manual step-by-step this automates, and
 §11 below for the first-real-backup drill this is also used for (§4 step 20).
+
+Waits for the disposable Postgres by polling a real query against `ammari_scratch` itself, not
+`pg_isready` — the postgres/pgvector entrypoint's temporary init server can make `pg_isready`
+report "ready" up to a second or so before the target database is actually guaranteed queryable
+(confirmed with a real timing run during Session 9); racing `pg_restore` into that window is what
+"database `ammari_scratch` does not exist" right after a successful decrypt actually means.
 
 ### 5.5 Real disaster restore (manual, owner only)
 
@@ -550,31 +572,83 @@ Prints one `PASS`/`FAIL`/`SKIP` line per check plus a summary, and exits non-zer
 - **External** (curl/nc, no SSH) — against the real `https://ammari.id`/`https://admin.ammari.id`
   and the public S3 endpoint, exactly as a visitor/bot/payment-gateway reviewer or a port scan
   would see them: both hosts return 200 and `/api/health` is ok; direct-to-origin TLS to
-  `43.173.52.121` is rejected (Authenticated Origin Pulls); `:8080`/`:8081`/`:5432` aren't
-  reachable from outside; `www.ammari.id` 301s to the apex with path+query kept; `/robots.txt`
-  allows indexing; `/api/test/*` 404s on both hosts; `/api/revalidate` 404s on the public web
-  host; HSTS/`X-Content-Type-Options`/`Referrer-Policy`/frame-protection headers are present with
-  no stray `X-Robots-Tag: noindex`; an anonymous GET of a `backups/` object returns 403; the
-  PDP's CTA is WhatsApp (not "Tambah ke keranjang") if at least one product is published yet
-  (**`SKIP`**, not `FAIL`, on a brand-new catalog with nothing published).
+  `43.173.52.121` is rejected (Authenticated Origin Pulls); `www.ammari.id` 301s to the apex with
+  path+query kept; `/robots.txt` allows indexing; `/api/test/*` 404s on both hosts;
+  `/api/revalidate` 404s on the public web host; HSTS/`X-Content-Type-Options`/`Referrer-Policy`/
+  frame-protection headers are present with no stray `X-Robots-Tag: noindex`; an anonymous GET of
+  a `backups/` object returns 403; the PDP's CTA is WhatsApp (not "Tambah ke keranjang") if at
+  least one product is published yet (**`SKIP`**, not `FAIL`, on a brand-new catalog with nothing
+  published).
+
+  `:8080`/`:8081`/`:5432` "closed from outside" is also checked via `nc`, but ONLY after a
+  **control probe**: `nc -z` against a random, definitely-unused high port on `43.173.52.121`
+  first. If even that "connects," this network intercepts/accepts outbound TCP regardless of
+  destination port (a captive portal, transparent proxy, or similar — confirmed happening on a
+  real run: `nc` reported 8080/8081/5432 all reachable while `ss -tlnp` on the VPS itself showed
+  only 22/80/443 public) — in that case all three port checks report **`SKIP`** with that
+  explanation instead of a false `FAIL`, and the SSH-side authoritative check below is what
+  actually verifies port exposure that run.
+
 - **SSH** (as `deploy`, no sudo, via `~/ammari-secrets/ammari_prod_deploy_key` — skipped, not
   failed, if that key isn't on this machine, or pass `--skip-ssh`): `db`/`caddy`/the active
   admin and web slot containers are running (and `db` passes its healthcheck); the internal
-  `:8080`/`:8081` health endpoints respond through Caddy; `STOREFRONT_CART_ENABLED=false` and
-  `DEPLOY_ENV=production` in `env/web.env` (prints these two `key=value` pairs — both are
-  non-secret flags, never a credential); no `NODE_ENV` or `E2E_TEST_LOGIN` key exists in any of
-  the four env files (prints only the key **name** if one is ever found, never a value); the four
-  monitoring timers (§6) are active, with their next scheduled run; the last backup is under 26h
-  old; disk and memory usage (printed as `INFO`, not a pass/fail — `disk-alert.timer` is what
-  actually pages on high usage).
+  `:8080`/`:8081` health endpoints respond through Caddy; **an authoritative listening/
+  published-port audit** — `ss -tln` (no sudo needed; falls back to parsing `/proc/net/tcp{,6}`
+  directly if `ss` isn't installed) must show nothing listening on a non-loopback address except
+  22/80/443, and `docker ps` must show no container publishing a host port other than caddy's
+  80/443 — this is the ground truth the external nc-based checks above can't always give you;
+  `STOREFRONT_CART_ENABLED=false` and `DEPLOY_ENV=production` in `env/web.env` (prints these two
+  `key=value` pairs — both are non-secret flags, never a credential); no `NODE_ENV` or
+  `E2E_TEST_LOGIN` key exists in any of the four env files (prints only the key **name** if one
+  is ever found, never a value); the four monitoring timers (§6) are active, with their next
+  scheduled run; the last backup is under 26h old; disk and memory usage (printed as `INFO`, not
+  a pass/fail — `disk-alert.timer` is what actually pages on high usage).
+
+  Each of these checks is independent: if the SSH connection drops or the remote script's output
+  is incomplete for any reason, every affected check reports its **own** `FAIL` with a specific
+  reason ("no data from the VPS for env/web.env (remote output missing — truncated run?)", etc.)
+  instead of one opaque "didn't complete" message hiding the rest. This matters because of a bug
+  found on a real run (Session 9): the remote script is piped to `bash -s` over SSH's own stdin,
+  and `docker compose exec` — even with `-T` — always attaches/forwards the caller's stdin to the
+  hijacked exec connection (`-T` only disables the pseudo-TTY), which silently drained the rest
+  of the not-yet-executed script text with no error the moment it ran. Fixed by redirecting that
+  call's stdin from `/dev/null`; see the comment at the top of the remote script in
+  `deploy-prod/go-live-check.sh` for the full explanation.
 
 Run it any time after a deploy, and definitely as part of go-live (`docs/plans/prod-deploy.md`
-§4 step 18 onward) and before submitting to the payment gateway. A `FAIL` on the security-header
-check most likely means those headers aren't configured yet anywhere in this codebase (confirmed
-during Session 8 — neither `apps/web/next.config.ts` nor `deploy-prod/Caddyfile` currently set
-HSTS/`X-Content-Type-Options`/`Referrer-Policy`/`X-Frame-Options` for the real pages, only for
-`/preview/home`'s own unrelated `noindex`/no-cache headers) — adding them is its own small
-follow-up, not something this verification script does for you.
+§4 step 18 onward) and before submitting to the payment gateway. The security headers checked
+here (HSTS/`X-Content-Type-Options`/`Referrer-Policy`/`X-Frame-Options`/`Permissions-Policy`) are
+set in `deploy-prod/Caddyfile` (and `deploy/Caddyfile` for dev) — see §12.
+
+## 12. Security headers
+
+Set in Caddy, not in either app's `next.config.ts` (confirmed neither sets any of these — see
+`deploy-prod/Caddyfile`'s own comment), on every public site block (never the internal-only
+`:8080`/`:8081` health listeners, where they'd be meaningless):
+
+| Header | Value | Differs per host? |
+|---|---|---|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | No |
+| `X-Content-Type-Options` | `nosniff` | No |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | No |
+| `X-Frame-Options` | `SAMEORIGIN` on `ammari.id` (nothing frames web today, but same-origin framing stays available for later), `DENY` on `admin.ammari.id` (admin is never framed, by itself or anyone else) | Yes |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=()` on both — no map-pin/checkout geolocation feature exists in code or `docs/plans/*.md` yet; flip `geolocation=()` to `geolocation=(self)` on web, and only web, if that ships later | No (for now) |
+| `Server` | removed (`-Server` — Caddy sets `Server: Caddy` by default) | No |
+
+No `Content-Security-Policy` yet — deliberately deferred; add it as its own follow-up once the
+real set of script/style/image origins is known.
+
+Each of these is defined as a reusable snippet (`web_security_headers`/`admin_security_headers`/
+`www_security_headers`) imported **twice** in its site block: once for the normal response path,
+and again inside a `handle_errors` block. This isn't redundant — confirmed empirically (local
+`caddy run` against a deliberately-unreachable upstream, pinned `caddy:2.10.2`): a plain `header`
+directive does **not** reliably survive a reverse_proxy failure (502) on its own — Caddy's
+built-in error-response path re-adds `Server: Caddy` and drops the rest on that path specifically
+— so without the second import inside `handle_errors`, an upstream outage would serve exactly the
+one response a reviewer/scanner is most likely to see without any of these protections.
+
+Reaching the server: see §1.5 for how a Caddyfile-only change (no admin/web image change) still
+gets reloaded on the normal deploy workflow.
 
 ## Related docs
 
