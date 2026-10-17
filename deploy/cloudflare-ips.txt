@@ -1,4 +1,4 @@
-# Cloudflare published IP ranges — refreshed 2026-10-15T05:33:22Z by
+# Cloudflare published IP ranges — refreshed 2026-10-17T04:31:34Z by
 # deploy/update-cloudflare-ips.sh. Source: https://www.cloudflare.com/ips-v4 and
 # https://www.cloudflare.com/ips-v6 — do not hand-edit, re-run the script instead.
 173.245.48.0/20
