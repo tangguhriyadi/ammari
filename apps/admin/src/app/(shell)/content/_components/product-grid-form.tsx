@@ -5,8 +5,13 @@ import { useState, useTransition } from "react";
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import { Button, ColorSwatch, Input, Label, Switch } from "@ammari/ui";
 import type { PublishableProductOption } from "@/lib/content/homepage";
-import { saveProductGridDraftAction } from "../actions";
+import { HOMEPAGE_SECTION_LABELS, unpublishedSectionsBannerText } from "@/lib/content/homepage-types";
+import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
+import { publishHomepageAction, saveProductGridDraftAction } from "../actions";
 import { ProductColorPicker, type ProductColorValue } from "./product-color-picker";
+import { UnpublishedChangesBanner } from "./unpublished-changes-banner";
+
+const SECTION_LABEL = HOMEPAGE_SECTION_LABELS.product_grid;
 
 export interface ProductGridFormValues {
   isVisible: boolean;
@@ -24,15 +29,23 @@ function resolveTileLabel(tile: ProductColorValue, products: PublishableProductO
 export function ProductGridForm({
   initialValues,
   products,
+  initialUnpublishedSectionLabels,
 }: {
   initialValues: ProductGridFormValues;
   products: PublishableProductOption[];
+  initialUnpublishedSectionLabels: string[];
 }) {
   const router = useRouter();
   const [values, setValues] = useState(initialValues);
+  const [savedValues, setSavedValues] = useState(initialValues);
+  const [unpublishedSectionLabels, setUnpublishedSectionLabels] = useState(initialUnpublishedSectionLabels);
   const [draftTile, setDraftTile] = useState<ProductColorValue | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [publishPending, startPublishTransition] = useTransition();
+
+  const dirty = JSON.stringify(values) !== JSON.stringify(savedValues);
+  useUnsavedChangesGuard(dirty);
 
   function moveTile(index: number, direction: -1 | 1) {
     setValues((prev) => {
@@ -66,12 +79,32 @@ export function ProductGridForm({
         setFormError(result.error);
         return;
       }
+      setSavedValues(values);
+      setUnpublishedSectionLabels((prev) => (prev.includes(SECTION_LABEL) ? prev : [...prev, SECTION_LABEL]));
       router.refresh();
+    });
+  }
+
+  function handlePublish() {
+    setFormError(null);
+    startPublishTransition(async () => {
+      const result = await publishHomepageAction();
+      if (!result.ok) {
+        setFormError(result.error);
+        return;
+      }
+      setUnpublishedSectionLabels([]);
     });
   }
 
   return (
     <div className="flex max-w-2xl flex-col gap-4">
+      {unpublishedSectionLabels.length > 0 && (
+        <UnpublishedChangesBanner onPublish={handlePublish} pending={publishPending} disabled={dirty} testId="product-grid-unpublished-banner">
+          {unpublishedSectionsBannerText(unpublishedSectionLabels)}
+        </UnpublishedChangesBanner>
+      )}
+
       <Switch label="Tayang" checked={values.isVisible} onCheckedChange={(checked) => setValues((prev) => ({ ...prev, isVisible: checked }))} />
 
       <div className="flex flex-col gap-1.5">

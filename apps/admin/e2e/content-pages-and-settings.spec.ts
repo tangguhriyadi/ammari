@@ -9,6 +9,10 @@ import { E2E_PRODUCTS_NO_FINANCE_EMAIL, E2E_STOREFRONT_EMAIL } from "./global-se
 
 async function runInfoPagePublishAndDiscardFlow(page: Page, label: string): Promise<void> {
   const editor = page.getByTestId("info-page-body-editor");
+  // Scoped, not a bare getByRole("button", {name: "Terbitkan"}) — once a SAVED draft differs
+  // from what's published (further down this flow), the new per-editor unpublished-changes
+  // banner renders its OWN "Terbitkan" button too, and an unscoped locator would match both.
+  const actions = page.getByTestId("info-page-actions");
 
   await page.goto("/content/pages/how-to-order");
   await page.locator("#info-page-title").fill(`Cara Pemesanan ${label}`);
@@ -18,10 +22,10 @@ async function runInfoPagePublishAndDiscardFlow(page: Page, label: string): Prom
   // the `<label for>` points at EditorContent's wrapper id, not the ProseMirror node itself).
   await editor.click();
   await page.keyboard.type(`Langkah terbit ${label}.`);
-  await page.getByRole("button", { name: "Simpan draf" }).click();
+  await actions.getByRole("button", { name: "Simpan draf" }).click();
   await page.waitForLoadState("networkidle");
 
-  await page.getByRole("button", { name: "Terbitkan" }).click();
+  await actions.getByRole("button", { name: "Terbitkan" }).click();
   await page.waitForLoadState("networkidle");
   await expect(page.getByText("Halaman ini belum pernah diterbitkan")).toHaveCount(0);
 
@@ -31,10 +35,10 @@ async function runInfoPagePublishAndDiscardFlow(page: Page, label: string): Prom
   await editor.click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Draf belum disimpan.");
-  await expect(page.getByRole("button", { name: "Terbitkan" })).toBeDisabled();
-  await page.getByRole("button", { name: "Simpan draf" }).click();
+  await expect(actions.getByRole("button", { name: "Terbitkan" })).toBeDisabled();
+  await actions.getByRole("button", { name: "Simpan draf" }).click();
   await page.waitForLoadState("networkidle");
-  await expect(page.getByRole("button", { name: "Terbitkan" })).toBeEnabled();
+  await expect(actions.getByRole("button", { name: "Terbitkan" })).toBeEnabled();
 
   // "Batalkan perubahan" resets the DRAFT BODY back to what's published — title is a plain,
   // immediately-live field (not draft/publish), so it's untouched by discard, on purpose.
@@ -63,6 +67,56 @@ test.describe("Konten: Halaman Info", () => {
     }
     // privacy-policy/terms-of-service are seeded already-published (migration 0020).
     await expect(page.getByTestId("info-page-row-privacy-policy").getByText("Tayang")).toBeVisible();
+  });
+
+  test("the editor's own unpublished-changes banner appears after a saved (but not yet published) edit, with Terbitkan right there", async ({
+    page,
+  }) => {
+    await loginAs(page, E2E_STOREFRONT_EMAIL);
+    const editor = page.getByTestId("info-page-body-editor");
+    // Scoped, not a bare getByRole("button", {name: "Terbitkan"}) — once the banner below is
+    // showing, it renders its own "Terbitkan" too, and an unscoped locator would match both.
+    const actions = page.getByTestId("info-page-actions");
+
+    await page.goto("/content/pages/shipping");
+    await page.locator("#info-page-title").fill("Pengiriman Banner Test");
+    await editor.click();
+    await page.keyboard.type("Draf pertama.");
+    await actions.getByRole("button", { name: "Simpan draf" }).click();
+    await page.waitForLoadState("networkidle");
+
+    await actions.getByRole("button", { name: "Terbitkan" }).click();
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByTestId("info-page-unpublished-banner")).toHaveCount(0);
+
+    // A further SAVED edit — draft now differs from what's published — surfaces the banner
+    // right on this editor page. Info pages publish independently (no /content-style overview),
+    // so this banner is the only place this ever shows.
+    await editor.click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Draf kedua.");
+    await actions.getByRole("button", { name: "Simpan draf" }).click();
+    await page.waitForLoadState("networkidle");
+
+    const banner = page.getByTestId("info-page-unpublished-banner");
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText("belum diterbitkan");
+
+    await banner.getByRole("button", { name: "Terbitkan" }).click();
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByTestId("info-page-unpublished-banner")).toHaveCount(0);
+  });
+
+  test("warns before leaving an info page editor with unsaved edits", async ({ page }) => {
+    await loginAs(page, E2E_STOREFRONT_EMAIL);
+    await page.goto("/content/pages/returns-exchange");
+    await page.locator("#info-page-title").fill(`Pengembalian Unsaved ${Date.now()}`);
+
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await page.getByRole("navigation", { name: "Navigasi breadcrumb" }).getByRole("link", { name: "Halaman Info" }).click();
+    // Dismissing the confirm cancels the navigation — still on the same editor, edit intact.
+    await expect(page).toHaveURL(/\/content\/pages\/returns-exchange$/);
+    await expect(page.locator("#info-page-title")).toHaveValue(/Pengembalian Unsaved/);
   });
 
   test("a staff user without content.manage is denied /content/pages and never sees the Halaman Info nav item", async ({ page }) => {

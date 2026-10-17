@@ -4,9 +4,14 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Input, Label, Switch, Textarea } from "@ammari/ui";
 import type { PublishableProductOption } from "@/lib/content/homepage";
-import { saveFeatureBlockDraftAction } from "../actions";
+import { HOMEPAGE_SECTION_LABELS, unpublishedSectionsBannerText } from "@/lib/content/homepage-types";
+import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
+import { publishHomepageAction, saveFeatureBlockDraftAction } from "../actions";
 import { ContentImageField, type ContentImageFieldValue } from "./content-image-field";
 import { ProductColorPicker, type ProductColorValue } from "./product-color-picker";
+import { UnpublishedChangesBanner } from "./unpublished-changes-banner";
+
+const SECTION_LABEL = HOMEPAGE_SECTION_LABELS.feature_block;
 
 export interface FeatureBlockFormValues {
   isVisible: boolean;
@@ -36,14 +41,22 @@ function toContentImagePayload(image: ContentImageFieldValue | null) {
 export function FeatureBlockForm({
   initialValues,
   products,
+  initialUnpublishedSectionLabels,
 }: {
   initialValues: FeatureBlockFormValues;
   products: PublishableProductOption[];
+  initialUnpublishedSectionLabels: string[];
 }) {
   const router = useRouter();
   const [values, setValues] = useState(initialValues);
+  const [savedValues, setSavedValues] = useState(initialValues);
+  const [unpublishedSectionLabels, setUnpublishedSectionLabels] = useState(initialUnpublishedSectionLabels);
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [publishPending, startPublishTransition] = useTransition();
+
+  const dirty = JSON.stringify(values) !== JSON.stringify(savedValues);
+  useUnsavedChangesGuard(dirty);
 
   function set<K extends keyof FeatureBlockFormValues>(key: K, value: FeatureBlockFormValues[K]) {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -66,12 +79,32 @@ export function FeatureBlockForm({
         setFormError(result.error);
         return;
       }
+      setSavedValues(values);
+      setUnpublishedSectionLabels((prev) => (prev.includes(SECTION_LABEL) ? prev : [...prev, SECTION_LABEL]));
       router.refresh();
+    });
+  }
+
+  function handlePublish() {
+    setFormError(null);
+    startPublishTransition(async () => {
+      const result = await publishHomepageAction();
+      if (!result.ok) {
+        setFormError(result.error);
+        return;
+      }
+      setUnpublishedSectionLabels([]);
     });
   }
 
   return (
     <div className="flex max-w-2xl flex-col gap-4">
+      {unpublishedSectionLabels.length > 0 && (
+        <UnpublishedChangesBanner onPublish={handlePublish} pending={publishPending} disabled={dirty} testId="feature-block-unpublished-banner">
+          {unpublishedSectionsBannerText(unpublishedSectionLabels)}
+        </UnpublishedChangesBanner>
+      )}
+
       <Switch label="Tayang" checked={values.isVisible} onCheckedChange={(checked) => set("isVisible", checked)} />
 
       <div className="flex flex-col gap-1.5">

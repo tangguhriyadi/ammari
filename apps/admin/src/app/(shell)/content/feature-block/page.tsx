@@ -1,8 +1,9 @@
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { getHomepageSection, listPublishableProducts } from "@/lib/content/homepage";
+import { getHomepageSection, listHomepageSections, listPublishableProducts } from "@/lib/content/homepage";
 import { featureBlockContentSchema, type ContentImage } from "@/lib/content/homepage-schemas";
 import { buildContentImagePreviewUrl } from "@/lib/content/content-image-queries";
+import { HOMEPAGE_SECTION_LABELS, sectionHasUnpublishedChanges } from "@/lib/content/homepage-types";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { FeatureBlockForm, type FeatureBlockFormValues } from "../_components/feature-block-form";
 import type { ContentImageFieldValue } from "../_components/content-image-field";
@@ -23,7 +24,12 @@ function toFieldValue(image: ContentImage | null): ContentImageFieldValue | null
 
 export default async function ContentFeatureBlockPage() {
   await requirePermission("content.manage");
-  const [section, products] = await Promise.all([getHomepageSection("feature_block"), listPublishableProducts()]);
+  const [section, products, allSections] = await Promise.all([
+    getHomepageSection("feature_block"),
+    listPublishableProducts(),
+    listHomepageSections(),
+  ]);
+  const unpublishedSectionLabels = allSections.filter(sectionHasUnpublishedChanges).map((row) => HOMEPAGE_SECTION_LABELS[row.key]);
 
   const parsed = section ? featureBlockContentSchema.safeParse(section.draftContent) : null;
   const initialValues: FeatureBlockFormValues = parsed?.success
@@ -41,7 +47,7 @@ export default async function ContentFeatureBlockPage() {
     <>
       <Breadcrumb items={[...rootCrumbs("/content"), { label: "Feature Block" }]} />
       <PageHeader title="Feature Block" description="Blok produk unggulan di halaman utama." />
-      <FeatureBlockForm initialValues={initialValues} products={products} />
+      <FeatureBlockForm initialValues={initialValues} products={products} initialUnpublishedSectionLabels={unpublishedSectionLabels} />
     </>
   );
 }

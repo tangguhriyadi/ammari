@@ -5,7 +5,9 @@ import { useState, useTransition } from "react";
 import { Button, Card, Input, Label } from "@ammari/ui";
 import type { InfoPageSlug } from "@ammari/db/schema";
 import { RichTextEditor } from "@/app/(shell)/products/_components/rich-text-editor";
+import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import { discardInfoPageDraftAction, publishInfoPageAction, saveInfoPageDraftAction } from "../../actions";
+import { UnpublishedChangesBanner } from "../../_components/unpublished-changes-banner";
 
 export interface InfoPageFormValues {
   title: string;
@@ -19,15 +21,18 @@ export function InfoPageForm({
   slug,
   initialValues,
   isPublished,
+  initialHasUnpublishedChanges,
 }: {
   slug: InfoPageSlug;
   initialValues: InfoPageFormValues;
   isPublished: boolean;
+  initialHasUnpublishedChanges: boolean;
 }) {
   const router = useRouter();
   const [values, setValues] = useState(initialValues);
   const [publishedState, setPublishedState] = useState(isPublished);
   const [savedValues, setSavedValues] = useState(initialValues);
+  const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState(initialHasUnpublishedChanges);
   const [error, setError] = useState<string | null>(null);
   const [savePending, startSave] = useTransition();
   const [publishPending, startPublish] = useTransition();
@@ -40,6 +45,7 @@ export function InfoPageForm({
   const [editorKey, setEditorKey] = useState(0);
 
   const hasUnsavedEdits = values.title !== savedValues.title || values.bodyHtml !== savedValues.bodyHtml;
+  useUnsavedChangesGuard(hasUnsavedEdits);
 
   function handleSave() {
     setError(null);
@@ -50,6 +56,7 @@ export function InfoPageForm({
         return;
       }
       setSavedValues(values);
+      if (publishedState) setHasUnpublishedChanges(true);
       router.refresh();
     });
   }
@@ -63,6 +70,7 @@ export function InfoPageForm({
         return;
       }
       setPublishedState(true);
+      setHasUnpublishedChanges(false);
     });
   }
 
@@ -77,12 +85,19 @@ export function InfoPageForm({
       const resetValues = { title: values.title, bodyHtml: result.data.bodyHtml };
       setValues(resetValues);
       setSavedValues(resetValues);
+      setHasUnpublishedChanges(false);
       setEditorKey((key) => key + 1);
     });
   }
 
   return (
     <div className="flex max-w-2xl flex-col gap-4">
+      {publishedState && hasUnpublishedChanges && (
+        <UnpublishedChangesBanner onPublish={handlePublish} pending={publishPending} disabled={hasUnsavedEdits} testId="info-page-unpublished-banner">
+          Ada perubahan yang belum diterbitkan. Pengunjung masih melihat versi lama.
+        </UnpublishedChangesBanner>
+      )}
+
       {!publishedState && (
         <Card className="border-brand bg-brand/5">
           <p className="text-base text-neutral-900">Halaman ini belum pernah diterbitkan — pengunjung melihat status &quot;sedang disiapkan&quot;.</p>
@@ -119,7 +134,7 @@ export function InfoPageForm({
         </p>
       )}
 
-      <div className="flex flex-wrap justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2" data-testid="info-page-actions">
         <Button type="button" variant="secondary" onClick={handleDiscard} loading={discardPending} disabled={!publishedState}>
           Batalkan perubahan
         </Button>

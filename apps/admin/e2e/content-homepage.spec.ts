@@ -110,6 +110,42 @@ test.describe("Konten: Beranda (homepage sections)", () => {
     await runHideSectionFlow(page);
   });
 
+  test("the section's own editor shows an unpublished-changes banner naming the section, with Terbitkan right there — not just the /content overview", async ({
+    page,
+  }) => {
+    await loginAs(page, E2E_STOREFRONT_EMAIL);
+
+    await page.goto("/content/hero");
+    await page.getByLabel("Headline").fill(`Headline Section Banner ${Date.now()}`);
+    await page.getByLabel("Label tombol").fill("Belanja Sekarang");
+    await page.getByRole("button", { name: "Simpan", exact: true }).click();
+    await page.waitForLoadState("networkidle");
+
+    // Reload the SAME section page (not /content) — the banner names Hero and appears right
+    // here, without needing a trip to the overview.
+    await page.goto(page.url());
+    const banner = page.getByTestId("hero-unpublished-banner");
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText("Hero");
+    await expect(banner).toContainText("semua bagian beranda sekaligus");
+
+    await banner.getByRole("button", { name: "Terbitkan" }).click();
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByTestId("hero-unpublished-banner")).toHaveCount(0);
+  });
+
+  test("warns before leaving the hero editor with unsaved edits", async ({ page }) => {
+    await loginAs(page, E2E_STOREFRONT_EMAIL);
+    await page.goto("/content/hero");
+    await page.getByLabel("Headline").fill(`Headline Unsaved ${Date.now()}`);
+
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await page.getByRole("navigation", { name: "Navigasi breadcrumb" }).getByRole("link", { name: "Beranda" }).click();
+    // Dismissing the confirm cancels the navigation — still on the hero editor, edit intact.
+    await expect(page).toHaveURL(/\/content\/hero$/);
+    await expect(page.getByLabel("Headline")).toHaveValue(/Headline Unsaved/);
+  });
+
   test("a staff user without content.manage is denied /content and its section editors, and never sees the Beranda nav item", async ({ page }) => {
     await loginAs(page, E2E_PRODUCTS_NO_FINANCE_EMAIL); // products.manage only, no content.manage
 

@@ -64,3 +64,12 @@ export function sectionHasUnpublishedChanges(
 export function homepageHasUnpublishedChanges(rows: HomepageSectionRow[]): boolean {
   return rows.some(sectionHasUnpublishedChanges);
 }
+
+/** Copy for each section editor's own "Ada perubahan belum diterbitkan" banner (as opposed to
+ * the /content overview's generic one) — names which section(s) currently have an unpublished
+ * draft, and is explicit that Terbitkan here publishes ALL of them at once, not just the one
+ * being viewed (there's no per-section publish — see publishHomepageAction). `labels` is never
+ * empty when this is called — callers only render the banner when the list is non-empty. */
+export function unpublishedSectionsBannerText(labels: string[]): string {
+  return `Ada perubahan yang belum diterbitkan pada: ${labels.join(", ")}. Menekan Terbitkan akan menerbitkan semua bagian beranda sekaligus.`;
+}

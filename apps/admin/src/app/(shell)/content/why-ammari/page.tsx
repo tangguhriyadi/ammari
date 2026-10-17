@@ -1,13 +1,15 @@
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { getHomepageSection } from "@/lib/content/homepage";
+import { getHomepageSection, listHomepageSections } from "@/lib/content/homepage";
 import { whyAmmariContentSchema } from "@/lib/content/homepage-schemas";
+import { HOMEPAGE_SECTION_LABELS, sectionHasUnpublishedChanges } from "@/lib/content/homepage-types";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { WhyAmmariForm, type WhyAmmariFormValues } from "../_components/why-ammari-form";
 
 export default async function ContentWhyAmmariPage() {
   await requirePermission("content.manage");
-  const section = await getHomepageSection("why_ammari");
+  const [section, allSections] = await Promise.all([getHomepageSection("why_ammari"), listHomepageSections()]);
+  const unpublishedSectionLabels = allSections.filter(sectionHasUnpublishedChanges).map((row) => HOMEPAGE_SECTION_LABELS[row.key]);
 
   const parsed = section ? whyAmmariContentSchema.safeParse(section.draftContent) : null;
   const initialValues: WhyAmmariFormValues = parsed?.success
@@ -18,7 +20,7 @@ export default async function ContentWhyAmmariPage() {
     <>
       <Breadcrumb items={[...rootCrumbs("/content"), { label: "Kenapa Ammari" }]} />
       <PageHeader title="Kenapa Ammari" description="Poin-poin keunggulan brand di halaman utama." />
-      <WhyAmmariForm initialValues={initialValues} />
+      <WhyAmmariForm initialValues={initialValues} initialUnpublishedSectionLabels={unpublishedSectionLabels} />
     </>
   );
 }

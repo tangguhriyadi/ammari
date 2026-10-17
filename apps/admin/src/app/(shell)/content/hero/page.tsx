@@ -1,8 +1,9 @@
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { getHomepageSection, listPublishableProducts } from "@/lib/content/homepage";
+import { getHomepageSection, listHomepageSections, listPublishableProducts } from "@/lib/content/homepage";
 import { heroContentSchema, type ContentImage } from "@/lib/content/homepage-schemas";
 import { buildContentImagePreviewUrl } from "@/lib/content/content-image-queries";
+import { HOMEPAGE_SECTION_LABELS, sectionHasUnpublishedChanges } from "@/lib/content/homepage-types";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { HeroForm, type HeroFormValues } from "../_components/hero-form";
 import type { ContentImageFieldValue } from "../_components/content-image-field";
@@ -29,7 +30,12 @@ function toFieldValue(image: ContentImage | null): ContentImageFieldValue | null
 
 export default async function ContentHeroPage() {
   await requirePermission("content.manage");
-  const [section, products] = await Promise.all([getHomepageSection("hero"), listPublishableProducts()]);
+  const [section, products, allSections] = await Promise.all([
+    getHomepageSection("hero"),
+    listPublishableProducts(),
+    listHomepageSections(),
+  ]);
+  const unpublishedSectionLabels = allSections.filter(sectionHasUnpublishedChanges).map((row) => HOMEPAGE_SECTION_LABELS[row.key]);
 
   const parsed = section ? heroContentSchema.safeParse(section.draftContent) : null;
   const initialValues: HeroFormValues = parsed?.success
@@ -59,7 +65,7 @@ export default async function ContentHeroPage() {
     <>
       <Breadcrumb items={[...rootCrumbs("/content"), { label: "Hero" }]} />
       <PageHeader title="Hero" description="Bagian pertama yang dilihat pengunjung di halaman utama." />
-      <HeroForm initialValues={initialValues} products={products} />
+      <HeroForm initialValues={initialValues} products={products} initialUnpublishedSectionLabels={unpublishedSectionLabels} />
     </>
   );
 }
