@@ -435,9 +435,31 @@ hand per §4.
   `apps/web/src/lib/store-settings.ts`'s `getWhatsappNumber()`, not an env var; `STORE_WHATSAPP_NUMBER`
   is only a fallback for when the database value is empty and should not be relied on in prod —
   walk the go-live checklist in §7 end to end against the real prod URLs.
-- **Files:** none (verification session) — any fix found becomes its own small follow-up commit.
+- **Status (2026-10-17):** since this is a read-only verification session and no agent session
+  ever touches the real VPS/Cloudflare settings, the checklist itself is automated into two
+  scripts the OWNER runs by hand instead of a step-by-step walkthrough — see
+  `docs/deploy-prod.md` §11.
+  - `deploy-prod/go-live-check.sh` — runs every check in §7's "Go-live checklist" below (the
+    external curl/nc checks plus the SSH-based container/env/timer/backup/disk checks), printing
+    PASS/FAIL/SKIP per check and exiting non-zero on any FAIL.
+  - `deploy-prod/restore-drill-local.sh` — automates `docs/runbooks/restore-drill.md`'s "Drill:
+    restore into a disposable local Postgres" section end to end (download the newest backup,
+    decrypt, restore into a throwaway container, print row counts, clean up).
+  - Both were tested as far as possible without touching prod (shellcheck-clean; `restore-drill-local.sh`
+    exercised end to end — including a wrong-key and an empty-bucket failure case — against a
+    disposable Postgres + S3-compatible mock stack; `go-live-check.sh`'s check logic exercised
+    against local HTTP mocks and a stubbed SSH remote-script environment, which caught and fixed
+    a real bug in the `systemctl is-active` timer-state parsing).
+  - **Done when:** the owner runs `deploy-prod/go-live-check.sh` against the real prod URLs/VPS
+    and it reports zero FAILs (SKIPs are fine — e.g. the PDP CTA check before any product is
+    published), **and** has run `deploy-prod/restore-drill-local.sh` at least once against a real
+    prod backup (§4 step 20) and confirmed the printed row counts look right. Any FAIL this turns
+    up gets its own small follow-up commit — this session's scope is the verification tooling
+    itself, not fixing whatever it finds.
+- **Files:** `deploy-prod/go-live-check.sh`, `deploy-prod/restore-drill-local.sh`,
+  `docs/deploy-prod.md` (§11, §5.4), this file.
 - **Verification:** the checklist in §7, performed for real against `https://ammari.id` and
-  `https://admin.ammari.id`.
+  `https://admin.ammari.id` by actually running the two scripts above.
 - **Rollback:** n/a (read-only session); any issue found triggers the normal rollback path (§7).
 
 ---
@@ -712,8 +734,10 @@ drill (step 20).
     Settings) — this is what the storefront actually reads (§3 Session 8).
 20. **Run the restore drill for real, once, against prod's first real backup** (not just the
     disposable-DB drill from Session 5) — confirms the whole chain works end to end before you
-    need it under pressure. You'll need `PG_BACKUP_ENCRYPTION_KEY` from step 10's
-    `~/ammari-secrets/prod-backup.env` (or your password manager) to decrypt it.
+    need it under pressure. Run `deploy-prod/restore-drill-local.sh` from your Mac with Docker
+    Desktop running (Session 8) — it reads `PG_BACKUP_ENCRYPTION_KEY` from
+    `~/ammari-secrets/prod-backup.env` and the S3 credentials from `~/ammari-secrets/prod-admin.env`
+    itself; see `docs/deploy-prod.md` §11 for the exact command and what it prints.
 
 ---
 

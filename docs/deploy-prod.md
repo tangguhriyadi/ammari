@@ -302,10 +302,22 @@ prefix and the local status file.
 
 ### 5.4 Restore drill (routine, disposable DB)
 
-Full step-by-step: **`docs/runbooks/restore-drill.md`**. Downloads the newest backup, decrypts it
-with `PG_BACKUP_ENCRYPTION_KEY` (from `~/ammari-secrets/prod-backup.env`), and restores it into a
-**throwaway** local Postgres container — never the real `ammari` database. Run this periodically,
-and after any change to `pg-backup.sh`'s own dump/encrypt format.
+```bash
+# On your Mac, with Docker Desktop running:
+deploy-prod/restore-drill-local.sh
+```
+
+Automates `docs/runbooks/restore-drill.md`'s "Drill: restore into a disposable local Postgres"
+section: reads `PG_BACKUP_ENCRYPTION_KEY` from `~/ammari-secrets/prod-backup.env` and the S3
+credentials from `~/ammari-secrets/prod-admin.env` (never printed), downloads the newest
+`backups/daily/` object, decrypts it, restores it into a **throwaway** Postgres container
+published on a random local port, prints row counts for `staff_auth_users`/`products`/
+`product_variants`/`storefront_homepage_sections`/`info_pages`/`store_settings`, then removes the
+container and every temp file — never touches the real `ammari` database (it never even reads a
+prod `DATABASE_URL`). Pass `--object backups/daily/<key>` to restore a specific object instead of
+the newest one. Run this periodically, and after any change to `pg-backup.sh`'s own dump/encrypt
+format. See `docs/runbooks/restore-drill.md` for the manual step-by-step this automates, and
+§11 below for the first-real-backup drill this is also used for (§4 step 20).
 
 ### 5.5 Real disaster restore (manual, owner only)
 
@@ -521,6 +533,48 @@ seeded this way — create it later, once logged in as `super_admin`, through th
 above).
 
 ---
+
+## 11. Go-live verification
+
+`docs/plans/prod-deploy.md` §7's "Go-live checklist" and "Pre-submission content checklist" are
+automated into one script, run by hand from your Mac — no agent session has touched the real
+VPS/Cloudflare settings, and this script doesn't either, it only observes:
+
+```bash
+deploy-prod/go-live-check.sh
+```
+
+Prints one `PASS`/`FAIL`/`SKIP` line per check plus a summary, and exits non-zero if any check
+`FAIL`ed. Never prints a secret value. Two groups of checks:
+
+- **External** (curl/nc, no SSH) — against the real `https://ammari.id`/`https://admin.ammari.id`
+  and the public S3 endpoint, exactly as a visitor/bot/payment-gateway reviewer or a port scan
+  would see them: both hosts return 200 and `/api/health` is ok; direct-to-origin TLS to
+  `43.173.52.121` is rejected (Authenticated Origin Pulls); `:8080`/`:8081`/`:5432` aren't
+  reachable from outside; `www.ammari.id` 301s to the apex with path+query kept; `/robots.txt`
+  allows indexing; `/api/test/*` 404s on both hosts; `/api/revalidate` 404s on the public web
+  host; HSTS/`X-Content-Type-Options`/`Referrer-Policy`/frame-protection headers are present with
+  no stray `X-Robots-Tag: noindex`; an anonymous GET of a `backups/` object returns 403; the
+  PDP's CTA is WhatsApp (not "Tambah ke keranjang") if at least one product is published yet
+  (**`SKIP`**, not `FAIL`, on a brand-new catalog with nothing published).
+- **SSH** (as `deploy`, no sudo, via `~/ammari-secrets/ammari_prod_deploy_key` — skipped, not
+  failed, if that key isn't on this machine, or pass `--skip-ssh`): `db`/`caddy`/the active
+  admin and web slot containers are running (and `db` passes its healthcheck); the internal
+  `:8080`/`:8081` health endpoints respond through Caddy; `STOREFRONT_CART_ENABLED=false` and
+  `DEPLOY_ENV=production` in `env/web.env` (prints these two `key=value` pairs — both are
+  non-secret flags, never a credential); no `NODE_ENV` or `E2E_TEST_LOGIN` key exists in any of
+  the four env files (prints only the key **name** if one is ever found, never a value); the four
+  monitoring timers (§6) are active, with their next scheduled run; the last backup is under 26h
+  old; disk and memory usage (printed as `INFO`, not a pass/fail — `disk-alert.timer` is what
+  actually pages on high usage).
+
+Run it any time after a deploy, and definitely as part of go-live (`docs/plans/prod-deploy.md`
+§4 step 18 onward) and before submitting to the payment gateway. A `FAIL` on the security-header
+check most likely means those headers aren't configured yet anywhere in this codebase (confirmed
+during Session 8 — neither `apps/web/next.config.ts` nor `deploy-prod/Caddyfile` currently set
+HSTS/`X-Content-Type-Options`/`Referrer-Policy`/`X-Frame-Options` for the real pages, only for
+`/preview/home`'s own unrelated `noindex`/no-cache headers) — adding them is its own small
+follow-up, not something this verification script does for you.
 
 ## Related docs
 

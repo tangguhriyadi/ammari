@@ -10,6 +10,11 @@ It only ever restores into a **disposable** database — never the real `ammari`
 `CLAUDE.md`'s local-safety rule. For an actual production incident, skip to "Real disaster
 restore" at the end of this file instead.
 
+**`deploy-prod/restore-drill-local.sh` (Session 8) automates every step below** — run that
+instead of typing these commands by hand; this file documents what it actually does under the
+hood, and is still the one to follow for the manual steps or if the script itself needs
+debugging.
+
 ## What you need
 
 - `PG_BACKUP_ENCRYPTION_KEY` — from `~/ammari-secrets/prod-backup.env` (or your password
