@@ -481,50 +481,32 @@ files (step 10), GitHub environment (step 11), and everything from step 12 onwar
    **consent screen** is already **"In production."** No **Authorized JavaScript origins** are
    needed — this is a server-side OAuth flow, so the client has none listed and none to add.
 10. **Build the secrets files, on your Mac, never displayed or typed by hand.** *Remaining.*
+    `deploy-prod/make-prod-env.sh` does this: builds `~/ammari-secrets/prod-admin.env`,
+    `prod-web.env`, `prod-db.env` and `prod-backup.env` from `deploy-prod/env/*.example`,
+    generating fresh secrets with `openssl rand` (both `BETTER_AUTH` secrets, `REVALIDATE_SECRET`
+    and `PREVIEW_SECRET` — each shared identically between `prod-admin.env`/`prod-web.env` —
+    the Postgres password written consistently into `prod-db.env` and into `DATABASE_URL` in
+    both app files, and `PG_BACKUP_ENCRYPTION_KEY`), and filling every non-secret value from
+    this plan (`https://ammari.id`/`https://admin.ammari.id`, `DEPLOY_ENV=production`,
+    `STOREFRONT_CART_ENABLED=false`, the `ammariprod-cdy2yf`/`kencana` bucket settings, the
+    alert-recipient addresses). It reads the already-provisioned prod Resend key from
+    `~/ammari-secrets/prod-resend-api-key` (step 8), and reuses the Google OAuth client id/
+    secret and S3 access key/secret from `~/ammari-secrets/dev-admin.env` when the variable
+    names exist there (same Google client, same Cloudeka account — step 9, step 7), asking for
+    anything it can't find with a hidden prompt instead. It never prints a secret to the
+    terminal, never writes one into this repo, and refuses to overwrite an existing
+    `~/ammari-secrets/prod-*.env` unless you pass `--force` (which backs the old file up with a
+    timestamp first):
     ```bash
-    mkdir -p ~/ammari-secrets
-    cp deploy-prod/env/admin.env.example  ~/ammari-secrets/prod-admin.env
-    cp deploy-prod/env/web.env.example    ~/ammari-secrets/prod-web.env
-    cp deploy-prod/env/backup.env.example ~/ammari-secrets/prod-backup.env
-
-    # REVALIDATE_SECRET and PREVIEW_SECRET must be IDENTICAL between admin and web — generate
-    # each ONCE, then append the same value to both files:
-    REVALIDATE_SECRET="$(openssl rand -base64 32)"
-    printf 'REVALIDATE_SECRET=%s\n' "$REVALIDATE_SECRET" >> ~/ammari-secrets/prod-admin.env
-    printf 'REVALIDATE_SECRET=%s\n' "$REVALIDATE_SECRET" >> ~/ammari-secrets/prod-web.env
-    unset REVALIDATE_SECRET
-
-    PREVIEW_SECRET="$(openssl rand -base64 32)"
-    printf 'PREVIEW_SECRET=%s\n' "$PREVIEW_SECRET" >> ~/ammari-secrets/prod-admin.env
-    printf 'PREVIEW_SECRET=%s\n' "$PREVIEW_SECRET" >> ~/ammari-secrets/prod-web.env
-    unset PREVIEW_SECRET
-
-    # App-specific secrets, straight into their own file, never assigned to a shell variable
-    # you'd have to remember to unset:
-    printf 'STAFF_BETTER_AUTH_SECRET=%s\n' "$(openssl rand -base64 32)" >> ~/ammari-secrets/prod-admin.env
-    printf 'CUSTOMER_BETTER_AUTH_SECRET=%s\n' "$(openssl rand -base64 32)" >> ~/ammari-secrets/prod-web.env
-
-    # Backup encryption key — needed again in step 19's restore-drill-for-real and in any future
-    # disaster recovery. LOSING THIS KEY MAKES EVERY EXISTING ENCRYPTED BACKUP PERMANENTLY
-    # UNREADABLE — there is no recovery path without it. Keep a copy in a password manager
-    # (not just this file on your Mac) the moment it's generated, before it's ever used.
-    printf 'PG_BACKUP_ENCRYPTION_KEY=%s\n' "$(openssl rand -base64 48)" >> ~/ammari-secrets/prod-backup.env
-
-    chmod 600 ~/ammari-secrets/*
+    deploy-prod/make-prod-env.sh
     ```
-    Now **edit the non-secret values by hand** in those same three files (this part is normal
-    editing, not a secrets operation): `DATABASE_URL`, `MAIN_SITE_URL`, `BETTER_AUTH_URL`s
-    (`https://ammari.id` for web — the **apex**, not `www.`), `DEPLOY_ENV=production`, Google
-    OAuth client id/secret (step 9 — these came from Google's console, not generated locally, so
-    typing them in is unavoidable but they aren't freshly-generated local secrets either),
-    Resend key (step 8), and the `ammariprod-cdy2yf` bucket's endpoint/region/access key into
-    `S3_*` in `prod-admin.env` only (step 7 — **not** duplicated into `prod-backup.env`, which
-    holds only `PG_BACKUP_ENCRYPTION_KEY`; the backup script reads `admin.env`'s `S3_*` vars
-    directly, see Session 5). `S3_KEY_PREFIX` stays **empty** for this bucket (unlike dev's
-    `dev/` prefix) — it must match `bucket-policy.prod.json`'s unprefixed `products/*`/
-    `content/*` resources, or uploaded images silently stop being publicly readable. **Never**
-    add `NODE_ENV` or `E2E_TEST_LOGIN` to any of these files. Double-check
-    `STOREFRONT_CART_ENABLED=false` in `prod-web.env` (the whole point of this early launch).
+    It ends with a validation pass that prints only key names — which are set, still empty, or
+    still a placeholder — and confirms (by hash, never by value) that `REVALIDATE_SECRET` and
+    `PREVIEW_SECRET` actually match between `prod-admin.env` and `prod-web.env`. A few values it
+    deliberately leaves empty for you to fill by hand afterward (not generated or confirmed by
+    the plan's own text): `EMAIL_FROM` and `STORAGE_PUBLIC_BASE_URL` in both app files, and
+    `STORE_WHATSAPP_NUMBER` in `prod-web.env` (optional fallback only — see step 19). **Never**
+    add `NODE_ENV` or `E2E_TEST_LOGIN` to any of these files — the script never does either.
 11. **GitHub repo settings.** *Remaining.*
     - **Settings → Actions → General → Workflow permissions** → "Read and write permissions"
       (should already be set from dev's setup; confirm it still is).
@@ -537,17 +519,21 @@ files (step 10), GitHub environment (step 11), and everything from step 12 onwar
         `DEPLOY_SSH_USER` (`deploy`), `DEPLOY_SSH_KEY` (the **prod** private key from step 3),
         `DEPLOY_SSH_KNOWN_HOSTS` (step 3's `ssh-keyscan` output).
 12. **Copy the secrets files onto the VPS, then fill in the real env files.** *Remaining.*
+    `deploy-prod/upload-prod-env.sh` does this: `scp`s all four files from `~/ammari-secrets`
+    (`prod-admin.env`, `prod-web.env`, `prod-db.env`, `prod-backup.env`) to
+    `deploy@43.173.52.121:/opt/ammari-prod/env/` as `admin.env`/`web.env`/`db.env`/`backup.env`
+    using `~/ammari-secrets/ammari_prod_deploy_key`, then `chmod 600`s them remotely. It prints
+    only file names and permissions, never a file's contents:
     ```bash
-    scp ~/ammari-secrets/prod-admin.env  deploy@<vps-ip>:/opt/ammari-prod/env/admin.env
-    scp ~/ammari-secrets/prod-web.env    deploy@<vps-ip>:/opt/ammari-prod/env/web.env
-    scp ~/ammari-secrets/prod-backup.env deploy@<vps-ip>:/opt/ammari-prod/env/backup.env
-    ssh deploy@<vps-ip> 'chmod 600 /opt/ammari-prod/env/*.env'
+    deploy-prod/upload-prod-env.sh
     ```
-    These three files are now complete (step 10 already filled in every value, secret and
+    These four files are now complete (step 10 already filled in every value, secret and
     non-secret) — nothing left to edit on the VPS itself. If a non-secret value ever needs to
-    change later (a URL, a flag), edit the copy in `~/ammari-secrets` and re-run the matching
-    `scp` line above, rather than editing the file directly on the VPS, so `~/ammari-secrets`
-    stays the one source of truth.
+    change later (a URL, a flag), edit the copy in `~/ammari-secrets` and re-run this script,
+    rather than editing a file directly on the VPS, so `~/ammari-secrets` stays the one source
+    of truth. (`prod-db.env`/`db.env` holds `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` for
+    the self-hosted `db` service, `deploy-prod/docker-compose.yml`'s own `env_file: ./env/db.env`
+    — easy to forget since it's the one file step 10/12 didn't originally call out by name.)
 13. **Promote `dev` into `main`.** `main` already exists in this repo (confirmed:
     `git branch -a` shows both local and `origin/main`) — if it ever doesn't,
     `git checkout -b main dev && git push -u origin main` first. Otherwise, fast-forward it to
