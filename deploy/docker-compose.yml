@@ -31,8 +31,15 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy/certs:/etc/caddy/certs:ro
+      # ./caddy (Caddyfile + certs/) is mounted as ONE directory, not a single-file mount of the
+      # Caddyfile — Session 10: a single-file bind mount binds to that file's INODE, not its
+      # path, and rsync's default replace-via-rename (what every deploy's sync step does) swaps
+      # the inode, leaving a single-file-mounted container serving stale content forever
+      # (confirmed real on THIS environment — see docs/deploy.md's Caddy-reload section and
+      # ./caddy/Caddyfile's own header comment for the full story). A directory mount doesn't
+      # have this problem: the container always resolves a path against whatever the host
+      # directory currently contains.
+      - ./caddy:/etc/caddy:ro
       - ./cloudflare:/etc/caddy/cloudflare:ro
       - caddy_data:/data
       - caddy_config:/config

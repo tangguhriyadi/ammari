@@ -57,7 +57,7 @@
 #                                           images below), same shape as dev's own file.
 #
 # Why health checks can verify "through Caddy" at all despite zone-level Authenticated Origin
-# Pulls: every PUBLIC site block in deploy-prod/Caddyfile requires the Cloudflare client
+# Pulls: every PUBLIC site block in deploy-prod/caddy/Caddyfile requires the Cloudflare client
 # certificate, which this VPS deliberately never holds (only the CA root does —
 # deploy-prod/cloudflare/README.md). Caddyfile (Session 2) was extended with two bare-port,
 # plain-HTTP, never-published internal listeners (`:8080` for web, `:8081` for admin) that import
@@ -173,23 +173,74 @@ docker compose up -d caddy
 # run (e.g. this exact change: new security headers, no app code touched), neither process_app
 # call below reloads Caddy at all, and the new file would sit on disk, unread by the running
 # `caddy` process, until some LATER deploy happens to flip a slot for an unrelated reason. Hash
-# the files Caddy actually imports (Caddyfile + the cloudflare/*.caddy snippets rsync keeps in
-# sync — NOT cloudflare/origin-pull-ca.pem or caddy/active-upstream.caddy, both excluded from
+# the files Caddy actually imports (caddy/Caddyfile + the cloudflare/*.caddy snippets rsync keeps
+# in sync — NOT cloudflare/origin-pull-ca.pem or caddy/active-upstream.caddy, both excluded from
 # rsync and already covered by every flip's own reload_caddy call) against the hash recorded last
-# time THIS script ran, and reload only when it actually changed. `caddy validate` first means a
-# syntax error here fails loudly before touching the live config — `caddy reload` itself also
-# validates and refuses a broken config, but checking explicitly gives a clearer error message
-# and exit code than parsing reload's own output would.
+# time THIS script ran, and reload only when it actually changed.
+#
+# Session 10: `caddy reload` alone is NOT enough to trust here — confirmed real on dev, where the
+# host file had new content, `caddy reload` reported success, but the caddy CONTAINER's own
+# `/etc/caddy/Caddyfile` still had the old content, because the Caddyfile used to be a
+# single-file bind mount (binds to that file's INODE, not its path — rsync's default
+# replace-via-rename swaps the inode, and a single-file mount never re-resolves to the new one).
+# Fixed structurally by mounting `./caddy` as a whole DIRECTORY (docker-compose.yml), which
+# doesn't have this problem — but this script still VERIFIES that before trusting a reload, and
+# recreates the container instead if it's ever wrong again for any other reason:
+#   1. `caddy validate` first — a syntax error fails loudly before touching the live config.
+#   2. Compare the CONTAINER's own view of these files (sha256, via `docker compose exec`) against
+#      the host's — if they already match, a plain `reload` is trusted. If they don't, `reload`
+#      would just re-read the exact same (potentially still-stale) bind-mounted path, so this
+#      recreates the `caddy` container instead (stop+start — measured locally, well under 2s of
+#      downtime for Caddy specifically, no slow init to wait through).
+#   3. Verify the container's view again after whichever of the two just ran — if it STILL
+#      doesn't match, something deeper than a one-off staleness is wrong with the caddy volume
+#      mounts, and this aborts the deploy rather than silently serving old config.
+#   4. Finally, verify the actual behavior, not just the file: curl the internal `:8080` listener
+#      (same one `poll_health_through_caddy` below already uses) and confirm a security header
+#      this exact config is supposed to add is actually present in the live response.
 CADDY_CONFIG_HASH_FILE=".caddy-config-hash"
-new_caddy_hash="$(cat Caddyfile cloudflare/*.caddy 2>/dev/null | sha256sum | cut -d' ' -f1)"
+new_caddy_hash="$(cat caddy/Caddyfile cloudflare/*.caddy 2>/dev/null | sha256sum | cut -d' ' -f1)"
 old_caddy_hash="$(cat "$CADDY_CONFIG_HASH_FILE" 2>/dev/null || true)"
+
+caddy_container_matches_host() {
+  local container_hash
+  container_hash="$(docker compose exec -T caddy sh -c \
+    'cat /etc/caddy/Caddyfile /etc/caddy/cloudflare/*.caddy 2>/dev/null | sha256sum | cut -d" " -f1' \
+    2>/dev/null || true)"
+  [ -n "$container_hash" ] && [ "$container_hash" = "$new_caddy_hash" ]
+}
+
+caddy_headers_live() {
+  local hdrs
+  hdrs="$(docker compose exec -T caddy curl -sI http://127.0.0.1:8080/ 2>/dev/null || true)"
+  grep -qi '^strict-transport-security:' <<<"$hdrs"
+}
+
 if [ "$new_caddy_hash" != "$old_caddy_hash" ]; then
-  echo "==> Caddyfile/cloudflare snippet changed since the last deploy — validating and reloading Caddy"
+  echo "==> Caddyfile/cloudflare snippet changed since the last deploy"
   if ! docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
-    echo "==> Caddyfile is INVALID — aborting before reloading (the currently-running config is untouched)" >&2
+    echo "==> Caddyfile is INVALID — aborting before touching the live config (the currently-running config is untouched)" >&2
     exit 1
   fi
-  docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+
+  if caddy_container_matches_host; then
+    echo "==> caddy container's own filesystem already matches the new config — reloading"
+    docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+  else
+    echo "==> caddy container's own filesystem does NOT match the new host config — a reload would just re-read the same (possibly stale) bind-mounted path, so recreating the caddy container instead"
+    docker compose up -d --force-recreate caddy
+  fi
+
+  if ! caddy_container_matches_host; then
+    echo "==> FATAL: caddy container still doesn't see the new config even after a recreate — something deeper is wrong with the caddy volume mounts, not just a one-off staleness" >&2
+    exit 1
+  fi
+  if ! caddy_headers_live; then
+    echo "==> FATAL: caddy container's config matches on disk, but the internal :8080 listener is not serving the expected security headers — Caddy may not have actually reloaded/started cleanly" >&2
+    exit 1
+  fi
+  echo "==> Caddy is serving the updated config (verified via sha256 + a live header check on :8080)"
+
   echo "$new_caddy_hash" > "$CADDY_CONFIG_HASH_FILE"
 else
   echo "==> Caddyfile/cloudflare snippets unchanged since the last deploy — no reload needed here (a slot flip below, if any, still reloads Caddy itself)"
@@ -282,7 +333,7 @@ poll_health_container() {
 
 poll_health_through_caddy() {
   local app="$1" port attempt
-  # :8080/:8081 are the internal-only plain-HTTP listeners added to deploy-prod/Caddyfile
+  # :8080/:8081 are the internal-only plain-HTTP listeners added to deploy-prod/caddy/Caddyfile
   # (Session 3) specifically so this script can verify its own just-flipped reverse_proxy
   # upstream end-to-end without the Cloudflare client certificate this VPS never holds.
   if [ "$app" = "web" ]; then port=8080; else port=8081; fi

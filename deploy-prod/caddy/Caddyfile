@@ -1,5 +1,18 @@
-# Prod-environment Caddyfile (docs/plans/prod-deploy.md §3 Session 2). Copied from
-# deploy/Caddyfile (dev) as the stated starting point — differences from that file:
+# Prod-environment Caddyfile (docs/plans/prod-deploy.md §3 Session 2). Lives at
+# deploy-prod/caddy/Caddyfile, not deploy-prod/Caddyfile (moved here in Session 10) — this
+# directory is mounted WHOLE into the caddy container (`./caddy:/etc/caddy:ro` in
+# docker-compose.yml), deliberately NOT a single-file bind mount of just this file. A single-file
+# mount binds to the file's INODE, not its path; rsync's default replace-via-rename (writing a
+# new file then renaming over the old one, same as every deploy's sync step does) swaps the
+# inode at that path, and a running container with a single-file mount keeps serving the OLD
+# inode's content forever — `caddy reload` reads that same stale bind mount and reports success
+# while actually serving nothing new. Confirmed real on dev (Session 10): the host file had the
+# new content, the container's own `/etc/caddy/Caddyfile` did not, and only recreating the
+# container fixed it. A directory mount doesn't have this problem — the container always resolves
+# the path against whatever the host directory currently points to. See docs/deploy-prod.md §12.
+#
+# Copied from deploy/caddy/Caddyfile (dev) as the stated starting point — differences from that
+# file:
 #   - No `X-Robots-Tag: noindex` anywhere (every host here is a real, indexable prod host; dev's
 #     own file flags this exact line as the one to drop when prod gets its own Caddyfile).
 #   - `www.ammari.id` gets its OWN site block that only 301-redirects to the apex — dev instead
@@ -101,8 +114,11 @@ import cloudflare/cloudflare-only.caddy
 # each a `reverse_proxy` to whichever slot is currently active. The file checked into this repo
 # is a sensible DEFAULT pointing at the blue slots (see deploy-prod/caddy/active-upstream.caddy's
 # own header comment) so this Caddyfile validates and runs correctly even before Session 3's
-# deploy script exists; Session 3 is what actually rewrites it on every slot flip.
-import generated/active-upstream.caddy
+# deploy script exists; Session 3 is what actually rewrites it on every slot flip. Lives in this
+# SAME directory (not a separate "generated/" mount point) as of Session 10 — see this
+# Caddyfile's own new location (deploy-prod/caddy/Caddyfile, not deploy-prod/Caddyfile) and
+# docker-compose.yml's single `./caddy:/etc/caddy:ro` directory mount for why.
+import active-upstream.caddy
 
 # Internal-only health-check listeners (Session 3, deploy-prod/remote-deploy.sh). Plain HTTP,
 # NEVER published to the host (deploy-prod/docker-compose.yml's `caddy` service only publishes

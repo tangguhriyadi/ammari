@@ -47,13 +47,19 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      # deploy-prod/Caddyfile, caddy/certs/, cloudflare/ are Session 2's deliverables — this
-      # service definition is added now so Session 2 only has to add files, not touch compose.
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy/certs:/etc/caddy/certs:ro
+      # ./caddy (Caddyfile, certs/, the generated active-upstream snippet) is mounted as ONE
+      # directory, not individual single-file mounts — Session 10: a single-file bind mount
+      # binds to that file's INODE, not its path, and rsync's default replace-via-rename (what
+      # every deploy's sync step does) swaps the inode, leaving a single-file-mounted container
+      # serving stale content forever (confirmed real on dev — see docs/deploy-prod.md §12 and
+      # ./caddy/Caddyfile's own header comment for the full story). A directory mount doesn't
+      # have this problem: the container always resolves a path against whatever the host
+      # directory currently contains. `cloudflare/` is a separate directory mount for the same
+      # reason it always was — it was never single-file to begin with, just kept apart from
+      # Caddy's own `caddy/` directory since prod's AOP CA root lives there and must stay
+      # excluded from the routine deploy sync.
+      - ./caddy:/etc/caddy:ro
       - ./cloudflare:/etc/caddy/cloudflare:ro
-      # Session 3's generated active-upstream snippet lives here too, imported by the Caddyfile.
-      - ./caddy:/etc/caddy/generated:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:

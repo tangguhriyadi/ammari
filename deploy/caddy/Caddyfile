@@ -1,6 +1,19 @@
-# Dev-environment Caddyfile (docs/deploy.md). Prod will get its own Caddyfile on its own VPS
-# later (docs/plans/deploy-dev.md, open question 1) — copy this one as the starting point and
-# remove the X-Robots-Tag lines, which exist ONLY because every host in THIS file is a dev host.
+# Dev-environment Caddyfile (docs/deploy.md). Lives at deploy/caddy/Caddyfile, not
+# deploy/Caddyfile (moved here in Session 10) — this directory is mounted WHOLE into the caddy
+# container (`./caddy:/etc/caddy:ro` in docker-compose.yml), deliberately NOT a single-file bind
+# mount of just this file. A single-file mount binds to the file's INODE, not its path; rsync's
+# default replace-via-rename (writing a new file then renaming over the old one, same as every
+# deploy's sync step does) swaps the inode at that path, and a running container with a
+# single-file mount keeps serving the OLD inode's content forever — `caddy reload` reads that
+# same stale bind mount and reports success while actually serving nothing new. Confirmed real
+# on THIS environment (Session 10): the host file had the new content, the container's own
+# `/etc/caddy/Caddyfile` did not, and only recreating the container fixed it. A directory mount
+# doesn't have this problem — the container always resolves the path against whatever the host
+# directory currently points to. See docs/deploy.md's Caddy-reload section.
+#
+# Prod got its own Caddyfile on its own VPS later (docs/plans/deploy-dev.md, open question 1) —
+# deploy-prod/caddy/Caddyfile was copied from this one as the starting point, with the
+# X-Robots-Tag lines removed, since every host in THIS file is a dev host.
 #
 # The Cloudflare trust boundary lives entirely here, not in ufw (docker publishes its own
 # iptables rules that bypass ufw's filtering of published ports — see docs/plans/deploy-dev.md):

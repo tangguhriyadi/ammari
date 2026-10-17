@@ -64,11 +64,58 @@ docker compose up -d
 
 # Picks up a changed Caddyfile/cert volume without restarting the caddy container — `up -d`
 # alone won't notice a bind-mounted file changed on disk (only an image/env/command diff
-# triggers a recreate), so a deploy that touched deploy/Caddyfile would otherwise silently keep
-# serving the OLD config until something else restarted the container. Safe to run every
+# triggers a recreate), so a deploy that touched deploy/caddy/Caddyfile would otherwise silently
+# keep serving the OLD config until something else restarted the container. Safe to run every
 # deploy even when nothing changed (reload is a no-op against an identical config).
+#
+# Session 10: a plain `caddy reload` is NOT enough to trust on its own — confirmed real on THIS
+# environment: the host file had new content, `caddy reload` reported success, but the caddy
+# CONTAINER's own `/etc/caddy/Caddyfile` still had the old content, because the Caddyfile used
+# to be a single-file bind mount (binds to that file's INODE, not its path — rsync's default
+# replace-via-rename swaps the inode, and a single-file mount never re-resolves to the new one).
+# Fixed structurally by mounting `./caddy` as a whole DIRECTORY (docker-compose.yml), which
+# doesn't have this problem — but this script still verifies that before trusting a reload, and
+# recreates the container instead if it's ever wrong again for any other reason: compare the
+# container's own sha256 of these files against the host's; if they already match, trust a plain
+# reload; if they don't, a reload would just re-read the same stale path, so recreate instead;
+# then verify again, and finally confirm a security header is actually present on a live
+# response through the container's own internal :3000-facing listener (there's no internal
+# bare-port health listener here the way deploy-prod/caddy/Caddyfile has — curl straight to Caddy on
+# its own published port from INSIDE the container, which doesn't need the Cloudflare client
+# cert client_auth requires from outside).
+caddy_hash="$(cat caddy/Caddyfile cloudflare/*.caddy 2>/dev/null | sha256sum | cut -d' ' -f1)"
+caddy_container_matches_host() {
+  local container_hash
+  container_hash="$(docker compose exec -T caddy sh -c \
+    'cat /etc/caddy/Caddyfile /etc/caddy/cloudflare/*.caddy 2>/dev/null | sha256sum | cut -d" " -f1' \
+    2>/dev/null || true)"
+  [ -n "$container_hash" ] && [ "$container_hash" = "$caddy_hash" ]
+}
+# No internal, non-AOP-gated port to curl for a live header check here (unlike
+# deploy-prod/caddy/Caddyfile's :8080/:8081) — client_auth on ammari.my.id/admin.ammari.my.id applies
+# to every path on those hostnames, and this VPS only ever holds the AOP CA root, never a leaf
+# cert's private key (deploy/cloudflare/README.md), so there's no way to present a valid client
+# cert from inside this script either. The sha256 content-match below is the authoritative check
+# here: it directly confirms the running container's filesystem holds byte-identical content to
+# what the Caddyfile on disk says — `caddy reload`/`validate` succeeding against that same
+# content is Caddy's own job, already exercised on every commit via CI's `caddy validate`.
 echo "==> Reloading Caddy config"
-docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+if ! docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
+  echo "==> Caddyfile is INVALID — aborting before touching the live config (the currently-running config is untouched)" >&2
+  exit 1
+fi
+if caddy_container_matches_host; then
+  echo "==> caddy container's own filesystem already matches the host — reloading"
+  docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+else
+  echo "==> caddy container's own filesystem does NOT match the host — a reload would just re-read the same (possibly stale) bind-mounted path, so recreating the caddy container instead"
+  docker compose up -d --force-recreate caddy
+fi
+if ! caddy_container_matches_host; then
+  echo "==> FATAL: caddy container still doesn't see the current config even after a recreate — something deeper is wrong with the caddy volume mounts, not just a one-off staleness" >&2
+  exit 1
+fi
+echo "==> Caddy's own filesystem matches the current config (verified via sha256)"
 
 poll_health() {
   local service="$1" attempt

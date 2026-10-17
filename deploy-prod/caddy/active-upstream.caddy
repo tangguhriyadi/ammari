@@ -5,10 +5,15 @@
 # From Session 3 onward, this file is REGENERATED, not hand-edited: deploy-prod/remote-deploy.sh
 # rewrites it to name whichever slot (blue or green) is currently active for each app — read from
 # /opt/ammari-prod/active-slot-admin and /opt/ammari-prod/active-slot-web — then runs
-# `caddy reload` so the new upstream takes effect with no downtime and no Caddyfile change. Mounted
-# read-only into the caddy container at /etc/caddy/generated/active-upstream.caddy
-# (deploy-prod/docker-compose.yml's `./caddy:/etc/caddy/generated:ro`) and imported once, by
-# ../Caddyfile, before either site block that uses these two named snippets.
+# `caddy reload` so the new upstream takes effect with no downtime and no Caddyfile change.
+# Rewritten via `cat > this-file <<EOF ... EOF` — a truncate-and-write into the SAME inode, never
+# a write-then-rename — so even before Session 10's directory-mount fix (see ../Caddyfile's own
+# header), this particular file was never at risk of the single-file-bind-mount staleness bug
+# that hit the Caddyfile itself: a running container always sees an in-place rewrite of a file it
+# already has mounted, single-file or not. Confirmed with a real Linux bind-mount test, not just
+# reasoned about. Mounted read-only into the caddy container at /etc/caddy/active-upstream.caddy
+# (deploy-prod/docker-compose.yml's `./caddy:/etc/caddy:ro` directory mount) and imported once,
+# by ../Caddyfile, before either site block that uses these two named snippets.
 (active_upstream_web) {
 	reverse_proxy web-blue:3000
 }
