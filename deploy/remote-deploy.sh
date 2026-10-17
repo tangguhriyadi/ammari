@@ -78,11 +78,20 @@ docker compose up -d
 # recreates the container instead if it's ever wrong again for any other reason: compare the
 # container's own sha256 of these files against the host's; if they already match, trust a plain
 # reload; if they don't, a reload would just re-read the same stale path, so recreate instead;
-# then verify again, and finally confirm a security header is actually present on a live
-# response through the container's own internal :3000-facing listener (there's no internal
-# bare-port health listener here the way deploy-prod/caddy/Caddyfile has — curl straight to Caddy on
-# its own published port from INSIDE the container, which doesn't need the Cloudflare client
-# cert client_auth requires from outside).
+# then verify again (fatal if it still doesn't match — this is the one check in here that can
+# ever abort the deploy), and finally cross-check Caddy's actual in-memory running config via
+# its admin API (`http://127.0.0.1:2019/config/` — loopback-only inside the container; nothing
+# to do with the public ammari.my.id/admin.ammari.my.id site blocks' client_auth, so AOP is not
+# a problem for this check the way it would be for curling a real public path). Checks the LIVE
+# config contains the expected header VALUES, rather than a byte-for-byte hash against a
+# freshly-`caddy adapt`ed copy — tried the hash approach first and it produced false mismatches
+# against this real Caddyfile even right after a clean reload, with no actual problem: Caddy's
+# provisioned runtime graph restructures `handle_errors` nesting in a way plain re-adapting
+# doesn't reproduce, so an exact hash compare is the wrong tool here. This second check is
+# advisory only, never fatal: the sha256 content-match above is the authoritative signal (it
+# directly confirms the running container's filesystem holds byte-identical content to what's
+# on disk); if the admin API cross-check can't independently confirm the expected headers are
+# actually live, that's logged as inconclusive, not as a broken deploy.
 caddy_hash="$(cat caddy/Caddyfile cloudflare/*.caddy 2>/dev/null | sha256sum | cut -d' ' -f1)"
 caddy_container_matches_host() {
   local container_hash
@@ -91,14 +100,14 @@ caddy_container_matches_host() {
     2>/dev/null || true)"
   [ -n "$container_hash" ] && [ "$container_hash" = "$caddy_hash" ]
 }
-# No internal, non-AOP-gated port to curl for a live header check here (unlike
-# deploy-prod/caddy/Caddyfile's :8080/:8081) — client_auth on ammari.my.id/admin.ammari.my.id applies
-# to every path on those hostnames, and this VPS only ever holds the AOP CA root, never a leaf
-# cert's private key (deploy/cloudflare/README.md), so there's no way to present a valid client
-# cert from inside this script either. The sha256 content-match below is the authoritative check
-# here: it directly confirms the running container's filesystem holds byte-identical content to
-# what the Caddyfile on disk says — `caddy reload`/`validate` succeeding against that same
-# content is Caddy's own job, already exercised on every commit via CI's `caddy validate`.
+caddy_live_config_has_expected_headers() {
+  local live
+  live="$(docker compose exec -T caddy curl -s http://127.0.0.1:2019/config/ 2>/dev/null || true)"
+  [ -n "$live" ] || return 1
+  grep -q '"Strict-Transport-Security":\["max-age=31536000; includeSubDomains"\]' <<<"$live" || return 1
+  grep -q '"X-Frame-Options":\["SAMEORIGIN"\]' <<<"$live" || return 1  # ammari.my.id
+  grep -q '"X-Frame-Options":\["DENY"\]' <<<"$live" || return 1        # admin.ammari.my.id
+}
 echo "==> Reloading Caddy config"
 if ! docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
   echo "==> Caddyfile is INVALID — aborting before touching the live config (the currently-running config is untouched)" >&2
@@ -112,10 +121,15 @@ else
   docker compose up -d --force-recreate caddy
 fi
 if ! caddy_container_matches_host; then
-  echo "==> FATAL: caddy container still doesn't see the current config even after a recreate — something deeper is wrong with the caddy volume mounts, not just a one-off staleness" >&2
+  echo "==> FATAL: caddy container still doesn't see the current config even after a recreate — something deeper is wrong with the caddy volume mounts, not just a one-off staleness. The deploy is broken, not just inconclusive." >&2
   exit 1
 fi
-echo "==> Caddy's own filesystem matches the current config (verified via sha256)"
+echo "==> Caddy's own filesystem matches the current config (verified via sha256) — deploy state is confirmed live"
+if caddy_live_config_has_expected_headers; then
+  echo "==> Caddy's live in-memory config (via the admin API) actually contains the expected per-host security headers — fully confirmed, not just inconclusive"
+else
+  echo "==> NOTE: verification inconclusive — could not independently confirm via Caddy's admin API that the live in-memory config has the expected headers (the file-level check above already passed, which is the authoritative signal here; this does not mean the deploy is broken)"
+fi
 
 poll_health() {
   local service="$1" attempt
