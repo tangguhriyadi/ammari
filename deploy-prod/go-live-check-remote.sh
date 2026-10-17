@@ -92,7 +92,14 @@ else
     echo "LISTEN:${addr}:${port}"
   done
 fi
-docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null </dev/null | while IFS= read -r line; do
+# Pipe-delimited, not space-delimited — {{.Ports}} itself contains spaces (e.g. after each
+# comma in "0.0.0.0:80->80/tcp, [::]:80->80/tcp"), so a space-split local parser can't reliably
+# tell the name/ports fields apart. The compose service label (always set by `docker compose up`,
+# regardless of the project-name prefix compose puts on the CONTAINER NAME, e.g.
+# "ammari-prod-caddy-1") is what the local script uses to recognize caddy — matching on the name
+# itself breaks the moment the project name isn't literally "ammari-prod" with no instance
+# suffix, which is exactly what happens on the real VPS.
+docker ps --format '{{.Names}}|{{.Label "com.docker.compose.service"}}|{{.Ports}}' 2>/dev/null </dev/null | while IFS= read -r line; do
   echo "PUBPORT $line"
 done
 echo "PORTAUDIT_DONE:0"

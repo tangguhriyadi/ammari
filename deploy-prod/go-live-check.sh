@@ -499,20 +499,35 @@ run_ssh_checks() {
   local pub_violations=()
   while IFS= read -r rest; do
     [ -z "$rest" ] && continue
-    local cname cports
-    cname="${rest%% *}"
-    cports="${rest#* }"
-    [ "$cports" = "$cname" ] && cports=""
+    # Pipe-delimited (name|compose-service-label|ports) — see go-live-check-remote.sh's own
+    # comment for why: {{.Ports}} contains spaces, and the container NAME on the real VPS is
+    # "ammari-prod-caddy-1" (compose's project-name prefix), never literally "caddy". The compose
+    # service label is what's actually checked below, not the name.
+    local cname service cports
+    cname="${rest%%|*}"
+    rest="${rest#*|}"
+    service="${rest%%|*}"
+    cports="${rest#*|}"
     local mappings=() m hostpart hostport
     IFS=',' read -ra mappings <<<"$cports"
+    # Same host port is listed once per address family (IPv4 "0.0.0.0:80->80/tcp" AND IPv6
+    # "[::]:80->80/tcp" for one real published port) — de-dupe per container so one actually-
+    # published port doesn't produce two identical violation lines. bash 3.2 has no associative
+    # arrays (added in bash 4), so "seen" is tracked as a space-padded string checked with a glob,
+    # not declare -A.
+    local seen_ports=""
     for m in "${mappings[@]}"; do
       m="$(tr -d '[:space:]' <<<"$m")"
       [[ "$m" == *"->"* ]] || continue
       hostpart="${m%%->*}"
       hostport="${hostpart##*:}"
+      case " $seen_ports " in
+        *" $hostport "*) continue ;;
+      esac
+      seen_ports="$seen_ports $hostport"
       if [ "$hostport" != "80" ] && [ "$hostport" != "443" ]; then
         pub_violations+=("$cname publishes $hostport")
-      elif [ "$cname" != "caddy" ]; then
+      elif [ "$service" != "caddy" ]; then
         pub_violations+=("$cname (not caddy) publishes $hostport")
       fi
     done
