@@ -260,8 +260,13 @@ jobs:
       # this repo: env/ (the real admin.env/web.env/db.env — this repo only has the .example
       # files, which the owner copies by hand per docs/plans/prod-deploy.md §4 step 10, never
       # through this sync), caddy/certs/ (the real origin cert+key), cloudflare/origin-pull-ca.pem
-      # (the AOP CA root), and backup/ (Session 5's encryption key/env, once it lands). Also
-      # excludes every piece of remote-deploy.sh's own on-disk state so a sync can never clobber it:
+      # (the AOP CA root), backup/ (Session 5 — install-backup-timer.sh is run by hand after an
+      # out-of-band scp, specifically so a routine app deploy can never silently overwrite
+      # pg-backup.sh or the last-backup-status.json it writes), and monitoring/ (Session 6 — same
+      # reasoning as backup/: install-monitoring.sh is also run by hand after an out-of-band scp,
+      # so a routine deploy never overwrites the check scripts OR monitoring/state/, the alert
+      # dedup bookkeeping the checks themselves write between deploys). Also excludes every piece
+      # of remote-deploy.sh's own on-disk state so a sync can never clobber it:
       # active-slot-*/deployed-sha-* (which slot + sha is live per app), deploy-history.log (image
       # retention), .env (Compose's per-slot image tags), and caddy/active-upstream.caddy (the
       # generated Caddy snippet reflecting whichever slots are ACTUALLY live right now — the
@@ -279,6 +284,7 @@ jobs:
             --exclude 'caddy/active-upstream.caddy' \
             --exclude 'cloudflare/origin-pull-ca.pem' \
             --exclude 'backup/' \
+            --exclude 'monitoring/' \
             --exclude '.env' \
             --exclude 'active-slot-*' \
             --exclude 'deployed-sha-*' \

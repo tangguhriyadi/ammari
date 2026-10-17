@@ -1,0 +1,11 @@
+[Unit]
+Description=Run health-check.service every 10 minutes
+
+[Timer]
+OnCalendar=*-*-* *:0/10:00
+# A missed run just means waiting for the next 10-minute mark — not worth a catch-up run the way
+# the once-a-day/once-an-hour timers are, so Persistent is left at its default (false) here.
+Unit=health-check.service
+
+[Install]
+WantedBy=timers.target

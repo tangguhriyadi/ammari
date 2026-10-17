@@ -308,25 +308,68 @@ hand per §4.
   the real DB; restore drill only ever targets a disposable DB).
 
 ### Session 6 — Monitoring minimum
-- **Scope:** document (not code — UptimeRobot is a SaaS the owner sets up directly, §4 step 18)
-  the uptime check, and build the other two, both alerting by **email via the prod Resend API
-  key** (read from `/opt/ammari-prod/env/admin.env`, same key the app already uses for OTP —
-  a plain `curl` to Resend's `/emails` endpoint, no new credential needed) to **both**
-  `ammariofc@gmail.com` and the owner's own address: (a) uptime — UptimeRobot free tier hitting
-  `/api/health` on both domains, 5-minute interval (confirmed choice; no agent action beyond
-  documenting it in `docs/deploy-prod.md`), (b) disk-space alert — a small script + systemd timer
-  on the VPS that alerts past a threshold (propose 80% used), (c) backup-success check — a script
-  that alerts if **either** the newest object under the prod bucket's `backups/` prefix is older
-  than ~26h **or no backup object exists at all yet** (so a brand-new install with zero backups
-  ever run pages someone immediately, instead of silently waiting for a "staleness" condition
-  that can never trigger when there's nothing to compare against).
-- **Files:** `deploy-prod/monitoring/disk-alert.sh` + its timer unit,
-  `deploy-prod/monitoring/backup-check.sh` + its timer unit, a short section in
-  `docs/deploy-prod.md`.
-- **Verification:** trigger each alert condition manually once (fill the disk with a dummy file
-  under a throwaway path, or point the backup check at an empty/missing bucket prefix) to confirm
-  the alert actually fires and the email actually arrives, then clean up the manual trigger.
-- **Rollback:** scripts/timers only.
+- **Status:** done (2026-10-17). UptimeRobot itself stays documentation-only (a SaaS the owner
+  sets up directly, §4 step 18); the other three checks (disk/backup/health) were built, all
+  alerting by **email via the prod Resend API key** (read from `/opt/ammari-prod/env/admin.env`, same key the app already uses for
+  OTP — the exact throwaway-curl-container mechanism `deploy-prod/backup/pg-backup.sh` (Session 5)
+  already has live in prod, factored into one shared sourced file instead of being duplicated
+  three times — see "Files" below) to **both** `ammariofc@gmail.com` and the owner's own address
+  (`ALERT_EMAIL_TO` in `env/backup.env`):
+  1. **Uptime** — UptimeRobot free tier hitting `/api/health` on both domains, 5-minute interval
+     (confirmed choice; documented in §4 step 18 and §6 below, no agent-built script).
+  2. **Disk-space alert** (`disk-alert.sh`, hourly) — alerts when `/` is ≥80% used, with a
+     `docker system df` summary in the email body so the likely cause (image/layer buildup vs.
+     Postgres data growth) is visible without an SSH round-trip first.
+  3. **Backup-success check** (`backup-check.sh`, daily at 09:00 Asia/Jakarta) — alerts if **any**
+     of: the local `backup/last-backup-status.json` is missing or older than 26h, the newest
+     object under the bucket's `backups/daily/` prefix is missing or older than 26h (listed via
+     the same throwaway aws-cli-container approach `pg-backup.sh` already uses), or the two
+     **disagree** with each other (the status file claims a timestamp that doesn't match what's
+     actually newest in the bucket) — catching not just staleness but a status file that no
+     longer reflects reality.
+  4. **Health check** (`health-check.sh`, every 10 minutes) — added beyond this session's
+     original scope once it became clear "is the app actually up" needed its own check distinct
+     from backup/disk: alerts if the `db` container, the `caddy` container, the active admin slot
+     container, or the active web slot container (read from `active-slot-admin`/`active-slot-web`,
+     the same files `remote-deploy.sh` writes) aren't running/healthy, or if the internal
+     `:8080`/`:8081` `/api/health` checks through Caddy fail — the exact same end-to-end path
+     `remote-deploy.sh`'s own `poll_health_through_caddy` already uses during a deploy.
+
+  **Alert de-duplication (all three scripts, shared logic):** each named condition (one per
+  disk/backup check, six independent ones for health-check — db, caddy, admin container, web
+  container, admin endpoint, web endpoint) alerts at most once per 12 hours while it stays
+  failing, then sends exactly one "RECOVERED" email the next time it's seen passing. State is one
+  small text file per condition under `/opt/ammari-prod/monitoring/state/` — written only by the
+  scripts themselves, never synced from this repo (see "Deploy exclusion" below).
+
+  A `send-test-alert.sh` command sends one real email through the same mechanism, for confirming
+  delivery once right after install — see §4 step 17.
+- **Files:** `deploy-prod/monitoring/lib/alert-lib.sh` (shared: env-file loading, the Resend
+  send, and the dedup/recovery bookkeeping — sourced by all three checks, not duplicated),
+  `deploy-prod/monitoring/disk-alert.{sh,service,timer}`,
+  `deploy-prod/monitoring/backup-check.{sh,service,timer}`,
+  `deploy-prod/monitoring/health-check.{sh,service,timer}`,
+  `deploy-prod/monitoring/send-test-alert.sh`, `deploy-prod/monitoring/install-monitoring.sh`
+  (run by the owner with sudo — installs/enables all three timers, creates
+  `monitoring/state/` owned by `deploy`, prints next scheduled runs).
+  **Deploy exclusion:** `deploy-prod/monitoring/` is added to `.github/workflows/deploy-prod.yml`'s
+  rsync excludes, the same way `backup/` already is — these scripts are installed once by hand
+  (scp + `install-monitoring.sh`, §4 step 17), never through the routine app-deploy sync, so a
+  normal deploy can never silently overwrite a check script or clobber `monitoring/state/`'s
+  dedup bookkeeping between runs.
+- **Verification:** a disposable local Docker stack (fake `db`/`caddy`/`admin-blue`/`web-blue`
+  containers standing in for the real compose services, a throwaway S3-compatible container for
+  the bucket listing, and a mock HTTP server standing in for Resend via the same
+  `RESEND_API_URL` override `pg-backup.sh` already supports) forced each failure condition in
+  turn — disk threshold, missing/stale/disagreeing backup status, a stopped container, a stopped
+  `caddy` — and confirmed: the alert fires with the expected subject/body, an immediate rerun
+  while still failing is suppressed (no duplicate email), and the next passing run sends exactly
+  one "RECOVERED" email and leaves `monitoring/state/` empty again. `shellcheck -x` clean on all
+  five scripts. Everything created for the test (containers, network, temp files) was torn down;
+  no real server was touched.
+- **Rollback:** scripts/timers only; nothing destructive by construction (every check is
+  read-only against the real stack — it only ever reads container/file/bucket state and sends
+  email, never writes to `db`, the bucket, or any app container).
 
 ### Session 7 — Prod bucket policy + runbook (`docs/deploy-prod.md`)
 - **Status:** the bucket-policy half of this session's scope was pulled forward and done
@@ -385,9 +428,10 @@ environment exists under that exact name, the first prod deploy has run successf
 `super_admin` is seeded, and the prod bucket policy is applied and verified (200 on
 `products/*`/`content/*`, 403 elsewhere) using the real `prod-admin.env` credentials. The VPS's
 own clock/timezone is confirmed `Asia/Jakarta` (relevant to Session 5's nightly backup timer,
-below). **Remaining:** install the nightly backup + monitoring timers (step 17 — Session 5 ships
-the scripts/units; this step is the owner actually installing them on the VPS), UptimeRobot (step
-18), entering real products/content (step 19), and the real-backup restore drill (step 20).
+below). **Remaining:** install the nightly backup + monitoring timers (step 17 — Sessions 5 and 6
+both ship the scripts/units now; this step is the owner actually installing them on the VPS),
+UptimeRobot (step 18), entering real products/content (step 19), and the real-backup restore
+drill (step 20).
 
 1. **Buy the VPS.** ✅ **Done.** Sumopod, Jakarta region, **IP `43.173.52.121`**, Ubuntu 24.04,
    `x86_64` confirmed, **2 vCPU / 3.6 GiB RAM / 60 GB SSD** (the actual provisioned specs —
@@ -583,12 +627,38 @@ the scripts/units; this step is the owner actually installing them on the VPS), 
     an actual object under `backups/` specifically, since none exists until Session 5's backup
     timer has run at least once (step 17) — that specific check is still owed, both here and at
     §7's go-live checklist.
-17. **Set up the nightly backup timer and monitoring timers** (Sessions 5–6's systemd units).
-    For the backup timer (Session 5, shipped): on your Mac, `scp -i
-    ~/ammari-secrets/ammari_prod_deploy_key -r deploy-prod/backup
-    deploy@43.173.52.121:/opt/ammari-prod/`, then on the VPS, `cd /opt/ammari-prod/backup &&
-    sudo ./install-backup-timer.sh`. For the monitoring timers (Session 6, not yet shipped):
-    `systemctl enable --now disk-alert.timer backup-check.timer` once those land.
+17. **Set up the nightly backup timer and the three monitoring timers** (Sessions 5 and 6's
+    systemd units — both ship scripts now; this step is you actually installing them). `backup/`
+    and `monitoring/` are both excluded from the routine deploy rsync (§3 Session 5/6), so they
+    only ever reach the VPS via the manual `scp` below — do these **in this exact order**, noting
+    which user runs each command (`deploy` has no sudo; `ubuntu` does):
+    1. **On your Mac**, as yourself, copy both directories over (only needed once, and again any
+       time a script/unit file under either directory changes):
+       ```bash
+       scp -i ~/ammari-secrets/ammari_prod_deploy_key -r deploy-prod/backup \
+         deploy@43.173.52.121:/opt/ammari-prod/
+       scp -i ~/ammari-secrets/ammari_prod_deploy_key -r deploy-prod/monitoring \
+         deploy@43.173.52.121:/opt/ammari-prod/
+       ```
+    2. **SSH onto the VPS as `ubuntu`** (the admin account with sudo — §4 step 3), then install
+       both sets of units:
+       ```bash
+       cd /opt/ammari-prod/backup && sudo ./install-backup-timer.sh
+       cd /opt/ammari-prod/monitoring && sudo ./install-monitoring.sh
+       ```
+       Each install script itself runs `systemctl enable --now` on its own timers and prints
+       their next scheduled run — no separate `systemctl` step needed. `install-monitoring.sh`
+       also creates `/opt/ammari-prod/monitoring/state/`, owned by `deploy` (the user every
+       check/timer actually runs as).
+    3. **Switch to (or SSH back in as) `deploy`** — no sudo needed — and confirm alert delivery
+       actually works, once, before trusting any of this for a real incident:
+       ```bash
+       cd /opt/ammari-prod/monitoring && ./send-test-alert.sh
+       ```
+       Confirm the test email arrives at both `ammariofc@gmail.com` and your own address. If it
+       doesn't, check `ALERT_EMAIL_TO`/`RESEND_API_KEY`/`EMAIL_FROM` in
+       `/opt/ammari-prod/env/{backup,admin}.env` before moving on — see §6 below for what each
+       alert means and how to tell a real incident from a misconfigured alert path.
 18. **Set up UptimeRobot (free tier).**
     - Sign up at uptimerobot.com (free plan is enough — up to 50 monitors, 5-minute interval).
     - **Add New Monitor** → Monitor Type: **HTTP(s)** → Friendly Name "Ammari web health" →
@@ -661,19 +731,43 @@ the scripts/units; this step is the owner actually installing them on the VPS), 
   same key, `pg_restore` into a throwaway `ammari_scratch`-style database (never the real `ammari`
   db, per `CLAUDE.md`'s local-safety rule), spot-check row counts against what prod currently
   reports.
-- **Monitoring minimum (three checks, Session 6), all alerting by email via the prod Resend key
-  to `ammariofc@gmail.com` and the owner's own address:**
+- **Monitoring minimum (four checks, Session 6), the three VPS-local ones alerting by email via
+  the prod Resend key to `ammariofc@gmail.com` and the owner's own address
+  (`ALERT_EMAIL_TO` in `env/backup.env`), each de-duplicated to at most one alert per 12h per
+  condition plus exactly one "RECOVERED" email when it clears
+  (`deploy-prod/monitoring/lib/alert-lib.sh`'s shared dedup state under
+  `/opt/ammari-prod/monitoring/state/`):**
   1. **Uptime (confirmed): UptimeRobot, free tier.** HTTP(s) monitors on `/api/health` for both
      `https://ammari.id` and `https://admin.ammari.id`, 5-minute interval, email alerts (its own
      alert contact, separate from the Resend-based alerts below) — see §4 step 18 for exact
      setup. A SaaS free tier over self-hosting one more service on a 3.6 GiB box.
-  2. **Disk alert** — VPS-local timer, alerts past ~80% disk used (the exact threshold most
-     likely to matter here: Docker image/layer growth plus Postgres data growth over months).
-  3. **Backup success** — VPS-local timer, alerts if **either** the newest object under the
-     prod bucket's `backups/` prefix is older than ~26 hours (gives a bit of slack over the 24h
-     cadence before paging anyone) **or no backup object exists at all** — the latter catches a
-     brand-new install whose backup timer never successfully ran even once, which a pure
-     "staleness" check alone would never flag (there's nothing to compare against yet).
+  2. **Disk alert** (`disk-alert.sh`, hourly) — alerts past ~80% disk used (the exact threshold
+     most likely to matter here: Docker image/layer growth plus Postgres data growth over
+     months), with a `docker system df` summary in the email.
+  3. **Backup success** (`backup-check.sh`, daily at 09:00 Asia/Jakarta) — alerts if the local
+     status file or the newest `backups/daily/` object is missing/older than ~26 hours (gives a
+     bit of slack over the 24h cadence before paging anyone), **or if neither exists yet** (a
+     brand-new install whose backup timer never successfully ran even once — a pure "staleness"
+     check alone would never flag that, since there's nothing to compare against), **or if the
+     two disagree** (the status file's claimed timestamp doesn't match the bucket's actual
+     newest object).
+  4. **Health check** (`health-check.sh`, every 10 minutes) — alerts if `db`, `caddy`, the active
+     admin slot container, or the active web slot container isn't running/healthy, or if the
+     internal `:8080`/`:8081` `/api/health` checks through Caddy fail — six independently
+     tracked/de-duplicated conditions, so e.g. a `caddy` outage doesn't mask or get masked by a
+     `db` outage.
+
+### What each alert means and what to do
+
+| Email subject | What it means | What to do |
+|---|---|---|
+| `VPS disk usage high (N% used)` | `/` is at or above 80% used. | SSH in, run `docker system df -v` (the email already includes the summary) and `docker image prune -a` to reclaim old image layers — **never** `docker system prune --volumes` or anything volume-scoped, that risks the Postgres data volume. If usage is genuine data growth rather than Docker cruft, start planning a disk upsize. |
+| `Nightly backup check FAILED` | The local status file and/or the newest object in the bucket's `backups/daily/` prefix is missing, stale (>26h), or the two disagree. | `journalctl -u pg-backup.service -n 100` on the VPS for the last backup attempt's own output; `docker compose exec db pg_isready` to confirm the database itself is reachable. A single missed night self-heals the next run; a **disagreement** (status file claims success but the bucket doesn't show it) is the one that needs a human to look, since it can mean a transient upload failure that `pg-backup.sh`'s own status write didn't catch. |
+| `db container is not healthy` | The `db` container isn't running, or isn't passing its `pg_isready` healthcheck. | This is the most serious of the four — the whole app is almost certainly down or about to be. `docker compose logs db`, `docker compose up -d db`. |
+| `caddy container is not running` | The only container publishing 80/443 is down — the site is very likely fully unreachable from the internet. | `docker compose logs caddy`, `docker compose up -d caddy`. Usually arrives together with the two `/api/health` alerts below (same underlying cause). |
+| `active admin slot (admin-X) is not running` / `active web slot (web-X) is not running` | Whichever slot `active-slot-admin`/`active-slot-web` currently names isn't running. | Likely a container crash outside of a deploy (a deploy's own blue-green sequencing already health-checks before flipping — see Session 3). `docker compose logs admin-X`/`web-X`, `docker compose up -d admin-X`/`web-X`. |
+| `admin /api/health failed through Caddy` / `web /api/health failed through Caddy` | A request through Caddy's internal `:8081`/`:8080` listener to that app's `/api/health` didn't return 200 — the same end-to-end check `remote-deploy.sh` runs during a deploy. | Could be the app itself (check its own container logs) or Caddy's routing (check `caddy/active-upstream.caddy` points at a running container). If this fires alone (not alongside a container alert), the container is up but the app inside it is unhealthy. |
+| Any subject prefixed `RECOVERED:` | The condition in the original subject has cleared. | Nothing required — this just confirms the earlier alert is resolved. If one never arrives after you've fixed something, re-run that check by hand (`./disk-alert.sh` / `./backup-check.sh` / `./health-check.sh` from `/opt/ammari-prod/monitoring`) to confirm it now passes. |
 
 ---
 

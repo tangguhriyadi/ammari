@@ -1,0 +1,12 @@
+[Unit]
+Description=Run disk-alert.service hourly
+
+[Timer]
+OnCalendar=hourly
+# Catches up on a missed run (VPS reboot/maintenance window) instead of silently waiting up to a
+# full hour for the next scheduled time.
+Persistent=true
+Unit=disk-alert.service
+
+[Install]
+WantedBy=timers.target

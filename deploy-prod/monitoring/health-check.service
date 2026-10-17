@@ -1,0 +1,12 @@
+[Unit]
+Description=Ammari prod: db/caddy/admin/web health check (every 10 minutes)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/opt/ammari-prod/monitoring
+ExecStart=/opt/ammari-prod/monitoring/health-check.sh
+StandardOutput=journal
+StandardError=journal
