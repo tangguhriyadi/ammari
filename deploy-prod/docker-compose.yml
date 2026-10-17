@@ -1,0 +1,143 @@
+# Prod-environment stack (docs/deploy-prod.md, Session 7) — synced onto the PROD VPS from this
+# repo on every deploy (deploy-prod/remote-deploy.sh, Session 3), at /opt/ammari-prod. Separate
+# directory from deploy/ (dev) on purpose — see docs/plans/prod-deploy.md §2, "Config location"
+# row — so the two environments' rsync targets can never cross-contaminate.
+#
+# Blue-green: admin and web each have two slots (…-blue / …-green). Only ONE slot per app is
+# meant to be running at a time — deploy-prod/remote-deploy.sh (Session 3) is what actually
+# starts/stops the right one (`docker compose up -d admin-blue`, not a bare `up -d`), waits for
+# its own health check before flipping traffic, and stops the old slot only after the flip. The
+# flip is SEQUENTIAL by default (admin flips fully before web starts, if both change in the same
+# deploy) — the real VPS has ~3.0 GiB usable RAM, not the 4 GB this plan was originally sized
+# against, so at most one app ever runs two slots at once; see docs/plans/prod-deploy.md §1
+# "Memory budget" and §3 Session 3. This file does not use Compose `profiles:` to enforce any of
+# that — the deploy script's explicit service selection is the enforcement.
+#
+# `caddy` deliberately has no `depends_on` on the app services (unlike deploy/docker-compose.yml
+# in dev, which only ever has one slot per app): which slot is "active" changes at deploy time,
+# not at container-start time. Caddy's upstream for each app is a small generated snippet
+# (deploy-prod/caddy/active-upstream.caddy, Session 3) that remote-deploy.sh rewrites and
+# `caddy reload`s on every slot flip — Caddy itself doesn't need to wait on either slot to start.
+#
+# Pinned so the compose project (and therefore its network name, e.g. `ammari-prod_internal`,
+# referenced directly by remote-deploy.sh's migrator `docker run --network` call in Session 3) is
+# predictable regardless of which directory this file sits in or what the CWD was when
+# `docker compose` ran it.
+name: ammari-prod
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Heap cap for each admin/web container, below its own mem_limit — leaves headroom for Next.js's
+# non-heap RSS (native deps, buffers) inside the same container cap. See
+# docs/plans/prod-deploy.md §1 "Memory budget".
+x-node-options: &node-memory
+  NODE_OPTIONS: --max-old-space-size=320
+
+services:
+  caddy:
+    image: caddy:2.10.2
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # deploy-prod/Caddyfile, caddy/certs/, cloudflare/ are Session 2's deliverables — this
+      # service definition is added now so Session 2 only has to add files, not touch compose.
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/certs:/etc/caddy/certs:ro
+      - ./cloudflare:/etc/caddy/cloudflare:ro
+      # Session 3's generated active-upstream snippet lives here too, imported by the Caddyfile.
+      - ./caddy:/etc/caddy/generated:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+
+  db:
+    # Must match the Postgres major version used in dev/local (16, docs/SPEC.md §2.4).
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 768m
+    # Conservative for a 3.6 GiB box (the actual provisioned VPS, not a 4 GB planning estimate)
+    # shared with admin's and web's app containers — see docs/plans/prod-deploy.md §1 "Memory
+    # budget". The blue-green flip is SEQUENTIAL by default (admin fully, then web), so at most
+    # 3 Next.js containers run at once, never 4. Postgres's own defaults (128MB shared_buffers)
+    # are too small for this workload; these are still well short of the usual "25% of RAM" rule
+    # of thumb because RAM here is shared with those app containers, not dedicated to Postgres
+    # the way a managed instance would be.
+    command:
+      - "-c"
+      - "shared_buffers=192MB"
+      - "-c"
+      - "effective_cache_size=512MB"
+    env_file:
+      - ./env/db.env
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  admin-blue:
+    image: ghcr.io/tangguhriyadi/ammari-admin:${ADMIN_BLUE_IMAGE_TAG}
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 450m
+    environment: *node-memory
+    env_file:
+      - ./env/admin.env
+    networks:
+      - internal
+
+  admin-green:
+    image: ghcr.io/tangguhriyadi/ammari-admin:${ADMIN_GREEN_IMAGE_TAG}
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 450m
+    environment: *node-memory
+    env_file:
+      - ./env/admin.env
+    networks:
+      - internal
+
+  web-blue:
+    image: ghcr.io/tangguhriyadi/ammari-web:${WEB_BLUE_IMAGE_TAG}
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 450m
+    environment: *node-memory
+    env_file:
+      - ./env/web.env
+    networks:
+      - internal
+
+  web-green:
+    image: ghcr.io/tangguhriyadi/ammari-web:${WEB_GREEN_IMAGE_TAG}
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 450m
+    environment: *node-memory
+    env_file:
+      - ./env/web.env
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  db_data:

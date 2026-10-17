@@ -1,5 +1,5 @@
 {
-  "_comment": "Template, not yet applied (docs/SPEC.md §11, docs/deploy.md). Mirrors bucket-policy.dev.json but scoped to the PROD bucket's own ARN and prefix (prod uses no S3_KEY_PREFIX — see deploy/env/web.env.example's comment on that var) once that bucket exists. Public GetObject is scoped to exactly the prefixes apps/web's storefront renders publicly (products/* and content/*) plus healthcheck/* (packages/storage's storage:check script). Everything else stays private. Replace REPLACE_WITH_PROD_BUCKET_NAME below, then apply with `pnpm --filter @ammari/storage policy:apply -- --env prod` (see docs/deploy.md). This _comment key is stripped by the apply script before calling PutBucketPolicy.",
+  "_comment": "Applied to the real prod bucket ammariprod-cdy2yf (Cloudeka, endpoint https://kencana.basic.box.cloudeka.id, region kencana — docs/plans/prod-deploy.md §4 step 7). This is the ONE prod bucket: it also holds nightly encrypted Postgres backups under backups/, which deliberately has NO statement here and must stay private (verified by an anonymous curl expecting 403 — docs/plans/prod-deploy.md §4 step 16, §7's go-live checklist). Prod uses no S3_KEY_PREFIX (unlike dev's shared bucket, split by local/ vs dev/) — see deploy-prod/env/admin.env.example's comment on that var; a non-empty prefix here would silently break public image serving, since these Resource ARNs assume keys sit at the bucket root. Public GetObject is scoped to exactly the prefixes apps/web's storefront renders publicly (products/* and content/*) plus healthcheck/* (packages/storage's storage:check script). Everything else — including backups/ — stays private. Apply with `pnpm --filter @ammari/storage policy:apply -- --env prod` (see docs/deploy-prod.md). This _comment key is stripped by the apply script before calling PutBucketPolicy.",
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -8,9 +8,9 @@
       "Principal": "*",
       "Action": "s3:GetObject",
       "Resource": [
-        "arn:aws:s3:::REPLACE_WITH_PROD_BUCKET_NAME/products/*",
-        "arn:aws:s3:::REPLACE_WITH_PROD_BUCKET_NAME/content/*",
-        "arn:aws:s3:::REPLACE_WITH_PROD_BUCKET_NAME/healthcheck/*"
+        "arn:aws:s3:::ammariprod-cdy2yf/products/*",
+        "arn:aws:s3:::ammariprod-cdy2yf/content/*",
+        "arn:aws:s3:::ammariprod-cdy2yf/healthcheck/*"
       ]
     }
   ]

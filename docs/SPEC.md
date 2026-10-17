@@ -79,8 +79,11 @@ pnpm workspaces + Turborepo:
 
 - **Dev:** a managed Postgres 16 + pgvector instance on Sumopod (already created) — not
   self-hosted in a container.
-- **Prod:** a separate managed Postgres 16 + pgvector instance. Dev and prod databases are
-  always separate.
+- **Prod:** a self-hosted `pgvector/pgvector:pg16` container on the prod VPS itself (separate
+  from dev's managed instance above), not exposed publicly — reachable only from other
+  containers on the same VPS's internal Docker network. Nightly encrypted `pg_dump` to a
+  dedicated, private object storage bucket, with a documented restore drill. Dev and prod
+  databases are always separate. See `docs/plans/prod-deploy.md` for the full design.
 - **Local:** Postgres 16 + pgvector via the root `docker-compose.yml`, for local development and
   automated tests only. A laptop never connects to the Sumopod dev database directly — local
   work always talks to the local container.

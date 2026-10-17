@@ -98,9 +98,21 @@ describe("loadPolicyFile", () => {
     );
   });
 
-  test("refuses to load the prod policy while its bucket name placeholder is unfilled", () => {
-    expect(() => loadPolicyFile("prod")).toThrow(/REPLACE_WITH_PROD_BUCKET_NAME/);
+  test("loads and strips the prod policy, scoped to the real prod bucket's products/content/healthcheck prefixes only", () => {
+    const { policy, policyJson } = loadPolicyFile("prod");
+    expect(policy).not.toHaveProperty("_comment");
+    expect(policyJson).not.toContain("_comment");
+    const resources = (policy.Statement as Array<{ Resource: string[] }>)[0]?.Resource ?? [];
+    expect(resources).toEqual([
+      "arn:aws:s3:::ammariprod-cdy2yf/products/*",
+      "arn:aws:s3:::ammariprod-cdy2yf/content/*",
+      "arn:aws:s3:::ammariprod-cdy2yf/healthcheck/*",
+    ]);
+    // The same bucket also holds nightly encrypted backups under backups/ — that prefix must
+    // never appear in the public-read policy (docs/plans/prod-deploy.md §4 step 7).
+    expect(policyJson).not.toContain("backups/");
   });
+
 
   test("policyFilePath points at the package-root JSON files", () => {
     expect(policyFilePath("dev")).toMatch(/bucket-policy\.dev\.json$/);
