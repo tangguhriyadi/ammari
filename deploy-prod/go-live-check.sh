@@ -131,8 +131,30 @@ check_aop_rejected "$WEB_HOST"
 check_aop_rejected "$ADMIN_HOST"
 
 # --- 3. Internal-only ports must not be reachable from outside the VPS ---
+#
+# nc-based "is it closed" checks are only trustworthy if THIS network path actually reaches the
+# VPS honestly. Some networks (captive portals, transparent proxies, some corporate/consumer
+# routers) intercept or accept outbound TCP connections regardless of the real destination port —
+# `nc -z` then reports a port "open" even though the VPS itself never has anything listening
+# there (confirmed on a real run: `ss -tlnp` on the VPS showed only :22/:80/:443 public and `docker
+# ps` showed no published app/db ports, while this exact nc check reported 8080/8081/5432 as all
+# reachable). A random, definitely-unused high port as a control probe tells us which situation
+# we're in: if even THAT "connects", every nc-based port check below is unreliable from this
+# machine and must be skipped, not reported as a false FAIL — the SSH-side authoritative check
+# below (ground truth from inside the VPS) is what actually verifies this.
+CONTROL_PORT=$((40000 + RANDOM % 20000))
+NETWORK_INTERCEPTS_TCP=0
+if nc -z -w 5 "$VPS_IP" "$CONTROL_PORT" 2>/dev/null; then
+  NETWORK_INTERCEPTS_TCP=1
+  info "control probe: TCP connect to ${VPS_IP}:${CONTROL_PORT} (an unassigned high port, nothing listens there) SUCCEEDED — this network intercepts/accepts outbound TCP regardless of destination port, so nc-based port-closed checks below cannot be trusted from this machine. Skipping them; see the SSH-side authoritative listening/published-port check instead."
+fi
+
 check_port_closed() {
   local port="$1"
+  if [ "$NETWORK_INTERCEPTS_TCP" = "1" ]; then
+    skip "TCP port ${port} on ${VPS_IP} reachability from outside — nc is unreliable on this network (control probe on port ${CONTROL_PORT} also 'connected'); see the SSH-side authoritative port check below"
+    return
+  fi
   if nc -z -w 5 "$VPS_IP" "$port" 2>/dev/null; then
     fail "TCP port ${port} on ${VPS_IP} IS reachable from outside (expected closed/filtered)"
   else
@@ -282,9 +304,20 @@ run_ssh_checks() {
   local output
   # Remote script is piped over stdin (bash -s) — never written to disk on the VPS. Fully
   # single-quoted heredoc: every $var below expands ON THE REMOTE SIDE, never on this Mac.
-  if ! output="$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
+  local ssh_rc=0
+  output="$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
     "${SSH_USER}@${SSH_HOST}" bash -s <<'REMOTE_SCRIPT'
 set -uo pipefail
+# IMPORTANT: this whole script arrives on the SAME stdin pipe that every command below inherits
+# by default. Any command that attaches to or reads from ITS OWN stdin (docker/docker compose
+# exec without -i is still an exception — `exec` always hijacks/forwards the caller's stdin to
+# the container process even with -T, which only disables the pseudo-TTY, not stdin forwarding;
+# ssh, mysql/psql clients, etc. have the same hazard) will eagerly drain whatever of THIS script
+# hasn't been read yet, silently and permanently losing it — no error, the remote bash just runs
+# out of script. Confirmed on a real go-live run: output ended cleanly right after the second
+# `docker compose exec` call below (admin's INTERNALHEALTH line) with every later section (env
+# files, timers, backup age, disk/memory) never printed and no error anywhere. Every such call
+# below MUST redirect its own stdin from /dev/null.
 cd /opt/ammari-prod || { echo "FATAL:cd"; exit 1; }
 
 container_line() {
@@ -312,12 +345,48 @@ container_line "web-$web_slot"
 for pair in "web:8080" "admin:8081"; do
   app="${pair%%:*}"
   port="${pair#*:}"
-  if docker compose exec -T caddy curl -sf "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1; then
+  if docker compose exec -T caddy curl -sf "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1 </dev/null; then
     echo "INTERNALHEALTH:$app:ok"
   else
     echo "INTERNALHEALTH:$app:fail"
   fi
 done
+
+# --- authoritative listening/published-port audit — ground truth from inside the VPS, since an
+#     external nc-based check can be fooled by a network that intercepts outbound TCP (see this
+#     script's own external control-probe check). `ss -tln` needs no sudo: address/port come from
+#     /proc/net/tcp{,6}, which is world-readable — only `-p` (process-name resolution) needs
+#     privilege, and this doesn't use it. Falls back to parsing /proc/net/tcp{,6} directly if `ss`
+#     itself isn't installed. ---
+if command -v ss >/dev/null 2>&1; then
+  ss -Htln 2>/dev/null </dev/null | awk '{print $(NF-1)}' | while IFS= read -r addrport; do
+    echo "LISTEN:$addrport"
+  done
+else
+  for f in /proc/net/tcp /proc/net/tcp6; do
+    [ -r "$f" ] || continue
+    fam="6"; [ "$f" = "/proc/net/tcp" ] && fam="4"
+    awk -v fam="$fam" 'NR>1 && $4=="0A"{print fam, $2}' "$f"
+  done | while read -r fam hexaddrport; do
+    hexaddr="${hexaddrport%:*}"
+    hexport="${hexaddrport##*:}"
+    port=$((16#$hexport))
+    if [ "$fam" = "6" ]; then
+      if [ "$hexaddr" = "00000000000000000000000001000000" ]; then
+        addr="::1"
+      else
+        addr="0.0.0.0" # any other IPv6 listener counts as non-loopback for this audit
+      fi
+    else
+      addr="$(printf '%d.%d.%d.%d' $((16#${hexaddr:6:2})) $((16#${hexaddr:4:2})) $((16#${hexaddr:2:2})) $((16#${hexaddr:0:2})))"
+    fi
+    echo "LISTEN:${addr}:${port}"
+  done
+fi
+docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null </dev/null | while IFS= read -r line; do
+  echo "PUBPORT $line"
+done
+echo "PORTAUDIT_DONE:0"
 
 if [ -f env/web.env ]; then
   v="$(grep -m1 '^STOREFRONT_CART_ENABLED=' env/web.env || true)"
@@ -378,14 +447,21 @@ echo "DISK:$(df -h / | awk 'NR==2{print $5" used, "$4" free of "$2}')"
 echo "MEM:$(free -h | awk '/^Mem:/{print "used="$3", free="$4", available="$7}')"
 echo "REMOTE_DONE:0"
 REMOTE_SCRIPT
-  )"; then
-    fail "SSH to ${SSH_USER}@${SSH_HOST} failed, or the remote script errored — container/env/timer/backup/disk checks were not run"
-    return
-  fi
+  )"
+  ssh_rc=$?
 
-  if ! grep -q '^REMOTE_DONE:0$' <<<"$output"; then
-    fail "remote check script did not complete (output: $(tr '\n' ' ' <<<"$output" | head -c 300))"
-    return
+  # Every section below is evaluated independently from whatever text IS in $output, rather than
+  # bailing out entirely the moment something looks incomplete — a truncated or partially-failed
+  # remote run should surface as THAT check's own FAIL with a specific reason, not hide every
+  # other (possibly still-valid) piece of data behind one blanket message. `remote_done=1` only
+  # controls the wording of the completeness note below; it never gates whether a check runs.
+  local remote_done=0
+  grep -q '^REMOTE_DONE:0$' <<<"$output" && remote_done=1
+
+  if [ "$ssh_rc" -ne 0 ]; then
+    fail "SSH to ${SSH_USER}@${SSH_HOST} exited non-zero (rc=$ssh_rc) — checks below are evaluated against whatever partial output was captured, if any"
+  elif [ "$remote_done" -ne 1 ]; then
+    info "remote check script did not report completion (no REMOTE_DONE:0) — output may be truncated; checks below reflect only what was actually received"
   fi
 
   # --- containers ---
@@ -408,18 +484,26 @@ REMOTE_SCRIPT
   admin_slot="$(grep '^SLOT:admin:' <<<"$output" | cut -d: -f3)"
   web_slot="$(grep '^SLOT:web:' <<<"$output" | cut -d: -f3)"
 
-  line="$(grep "^CONTAINER:admin-${admin_slot}:" <<<"$output")"
-  if [[ "$line" == *"running=true"* ]]; then
-    pass "active admin slot (admin-${admin_slot}) is running"
+  if [ -z "$admin_slot" ]; then
+    fail "could not determine the active admin slot — no SLOT:admin: line from the VPS"
   else
-    fail "active admin slot (admin-${admin_slot}) check failed ($line)"
+    line="$(grep "^CONTAINER:admin-${admin_slot}:" <<<"$output")"
+    if [[ "$line" == *"running=true"* ]]; then
+      pass "active admin slot (admin-${admin_slot}) is running"
+    else
+      fail "active admin slot (admin-${admin_slot}) check failed ($line)"
+    fi
   fi
 
-  line="$(grep "^CONTAINER:web-${web_slot}:" <<<"$output")"
-  if [[ "$line" == *"running=true"* ]]; then
-    pass "active web slot (web-${web_slot}) is running"
+  if [ -z "$web_slot" ]; then
+    fail "could not determine the active web slot — no SLOT:web: line from the VPS"
   else
-    fail "active web slot (web-${web_slot}) check failed ($line)"
+    line="$(grep "^CONTAINER:web-${web_slot}:" <<<"$output")"
+    if [[ "$line" == *"running=true"* ]]; then
+      pass "active web slot (web-${web_slot}) is running"
+    else
+      fail "active web slot (web-${web_slot}) check failed ($line)"
+    fi
   fi
 
   # --- internal health through Caddy ---
@@ -455,6 +539,13 @@ REMOTE_SCRIPT
   for f in admin.env web.env db.env backup.env; do
     if grep -q "^ENVMISSING:$f$" <<<"$output"; then
       fail "env/$f is missing on the VPS"
+      continue
+    fi
+    if ! grep -q "^ENVCHECKED:$f$" <<<"$output"; then
+      # Absence of ENVBAD lines alone is NOT evidence of a clean file — it's indistinguishable
+      # from this section never having run at all. Only trust it once ENVCHECKED:$f confirms the
+      # remote script actually reached and finished checking this file.
+      fail "no data from the VPS for env/$f (remote output missing — truncated run?)"
       continue
     fi
     local bad_keys
@@ -502,6 +593,66 @@ REMOTE_SCRIPT
       fi
       ;;
   esac
+
+  # --- authoritative listening/published-port audit (see the external control-probe check:
+  #     nc from this machine can report a port "open" even when nothing is listening, so this —
+  #     run from inside the VPS itself — is the check that actually gates PASS/FAIL for port
+  #     exposure). ---
+  local portaudit_done=0
+  grep -q '^PORTAUDIT_DONE:0$' <<<"$output" && portaudit_done=1
+
+  local listen_violations=()
+  while IFS= read -r addrport; do
+    [ -z "$addrport" ] && continue
+    local addr port
+    addr="${addrport%:*}"
+    port="${addrport##*:}"
+    case "$addr" in
+      127.*|::1|\[::1\]) continue ;; # loopback-only — not a public exposure
+    esac
+    case "$port" in
+      22|80|443) continue ;;
+    esac
+    listen_violations+=("${addr}:${port}")
+  done < <(grep '^LISTEN:' <<<"$output" | cut -d: -f2-)
+
+  if [ "$portaudit_done" -ne 1 ]; then
+    fail "could not get an authoritative listening-port audit from the VPS (no PORTAUDIT_DONE marker — remote output missing or truncated)"
+  elif [ "${#listen_violations[@]}" -eq 0 ]; then
+    pass "VPS has nothing listening on a non-loopback address except 22/80/443 (ss/proc authoritative check)"
+  else
+    fail "VPS has unexpected listener(s) on a non-loopback address: $(IFS=', '; echo "${listen_violations[*]}") — expected only 22/80/443"
+  fi
+
+  local pub_violations=()
+  while IFS= read -r rest; do
+    [ -z "$rest" ] && continue
+    local cname cports
+    cname="${rest%% *}"
+    cports="${rest#* }"
+    [ "$cports" = "$cname" ] && cports=""
+    local mappings=() m hostpart hostport
+    IFS=',' read -ra mappings <<<"$cports"
+    for m in "${mappings[@]}"; do
+      m="$(tr -d '[:space:]' <<<"$m")"
+      [[ "$m" == *"->"* ]] || continue
+      hostpart="${m%%->*}"
+      hostport="${hostpart##*:}"
+      if [ "$hostport" != "80" ] && [ "$hostport" != "443" ]; then
+        pub_violations+=("$cname publishes $hostport")
+      elif [ "$cname" != "caddy" ]; then
+        pub_violations+=("$cname (not caddy) publishes $hostport")
+      fi
+    done
+  done < <(grep '^PUBPORT ' <<<"$output" | sed 's/^PUBPORT //')
+
+  if [ "$portaudit_done" -ne 1 ]; then
+    fail "could not get an authoritative published-port audit from the VPS (no PORTAUDIT_DONE marker — remote output missing or truncated)"
+  elif [ "${#pub_violations[@]}" -eq 0 ]; then
+    pass "only caddy publishes a host port (80/443); no other container publishes anything (docker ps authoritative check)"
+  else
+    fail "unexpected published port(s): $(IFS='; '; echo "${pub_violations[*]}")"
+  fi
 
   # --- disk / memory — informational only, no pass/fail threshold here (disk-alert.timer above
   #     is what actually pages on >=80% disk usage) ---
