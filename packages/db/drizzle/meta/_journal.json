@@ -148,6 +148,13 @@
       "when": 1792161025807,
       "tag": "0020_info_pages_and_store_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792194921123,
+      "tag": "0021_puzzling_cable",
+      "breakpoints": true
     }
   ]
 }

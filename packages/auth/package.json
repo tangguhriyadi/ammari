@@ -8,7 +8,8 @@
     "./staff": "./src/staff/index.ts",
     "./customer": "./src/customer/index.ts",
     "./testing": "./src/testing/index.ts",
-    "./otp-timing": "./src/shared/otp-timing.ts"
+    "./otp-timing": "./src/shared/otp-timing.ts",
+    "./ip-throttle": "./src/shared/ip-throttle.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

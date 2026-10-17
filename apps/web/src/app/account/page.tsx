@@ -1,8 +1,8 @@
-import { Badge, Button, EmptyState } from "@ammari/ui";
+import { Badge, EmptyState } from "@ammari/ui";
 import { formatDate, formatRupiah } from "@ammari/ui/lib";
 import { requireConsentedSession } from "@/lib/auth/require-customer";
 import { listMyOrders, listMyVouchers } from "@/lib/account/queries";
-import { logoutAction } from "@/app/actions";
+import { LogoutButton } from "./logout-button";
 import { ProfileBanner } from "./profile-banner";
 
 const VOUCHER_STATUS_LABELS: Record<string, string> = {
@@ -69,11 +69,7 @@ export default async function AccountPage() {
         )}
       </section>
 
-      <form action={logoutAction}>
-        <Button type="submit" variant="secondary">
-          Keluar
-        </Button>
-      </form>
+      <LogoutButton email={customer.email ?? null} />
     </div>
   );
 }

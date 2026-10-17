@@ -1,8 +1,56 @@
-import { eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import type { db as defaultDb } from "@ammari/db";
-import { customers } from "@ammari/db/schema";
+import { customerAuthVerifications, customers } from "@ammari/db/schema";
+import { getEmailCooldownRemainingSeconds } from "../shared/email-throttle";
+import { OTP_RESEND_COOLDOWN_SECONDS } from "../shared/otp-timing";
 
 export type Database = typeof defaultDb;
+
+export interface OtpResendState {
+  /** Seconds until a fresh sign-in OTP send is allowed again for this email; 0 means nothing is
+   * blocking a send right now. */
+  cooldownRemainingSeconds: number;
+  /** Only meaningful when `cooldownRemainingSeconds > 0`. true ("Case A" in login-form.tsx's own
+   * doc comments): an earlier sign-in code for this email is still unexpired and hasn't been
+   * consumed (a successful sign-in), expired, or invalidated by 5 wrong attempts — the UI can
+   * safely tell the user to keep using it. false ("Case B"): that code is gone, but the cooldown
+   * is still active — a fresh send is blocked and there is nothing left for the user to enter,
+   * so the UI must say so instead of silently stranding them on a code step with no valid code. */
+  hasActiveCode: boolean;
+}
+
+/** Mirrors better-auth's own `toOTPIdentifier("sign-in", email)` (dist/plugins/email-otp/
+ * utils.mjs) — not exported from its public API, so duplicated here rather than imported. Both
+ * apps' own sign-in flow is the only OTP type this instance ever sends (see
+ * create-customer-auth.ts's `type !== "sign-in"` early return), so this never needs to handle
+ * any other type. */
+function signInOtpIdentifier(email: string): string {
+  return `sign-in-otp-${email}`;
+}
+
+/** Tells the login form whether a resend attempt made right now would be Case A or Case B (see
+ * `OtpResendState`'s own doc comment) — read-only, calls neither better-auth's send endpoint nor
+ * writes to `auth_email_throttle`, so asking never itself changes the answer. The email is
+ * normalized (trim + lowercase) the same way better-auth's own endpoints normalize it before
+ * building their identifier/throttle keys. */
+export async function getCustomerOtpResendState(db: Database, email: string): Promise<OtpResendState> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const cooldownRemainingSeconds = await getEmailCooldownRemainingSeconds(db, normalizedEmail, OTP_RESEND_COOLDOWN_SECONDS);
+  if (cooldownRemainingSeconds === 0) return { cooldownRemainingSeconds: 0, hasActiveCode: false };
+
+  const [activeCode] = await db
+    .select({ id: customerAuthVerifications.id })
+    .from(customerAuthVerifications)
+    .where(
+      and(
+        eq(customerAuthVerifications.identifier, signInOtpIdentifier(normalizedEmail)),
+        gt(customerAuthVerifications.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+
+  return { cooldownRemainingSeconds, hasActiveCode: Boolean(activeCode) };
+}
 
 export interface CustomerIdentity {
   id: string;

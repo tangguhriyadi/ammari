@@ -76,6 +76,22 @@ export async function rememberOtpSendAttempt(storageKeyPrefix: string, email: st
   }
 }
 
+/** Removes any remembered send attempt for `email` — call on successful sign-in (the code that
+ * attempt was remembering has just been consumed, so remembering it any longer only risks a
+ * future false "still cooling down" read) and on sign-out (the next sign-in, possibly by a
+ * different person on a shared device, must not inherit this one's memory). This is purely the
+ * same-browser fallback signal (see `getOtpResendState`/the login forms' own `sendOtp` for the
+ * server-backed check that is now the real source of truth) — clearing it early just keeps that
+ * fallback from ever going stale, it doesn't affect the server-side cooldown at all. */
+export async function clearRememberedOtpSendAttempt(storageKeyPrefix: string, email: string): Promise<void> {
+  try {
+    const emailHash = await hashEmail(email);
+    localStorage.removeItem(storageKeyFor(storageKeyPrefix, emailHash));
+  } catch {
+    // Same "a storage nicety, not a correctness requirement" posture as the rest of this module.
+  }
+}
+
 /** Returns the remembered send time for `email`, or `null` if there isn't one or it's older than
  * `maxAgeMs` (pass `OTP_EXPIRES_IN_SECONDS * 1000` — once a code's own validity window has
  * passed, there's nothing left to protect, cooldown or otherwise, so a genuinely fresh send is

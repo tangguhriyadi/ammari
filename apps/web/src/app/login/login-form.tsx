@@ -4,7 +4,13 @@ import { useState, useSyncExternalStore, useTransition } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button, GoogleLogo, Input, Label } from "@ammari/ui";
-import { formatCountdown, getRememberedOtpSendAttempt, rememberOtpSendAttempt, useCountdown } from "@ammari/ui/lib";
+import {
+  clearRememberedOtpSendAttempt,
+  formatCountdown,
+  getRememberedOtpSendAttempt,
+  rememberOtpSendAttempt,
+  useCountdown,
+} from "@ammari/ui/lib";
 import { authClient } from "@/lib/auth/client";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "@ammari/auth/otp-timing";
 
@@ -21,6 +27,38 @@ const OTP_LAST_SEND_STORAGE_KEY_PREFIX = "ammari-web-otp-last-send";
 // a legitimate signal, not an enumeration leak.
 const GENERIC_ERROR = "Kode tidak valid. Coba lagi.";
 const RATE_LIMITED_ERROR = "Terlalu banyak percobaan. Coba lagi nanti.";
+
+interface OtpResendState {
+  cooldownRemainingSeconds: number;
+  hasActiveCode: boolean;
+}
+
+/** Asks the server which of "Case A"/"Case B" applies (see `sendOtp`'s own doc comment) —
+ * read-only, never calls better-auth's real send endpoint, so asking never itself changes the
+ * answer. Returns `null` on any failure (network error, non-OK response, unexpected shape) so
+ * the caller can fail open to the pre-fix, same-browser-only heuristic instead of getting stuck. */
+async function checkOtpResendState(email: string): Promise<OtpResendState | null> {
+  try {
+    const response = await fetch("/api/otp-resend-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    if (!response.ok) return null;
+    const data: unknown = await response.json();
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      typeof (data as Partial<OtpResendState>).cooldownRemainingSeconds !== "number" ||
+      typeof (data as Partial<OtpResendState>).hasActiveCode !== "boolean"
+    ) {
+      return null;
+    }
+    return data as OtpResendState;
+  } catch {
+    return null;
+  }
+}
 
 // See apps/admin's own login-form.tsx for the full reasoning behind every piece of this file —
 // this is the same design, just restyled with @ammari/ui's own components.
@@ -94,6 +132,11 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
   // the server's 60s per-email cooldown, so the PREVIOUS code is still the live one. Drives the
   // "Kode sebelumnya masih berlaku" message in place of "Kode telah dikirim ke ..." below.
   const [skippedResend, setSkippedResend] = useState(false);
+  // Set when the server reports the per-email cooldown is active but the earlier code is gone
+  // ("Case B" — consumed, expired, or locked out): the epoch ms when a fresh send becomes
+  // possible again, straight from the server's own `cooldownRemainingSeconds`, never guessed by
+  // the client. Drives the "Kamu baru saja meminta kode..." inline error below.
+  const [cooldownBlockedUntil, setCooldownBlockedUntil] = useState<number | null>(null);
   const [sendPending, startSendTransition] = useTransition();
   const [verifyPending, startVerifyTransition] = useTransition();
 
@@ -106,23 +149,59 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
   async function sendOtp(targetEmail: string): Promise<void> {
     const now = Date.now();
     // better-auth's own send endpoint always returns `{success: true}` even when
-    // sendVerificationOTP silently no-ops because the per-email cooldown is still active (see
-    // @ammari/ui/lib's otp-send-guard.ts for the full bug this guards against) — so THIS is the
-    // one place that can actually tell the difference, by remembering what THIS browser itself
-    // last did, independent of the per-flow session state that gets cleared on login/"Ganti
-    // email".
-    const remembered = await getRememberedOtpSendAttempt(OTP_LAST_SEND_STORAGE_KEY_PREFIX, targetEmail, OTP_EXPIRES_IN_SECONDS * 1000);
-    if (remembered !== null && now - remembered < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
+    // sendVerificationOTP silently no-ops because the per-email cooldown is still active, AND
+    // its own `resolveOTP` unconditionally overwrites the stored code on every call regardless
+    // of whether anything actually gets emailed — so calling it just to find out "is there still
+    // a valid code" would destroy one that is. `checkOtpResendState` asks the server instead,
+    // read-only, and tells Case A (an earlier code is still unexpired and unused — behave as
+    // before, go straight to the code step) apart from Case B (that code is gone — consumed by a
+    // sign-in, expired, or locked out after 5 wrong attempts — the cooldown blocks a resend but
+    // there is nothing left for the user to enter, so staying on the code step would strand
+    // them). See @ammari/ui/lib's otp-send-guard.ts for why this browser's own localStorage
+    // memory alone used to (wrongly) decide this.
+    const resendState = await checkOtpResendState(targetEmail);
+
+    if (resendState === null) {
+      // The server check itself failed (network hiccup) — fall back to the pre-fix heuristic:
+      // this browser's own memory of its last real send. Imperfect (it can't tell Case A from
+      // Case B either), but strictly better than nothing, and only reached when the check above
+      // couldn't even run.
+      const remembered = await getRememberedOtpSendAttempt(OTP_LAST_SEND_STORAGE_KEY_PREFIX, targetEmail, OTP_EXPIRES_IN_SECONDS * 1000);
+      if (remembered !== null && now - remembered < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
+        setSendError(undefined);
+        setVerifyError(undefined);
+        setCooldownBlockedUntil(null);
+        setEmail(targetEmail);
+        setSentAt(remembered); // the REAL sentAt — so the expiry/resend countdowns stay accurate
+        setStep("sent");
+        setSkippedResend(true);
+        storeSession({ email: targetEmail, sentAt: remembered });
+        return;
+      }
+    } else if (resendState.cooldownRemainingSeconds > 0) {
+      if (resendState.hasActiveCode) {
+        // Case A — reconstruct the original send time from the server's own remaining-seconds
+        // figure (never guessed by the client) and behave exactly as before this fix: go
+        // straight to the code step, "Kode sebelumnya masih berlaku."
+        const sentAt = now - (OTP_RESEND_COOLDOWN_SECONDS - resendState.cooldownRemainingSeconds) * 1000;
+        setSendError(undefined);
+        setVerifyError(undefined);
+        setCooldownBlockedUntil(null);
+        setEmail(targetEmail);
+        setSentAt(sentAt);
+        setStep("sent");
+        setSkippedResend(true);
+        storeSession({ email: targetEmail, sentAt });
+        await rememberOtpSendAttempt(OTP_LAST_SEND_STORAGE_KEY_PREFIX, targetEmail, sentAt);
+        return;
+      }
+      // Case B — stay on the email step; the inline countdown error below does the rest.
       setSendError(undefined);
-      setVerifyError(undefined);
-      setEmail(targetEmail);
-      setSentAt(remembered); // the REAL sentAt — so the expiry/resend countdowns stay accurate
-      setStep("sent");
-      setSkippedResend(true);
-      storeSession({ email: targetEmail, sentAt: remembered });
+      setCooldownBlockedUntil(now + resendState.cooldownRemainingSeconds * 1000);
       return;
     }
 
+    setCooldownBlockedUntil(null);
     const { error } = await authClient.emailOtp.sendVerificationOtp({ email: targetEmail, type: "sign-in" });
     if (error?.status === 429) {
       setSendError(RATE_LIMITED_ERROR);
@@ -174,6 +253,7 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
         return;
       }
       storeSession(null);
+      await clearRememberedOtpSendAttempt(OTP_LAST_SEND_STORAGE_KEY_PREFIX, email);
       router.push(next);
       router.refresh();
     });
@@ -185,6 +265,12 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
   const remainingResendMs = useCountdown(resendAvailableAt);
   const isExpired = step === "sent" && expiresAt !== null && remainingExpiryMs <= 0;
   const canResend = step === "sent" && resendAvailableAt !== null && remainingResendMs <= 0;
+
+  // Case B's inline cooldown error (see sendOtp) — ticks down live from the server's own
+  // remaining-seconds figure and clears itself once it reaches 0, re-enabling the send button.
+  const remainingCooldownMs = useCountdown(cooldownBlockedUntil);
+  const cooldownSecondsLeft = Math.ceil(remainingCooldownMs / 1000);
+  const isCooldownBlocked = cooldownBlockedUntil !== null && remainingCooldownMs > 0;
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-8 bg-neutral-50 px-4 py-10">
@@ -207,12 +293,18 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
               placeholder="nama@email.com"
             />
           </div>
-          {sendError && (
+          {sendError ? (
             <p role="alert" className="text-sm text-danger-700">
               {sendError}
             </p>
+          ) : (
+            isCooldownBlocked && (
+              <p role="alert" className="text-sm text-danger-700">
+                {`Kamu baru saja meminta kode. Coba lagi dalam ${cooldownSecondsLeft} detik.`}
+              </p>
+            )
           )}
-          <Button type="submit" loading={sendPending}>
+          <Button type="submit" loading={sendPending} disabled={sendPending || isCooldownBlocked}>
             Kirim kode
           </Button>
 

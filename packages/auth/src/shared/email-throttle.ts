@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import type { db as defaultDb } from "@ammari/db";
 import { authEmailThrottle } from "@ammari/db/schema";
 
@@ -90,6 +90,27 @@ export async function recordEmailThrottleAttempt(
     priorAttemptsInCapWindow: Number(row?.priorAttemptsInCapWindow ?? 1),
     priorGlobalAttempts: Number(row?.priorGlobalAttempts ?? 1),
   };
+}
+
+/** Read-only mirror of `recordEmailThrottleAttempt`'s cooldown check — records no attempt of its
+ * own (unlike that function, which both decides AND records an attempt in the same insert). Lets
+ * a caller ask "how long until this email can send again" WITHOUT going anywhere near Better
+ * Auth's own `sendVerificationOTP`/`resolveOTP`, which unconditionally regenerates and overwrites
+ * the stored OTP on every call regardless of whether it ends up actually emailing anything (see
+ * dist/plugins/email-otp/routes.mjs) — calling the real send endpoint just to ask "what's the
+ * cooldown" would destroy a still-valid, not-yet-consumed code for nothing. Used by
+ * `getCustomerOtpResendState`/`getStaffOtpResendState` (customer-data.ts/staff-data.ts) to tell
+ * the login forms' "Case A vs Case B" apart — see those functions' own doc comments. */
+export async function getEmailCooldownRemainingSeconds(db: Database, email: string, cooldownSeconds: number): Promise<number> {
+  const [lastAttempt] = await db
+    .select({ createdAt: authEmailThrottle.createdAt })
+    .from(authEmailThrottle)
+    .where(eq(authEmailThrottle.email, email))
+    .orderBy(desc(authEmailThrottle.createdAt))
+    .limit(1);
+  if (!lastAttempt) return 0;
+  const elapsedSeconds = Math.floor((Date.now() - lastAttempt.createdAt.getTime()) / 1000);
+  return Math.max(0, cooldownSeconds - elapsedSeconds);
 }
 
 /** Opportunistic pruning (CLAUDE.md: a throttle table must not grow forever) — most calls are a
