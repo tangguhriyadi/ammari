@@ -220,6 +220,17 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
         <Textarea id="batch-notes" value={notes} onChange={(event) => setNotes(event.target.value)} rows={2} />
       </div>
 
+      {fabricId ? (
+        <BatchLinePicker
+          eligibleSkus={visibleEligibleSkus}
+          quantities={quantities}
+          onQtyChange={(sku, qty) => setQuantities((q) => ({ ...q, [sku]: qty }))}
+          fabricYards={fabricYardsNumber}
+        />
+      ) : (
+        <p className="text-base text-neutral-600">Pilih bahan untuk memilih SKU.</p>
+      )}
+
       {canViewProfit && (
         <>
           <div>
@@ -242,17 +253,6 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
       )}
       {!canViewProfit && mode === "edit" && (
         <p className="text-sm text-neutral-600">Biaya hanya bisa dilihat dan diisi oleh pemilik.</p>
-      )}
-
-      {fabricId ? (
-        <BatchLinePicker
-          eligibleSkus={visibleEligibleSkus}
-          quantities={quantities}
-          onQtyChange={(sku, qty) => setQuantities((q) => ({ ...q, [sku]: qty }))}
-          fabricYards={fabricYardsNumber}
-        />
-      ) : (
-        <p className="text-base text-neutral-600">Pilih bahan untuk memilih SKU.</p>
       )}
 
       {error && (
