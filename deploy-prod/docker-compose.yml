@@ -97,6 +97,13 @@ services:
     environment: *node-memory
     env_file:
       - ./env/admin.env
+    # Session 3 (deploy-prod/remote-deploy.sh) already waits for db to report healthy before
+    # ever starting an app slot — this is defense in depth for the same guarantee, so a slot
+    # started outside that script's own sequencing still refuses to come up against a db that
+    # isn't ready yet, rather than crash-looping against connection errors.
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - internal
 
@@ -108,6 +115,9 @@ services:
     environment: *node-memory
     env_file:
       - ./env/admin.env
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - internal
 
@@ -119,6 +129,9 @@ services:
     environment: *node-memory
     env_file:
       - ./env/web.env
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - internal
 
@@ -130,6 +143,9 @@ services:
     environment: *node-memory
     env_file:
       - ./env/web.env
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - internal
 

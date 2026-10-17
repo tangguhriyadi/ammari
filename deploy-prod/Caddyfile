@@ -47,6 +47,26 @@ import cloudflare/cloudflare-only.caddy
 # deploy script exists; Session 3 is what actually rewrites it on every slot flip.
 import generated/active-upstream.caddy
 
+# Internal-only health-check listeners (Session 3, deploy-prod/remote-deploy.sh). Plain HTTP,
+# NEVER published to the host (deploy-prod/docker-compose.yml's `caddy` service only publishes
+# 80/443) — reachable only via `docker compose exec caddy curl ...` from inside this same
+# container. Every PUBLIC site block below requires the Cloudflare Authenticated Origin Pulls
+# client certificate (`client_auth` above), which this VPS deliberately never holds (only the CA
+# root does — cloudflare/README.md) — so remote-deploy.sh has no way to verify its own
+# just-flipped reverse_proxy upstream by hitting ammari.id/admin.ammari.id directly, even from
+# localhost on this box. These two bare-port blocks import the SAME generated upstream snippets
+# as the real public hosts below, giving the deploy script a genuine end-to-end "did Caddy's
+# reload actually pick up the new upstream" check that doesn't require Cloudflare's client cert.
+# A bare `:port` address with no hostname never triggers Caddy's automatic HTTPS management, so
+# these stay plain HTTP by construction — no cert, no client_auth, nothing to misconfigure here.
+:8080 {
+	import active_upstream_web
+}
+
+:8081 {
+	import active_upstream_admin
+}
+
 ammari.id {
 	import cloudflare_only
 	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key {

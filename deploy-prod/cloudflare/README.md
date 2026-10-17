@@ -50,11 +50,15 @@ so this isn't tribal knowledge.
    openssl req -newkey rsa:2048 -nodes -keyout client.key -out client.csr \
      -subj "/CN=ammari-prod-origin-pull"
    openssl x509 -req -in client.csr -CA ammari-prod-aop-ca.pem -CAkey ammari-prod-aop-ca.key \
-     -CAcreateserial -days 825 -out client.pem \
+     -CAcreateserial -days 3650 -out client.pem \
      -extfile <(printf "basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\n")
    ```
-   825 days (not the CA's own 3650) — the longest leaf validity public CAs/browsers still widely
-   tolerate, and it keeps this cert inside Cloudflare's own expiry-notification window (§3).
+   3650 days (10 years) — the same validity as the CA itself. This leaf is never evaluated by a
+   browser or any publicly-trusted chain (only Cloudflare and this one Caddy config ever see
+   it), so the usual "~825 days max" guidance for publicly-trusted leaf certificates doesn't
+   apply here; matching the CA's own 10-year window avoids a renewal cadence this plan would
+   otherwise have to schedule and babysit for a boundary with no public-trust constraint pushing
+   the other way.
    **Done, as of 2026-10-17:** `CN=ammari-prod-origin-pull`, `CA:FALSE`, valid to **2036**.
 
 3. **Upload the leaf — both halves — to Cloudflare's zone-level AOP slot.** Dashboard:
@@ -93,9 +97,10 @@ so this isn't tribal knowledge.
 
 ## 3. Renewal, before the leaf expires in 2036
 
-The leaf is deliberately short-lived relative to the CA (825 days vs. 10 years) specifically so
-it gets renewed on a human cadence instead of being set once and forgotten. Two independent
-reminders exist:
+The leaf matches the CA's own 10-year validity (3650 days — see §2 step 2), so there is no
+routine renewal cadence to maintain here; the procedure below exists for the one time it really
+is needed — 2036, or sooner if the leaf or its key is ever suspected compromised. Two
+independent reminders exist for that date:
 
 - **Cloudflare's own dashboard** emails the account's registered contacts ahead of a
   zone-level-AOP certificate's expiry — no separate monitoring needed for this specific date, but
@@ -113,7 +118,7 @@ leaf):**
    openssl req -newkey rsa:2048 -nodes -keyout client.key -out client.csr \
      -subj "/CN=ammari-prod-origin-pull"
    openssl x509 -req -in client.csr -CA ammari-prod-aop-ca.pem -CAkey ammari-prod-aop-ca.key \
-     -CAcreateserial -days 825 -out client.pem \
+     -CAcreateserial -days 3650 -out client.pem \
      -extfile <(printf "basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\n")
    ```
 2. `ammari.id` zone → **SSL/TLS → Origin Server → Authenticated Origin Pulls → Zone-level** →
