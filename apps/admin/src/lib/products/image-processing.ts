@@ -107,3 +107,19 @@ export async function processUploadedImage(buffer: Buffer): Promise<ProcessedIma
 
   return { width, height, sizes: sizes as Record<ImageSize, Buffer> };
 }
+
+/** Logs one line per upload with ms spent in sharp processing vs. the S3 PUT loop, plus input/
+ * output byte counts — "uploads are slow" was reported on phone photos even with client-side
+ * downscaling already in place (client-image-resize.ts), on both dev and prod, so this plus the
+ * `receive/parse` line logged by the calling action (uploadProductImageAction /
+ * uploadContentImageAction) narrow down which stage is actually the bottleneck instead of
+ * guessing. No secrets or personal data — just byte counts and durations. */
+export function logUploadTiming(
+  label: string,
+  timing: { sharpMs: number; s3Ms: number; inputBytes: number; outputBytes: number },
+): void {
+  console.log(
+    `[upload-timing] ${label}: sharp=${timing.sharpMs.toFixed(0)}ms s3=${timing.s3Ms.toFixed(0)}ms ` +
+      `inputBytes=${timing.inputBytes} outputBytes=${timing.outputBytes}`,
+  );
+}

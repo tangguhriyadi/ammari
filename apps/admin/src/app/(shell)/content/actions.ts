@@ -155,7 +155,11 @@ export async function uploadContentImageAction(formData: FormData): Promise<Acti
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
 
   return runAction(async () => {
+    // See uploadProductImageAction's own comment (products/actions.ts) — this measures reading
+    // the already-received File into a Buffer, not the network transfer itself.
+    const receiveStarted = performance.now();
     const fileBuffer = Buffer.from(await file.arrayBuffer());
+    console.log(`[upload-timing] content image receive/parse=${(performance.now() - receiveStarted).toFixed(0)}ms bytes=${fileBuffer.length}`);
     return uploadContentImage({ sectionKey: parsed.data.sectionKey, variant: parsed.data.variant, fileBuffer });
   });
 }

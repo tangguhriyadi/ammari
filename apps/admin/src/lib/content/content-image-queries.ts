@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { HomepageSectionKey } from "@ammari/db/schema";
 import { getStorageClient, getStorageKeyPrefix } from "@/lib/storage";
 import { buildImageObjectKey } from "@/lib/products/image-keys";
-import { IMAGE_SIZES, processUploadedImage, type ImageSize } from "@/lib/products/image-processing";
+import { IMAGE_SIZES, logUploadTiming, processUploadedImage, type ImageSize } from "@/lib/products/image-processing";
 import { ActionError } from "@/lib/errors";
 import { buildContentImageStorageKey } from "./content-image-keys";
 
@@ -74,7 +74,9 @@ export async function uploadContentImage(input: {
   variant: ContentImageVariant;
   fileBuffer: Buffer;
 }): Promise<UploadedContentImage> {
+  const sharpStarted = performance.now();
   const processed = await processUploadedImage(input.fileBuffer);
+  const sharpMs = performance.now() - sharpStarted;
   assertMinDimensions(input.variant, processed.width, processed.height);
 
   const storage = getStorageClient();
@@ -86,6 +88,7 @@ export async function uploadContentImage(input: {
   });
 
   const putSizes: ImageSize[] = [];
+  const s3Started = performance.now();
   try {
     for (const size of IMAGE_SIZES) {
       await storage.put(buildImageObjectKey(storageKey, size), processed.sizes[size], "image/webp");
@@ -95,6 +98,12 @@ export async function uploadContentImage(input: {
     await deleteContentImageObjects(storageKey, putSizes);
     throw new ActionError("Gagal mengunggah gambar ke penyimpanan. Coba lagi.");
   }
+  logUploadTiming(`content image (${input.sectionKey}/${input.variant})`, {
+    sharpMs,
+    s3Ms: performance.now() - s3Started,
+    inputBytes: input.fileBuffer.length,
+    outputBytes: IMAGE_SIZES.reduce((sum, size) => sum + processed.sizes[size].length, 0),
+  });
 
   return {
     storageKey,

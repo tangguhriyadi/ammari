@@ -16,9 +16,10 @@ vi.mock("../actions", () => ({
 }));
 
 // The real downscaler needs createImageBitmap + <canvas>, neither available in jsdom — staging
-// logic doesn't care what happens inside it, so it's stubbed to the identity function.
+// logic doesn't care what happens inside it, so it's stubbed to an identity "no resize happened"
+// result, matching the real function's DownscaleResult shape.
 vi.mock("@/lib/products/client-image-resize", () => ({
-  downscaleImageForUpload: vi.fn(async (file: File) => file),
+  downscaleImageForUpload: vi.fn(async (file: File) => ({ file, processed: false, timingMs: 0, inputBytes: file.size, outputBytes: file.size })),
 }));
 
 function makeFile(name: string, type = "image/jpeg", sizeBytes = 1024) {

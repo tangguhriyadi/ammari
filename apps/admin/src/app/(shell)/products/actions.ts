@@ -327,7 +327,14 @@ export async function uploadProductImageAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
 
   return runAction(async () => {
+    // Note: Next.js has already fully received/parsed the multipart body before this server
+    // action even starts running, so this only measures reading the already-in-memory File into
+    // a Buffer — a near-zero number is expected and confirms the real network transfer time
+    // (the thing a phone-on-mobile-data complaint is actually about) happens before this log,
+    // outside what server-side code can time.
+    const receiveStarted = performance.now();
     const fileBuffer = Buffer.from(await file.arrayBuffer());
+    console.log(`[upload-timing] product image receive/parse=${(performance.now() - receiveStarted).toFixed(0)}ms bytes=${fileBuffer.length}`);
     const image = await imageQueries.uploadProductImage(
       {
         productId: parsed.data.productId,

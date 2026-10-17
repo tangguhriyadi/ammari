@@ -4,7 +4,7 @@ import { and, asc, count, eq, isNull, ne } from "drizzle-orm";
 import { fabricColors, productImages, productVariants, products } from "@ammari/db/schema";
 import { getStorageClient, getStorageKeyPrefix } from "@/lib/storage";
 import { buildImageObjectKey, buildImageStorageKey } from "./image-keys";
-import { IMAGE_SIZES, processUploadedImage, type ImageSize } from "./image-processing";
+import { IMAGE_SIZES, logUploadTiming, processUploadedImage, type ImageSize } from "./image-processing";
 import { ActionError, FieldError } from "./errors";
 import { defaultDb, lockProductForUpdate, writeAuditLog, type Database, type Tx } from "./db";
 
@@ -214,13 +214,16 @@ export async function uploadProductImage(
   actorStaffUserId: string | null,
   db: Database = defaultDb,
 ): Promise<typeof productImages.$inferSelect> {
+  const sharpStarted = performance.now();
   const processed = await processUploadedImage(input.fileBuffer);
+  const sharpMs = performance.now() - sharpStarted;
 
   const storage = getStorageClient();
   const imageId = randomUUID();
   const storageKey = buildImageStorageKey({ keyPrefix: getStorageKeyPrefix(), productId: input.productId, imageId });
 
   const putSizes: ImageSize[] = [];
+  const s3Started = performance.now();
   try {
     for (const size of IMAGE_SIZES) {
       await storage.put(buildImageObjectKey(storageKey, size), processed.sizes[size], "image/webp");
@@ -230,6 +233,12 @@ export async function uploadProductImage(
     await deleteObjectsLogged(storageKey, imageId, putSizes);
     throw new ActionError("Gagal mengunggah foto ke penyimpanan. Coba lagi.");
   }
+  logUploadTiming("product image", {
+    sharpMs,
+    s3Ms: performance.now() - s3Started,
+    inputBytes: input.fileBuffer.length,
+    outputBytes: IMAGE_SIZES.reduce((sum, size) => sum + processed.sizes[size].length, 0),
+  });
 
   try {
     return await db.transaction(async (tx) => {

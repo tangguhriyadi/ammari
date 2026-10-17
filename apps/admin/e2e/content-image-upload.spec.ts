@@ -110,4 +110,42 @@ test.describe("Konten: gambar Hero/Feature Block", () => {
     await expect(page.locator('[role="alert"]', { hasText: /terlalu kecil/ })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByLabel("Teks alternatif")).toHaveCount(0);
   });
+
+  test("downscales a large (6000x4000) photo client-side before upload", async ({ page }) => {
+    await loginAs(page, E2E_STOREFRONT_EMAIL);
+    await page.goto("/content/hero");
+    await page.getByLabel("Headline").fill("Headline Downscale Test");
+    await page.getByLabel("Label tombol").fill("Belanja Sekarang");
+
+    // A deliberately huge original — generated, not a real phone photo, but the same shape
+    // (way over both the 2400px long-edge cap and the 1.5MB skip threshold in
+    // client-image-resize.ts).
+    const original = await jpegFixture(6000, 4000, { r: 90, g: 130, b: 160 });
+
+    // Reading the actual uploaded bytes off the network isn't possible here: Chromium's CDP
+    // doesn't expose postData for multipart/form-data requests carrying a file part (a known
+    // Playwright/CDP limitation, confirmed by `request.postDataBuffer()` always resolving to
+    // `undefined` for this exact request when tried). client-image-resize.ts's own dev-only
+    // `[image-resize]` console log is the one place the real before/after numbers are available
+    // to this test — the same log a developer would read in the browser console to debug the
+    // "uploads are slow" report this whole feature exists for.
+    const consoleMessagePromise = page.waitForEvent("console", (msg) => msg.text().includes("[image-resize]"));
+    await page.getByTestId("content-image-input-desktop").setInputFiles({ name: "huge.jpg", mimeType: "image/jpeg", buffer: original });
+    const consoleMessage = await consoleMessagePromise;
+    await expect(page.getByLabel("Teks alternatif")).toBeVisible({ timeout: 15_000 });
+
+    const text = consoleMessage.text();
+    const match = text.match(/(\d+)x(\d+) \((\d+)B\) -> (\d+)x(\d+) \((\d+)B\) in (\d+)ms/);
+    expect(match, `expected an "[image-resize]" log matching the WxH (bytes) -> WxH (bytes) in Nms shape, got: ${text}`).not.toBeNull();
+    const [, , , inputBytesStr, outWidthStr, outHeightStr, outputBytesStr] = match!;
+    const outputWidth = Number(outWidthStr);
+    const outputHeight = Number(outHeightStr);
+    const inputBytes = Number(inputBytesStr);
+    const outputBytes = Number(outputBytesStr);
+
+    expect(Math.max(outputWidth, outputHeight)).toBeLessThanOrEqual(2400);
+    // Much smaller than the original — the real-world complaint this exists to diagnose (10-15MB
+    // phone photos) is about bytes over the network, not just pixel count.
+    expect(outputBytes).toBeLessThan(inputBytes * 0.5);
+  });
 });

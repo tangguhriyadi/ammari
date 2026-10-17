@@ -23,6 +23,12 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
   const router = useRouter();
   const [pending, setPending] = useState<PendingPhoto[]>([]);
   const [saving, setSaving] = useState(false);
+  // True while addFiles is downscaling a just-picked batch, before any of it appears as a
+  // pending tile — the "Memproses foto..." status (see product-photos-section.tsx). `devResizeInfo`
+  // is the dev-only size/timing detail for the last file processed in that batch (see
+  // client-image-resize.ts's own `[image-resize]` console log, which this mirrors for the UI).
+  const [processing, setProcessing] = useState(false);
+  const [devResizeInfo, setDevResizeInfo] = useState<string | null>(null);
   // Set once per `saveAll()` batch (not per file — one revalidation call for the whole batch,
   // not N), null until the first save; docs/plans/storefront-cms.md session 6.
   const [revalidationOk, setRevalidationOk] = useState<boolean | null>(null);
@@ -59,6 +65,8 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
     if (!fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
     const staged: PendingPhoto[] = [];
+    setProcessing(true);
+    setDevResizeInfo(null);
 
     for (const file of files) {
       if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
@@ -86,7 +94,7 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
         continue;
       }
 
-      const downscaled = await downscaleImageForUpload(file);
+      const resized = await downscaleImageForUpload(file);
       if (!mountedRef.current) {
         // Bailing out mid-batch (unmounted between files, e.g. navigated away while a later
         // file in the same multi-select was still downscaling) — revoke every object URL
@@ -98,17 +106,22 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
         }
         return;
       }
+      if (process.env.NODE_ENV !== "production") {
+        const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+        setDevResizeInfo(`${file.name}: ${mb(resized.inputBytes)}MB → ${mb(resized.outputBytes)}MB (${resized.timingMs}ms)`);
+      }
       staged.push({
         localId: createLocalId(),
         fabricColorId,
-        file: downscaled,
+        file: resized.file,
         name: file.name,
-        previewUrl: URL.createObjectURL(downscaled),
+        previewUrl: URL.createObjectURL(resized.file),
         state: "idle",
       });
     }
 
     setPending((prev) => [...prev, ...staged]);
+    setProcessing(false);
   }
 
   function removeFile(localId: string) {
@@ -183,5 +196,5 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
     }
   }
 
-  return { pending, saving, revalidationOk, addFiles, removeFile, discardAll, saveAll, retryRevalidation };
+  return { pending, saving, processing, devResizeInfo, revalidationOk, addFiles, removeFile, discardAll, saveAll, retryRevalidation };
 }

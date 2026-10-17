@@ -123,12 +123,19 @@ export function ContentImageField({
   const [mobileError, setMobileError] = useState<string | null>(null);
   const [desktopUploading, setDesktopUploading] = useState(false);
   const [mobileUploading, setMobileUploading] = useState(false);
+  // "Memproses foto..." while the client-side resize (client-image-resize.ts) runs, before the
+  // upload itself starts — distinct from desktop/mobileUploading's spinner, which already covers
+  // both phases. In dev, the text grows a size/timing suffix once the resize result is known,
+  // mirroring that module's own `[image-resize]` console log so the two are easy to correlate.
+  const [desktopStatus, setDesktopStatus] = useState<string | null>(null);
+  const [mobileStatus, setMobileStatus] = useState<string | null>(null);
   const desktopInputRef = useRef<HTMLInputElement>(null);
   const mobileInputRef = useRef<HTMLInputElement>(null);
 
   async function handleFile(variant: "desktop" | "mobile", file: File) {
     const setError = variant === "desktop" ? setDesktopError : setMobileError;
     const setUploading = variant === "desktop" ? setDesktopUploading : setMobileUploading;
+    const setStatus = variant === "desktop" ? setDesktopStatus : setMobileStatus;
 
     const clientError = clientValidationError(file);
     if (clientError) {
@@ -137,13 +144,21 @@ export function ContentImageField({
     }
     setError(null);
     setUploading(true);
+    setStatus("Memproses foto...");
 
     try {
-      const downscaled = await downscaleImageForUpload(file);
+      const resized = await downscaleImageForUpload(file);
+      if (process.env.NODE_ENV !== "production") {
+        const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+        setStatus(`Memproses foto... (${mb(resized.inputBytes)}MB → ${mb(resized.outputBytes)}MB, ${resized.timingMs}ms)`);
+      } else {
+        setStatus(null);
+      }
+
       const formData = new FormData();
       formData.set("sectionKey", sectionKey);
       formData.set("variant", variant);
-      formData.set("file", downscaled, file.name);
+      formData.set("file", resized.file, file.name);
 
       const result = await uploadContentImageAction(formData);
       if (!result.ok) {
@@ -161,6 +176,7 @@ export function ContentImageField({
       setError("Gagal mengunggah gambar. Coba lagi.");
     } finally {
       setUploading(false);
+      setStatus(null);
     }
   }
 
@@ -218,6 +234,12 @@ export function ContentImageField({
         </Button>
       )}
 
+      {desktopStatus && (
+        <p className="text-sm text-neutral-600" data-testid="content-image-status-desktop">
+          {desktopStatus}
+        </p>
+      )}
+
       {desktopError && (
         <p role="alert" className="text-sm text-danger-700">
           {desktopError}
@@ -268,6 +290,12 @@ export function ContentImageField({
             >
               Unggah crop mobile
             </Button>
+          )}
+
+          {mobileStatus && (
+            <p className="text-sm text-neutral-600" data-testid="content-image-status-mobile">
+              {mobileStatus}
+            </p>
           )}
 
           {mobileError && (

@@ -200,10 +200,11 @@ export function ProductPhotosSection({
   images: PhotoImage[];
 }) {
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
-  const { pending, saving, revalidationOk, addFiles, removeFile, discardAll, saveAll, retryRevalidation } = usePhotoStaging({
-    productId,
-    onSaved: () => {},
-  });
+  const { pending, saving, processing, devResizeInfo, revalidationOk, addFiles, removeFile, discardAll, saveAll, retryRevalidation } =
+    usePhotoStaging({
+      productId,
+      onSaved: () => {},
+    });
   const generalImages = images.filter((image) => image.fabricColorId === null);
 
   function confirmDiscard() {
@@ -214,6 +215,11 @@ export function ProductPhotosSection({
   return (
     <div className="flex flex-col gap-8 pb-36 sm:pb-0">
       <h2 className="text-lg font-semibold text-neutral-900">Foto</h2>
+      {processing && (
+        <p className="text-sm text-neutral-600" data-testid="photo-processing-status">
+          Memproses foto...{devResizeInfo ? ` (${devResizeInfo})` : ""}
+        </p>
+      )}
       {revalidationOk === false && (
         <p className="flex flex-wrap items-center gap-2 text-sm text-amber-800" data-testid="revalidation-warning">
           Perubahan tersimpan, tetapi toko online belum diperbarui.
@@ -230,7 +236,7 @@ export function ProductPhotosSection({
         images={generalImages}
         thumbnailImageId={thumbnailImageId}
         pendingPhotos={pending.filter((photo) => photo.fabricColorId === null)}
-        staging={saving}
+        staging={saving || processing}
         onSelectFiles={addFiles}
         onRemoveFile={removeFile}
       />
@@ -245,7 +251,7 @@ export function ProductPhotosSection({
           images={images.filter((image) => image.fabricColorId === group.fabricColorId)}
           thumbnailImageId={thumbnailImageId}
           pendingPhotos={pending.filter((photo) => photo.fabricColorId === group.fabricColorId)}
-          staging={saving}
+          staging={saving || processing}
           onSelectFiles={addFiles}
           onRemoveFile={removeFile}
         />
