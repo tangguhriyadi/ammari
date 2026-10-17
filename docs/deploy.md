@@ -78,7 +78,7 @@ SSH in as `ubuntu` for this whole section.
        -o /opt/ammari/cloudflare/origin-pull-ca.pem
      ```
      (same for every Cloudflare account — see `deploy/cloudflare/README.md` for how this was
-     confirmed). This is exactly what `deploy/Caddyfile`'s `client_auth { trust_pool file {
+     confirmed). This is exactly what `deploy/caddy/Caddyfile`'s `client_auth { trust_pool file {
      pem_file /etc/caddy/cloudflare/origin-pull-ca.pem } }` reads.
 3. Confirm `ammari.my.id`/`www`/`admin.ammari.my.id` DNS records are proxied (orange cloud) —
    should already be true per §0.
@@ -120,12 +120,12 @@ server** — never commit them, never paste them into a GitHub secret.
 ## 5. Verify the Caddy config before the first real deploy
 
 ```bash
-caddy validate --config /opt/ammari/Caddyfile
+caddy validate --config /opt/ammari/caddy/Caddyfile
 ```
 (after step 6's first sync has put a `Caddyfile` there — or run it against a local checkout of
-`deploy/Caddyfile` first). This exact config (including the `trust_pool` client-auth form) was
-validated against `caddy:2.10.2` during development; validating again here just confirms nothing
-about *your* copy of the cert/CA files is broken, not the Caddyfile syntax itself.
+`deploy/caddy/Caddyfile` first). This exact config (including the `trust_pool` client-auth form)
+was validated against `caddy:2.10.2` during development; validating again here just confirms
+nothing about *your* copy of the cert/CA files is broken, not the Caddyfile syntax itself.
 
 ## 6. First deploy
 
@@ -396,3 +396,18 @@ Real failures hit during the first dev rollout, and their fixes:
   (`deploy/remote-deploy.sh`'s own `poll_health` now prints the same two things automatically
   into the GitHub Actions log when a deploy's post-deploy health check fails — this is for
   digging in further by hand, or for a failure that happens well after a deploy succeeded.)
+- **A Caddyfile change deploys, `caddy reload` reports success, but the new config never
+  actually takes effect.** Hit for real: the host's `/opt/ammari/Caddyfile` had the new content,
+  but the caddy *container's own* `/etc/caddy/Caddyfile` still had the old content. Cause: the
+  Caddyfile used to be bind-mounted as a single file, which binds to that file's specific
+  **inode**, not its path — `rsync` (no `--inplace`) replaces a file by writing a new one and
+  renaming it over the old name, which changes the inode, and a single-file-mounted container
+  never re-resolves to the new one no matter how many times you `reload`. Fixed by mounting
+  `deploy/caddy/` as one DIRECTORY (`./caddy:/etc/caddy:ro` in `docker-compose.yml`) instead —
+  a directory mount always resolves a path fresh against whatever the host currently has there.
+  `remote-deploy.sh` no longer just trusts a reload either: it compares the container's own
+  sha256 of these files against the host's first, recreates the `caddy` container instead of
+  reloading if they ever mismatch, and re-verifies after. If this ever recurs anyway (e.g. after
+  some future compose/volume change), the fix is the same: `docker compose up -d --force-recreate
+  caddy` — a reload alone will NOT fix a genuinely stale mount, only recreating the container
+  re-establishes it.

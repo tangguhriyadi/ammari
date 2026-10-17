@@ -72,7 +72,7 @@ as `ubuntu` instead — see §0 below. If SSH is completely unreachable, Sumopod
 | SSH — `deploy` | Automation account, **no sudo**, in the `docker` group, owns `/opt/ammari-prod`. Key: `~/ammari-secrets/ammari_prod_deploy_key` on your Mac — the same key GitHub Actions uses (`DEPLOY_SSH_KEY` environment secret). Use for routine ops: `docker compose ps/logs`, running a backup by hand, `send-test-alert.sh`. |
 | SSH hardening | Password authentication and root login are both disabled. Only the two keys above work. |
 | Emergency access | Sumopod's own web console (provider dashboard) if SSH is unreachable for any reason. |
-| Directory layout | `/opt/ammari-prod/` — `docker-compose.yml`, `Caddyfile`, `remote-deploy.sh`, `active-slot-{admin,web}`, `deployed-sha-{admin,web}`, `deploy-history.log`, `.env` (per-slot image tags), `.caddy-config-hash` (hash of the last Caddyfile/cloudflare-snippet content `remote-deploy.sh` reloaded — see §1) all at the root; `env/` (real secrets, never in git), `caddy/certs/` (origin cert), `caddy/active-upstream.caddy` (generated, see §1), `cloudflare/` (AOP CA root + IP-range snippets), `backup/`, `monitoring/` as subdirectories. |
+| Directory layout | `/opt/ammari-prod/` — `docker-compose.yml`, `remote-deploy.sh`, `active-slot-{admin,web}`, `deployed-sha-{admin,web}`, `deploy-history.log`, `.env` (per-slot image tags), `.caddy-config-hash` (hash of the last Caddyfile/cloudflare-snippet content `remote-deploy.sh` reloaded — see §1) all at the root; `env/` (real secrets, never in git), `caddy/` — mounted WHOLE into the caddy container as one directory, not individual file mounts (see §1.6) — holding `Caddyfile`, `certs/` (origin cert), `active-upstream.caddy` (generated, see §1); `cloudflare/` (AOP CA root + IP-range snippets, a separate directory mount); `backup/`, `monitoring/` as subdirectories. |
 | Env files — source of truth | **Your Mac**, `~/ammari-secrets/prod-{admin,web,db,backup}.env`. The VPS's own `/opt/ammari-prod/env/*.env` are copies pushed there by `upload-prod-env.sh` — never edit them directly on the VPS (§3). |
 | Cloudflare | `ammari.id` zone, SSL/TLS mode **Full (strict)**. **Zone-level** Authenticated Origin Pulls (not Global) — our own CA, leaf cert valid to **2036**. Separate Cloudflare **origin certificate** (Caddy's TLS identity, 15-year validity, valid to **~2041**) — two unrelated cert pairs, see `deploy-prod/cloudflare/README.md`. `www.ammari.id` 301-redirects to the apex. |
 | Bucket | `ammariprod-cdy2yf`, Cloudeka, endpoint `https://kencana.basic.box.cloudeka.id`, region `kencana`. Public-read: `products/*`, `content/*`, `healthcheck/*`. Private (no policy statement — default-deny): `backups/daily/*`, `backups/weekly/*`. One bucket, one S3 access key for both the app and backups (`docs/plans/prod-deploy.md` §9 "Later" list — a deliberate, accepted scope-down, not an oversight). |
@@ -146,18 +146,59 @@ there's no visible downtime for either app during a routine deploy.
 ### 1.5 Caddyfile/cloudflare-snippet-only changes (no admin/web image change)
 
 `remote-deploy.sh` reloads Caddy as a side effect of a slot flip, but if this deploy's
-`Caddyfile` or `cloudflare/*.caddy` content changed while neither app's image did (e.g. a
+`caddy/Caddyfile` or `cloudflare/*.caddy` content changed while neither app's image did (e.g. a
 security-header tweak with no code change), there's no flip to trigger that reload from. The
 script handles this itself: it hashes those files on every run and, if the hash differs from the
-last run it recorded (`.caddy-config-hash`), runs `caddy validate` then `caddy reload` before
-touching either app — so the normal "Deploy (prod)" workflow is always enough, even for a
+last run it recorded (`.caddy-config-hash`), validates and reloads (or recreates — see §1.6)
+before touching either app — so the normal "Deploy (prod)" workflow is always enough, even for a
 Caddyfile-only change. If you ever need to force it by hand instead:
 ```bash
 ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121
 cd /opt/ammari-prod
 docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+# If that doesn't actually take effect (§1.6), recreate instead:
+docker compose up -d --force-recreate caddy
 ```
+
+### 1.6 Why Caddy's config is mounted as a directory, not individual files
+
+`deploy-prod/caddy/` (Caddyfile, certs/, the generated active-upstream snippet) is mounted into
+the caddy container as ONE directory (`./caddy:/etc/caddy:ro` in `docker-compose.yml`), not as
+separate single-file mounts. This isn't cosmetic — **Session 10 found this broken for real on
+dev**: after a deploy, the host's `/opt/ammari/Caddyfile` had the new content and `caddy reload`
+reported success, but the caddy *container's own* `/etc/caddy/Caddyfile` still had the old
+content. A single-file bind mount binds to that file's specific **inode**, not its path; `rsync`
+(no `--inplace`) replaces a file by writing a new one and renaming it over the old name — which
+changes the inode at that path — and a container holding a single-file mount never re-resolves
+to the new one, no matter how many times you `reload`. Only recreating the container (which
+re-establishes the bind mount from scratch) fixed it. A directory mount doesn't have this
+problem: the container always resolves a path by walking the mounted directory fresh, so it sees
+whatever the host currently has there. Reproduced and confirmed on real Linux bind-mount
+semantics (a Docker-in-Docker Linux container, not a macOS bind mount, which uses a different
+mechanism — virtiofs/gRPC-FUSE — that may not even exhibit this the same way) during Session 10.
+
+This is why `remote-deploy.sh`'s Caddyfile-reload step (§1.5) doesn't just trust `caddy reload`:
+it first compares the *container's own* sha256 of these files against the host's. If they
+already match, a plain reload is trusted. If they don't — which should never happen now that the
+mount is directory-based, but costs nothing to keep checking — it recreates the `caddy`
+container instead of reloading (confirmed locally: a reload against a genuinely stale mount
+changes nothing; `docker compose up -d --force-recreate caddy` does). Either way it then
+re-verifies the hash again, and finally curls the internal `:8080` listener to confirm a security
+header is actually present on a live response — not just that the file on disk looks right.
+Recreating Caddy is a brief restart (stop + start): measured locally at well under 2 seconds of
+actual downtime for the `caddy` service itself (no slow init — it just needs to parse a small
+Caddyfile), not the whole stack.
+
+The blue/green flip's own `active-upstream.caddy` rewrite (`write_snippet()`, a
+truncate-and-write into the SAME file via `cat > ... <<EOF`, never a rename) was never at risk of
+this bug in the first place, single-file-mounted or not — confirmed with the same real
+Linux-bind-mount test. It's also already inside the same directory mount as everything else.
+
+**The very first deploy after this mount-layout change needs Caddy recreated once** — handled
+automatically: `docker compose up -d caddy` (which `remote-deploy.sh` already runs on every
+deploy) detects the service's volume definition itself changed and recreates the container on
+its own, before this script's own verify-and-reload logic even runs. No separate manual step.
 
 ---
 
@@ -618,12 +659,12 @@ Prints one `PASS`/`FAIL`/`SKIP` line per check plus a summary, and exits non-zer
 Run it any time after a deploy, and definitely as part of go-live (`docs/plans/prod-deploy.md`
 §4 step 18 onward) and before submitting to the payment gateway. The security headers checked
 here (HSTS/`X-Content-Type-Options`/`Referrer-Policy`/`X-Frame-Options`/`Permissions-Policy`) are
-set in `deploy-prod/Caddyfile` (and `deploy/Caddyfile` for dev) — see §12.
+set in `deploy-prod/caddy/Caddyfile` (and `deploy/caddy/Caddyfile` for dev) — see §12.
 
 ## 12. Security headers
 
 Set in Caddy, not in either app's `next.config.ts` (confirmed neither sets any of these — see
-`deploy-prod/Caddyfile`'s own comment), on every public site block (never the internal-only
+`deploy-prod/caddy/Caddyfile`'s own comment), on every public site block (never the internal-only
 `:8080`/`:8081` health listeners, where they'd be meaningless):
 
 | Header | Value | Differs per host? |
@@ -648,7 +689,8 @@ built-in error-response path re-adds `Server: Caddy` and drops the rest on that 
 one response a reviewer/scanner is most likely to see without any of these protections.
 
 Reaching the server: see §1.5 for how a Caddyfile-only change (no admin/web image change) still
-gets reloaded on the normal deploy workflow.
+gets reloaded on the normal deploy workflow, and §1.6 for why that reload is actually trustworthy
+(the single-file-bind-mount bug this headers change originally ran into on dev).
 
 ## Related docs
 
