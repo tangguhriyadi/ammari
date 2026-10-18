@@ -275,6 +275,14 @@ cp "$ENV_EXAMPLE_DIR/backup.env.example" "$BACKUP_DEST"
 chmod 600 "$BACKUP_DEST"
 set_env_var "$BACKUP_DEST" "PG_BACKUP_ENCRYPTION_KEY" "$backup_encryption_key"
 set_env_var "$BACKUP_DEST" "ALERT_EMAIL_TO" "ammariofc@gmail.com,mtangguh97@gmail.com"
+# TODO(docs/plans/storage-r2.md Session 3): this leaves BACKUP_S3_ENDPOINT/BACKUP_S3_REGION/
+# BACKUP_S3_BUCKET/BACKUP_S3_ACCESS_KEY_ID/BACKUP_S3_SECRET_ACCESS_KEY at backup.env.example's
+# empty placeholders — fill them by hand (or via Session 3's --storage-only mode, once it exists)
+# rather than adding real prompts/reads here now. Deliberately NOT wired up in this session:
+# doing so would mean every `--force` run of this script (which currently regenerates EVERY
+# secret, not just storage ones) also re-prompts for/rewrites the backup bucket's credentials —
+# exactly the unnecessary-secret-rotation risk Session 3 exists to fix with a storage-only mode.
+# See the plan's "Decisions" §2 (hard requirement, not optional) before adding anything here.
 
 unset staff_better_auth_secret customer_better_auth_secret revalidate_secret preview_secret \
   postgres_password backup_encryption_key resend_key google_client_id google_client_secret \

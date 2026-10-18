@@ -9,12 +9,13 @@
 # Mechanics: pg_dump (inside the already-running `db` container, over its own unix socket, so no
 # Postgres password ever needs to leave that container) -> openssl aes-256-cbc-pbkdf2 encrypt
 # (key from env/backup.env's PG_BACKUP_ENCRYPTION_KEY, passed to openssl via `-pass env:`, never
-# argv, never echoed) -> upload to the SAME prod bucket's private backups/ prefix, using the S3
-# credentials already in env/admin.env (docs/plans/prod-deploy.md §4 step 7 / §9 "Later" list —
-# one bucket, one access key, not duplicated into backup.env). The encrypted dump briefly exists
-# at a mktemp path; the unencrypted dump NEVER touches disk at all (it only ever exists inside
-# the pg_dump|openssl pipe). Every temp file this script creates is removed by the EXIT trap
-# below, on success or failure alike.
+# argv, never echoed) -> upload to the DEDICATED, private `ammari-prod-backups` R2 bucket's
+# backups/ prefix, using the BACKUP_S3_* credentials in env/backup.env
+# (docs/plans/storage-r2.md Session 2 — a separate bucket and a separate scoped token from
+# env/admin.env's media-bucket S3_*; this script never loads env/admin.env at all). The encrypted
+# dump briefly exists at a mktemp path; the unencrypted dump NEVER touches disk at all (it only
+# ever exists inside the pg_dump|openssl pipe). Every temp file this script creates is removed by
+# the EXIT trap below, on success or failure alike.
 #
 # Nothing extra is installed on the host for this: pg_dump runs via `docker compose exec` into
 # the already-running `db` container, and the S3 upload/prune and the Resend alert each run
@@ -22,7 +23,7 @@
 # itself only ever needs Docker, which is already required for everything else on this VPS.
 #
 # Usage: pg-backup.sh   (no arguments; always targets this directory's own
-#                        ../docker-compose.yml / ../env/{admin,backup,db}.env)
+#                        ../docker-compose.yml / ../env/backup.env)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -175,15 +176,14 @@ fail() {
 require_var() {
   local name="$1"
   if [ -z "${!name:-}" ]; then
-    fail "missing required variable $name in env/backup.env or env/admin.env"
+    fail "missing required variable $name in env/backup.env"
   fi
 }
 
-echo "==> Loading env/backup.env and env/admin.env"
+echo "==> Loading env/backup.env"
 load_env_file "env/backup.env" || fail "could not read env/backup.env"
-load_env_file "env/admin.env" || fail "could not read env/admin.env"
 
-for v in PG_BACKUP_ENCRYPTION_KEY S3_ENDPOINT S3_REGION S3_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
+for v in PG_BACKUP_ENCRYPTION_KEY BACKUP_S3_ENDPOINT BACKUP_S3_REGION BACKUP_S3_BUCKET BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY; do
   require_var "$v"
 done
 # ALERT_EMAIL_TO / RESEND_API_KEY / EMAIL_FROM are intentionally NOT required here — send_alert
@@ -298,21 +298,24 @@ EOS
 
 # AWS_REQUEST_CHECKSUM_CALCULATION/AWS_RESPONSE_CHECKSUM_VALIDATION=when_required below: this
 # aws-cli version (2.27.49, pinned since this script's introduction) defaults to computing a
-# flexible checksum (CRC32, streamed as an aws-chunked trailer) on every S3 request. Cloudeka
-# (the current S3-compatible provider) doesn't handle that trailer correctly and stalls instead
-# of rejecting it — a 176KB upload took ~23s; an admin-upload PUT elsewhere hit 113s. Forcing
-# when_required (checksum only when an operation actually needs one — none of the ones this
-# script uses do) restores pre-default-change behavior. See docs/deploy-prod.md's
-# troubleshooting section.
+# flexible checksum (CRC32, streamed as an aws-chunked trailer) on every S3 request. This was
+# originally forced to work around Cloudeka (the prior S3-compatible provider for this bucket)
+# stalling on that trailer instead of rejecting it; R2 doesn't need the workaround, but it's
+# harmless to leave on. See docs/deploy-prod.md's troubleshooting section for the original
+# diagnosis.
+#
+# The S3_*/AWS_* names below are this script's own internal/container-local names (read by the
+# S3OPS_SCRIPT below and the aws-cli itself) — populated from the host-side BACKUP_S3_* variables
+# loaded from env/backup.env above; they're two different naming layers, not a typo.
 AWS_ENV_FILE="$(mktemp)"
 track_tmp "$AWS_ENV_FILE"
 chmod 600 "$AWS_ENV_FILE"
 cat > "$AWS_ENV_FILE" <<ENVEOF
-AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
-AWS_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
-AWS_DEFAULT_REGION=${S3_REGION}
-S3_BUCKET=${S3_BUCKET}
-S3_ENDPOINT=${S3_ENDPOINT}
+AWS_ACCESS_KEY_ID=${BACKUP_S3_ACCESS_KEY_ID}
+AWS_SECRET_ACCESS_KEY=${BACKUP_S3_SECRET_ACCESS_KEY}
+AWS_DEFAULT_REGION=${BACKUP_S3_REGION}
+S3_BUCKET=${BACKUP_S3_BUCKET}
+S3_ENDPOINT=${BACKUP_S3_ENDPOINT}
 DAILY_KEY=${DAILY_KEY}
 WEEKLY_KEY=${WEEKLY_KEY}
 KEEP_DAILY=${KEEP_DAILY}

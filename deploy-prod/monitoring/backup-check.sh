@@ -9,18 +9,19 @@
 #   1. LOCAL:  /opt/ammari-prod/backup/last-backup-status.json, written by
 #      deploy-prod/backup/pg-backup.sh (Session 5) only after a fully successful dump + encrypt +
 #      upload. Missing entirely, or older than STALE_HOURS, is a problem.
-#   2. BUCKET: the newest object actually under backups/daily/ in the prod bucket, listed with the
-#      SAME throwaway aws-cli container approach pg-backup.sh itself uses (pinned image, path-style
-#      S3 addressing, credentials passed via a 0600 env file, never argv). Missing entirely, or
-#      older than STALE_HOURS, is a problem. This guards against a scenario the local status file
-#      alone could never catch: the status file says a backup completed, but the object it claims
-#      to have written doesn't actually match what's live in the bucket.
+#   2. BUCKET: the newest object actually under backups/daily/ in the DEDICATED `ammari-prod-backups`
+#      R2 bucket, listed with the SAME throwaway aws-cli container approach pg-backup.sh itself
+#      uses (pinned image, path-style S3 addressing, credentials from env/backup.env's
+#      BACKUP_S3_* passed via a 0600 env file, never argv). Missing entirely, or older than
+#      STALE_HOURS, is a problem. This guards against a scenario the local status file alone
+#      could never catch: the status file says a backup completed, but the object it claims to
+#      have written doesn't actually match what's live in the bucket.
 # A brand-new install that has never run pg-backup.sh even once has NEITHER a status file NOR any
 # bucket object — that alerts immediately too (not a "staleness" check that could never trigger
 # with nothing to compare against yet).
 #
 # Usage: backup-check.sh   (no arguments; always targets this directory's own
-#                           ../env/{admin,backup}.env and ../backup/last-backup-status.json)
+#                           ../env/backup.env and ../backup/last-backup-status.json)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,7 +33,6 @@ STATE_DIR="$SCRIPT_DIR/state"
 
 cd "$ROOT_DIR"
 
-load_env_file "env/admin.env" || echo "==> WARNING: could not read env/admin.env" >&2
 load_env_file "env/backup.env" || echo "==> WARNING: could not read env/backup.env" >&2
 
 # Pinned, not :latest — same reasoning as pg-backup.sh's own copy of this same pin: an unattended
@@ -79,26 +79,29 @@ else
   fi
 fi
 
-echo "==> Listing s3://\${S3_BUCKET}/backups/daily/ via throwaway aws-cli container"
-for v in S3_ENDPOINT S3_REGION S3_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
+echo "==> Listing s3://\${BACKUP_S3_BUCKET}/backups/daily/ via throwaway aws-cli container"
+for v in BACKUP_S3_ENDPOINT BACKUP_S3_REGION BACKUP_S3_BUCKET BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY; do
   if [ -z "${!v:-}" ]; then
-    ISSUES+=("cannot list the bucket: $v is not set (check env/admin.env)")
+    ISSUES+=("cannot list the bucket: $v is not set (check env/backup.env)")
   fi
 done
 
 BUCKET_TS=""
-if [ -n "${S3_BUCKET:-}" ]; then
+if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   AWS_ENV_FILE="$(mktemp)"
   chmod 600 "$AWS_ENV_FILE"
   # when_required (not the aws-cli default): see pg-backup.sh's own comment above its matching
-  # AWS_ENV_FILE block — this aws-cli version's flexible-checksum default stalls against
-  # Cloudeka instead of failing fast.
+  # AWS_ENV_FILE block — originally forced to work around the prior Cloudeka provider; harmless
+  # to leave on against R2.
+  #
+  # S3_*/AWS_* below are this script's own internal/container-local names, populated from the
+  # host-side BACKUP_S3_* variables loaded from env/backup.env above.
   cat > "$AWS_ENV_FILE" <<ENVEOF
-AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
-AWS_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
-AWS_DEFAULT_REGION=${S3_REGION:-}
-S3_BUCKET=${S3_BUCKET:-}
-S3_ENDPOINT=${S3_ENDPOINT:-}
+AWS_ACCESS_KEY_ID=${BACKUP_S3_ACCESS_KEY_ID:-}
+AWS_SECRET_ACCESS_KEY=${BACKUP_S3_SECRET_ACCESS_KEY:-}
+AWS_DEFAULT_REGION=${BACKUP_S3_REGION:-}
+S3_BUCKET=${BACKUP_S3_BUCKET:-}
+S3_ENDPOINT=${BACKUP_S3_ENDPOINT:-}
 AWS_REQUEST_CHECKSUM_CALCULATION=when_required
 AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 ENVEOF

@@ -7,10 +7,13 @@
 # backup encryption key, so there is no code path by which it could reach the real prod database.
 #
 # What it does:
-#   1. Reads S3 credentials from ~/ammari-secrets/prod-admin.env and PG_BACKUP_ENCRYPTION_KEY from
+#   1. Reads the BACKUP_S3_* credentials and PG_BACKUP_ENCRYPTION_KEY, both from
 #      ~/ammari-secrets/prod-backup.env — loaded into THIS SCRIPT's own environment only. Never
 #      printed, never passed as a command-line argument to anything (same `-pass env:` /
 #      `--env-file` discipline deploy-prod/backup/pg-backup.sh itself uses to encrypt these dumps).
+#      This script needs no S3 credentials from prod-admin.env at all — backups live in their own
+#      dedicated, private R2 bucket with its own scoped token (docs/plans/storage-r2.md
+#      Session 2), separate from the media bucket's credentials.
 #   2. Lists s3://<bucket>/backups/daily/ via a throwaway, pinned aws-cli container (path-style
 #      addressing, same as pg-backup.sh/backup-check.sh) and downloads the newest object.
 #   3. Decrypts it with openssl (the same aes-256-cbc/pbkdf2 pg-backup.sh used to encrypt it).
@@ -22,8 +25,7 @@
 #   6. Removes the container, its network, and every temp file this script created — on success
 #      OR failure (EXIT trap) — nothing from this drill is left running or on disk afterward.
 #
-# Usage: deploy-prod/restore-drill-local.sh [--admin-env PATH] [--backup-env PATH] [--object KEY]
-#   --admin-env PATH    override ~/ammari-secrets/prod-admin.env (testing only)
+# Usage: deploy-prod/restore-drill-local.sh [--backup-env PATH] [--object KEY]
 #   --backup-env PATH   override ~/ammari-secrets/prod-backup.env (testing only)
 #   --object KEY        restore this exact backups/daily/<KEY> or backups/weekly/<KEY> object
 #                        instead of auto-picking the newest backups/daily/ one
@@ -32,16 +34,11 @@ set -uo pipefail
 AWS_CLI_IMAGE="amazon/aws-cli:2.27.49"
 PG_IMAGE="pgvector/pgvector:pg16"
 
-ADMIN_ENV="$HOME/ammari-secrets/prod-admin.env"
 BACKUP_ENV="$HOME/ammari-secrets/prod-backup.env"
 OBJECT_OVERRIDE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --admin-env)
-      ADMIN_ENV="$2"
-      shift 2
-      ;;
     --backup-env)
       BACKUP_ENV="$2"
       shift 2
@@ -52,7 +49,7 @@ while [ $# -gt 0 ]; do
       ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [--admin-env PATH] [--backup-env PATH] [--object KEY]" >&2
+      echo "Usage: $0 [--backup-env PATH] [--object KEY]" >&2
       exit 2
       ;;
   esac
@@ -76,9 +73,9 @@ cleanup() {
   for f in "${TMP_FILES[@]:-}"; do
     [ -n "$f" ] && rm -rf "$f"
   done
-  # Never leave the decryption key (or anything else loaded from the two env files) sitting in
-  # this shell's environment past the point this script actually needs it.
-  unset PG_BACKUP_ENCRYPTION_KEY S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_ENDPOINT S3_REGION S3_BUCKET 2>/dev/null || true
+  # Never leave the decryption key (or anything else loaded from the env file) sitting in this
+  # shell's environment past the point this script actually needs it.
+  unset PG_BACKUP_ENCRYPTION_KEY BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY BACKUP_S3_ENDPOINT BACKUP_S3_REGION BACKUP_S3_BUCKET 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -116,12 +113,11 @@ load_env_file() {
 command -v docker >/dev/null 2>&1 || fail "docker is not on PATH — install/start Docker Desktop first"
 docker info >/dev/null 2>&1 || fail "docker daemon is not reachable — is Docker Desktop running?"
 
-echo "==> Loading S3 credentials from $ADMIN_ENV and the backup key from $BACKUP_ENV"
-load_env_file "$ADMIN_ENV" || fail "could not read $ADMIN_ENV (run deploy-prod/make-prod-env.sh first if this is a fresh machine)"
-load_env_file "$BACKUP_ENV" || fail "could not read $BACKUP_ENV"
+echo "==> Loading backup S3 credentials and the backup key from $BACKUP_ENV"
+load_env_file "$BACKUP_ENV" || fail "could not read $BACKUP_ENV (run deploy-prod/make-prod-env.sh first if this is a fresh machine)"
 
-for v in S3_ENDPOINT S3_REGION S3_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
-  [ -n "${!v:-}" ] || fail "missing $v in $ADMIN_ENV"
+for v in BACKUP_S3_ENDPOINT BACKUP_S3_REGION BACKUP_S3_BUCKET BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY; do
+  [ -n "${!v:-}" ] || fail "missing $v in $BACKUP_ENV"
 done
 [ -n "${PG_BACKUP_ENCRYPTION_KEY:-}" ] || fail "missing PG_BACKUP_ENCRYPTION_KEY in $BACKUP_ENV"
 
@@ -131,20 +127,20 @@ track_tmp "$WORKDIR"
 # Single 0600 env file for every throwaway aws-cli container below — never passed via `-e` on
 # argv (which would show up in `docker inspect`/`ps`), same pattern pg-backup.sh itself uses.
 # AWS_REQUEST_CHECKSUM_CALCULATION/AWS_RESPONSE_CHECKSUM_VALIDATION=when_required: see
-# pg-backup.sh's own comment above its matching AWS_ENV_FILE block — this aws-cli version's
-# flexible-checksum default stalls against Cloudeka instead of failing fast.
+# pg-backup.sh's own comment above its matching AWS_ENV_FILE block — originally forced to work
+# around the prior Cloudeka provider's flexible-checksum stall; harmless to leave on against R2.
 AWS_ENV_FILE="$WORKDIR/aws.env"
 cat >"$AWS_ENV_FILE" <<ENVEOF
-AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
-AWS_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
-AWS_DEFAULT_REGION=${S3_REGION}
+AWS_ACCESS_KEY_ID=${BACKUP_S3_ACCESS_KEY_ID}
+AWS_SECRET_ACCESS_KEY=${BACKUP_S3_SECRET_ACCESS_KEY}
+AWS_DEFAULT_REGION=${BACKUP_S3_REGION}
 AWS_REQUEST_CHECKSUM_CALCULATION=when_required
 AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 ENVEOF
 chmod 600 "$AWS_ENV_FILE"
 
-# Forces path-style addressing — same reason pg-backup.sh/backup-check.sh and
-# packages/storage/src/s3-client.ts all hardcode this for this same Cloudeka endpoint.
+# Forces path-style addressing — R2 requires it (docs/plans/storage-r2.md), same as
+# packages/storage/src/s3-client.ts and pg-backup.sh/backup-check.sh.
 AWS_CONFIG_SCRIPT="$WORKDIR/aws-config.sh"
 cat >"$AWS_CONFIG_SCRIPT" <<'EOS'
 mkdir -p "$HOME/.aws"
@@ -157,16 +153,16 @@ EOS
 
 OBJECT_KEY="$OBJECT_OVERRIDE"
 if [ -z "$OBJECT_KEY" ]; then
-  echo "==> Listing s3://${S3_BUCKET}/backups/daily/ to find the newest backup"
+  echo "==> Listing s3://${BACKUP_S3_BUCKET}/backups/daily/ to find the newest backup"
   LISTING="$(docker run --rm \
     --env-file "$AWS_ENV_FILE" \
     -v "$AWS_CONFIG_SCRIPT:/aws-config.sh:ro" \
     --entrypoint /bin/bash \
     "$AWS_CLI_IMAGE" \
-    -c "source /aws-config.sh && aws s3 ls 's3://${S3_BUCKET}/backups/daily/' --endpoint-url '${S3_ENDPOINT}'" 2>/dev/null || true)"
+    -c "source /aws-config.sh && aws s3 ls 's3://${BACKUP_S3_BUCKET}/backups/daily/' --endpoint-url '${BACKUP_S3_ENDPOINT}'" 2>/dev/null || true)"
 
   if [ -z "$LISTING" ]; then
-    fail "no objects found under s3://${S3_BUCKET}/backups/daily/ — has pg-backup.timer run at least once yet? See docs/deploy-prod.md §5.2"
+    fail "no objects found under s3://${BACKUP_S3_BUCKET}/backups/daily/ — has pg-backup.timer run at least once yet? See docs/deploy-prod.md §5.2"
   fi
 
   # Object names (YYYY-MM-DD_HHMM.dump.enc) sort lexicographically == chronologically — same
@@ -174,13 +170,13 @@ if [ -z "$OBJECT_KEY" ]; then
   NEWEST_NAME="$(printf '%s\n' "$LISTING" | awk '{print $4}' | sort | tail -n1)"
   OBJECT_KEY="backups/daily/${NEWEST_NAME}"
 fi
-echo "==> Using backup object: s3://${S3_BUCKET}/${OBJECT_KEY}"
+echo "==> Using backup object: s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY}"
 
 echo "==> Downloading and decrypting"
 DOWNLOAD_SCRIPT="$WORKDIR/download.sh"
 cat >"$DOWNLOAD_SCRIPT" <<EOS
 source /aws-config.sh
-aws s3 cp "s3://${S3_BUCKET}/${OBJECT_KEY}" /out/dump.enc --endpoint-url "${S3_ENDPOINT}"
+aws s3 cp "s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY}" /out/dump.enc --endpoint-url "${BACKUP_S3_ENDPOINT}"
 EOS
 
 if ! docker run --rm \
@@ -191,7 +187,7 @@ if ! docker run --rm \
   --entrypoint /bin/bash \
   "$AWS_CLI_IMAGE" \
   /download.sh; then
-  fail "download of s3://${S3_BUCKET}/${OBJECT_KEY} failed"
+  fail "download of s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY} failed"
 fi
 [ -s "$WORKDIR/dump.enc" ] || fail "downloaded dump.enc is empty"
 
@@ -267,4 +263,4 @@ printf '%s\n' "$ROW_COUNTS" | while IFS='|' read -r table count; do
   printf '  %-50s %s\n' "$table" "$count"
 done
 
-echo "==> Restore drill complete — s3://${S3_BUCKET}/${OBJECT_KEY} restores cleanly."
+echo "==> Restore drill complete — s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY} restores cleanly."

@@ -186,28 +186,57 @@ secrets/Cloudflare settings"). Run `/code-review` (routing to `typescript-review
   (removing `policy.ts` et al. must not break `s3-client.test.ts`/`memory-client.test.ts`, which
   don't import from it).
 
-### Session 2 — Backup scripts read their own credentials
+### Session 2 — Backup scripts read their own credentials (done)
 
 Today `pg-backup.sh` and `backup-check.sh` load `env/admin.env` to get `S3_*` (because backups
 shared the media bucket's key). With a dedicated backups bucket, that coupling is no longer
 correct and should be removed, not just left harmlessly redundant:
 
-- `deploy-prod/env/backup.env.example`: add `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION`,
+- `deploy-prod/env/backup.env.example`: adds `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION`,
   `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, with a comment
   explaining these are the `ammari-prod-backups`-scoped R2 token, deliberately separate from
-  `env/admin.env`'s media-bucket credentials.
-- `deploy-prod/backup/pg-backup.sh`: drop `load_env_file "env/admin.env"` entirely (nothing else
+  `env/admin.env`'s media-bucket credentials. The non-secret values (endpoint, region, bucket
+  name — account-wide constants, not secrets) are pre-filled directly in the `.example` file
+  itself (unlike the media bucket's `S3_*`, which `make-prod-env.sh` fills programmatically) —
+  simplest for the one-time manual server switch documented in `docs/deploy-prod.md` §8.3, since
+  Session 3 hasn't wired `make-prod-env.sh` up for this yet (see below).
+- `deploy-prod/backup/pg-backup.sh`: drops `load_env_file "env/admin.env"` entirely (nothing else
   in this script needs it — DB access is via `docker compose exec db`, not a connection string).
-  Change the `require_var`/`S3OPS_SCRIPT` block to read `BACKUP_S3_*` instead of `S3_*`.
-- `deploy-prod/monitoring/backup-check.sh`: same change — stop loading `env/admin.env`, read
+  The `require_var`/`S3OPS_SCRIPT` block now reads `BACKUP_S3_*` instead of `S3_*`.
+- `deploy-prod/monitoring/backup-check.sh`: same change — stops loading `env/admin.env`, reads
   `BACKUP_S3_*` from `env/backup.env` for the bucket-listing check.
-- `deploy-prod/restore-drill-local.sh` and `docs/runbooks/restore-drill.md`: update the comment/
-  instructions that currently say "S3 credentials from `~/ammari-secrets/prod-admin.env`" to say
-  `~/ammari-secrets/prod-backup.env`'s `BACKUP_S3_*` vars instead.
-- Tests: these are bash scripts with no unit-test harness in this repo; verification is manual
-  (owner runs `pg-backup.sh` once by hand against the real backups bucket during cutover — see
-  "Switch order" below). This session is reviewed via `/code-review` (`security-reviewer` for the
-  credential-handling change), not exercised automatically.
+- `deploy-prod/restore-drill-local.sh`: no longer takes an `--admin-env` flag at all (it never
+  needed anything else from `prod-admin.env`) — reads `BACKUP_S3_*` and
+  `PG_BACKUP_ENCRYPTION_KEY` both from `--backup-env` (`~/ammari-secrets/prod-backup.env`).
+  `docs/runbooks/restore-drill.md` updated to match.
+- **Object prefix layout — kept unchanged.** `backups/daily/`+`backups/weekly/` still live
+  *inside* the new dedicated bucket, exactly as they did inside the old shared one. Simplest
+  consistent choice: zero changes needed to `pg-backup.sh`'s key-naming/prune logic, and
+  `restore-drill-local.sh`/`backup-check.sh` keep listing the same paths. The prefix is no longer
+  load-bearing for privacy (the whole bucket is private now), but removing it would be change for
+  its own sake.
+- `deploy-prod/make-prod-env.sh` / `upload-prod-env.sh`: **deliberately left untouched beyond a
+  TODO comment** pointing at Session 3. Wiring real prompts/reads for `BACKUP_S3_ACCESS_KEY_ID`/
+  `BACKUP_S3_SECRET_ACCESS_KEY` into `make-prod-env.sh` now isn't small or safe on its own — this
+  script's `--force` path currently regenerates *every* secret, not just storage ones, and
+  Decision 2 below requires a `--storage-only` mode before any script run should be trusted not
+  to rotate `STAFF_BETTER_AUTH_SECRET` etc. as a side effect. `upload-prod-env.sh` needed no
+  change — it already uploads `prod-backup.env` generically.
+- `deploy-prod/env/admin.env.example`'s comment claiming the media bucket "ALSO holds nightly
+  encrypted Postgres backups under its own backups/ prefix... reuses these SAME credentials" is
+  now false and was corrected in the same session.
+- Switch-over procedure for the real server documented in `docs/deploy-prod.md` §8.3: edit
+  `prod-backup.env` on the Mac, `upload-prod-env.sh`, `scp` the updated `backup/`/`monitoring/`
+  scripts (§8.1), then run `pg-backup.sh` + `backup-check.sh` manually once and
+  `restore-drill-local.sh` once against the new bucket before trusting the nightly timer.
+- Tests: these are bash scripts with no unit-test harness in this repo. `bash -n` on every
+  changed script passed; `shellcheck` (where available) passed with only pre-existing/expected
+  disables. A local dry run with a fake `env/backup.env` missing `BACKUP_S3_*` confirmed
+  `pg-backup.sh`/`backup-check.sh` fail loudly with a clear message and never fall back to
+  `env/admin.env` (that file was never even created in the dry-run sandbox). Real-bucket
+  verification is manual, per the switch-over procedure above — this session is reviewed via
+  `/code-review` (`security-reviewer` for the credential-handling change), not exercised
+  automatically.
 
 ### Session 3 — `make-prod-env.sh` / `upload-prod-env.sh` generate R2 values
 

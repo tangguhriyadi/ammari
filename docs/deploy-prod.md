@@ -75,7 +75,8 @@ as `ubuntu` instead — see §0 below. If SSH is completely unreachable, Sumopod
 | Directory layout | `/opt/ammari-prod/` — `docker-compose.yml`, `remote-deploy.sh`, `active-slot-{admin,web}`, `deployed-sha-{admin,web}`, `deploy-history.log`, `.env` (per-slot image tags), `.caddy-config-hash` (hash of the last Caddyfile/cloudflare-snippet content `remote-deploy.sh` reloaded — see §1) all at the root; `env/` (real secrets, never in git), `caddy/` — mounted WHOLE into the caddy container as one directory, not individual file mounts (see §1.6) — holding `Caddyfile`, `certs/` (origin cert), `active-upstream.caddy` (generated, see §1); `cloudflare/` (AOP CA root + IP-range snippets, a separate directory mount); `backup/`, `monitoring/` as subdirectories. |
 | Env files — source of truth | **Your Mac**, `~/ammari-secrets/prod-{admin,web,db,backup}.env`. The VPS's own `/opt/ammari-prod/env/*.env` are copies pushed there by `upload-prod-env.sh` — never edit them directly on the VPS (§3). |
 | Cloudflare | `ammari.id` zone, SSL/TLS mode **Full (strict)**. **Zone-level** Authenticated Origin Pulls (not Global) — our own CA, leaf cert valid to **2036**. Separate Cloudflare **origin certificate** (Caddy's TLS identity, 15-year validity, valid to **~2041**) — two unrelated cert pairs, see `deploy-prod/cloudflare/README.md`. `www.ammari.id` 301-redirects to the apex. |
-| Bucket | `ammariprod-cdy2yf`, Cloudeka, endpoint `https://kencana.basic.box.cloudeka.id`, region `kencana`. Public-read: `products/*`, `content/*`, `healthcheck/*`. Private (no policy statement — default-deny): `backups/daily/*`, `backups/weekly/*`. One bucket, one S3 access key for both the app and backups (`docs/plans/prod-deploy.md` §9 "Later" list — a deliberate, accepted scope-down, not an oversight). |
+| Media bucket | `ammariprod-cdy2yf`, Cloudeka, endpoint `https://kencana.basic.box.cloudeka.id`, region `kencana`. Public-read: `products/*`, `content/*`, `healthcheck/*`. Credentials in `env/admin.env`'s `S3_*`. Not yet migrated to R2 — see `docs/plans/storage-r2.md` Sessions 3–5. |
+| Backups bucket | `ammari-prod-backups`, Cloudflare R2, endpoint `https://d99c5045ed359887e8fdd591cc492ee9.r2.cloudflarestorage.com`, region `auto`, path-style addressing. **Private, no custom domain, never public.** Its own scoped API token — **separate** from the media bucket's key (`docs/plans/storage-r2.md` Session 2, superseding `docs/plans/prod-deploy.md` §9's old "same bucket, same key" scope-down). Credentials in `env/backup.env`'s `BACKUP_S3_*`, read only by `deploy-prod/backup/pg-backup.sh` and `deploy-prod/monitoring/backup-check.sh` — never `env/admin.env`. Object layout unchanged: `backups/daily/*` + `backups/weekly/*` inside this bucket. |
 | Resend | Separate prod API key, named `ammari-prod`, sending access restricted to the `mail.ammari.id` domain. |
 | Google OAuth | Same OAuth client ("Ammari") as dev, with `https://ammari.id/api/auth/callback/google` and `https://admin.ammari.id/api/auth/callback/google` added as redirect URIs; consent screen is "In production." |
 | GHCR access token | Classic PAT, scope `read:packages` only, used for `docker login ghcr.io` as `deploy` on the VPS (one-time, persists in `deploy`'s own `~/.docker/config.json`). **1-year expiry** — see §9's renewals calendar. |
@@ -365,8 +366,9 @@ deploy-prod/restore-drill-local.sh
 ```
 
 Automates `docs/runbooks/restore-drill.md`'s "Drill: restore into a disposable local Postgres"
-section: reads `PG_BACKUP_ENCRYPTION_KEY` from `~/ammari-secrets/prod-backup.env` and the S3
-credentials from `~/ammari-secrets/prod-admin.env` (never printed), downloads the newest
+section: reads `PG_BACKUP_ENCRYPTION_KEY` and the backup-bucket `BACKUP_S3_*` credentials, both
+from `~/ammari-secrets/prod-backup.env` (never printed; never `prod-admin.env`'s media-bucket
+`S3_*` — see the Facts table's "Backups bucket" row), downloads the newest
 `backups/daily/` object, decrypts it, restores it into a **throwaway** Postgres container
 published on a random local port, prints row counts for `staff_auth_users`/`products`/
 `product_variants`/`storefront_homepage_sections`/`info_pages`/`store_settings`, then removes the
@@ -628,6 +630,38 @@ and prints their next scheduled run. `install-monitoring.sh` also (re-)creates
 
 After either install, switch back to (or SSH in as) `deploy` (no sudo) and confirm delivery still
 works: `cd /opt/ammari-prod/monitoring && ./send-test-alert.sh` (§6.2).
+
+### 8.3 One-time switch: backups move to their own R2 bucket (`docs/plans/storage-r2.md` Session 2)
+
+`pg-backup.sh`/`backup-check.sh` now read `BACKUP_S3_*` from `env/backup.env` only — they no
+longer load `env/admin.env` at all. Do this once, in order:
+
+1. **On your Mac:** `$EDITOR ~/ammari-secrets/prod-backup.env` and add/fill:
+   `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION`, `BACKUP_S3_BUCKET` (the non-secret values are
+   already correct in `deploy-prod/env/backup.env.example` — copy them across if this file
+   predates this change), and `BACKUP_S3_ACCESS_KEY_ID`/`BACKUP_S3_SECRET_ACCESS_KEY` from
+   `~/ammari-secrets/r2-backups-access-key` / `r2-backups-secret-key` (paste the values with your
+   editor — never `cat`/`echo` them to a terminal).
+2. **Upload the env file:** `deploy-prod/upload-prod-env.sh` (pushes all four files; only
+   `backup.env` actually changed).
+3. **Copy the updated scripts:** §8.1 above (`scp` both `deploy-prod/backup` and
+   `deploy-prod/monitoring`) — `pg-backup.sh` and `backup-check.sh` themselves changed in this
+   session.
+4. **Verify, in order, before trusting the nightly timer with it:**
+   ```bash
+   ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121
+   cd /opt/ammari-prod/backup && ./pg-backup.sh          # one manual backup against the new bucket
+   cat last-backup-status.json                            # confirm it succeeded
+   cd /opt/ammari-prod/monitoring && ./backup-check.sh    # confirm it agrees (local file + bucket listing)
+   exit
+   # On your Mac:
+   deploy-prod/restore-drill-local.sh                      # confirms a backup from the new bucket actually restores
+   ```
+   Only after all three pass does the nightly `pg-backup.timer`/daily `backup-check.timer` need
+   no further action — they already run the scripts now on disk.
+5. The old Cloudeka bucket's existing `backups/` objects are untouched by this switch (nothing
+   deletes them) — leave them until `docs/plans/storage-r2.md`'s "Decommissioning Cloudeka" step,
+   in case a restore drill against one of them is ever needed before that.
 
 ---
 
