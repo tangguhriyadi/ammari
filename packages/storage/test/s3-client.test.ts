@@ -96,8 +96,26 @@ describe("S3StorageClient", () => {
     await client.put("products/a/400.webp", Buffer.from("x"), "image/webp");
     expect(sendMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        input: { Bucket: "ammari-products", Key: "products/a/400.webp", Body: Buffer.from("x"), ContentType: "image/webp" },
+        input: {
+          Bucket: "ammari-products",
+          Key: "products/a/400.webp",
+          Body: Buffer.from("x"),
+          ContentType: "image/webp",
+          CacheControl: "public, max-age=31536000, immutable",
+        },
       }),
+    );
+  });
+
+  // Regression coverage for the "immutable cache header is only safe because every key is
+  // write-once" invariant (docs/plans/storage-r2.md's "Decisions") — every put() call gets the
+  // same long-lived, immutable Cache-Control, since the write-path audit confirmed no caller ever
+  // reuses a key.
+  test("put always sets a long-lived immutable Cache-Control", async () => {
+    const client = new S3StorageClient(baseConfig());
+    await client.put("content/a/800.webp", Buffer.from("y"), "image/webp");
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ CacheControl: "public, max-age=31536000, immutable" }) }),
     );
   });
 

@@ -8,8 +8,6 @@
   },
   "scripts": {
     "storage:check": "tsx --env-file=../../apps/admin/.env src/check.ts",
-    "policy:apply": "tsx --env-file=../../apps/admin/.env src/policy-apply.ts",
-    "policy:show": "tsx --env-file=../../apps/admin/.env src/policy-show.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

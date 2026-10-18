@@ -515,21 +515,80 @@ their own host being down).
 - **An S3 upload (admin image upload, nightly backup, restore drill) takes 20s-2min instead of
   failing or finishing quickly.** Confirmed against Cloudeka: a 7.6KB admin image upload PUT took
   113s, a 176KB backup upload took ~23s — not a network issue (IPv4 connects in ~5ms, TLS in
-  ~30ms from both VPSes; the host has no AAAA record, so IPv6 isn't involved either). Cause: the
-  AWS SDK for JS v3 (`@aws-sdk/client-s3`, pinned `3.1144.0`) and aws-cli v2 (pinned `2.27.49`)
-  at these versions both default to computing/validating a flexible checksum (CRC32, streamed as
-  an `aws-chunked` trailer) on every S3 request — Cloudeka doesn't handle that trailer correctly
-  and stalls instead of rejecting it outright, until the client's own timeout (previously: none,
-  for the JS SDK — a request could hang indefinitely) finally gives up. Fixed by forcing
-  `WHEN_REQUIRED` checksum calculation/validation (`packages/storage/src/s3-client.ts` for the
-  admin app's uploads; `AWS_REQUEST_CHECKSUM_CALCULATION`/`AWS_RESPONSE_CHECKSUM_VALIDATION=
-  when_required` in the env file passed to the throwaway aws-cli container for
-  `backup/pg-backup.sh`, `monitoring/backup-check.sh`, and `restore-drill-local.sh`) plus a 5s
-  connect / 30s request timeout and `maxAttempts: 3` on the JS SDK client, so a provider-side
-  stall now fails fast with the existing Indonesian "Gagal mengunggah ... Coba lagi." error
-  instead of hanging. If uploads are STILL slow after this, check the `[upload-timing]` log line
-  each admin upload now prints (`sharp=`/`s3=` ms, input/output bytes) to see which stage is
-  actually slow before assuming it's the same checksum issue again.
+  ~30ms from both VPSes; the host has no AAAA record, so IPv6 isn't involved either; a plain
+  `fetch()` from inside the admin container reached the same host in 1.5s). The AWS SDK for JS
+  v3 (`@aws-sdk/client-s3`, pinned `3.1144.0`) and aws-cli v2 (pinned `2.27.49`) at these versions
+  both default to computing/validating a flexible checksum (CRC32, streamed as an `aws-chunked`
+  trailer) on every S3 request, which some S3-compatible providers mishandle — `WHEN_REQUIRED`
+  checksum calculation/validation (`packages/storage/src/s3-client.ts`;
+  `AWS_REQUEST_CHECKSUM_CALCULATION`/`AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` for the
+  aws-cli scripts) plus a 5s connect / 30s request timeout and `maxAttempts: 3` on the JS SDK
+  client turns an indefinite hang into a bounded one, but **did not fully fix it on dev** — after
+  deploying that fix, `[upload-timing]` still showed `s3=42056ms`/`s3=37795ms` for the same 7.6KB
+  object (one ~30s timeout + a successful retry, not an actual failure). So there's a second,
+  still-unconfirmed cause stacked on top of the checksum one — leading candidates: the SDK's
+  `Expect: 100-continue` header (sent only for bodies ≥2MB by default — unlikely for a 7.6KB
+  object, but check empirically, don't assume) and/or a stale/half-dead keep-alive socket being
+  reused by the client's long-lived `https.Agent` (the working 1.5s `fetch()` test used a fresh
+  connection, not a reused one).
+  - **Diagnostic:** `packages/storage/scripts/s3-diagnose.mjs` — a permanent, committed ops tool
+    (not a throwaway script; also the tool used to confirm R2's latency before the Cloudeka→R2
+    migration, `docs/plans/storage-r2.md`, and useful again for any *future* provider swap). Reads
+    `S3_*` from its environment, times 3 PUT+DELETE cycles of an 8KB object under
+    `healthcheck/_diag/` for 4 client configs (A: current prod config; B: A + no
+    Expect:100-continue; C: B + keepAlive disabled; D: a raw signed PUT via `fetch`, bypassing the
+    AWS SDK's HTTP handler entirely, as a baseline), and reports min/avg/max ms plus whether
+    `Expect: 100-continue` was ever sent and whether a `100 Continue` was ever received. Never
+    prints credentials, and always deletes the objects it writes — it cleans up after itself even
+    on a failed PUT (best-effort `DELETE` in a `finally`), so it never leaves diagnostic objects
+    behind in the bucket. Plain Node, no `tsx` needed.
+
+    The deployed admin container only has the Next standalone build (no monorepo source, no
+    `pnpm`), so running the real `@ammari/storage` package's copy of this script means copying it
+    in under its real package path first — not flattening it into `apps/admin/` — so it resolves
+    `@aws-sdk/client-s3`/`@smithy/node-http-handler` via the image's hoisted root
+    `node_modules/`, the same dependency the app's own uploads use, instead of a one-off copy.
+    Creating that new `packages/storage/scripts/` directory under `/app` needs **root** — `/app`
+    itself (as opposed to the specific subpaths the Dockerfile `COPY --chown`s) is owned by
+    `root`, not the `nextjs` user `docker compose exec` runs as by default:
+    ```bash
+    # From your Mac, repo root — works against either VPS; swap deploy@<host> and the container
+    # name for the one you're diagnosing (prod: deploy@<prod-vps-host>, container
+    # "ammari-prod-admin-<active-slot>"; dev: deploy@<dev-vps-host>, container "ammari-admin-1").
+    scp packages/storage/scripts/s3-diagnose.mjs deploy@<vps-host>:/tmp/s3-diagnose.mjs
+    ssh deploy@<vps-host>
+    docker compose exec --user root <admin-container> mkdir -p /app/packages/storage/scripts
+    docker cp /tmp/s3-diagnose.mjs <admin-container>:/app/packages/storage/scripts/s3-diagnose.mjs
+    docker compose exec --user root --workdir /app/packages/storage <admin-container> \
+      node scripts/s3-diagnose.mjs
+    ```
+    This inherits the container's real `S3_*` env (from `env/admin.env`) by default — to point it
+    at a *different* bucket/provider instead (e.g. benchmarking a candidate R2 bucket before
+    cutover, without touching the container's own env file), override on the command line:
+    ```bash
+    docker compose exec --user root --workdir /app/packages/storage \
+      -e S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com -e S3_REGION=auto \
+      -e S3_BUCKET=ammari-diag -e S3_ACCESS_KEY_ID=... -e S3_SECRET_ACCESS_KEY=... \
+      <admin-container> node scripts/s3-diagnose.mjs
+    ```
+    If it fails with `Cannot find module '@aws-sdk/client-s3'` or `'@smithy/node-http-handler'`,
+    Next's standalone output-file-tracing didn't carry one of them into the image the way it does
+    for every other non-`sharp` runtime dependency (see the admin `Dockerfile`'s own comment on
+    `sharp` for why that one specific exception exists) — report that back rather than trying to
+    work around it from inside the container.
+  - If **B** comes back fast and **A** doesn't: the fix is adding `expectContinueHeader: false`
+    to the `S3Client` constructor options in `packages/storage/src/s3-client.ts` (alongside the
+    existing `requestChecksumCalculation`/`responseChecksumValidation`), with a unit test
+    asserting it the same way the existing checksum-mode test does.
+  - If **C** comes back fast and **B** doesn't: the fix is disabling `keepAlive` on the S3
+    client's `httpsAgent`, which trades a small per-request TCP+TLS handshake cost for never
+    reusing a connection Cloudeka may have silently dropped.
+  - If **D** is fast but **A/B/C** all still stall: the problem is specific to the AWS SDK's own
+    Node HTTP handler, not Cloudeka or the network — point more precisely at whichever of
+    `@smithy/node-http-handler`'s request/socket/keep-alive machinery remains after B+C.
+  - Keep the `[upload-timing]`/`[image-resize]` logs regardless of which variant turns out to be
+    the fix — they're what originally surfaced the "checksum fix alone wasn't enough" finding and
+    are the first thing to check if this resurfaces differently later.
 
 ---
 

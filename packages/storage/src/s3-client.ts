@@ -17,6 +17,14 @@ const CONNECTION_TIMEOUT_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_ATTEMPTS = 3;
 
+// Safe only because every current caller of put() (apps/admin's product/content image upload
+// paths, this package's own healthcheck writer — see docs/plans/storage-r2.md's "Decisions") puts
+// each key exactly once and never overwrites it; a new upload always gets a brand-new storageKey
+// (randomUUID()), and the old object is deleted, not replaced in place. If a future write path
+// ever reuses a key, it must not go through this unconditional header — give it its own path with
+// a short max-age instead.
+const MEDIA_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
 export interface S3StorageClientConfig {
   endpoint: string;
   region: string;
@@ -60,7 +68,13 @@ export class S3StorageClient implements StorageClient {
 
   async put(key: string, body: Buffer, contentType: string): Promise<void> {
     await this.client.send(
-      new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: contentType }),
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        CacheControl: MEDIA_CACHE_CONTROL,
+      }),
     );
   }
 

@@ -34,19 +34,14 @@ function readConfig(): { endpoint: string; region: string; bucket: string; acces
 
 function printPublicReadOptions(): void {
   console.log("");
-  console.log("Public read did not work. Options:");
-  console.log("  1. Bucket policy scoped to the image prefixes (RECOMMENDED) — allow anonymous");
-  console.log(`     GetObject under "${process.env.S3_KEY_PREFIX ?? ""}products/*" and`);
-  console.log(`     "${process.env.S3_KEY_PREFIX ?? ""}healthcheck/*". Most S3-compatible`);
-  console.log("     providers support bucket policies reliably, unlike per-object ACLs, and it");
-  console.log("     needs no app changes.");
-  console.log("  2. Per-object public-read ACL set on every PUT — works only if the provider");
-  console.log("     supports ACLs (many S3-compatible services disable them by default).");
-  console.log("  3. Signed URLs — no bucket policy needed, but adds expiry/complexity this public");
-  console.log("     product catalog doesn't need.");
+  console.log("Public read did not work. Fix:");
+  console.log("  Connect a Cloudflare custom domain to this bucket (R2 dashboard → bucket →");
+  console.log("  Settings → Public access → Custom Domains) and point STORAGE_PUBLIC_BASE_URL at");
+  console.log("  it. R2 has no bucket-policy API — public access is a whole-bucket property set");
+  console.log("  once via a custom domain, not a per-prefix policy or per-object ACL.");
   console.log("");
-  console.log("I will not change bucket settings myself — please apply option 1 (or your pick) in");
-  console.log("the provider's console, then re-run this check.");
+  console.log("I will not change bucket settings myself — please connect the custom domain in the");
+  console.log("Cloudflare dashboard, then re-run this check.");
 }
 
 async function main(): Promise<void> {
