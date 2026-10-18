@@ -37,8 +37,12 @@ SSH in as `ubuntu` for this whole section.
    ```
    Copy `ammari_deploy_key.pub`'s contents into `/home/deploy/.ssh/authorized_keys` on the VPS
    (as `deploy`, `chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`). Keep
-   `ammari_deploy_key` (the private half) for step 3 below — delete it from your machine once
-   it's in the GitHub secret.
+   `ammari_deploy_key` (the private half) for step 3 below, then move it to
+   `~/ammari-secrets/ammari_deploy_key` (`chmod 600`) and keep it there: the same key GitHub
+   Actions uses from the `DEPLOY_SSH_KEY` secret also lets you `ssh -i
+   ~/ammari-secrets/ammari_deploy_key deploy@43.129.55.61` directly for routine ops (reading logs,
+   freeing disk space, the dev storage switch-over; see those sections below), the same
+   convention prod's own `ammari_prod_deploy_key` already follows (`docs/deploy-prod.md` §0).
 4. Pin the VPS's host key (so CI verifies it instead of trust-on-first-connect):
    ```bash
    ssh-keyscan -t ed25519 43.129.55.61
@@ -299,7 +303,8 @@ removes everything older, plus any dangling (untagged) image layers.
 
 ### Emergency: manually freeing disk space
 
-Safe to run any time, as `deploy` on the VPS (`sudo -iu deploy; cd /opt/ammari`):
+Safe to run any time, as `deploy` on the VPS (`ssh -i ~/ammari-secrets/ammari_deploy_key
+deploy@43.129.55.61; cd /opt/ammari`, no `sudo` needed, same key GitHub Actions uses):
 
 ```bash
 docker image prune -f                     # dangling (untagged) images only — never a tagged
@@ -362,9 +367,10 @@ Real failures hit during the first dev rollout, and their fixes:
   is something else; if that curl check itself returns an actual HTTP response, something is
   mis-set in the other direction (origin trusting nothing, effectively).
 - **Reading logs and health status on the VPS.** As `deploy` (not `ubuntu` or `root` —
-  `/opt/ammari` and the running containers are owned by/started as `deploy`):
+  `/opt/ammari` and the running containers are owned by/started as `deploy`), reached directly
+  from your Mac with the dedicated deploy key, no `sudo` needed:
   ```bash
-  sudo -iu deploy
+  ssh -i ~/ammari-secrets/ammari_deploy_key deploy@43.129.55.61
   cd /opt/ammari
   docker compose ps                                              # overall status
   docker compose logs --tail 100 admin                           # or web / caddy

@@ -285,42 +285,72 @@ correct and should be removed, not just left harmlessly redundant:
   the script uses no GNU-only `sed` (it never calls `sed` at all) and no bash-4+ constructs.
   `shellcheck` and `bash -n` both pass.
 
-### Session 4 — `go-live-check.sh`
+### Session 4: `go-live-check.sh` (done)
 
-- Update the hardcoded `S3_ENDPOINT="https://kencana.basic.box.cloudeka.id"` /
-  `S3_BUCKET="ammariprod-cdy2yf"` (lines 36–37) to the R2 account endpoint and
-  `ammari-prod-backups`. This check (`check_backups_private`, §9) runs from the owner's Mac with
-  no SSH, so it can't read the VPS's env file — these two values stay literal constants in the
-  script, same as today, just pointed at the new bucket.
-- No other check in this script needs to change — the admin/web health, AOP, header, and port
+- Updated the hardcoded `S3_ENDPOINT="https://kencana.basic.box.cloudeka.id"` /
+  `S3_BUCKET="ammariprod-cdy2yf"` to the R2 account endpoint and `ammari-prod-backups`. This check
+  (`check_backups_private`, §9) runs from the owner's Mac with no SSH, so it can't read the VPS's
+  env file: these two values stay literal constants in the script, same as before, just pointed
+  at the new bucket.
+- **`check_backups_private` rewritten, not just re-pointed.** R2 may deny an anonymous request
+  with 400/401/403 rather than Cloudeka's always-403, so the check no longer requires an exact
+  status code: it now requires "not 2xx" **and** no object-listing XML (`<Contents>`/`<Key>`)
+  anywhere in the body, checked via a shared `check_anon_no_listing` helper. It probes both a
+  nonexistent key and the real `backups/daily/` prefix (a `?list-type=2&prefix=...` listing
+  request) the same way. A connection failure (`000`) can't distinguish "correctly denied" from
+  "nothing answered," so it's reported as a new **`WARN`** level, never `PASS`, added alongside
+  `PASS`/`FAIL`/`SKIP` throughout the script (counters, summary line, a "Warned checks" list).
+  The old `fail()` message pointing at `bucket-policy.prod.json` (deleted in Session 1) was
+  replaced, since R2 has no bucket-policy concept at all.
+- **Added a media-bucket check** (not in the original scope, added per the same "every public
+  surface gets verified" principle): an anonymous GET of `https://img.ammari.id/` (the custom
+  domain root) must not return an object listing, and a `HEAD` on a key that doesn't exist must
+  404, without depending on any specific real object existing in the bucket.
+- No other check in this script needed to change: the admin/web health, AOP, header, and port
   checks are all storage-independent.
-- Tests: none automatable against a real bucket; run the full script by hand during go-live
-  verification (unchanged from existing practice).
+- Tests: `bash -n` and `shellcheck` clean under both the repo's installed bash and macOS's stock
+  `/bin/bash` (3.2). The new/changed logic (`check_anon_no_listing`, `check_backups_private`,
+  `check_media_not_listable`) was verified with a stubbed `curl` covering 2xx-with-a-listing,
+  2xx-without-a-listing, 400, 401, 403, a 403 whose body still leaks a `<Key>`, and a simulated
+  network error, confirming `PASS`/`FAIL`/`WARN` are decided correctly in each case, plus the
+  two-probe aggregation in `check_backups_private` and the HEAD-404 path in
+  `check_media_not_listable`. No real network calls in any test.
 
-### Session 5 — Docs
+### Session 5: Docs (done)
 
 - `docs/SPEC.md` §2.3/2.4: "Object storage: S3-compatible, with separate dev and prod buckets."
-  → "Object storage: Cloudflare R2 (S3-compatible), with separate dev and prod media buckets plus
-  a dedicated, private prod backups bucket." Update the §2.3 Prod-database paragraph's mention of
-  "the **same** prod object storage bucket used for product/content images... a deliberate,
-  accepted scope-down" — it no longer applies; point it at this plan instead of
-  `prod-deploy.md` §9.
-- `docs/plans/prod-deploy.md` §9: mark the "Separate, private backup bucket with its own access
-  key" entry as **done** (superseded by this plan), rather than deleting the paragraph — it
-  explains *why* the original launch didn't have one, which is still useful history.
-- `docs/deploy-prod.md` §0's Bucket row and §5 (Backups) — update to R2 details (new endpoint,
-  region, three bucket names, which env file now holds which credential).
-- `docs/deploy-prod.md`'s troubleshooting section — the long Cloudeka-slow-upload writeup stays
-  (valuable history, and `s3-diagnose.mjs` remains a useful general tool), but add one line at its
-  top: "Resolved by moving off Cloudeka entirely — see `docs/plans/storage-r2.md`." Don't delete
-  the diagnosis; a future provider swap might need the same tool again.
-- `docs/deploy.md`'s "Bucket policy: public-read for product/content images" section — replace
-  with "Public access: Cloudflare custom domain" explaining the one-time dashboard step instead of
-  `policy:apply`/`policy:show` (which no longer exist after Session 1).
-- `apps/admin/.env.example` / `apps/web/.env.example`: update the sample `S3_ENDPOINT`/
-  `S3_REGION`/`STORAGE_PUBLIC_BASE_URL` placeholder values to R2-shaped examples (`region=auto`,
-  `https://<account-id>.r2.cloudflarestorage.com`) so a new local setup doesn't copy
-  Cloudeka-shaped placeholders.
+  changed to "Object storage: Cloudflare R2 (S3-compatible), with separate dev and prod media
+  buckets plus a dedicated, private prod backups bucket." Updated the §2.3 Prod-database
+  paragraph's mention of "the **same** prod object storage bucket used for product/content
+  images... a deliberate, accepted scope-down": it no longer applies, and now points at this
+  plan instead of `prod-deploy.md` §9.
+- `docs/plans/prod-deploy.md` §9: marked the "Separate, private backup bucket with its own access
+  key" entry as **done** (superseded by this plan), rather than deleting the paragraph, since it
+  still explains *why* the original launch didn't have one.
+- `docs/deploy-prod.md` §0's Media bucket row, §5 (Backups), and §11 (Go-live verification)'s
+  description of `go-live-check.sh`: updated to R2 details and to the new `WARN` level/media
+  check from Session 4.
+- `docs/deploy-prod.md`'s troubleshooting section: the long Cloudeka-slow-upload writeup stays
+  (valuable history, and `s3-diagnose.mjs` remains a useful general tool), with one line added at
+  its top: "Resolved by moving off Cloudeka entirely, see `docs/plans/storage-r2.md`."
+- `docs/deploy.md`'s bucket-policy section was already replaced with "Public image access:
+  Cloudflare custom domain (R2)" in an earlier session; confirmed still accurate, no change
+  needed.
+- `apps/admin/.env.example`: sample `S3_ENDPOINT`/`S3_REGION`/`S3_BUCKET`/`STORAGE_PUBLIC_BASE_URL`
+  updated to R2-shaped examples. `apps/web/.env.example`'s `STORAGE_PUBLIC_BASE_URL` was already
+  blank (not a Cloudeka-shaped placeholder), so left as-is.
+- **Also fixed, found while doing the above:** `docs/deploy.md` described dev's manual VPS access
+  as `ssh ubuntu@... ; sudo -iu deploy` in two places ("Emergency: manually freeing disk space"
+  and "Reading logs and health status") and in this plan's own dev switch-order section below,
+  all wrong. Dev **is** reachable directly as `deploy` with a key, no `sudo`, the same
+  `ammari_deploy_key` GitHub Actions uses (`docs/deploy.md` §1 step 3); fixed in all three
+  places, and `docs/deploy.md` §1 step 3's own note about deleting that key off the Mac was
+  updated too, since it's now kept at `~/ammari-secrets/ammari_deploy_key` for exactly this.
+- **New: `deploy/switch-dev-storage.sh` + `deploy/switch-dev-storage-remote.sh`**, committed as
+  the safe way to do the dev env-file edit below, instead of a long manual-paste procedure. Full
+  design in the dev switch-order step below. Not part of the original Session 5 scope, but the
+  smallest safe way to satisfy "never display a key value, never put one on argv" for this
+  specific edit.
 
 ## Switch order: dev first, verify, then prod
 
@@ -329,41 +359,49 @@ correct and should be removed, not just left harmlessly redundant:
 2. Land Sessions 1–3 above (merged to `dev`, deployed via the normal dev pipeline) — Sessions 4
    and 5 touch only prod-only scripts (`go-live-check.sh`) and docs, neither blocks the dev
    switch.
-3. **On the VPS, by hand — the owner only, no Claude Code session touches this.** Dev's env
+3. **On the VPS, by hand (the owner only, no Claude Code session touches this).** Dev's env
    files live only on the VPS (unlike prod, there's no local `~/ammari-secrets/dev-*.env` source
-   of truth or a `make-dev-env.sh` generator) — edit them in place over SSH:
-   1. On your Mac, get the dev R2 credentials' *values* without ever typing or echoing them to a
-      terminal — open `~/ammari-secrets/r2-dev-access-key` and `r2-dev-secret-key` in a local
-      editor (or `pbcopy < ~/ammari-secrets/r2-dev-access-key`, then paste) and keep them ready
-      to paste into `env/admin.env` below. Same convention `docs/deploy-prod.md` §8.3 already
-      uses for the prod backups-bucket switch: paste with an editor, never `cat`/`echo` a key to
-      a terminal.
-   2. SSH in and switch to the `deploy` user — dev's own access pattern (`docs/deploy.md`
-      §"Reading logs and health status"), since dev keeps no dedicated `deploy`-user SSH key on
-      the Mac the way prod does:
-      ```bash
-      ssh ubuntu@43.129.55.61
-      sudo -iu deploy
-      cd /opt/ammari
-      $EDITOR env/admin.env
-      ```
-   3. In `env/admin.env`, change only these lines (every other line, including every
-      non-storage secret, stays as-is):
-      ```
-      S3_ENDPOINT=https://d99c5045ed359887e8fdd591cc492ee9.r2.cloudflarestorage.com
-      S3_REGION=auto
-      S3_BUCKET=ammari-dev
-      S3_ACCESS_KEY_ID=<paste the value from r2-dev-access-key>
-      S3_SECRET_ACCESS_KEY=<paste the value from r2-dev-secret-key>
-      S3_KEY_PREFIX=dev/                              # unchanged — same local/dev prefix split
-      STORAGE_PUBLIC_BASE_URL=https://img.ammari.my.id
-      ```
-   4. `$EDITOR env/web.env` and change only the one line it has (must match admin.env's value
-      exactly — `apps/web` holds no S3 credential at all, only this base URL):
-      ```
-      STORAGE_PUBLIC_BASE_URL=https://img.ammari.my.id
-      ```
-   5. `exit` back to `ubuntu`, then to your Mac, once both files are saved.
+   of truth or a `make-dev-env.sh` generator). Dev **is** reachable directly from the Mac as
+   `deploy`, with a key, no `sudo` needed: the same `ammari_deploy_key` GitHub Actions uses
+   (`docs/deploy.md` §1 step 3): `ssh -i ~/ammari-secrets/ammari_deploy_key
+   deploy@43.129.55.61`, app path `/opt/ammari` (an earlier revision of this section described a
+   `ssh ubuntu@... ; sudo -iu deploy` two-hop path, which was wrong; fixed here and in
+   `docs/deploy.md`'s "Emergency: manually freeing disk space" and "Reading logs and health
+   status" sections, which had the same mistake).
+
+   `deploy/switch-dev-storage.sh` (committed alongside this plan's Session 4/5 work) does this
+   edit for you: it never displays a key value and never passes one as a command-line argument.
+   It reads `~/ammari-secrets/r2-dev-access-key`/`r2-dev-secret-key` locally, and sends them to
+   the remote side embedded as two safely-quoted (`printf '%q'`) literal assignment lines
+   prepended to `deploy/switch-dev-storage-remote.sh`'s own text, the whole thing piped as one
+   write to `ssh ... bash -s` (the same channel `deploy-prod/go-live-check.sh` already uses to
+   run a whole script remotely). The remote half backs up `env/admin.env` and `env/web.env` first
+   (timestamped, mode 600) and then changes only `S3_ENDPOINT`/`S3_REGION`/`S3_BUCKET`/
+   `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`STORAGE_PUBLIC_BASE_URL` in `env/admin.env` and
+   `STORAGE_PUBLIC_BASE_URL` in `env/web.env`. Every other line, including `S3_KEY_PREFIX`
+   (stays `dev/`) and every non-storage secret, is left byte-for-byte untouched. It prints only
+   which variable **names** changed, never a value:
+   ```bash
+   deploy/switch-dev-storage.sh
+   ```
+   If you'd rather do it by hand instead: `ssh -i ~/ammari-secrets/ammari_deploy_key
+   deploy@43.129.55.61`, `cd /opt/ammari`, `$EDITOR env/admin.env` and change only:
+   ```
+   S3_ENDPOINT=https://d99c5045ed359887e8fdd591cc492ee9.r2.cloudflarestorage.com
+   S3_REGION=auto
+   S3_BUCKET=ammari-dev
+   S3_ACCESS_KEY_ID=<paste the value from r2-dev-access-key>
+   S3_SECRET_ACCESS_KEY=<paste the value from r2-dev-secret-key>
+   S3_KEY_PREFIX=dev/                              # unchanged, same local/dev prefix split
+   STORAGE_PUBLIC_BASE_URL=https://img.ammari.my.id
+   ```
+   then `$EDITOR env/web.env` and change only the one line it has (must match admin.env's value
+   exactly: `apps/web` holds no S3 credential at all, only this base URL):
+   ```
+   STORAGE_PUBLIC_BASE_URL=https://img.ammari.my.id
+   ```
+   paste values with your editor, never `cat`/`echo` a key to a terminal, same convention
+   `docs/deploy-prod.md` §8.3 already uses for the prod backups-bucket switch.
 4. `docker compose up -d --force-recreate admin web` (as `deploy`, still in `/opt/ammari` — dev
    has no blue/green, so this is the normal env-change recreate; `docs/deploy.md` has no
    numbered section for it, but it's the same operation as prod's §3.2).

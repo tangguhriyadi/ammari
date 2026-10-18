@@ -86,17 +86,15 @@ pnpm workspaces + Turborepo:
 - **Prod:** a self-hosted `pgvector/pgvector:pg16` container on the prod VPS itself (separate
   from dev's managed instance above), not exposed publicly — reachable only from other
   containers on the same VPS's internal Docker network. Nightly encrypted `pg_dump` (AES-256,
-  encrypted client-side before it ever leaves the VPS) to the private `backups/` prefix of the
-  **same** prod object storage bucket used for product/content images — not a separate dedicated
-  backup bucket; it reuses the app's own S3 access key (a deliberate, accepted scope-down for
-  this early launch, not an oversight — a dedicated backup bucket with its own key is listed as
-  a later improvement once revenue justifies it, see `docs/plans/prod-deploy.md` §9). Documented
-  restore drill. Dev and prod databases are always separate. Full operational runbook:
-  `docs/deploy-prod.md`; design: `docs/plans/prod-deploy.md`.
+  encrypted client-side before it ever leaves the VPS) to a **dedicated, private** prod backups
+  bucket (`ammari-prod-backups`), with its own access key, separate from the media bucket's
+  (see `docs/plans/storage-r2.md`). Documented restore drill. Dev and prod databases are always
+  separate. Full operational runbook: `docs/deploy-prod.md`; design: `docs/plans/prod-deploy.md`.
 - **Local:** Postgres 16 + pgvector via the root `docker-compose.yml`, for local development and
   automated tests only. A laptop never connects to the Sumopod dev database directly — local
   work always talks to the local container.
-- **Object storage:** S3-compatible, with separate dev and prod buckets.
+- **Object storage:** Cloudflare R2 (S3-compatible), with separate dev and prod media buckets
+  plus a dedicated, private prod backups bucket (see `docs/plans/storage-r2.md`).
 - **DNS:** Cloudflare.
 - Dev domains (`ammari.my.id`, `admin.ammari.my.id`) sit behind a login and are marked `noindex`.
 

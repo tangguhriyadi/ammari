@@ -32,9 +32,10 @@ REMOTE_SCRIPT_FILE="$SCRIPT_DIR/go-live-check-remote.sh"
 
 WEB_HOST="ammari.id"
 ADMIN_HOST="admin.ammari.id"
+MEDIA_HOST="img.ammari.id"
 VPS_IP="43.173.52.121"
-S3_ENDPOINT="https://kencana.basic.box.cloudeka.id"
-S3_BUCKET="ammariprod-cdy2yf"
+S3_ENDPOINT="https://d99c5045ed359887e8fdd591cc492ee9.r2.cloudflarestorage.com"
+S3_BUCKET="ammari-prod-backups"
 SSH_KEY="$HOME/ammari-secrets/ammari_prod_deploy_key"
 SSH_USER="deploy"
 SSH_HOST="$VPS_IP"
@@ -55,7 +56,9 @@ done
 PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
+WARN_COUNT=0
 FAILED_CHECKS=()
+WARNED_CHECKS=()
 
 pass() {
   echo "PASS: $1"
@@ -71,6 +74,14 @@ fail() {
 skip() {
   echo "SKIP: $1"
   SKIP_COUNT=$((SKIP_COUNT + 1))
+}
+
+# WARN is for a result that is inconclusive, never a stand-in for a passing check: a network/
+# connection failure means we could not confirm anything is private, not that it is private.
+warn() {
+  echo "WARN: $1"
+  WARN_COUNT=$((WARN_COUNT + 1))
+  WARNED_CHECKS+=("$1")
 }
 
 info() {
@@ -253,21 +264,67 @@ check_security_headers() {
 check_security_headers "$WEB_HOST"
 check_security_headers "$ADMIN_HOST"
 
-# --- 9. backups/ prefix must stay private — anonymous GET of a (nonexistent) probe key under it
-#     must return 403, same semantics packages/storage/src/policy-apply.ts's own verify() relies
-#     on: no matching public-read statement means S3 denies existence disclosure too. ---
-check_backups_private() {
-  local probe_key="backups/_go-live-check-probe-$$.txt" code
-  code="$(fetch "${S3_ENDPOINT}/${S3_BUCKET}/${probe_key}")"
-  if [ "$code" = "403" ]; then
-    pass "anonymous GET of s3://${S3_BUCKET}/${probe_key} returns 403 (backups/ stays private)"
-  else
-    fail "anonymous GET of s3://${S3_BUCKET}/${probe_key} returned $code (expected 403) — check bucket-policy.prod.json is actually applied"
+# --- 9. The prod backups bucket must stay private under R2's whole-bucket-public model (no
+#     bucket policies on R2, see docs/plans/storage-r2.md's "Decisions already made"). An
+#     anonymous (no credentials passed) request must come back non-2xx AND with no object-listing
+#     XML (<Contents>/<Key>) anywhere in the body: R2 may deny an anonymous request with
+#     400/401/403 rather than Cloudeka's old 403, so the exact status code doesn't matter, only
+#     "not 2xx" and "no listing leaked". A connection failure ("000") can't tell "correctly
+#     denied" apart from "nothing answered", so it's reported as WARN, never PASS. ---
+check_anon_no_listing() {
+  local desc="$1" url="$2" code
+  code="$(fetch "$url")"
+  if [ "$code" = "000" ]; then
+    warn "$desc: could not connect (network error); cannot confirm this is private"
+    return
   fi
+  if grep -qE '<(Contents|Key)>' "$BODY_FILE"; then
+    fail "$desc: response body contains an object listing (<Contents>/<Key>) at HTTP $code"
+    return
+  fi
+  case "$code" in
+    2??)
+      fail "$desc: returned HTTP $code (2xx); expected a non-2xx denial"
+      ;;
+    *)
+      pass "$desc: HTTP $code, no object listing in the body"
+      ;;
+  esac
+}
+
+check_backups_private() {
+  local probe_key="backups/_go-live-check-probe-$$.txt"
+  check_anon_no_listing \
+    "anonymous GET of s3://${S3_BUCKET}/${probe_key} (nonexistent key)" \
+    "${S3_ENDPOINT}/${S3_BUCKET}/${probe_key}"
+  check_anon_no_listing \
+    "anonymous listing of s3://${S3_BUCKET}/backups/daily/ (known real prefix)" \
+    "${S3_ENDPOINT}/${S3_BUCKET}/?list-type=2&prefix=backups/daily/"
 }
 check_backups_private
 
-# --- 10. PDP's primary CTA is WhatsApp (STOREFRONT_CART_ENABLED=false), if any product page
+# --- 10. The prod media bucket's Cloudflare custom domain (img.ammari.id) must not list objects
+#     at its root: a public custom domain only ever serves single objects by key, it should never
+#     answer a bucket-listing request, and a HEAD on a key that doesn't exist must 404, without
+#     this check depending on any specific real object existing in the bucket. ---
+check_media_not_listable() {
+  check_anon_no_listing \
+    "anonymous GET of https://${MEDIA_HOST}/ (custom domain root)" \
+    "https://${MEDIA_HOST}/"
+
+  local missing_key="_go-live-check-missing-$$.webp" code
+  code="$(fetch "https://${MEDIA_HOST}/${missing_key}" -I)"
+  if [ "$code" = "000" ]; then
+    warn "HEAD https://${MEDIA_HOST}/${missing_key}: could not connect (network error)"
+  elif [ "$code" = "404" ]; then
+    pass "HEAD https://${MEDIA_HOST}/${missing_key} returns 404 for a nonexistent key"
+  else
+    fail "HEAD https://${MEDIA_HOST}/${missing_key} returned $code (expected 404)"
+  fi
+}
+check_media_not_listable
+
+# --- 11. PDP's primary CTA is WhatsApp (STOREFRONT_CART_ENABLED=false), if any product page
 #     exists yet — SKIP (not FAIL) on a brand-new catalog with nothing published. ---
 check_pdp_whatsapp_cta() {
   local code slug
@@ -550,7 +607,12 @@ run_ssh_checks
 
 echo
 echo "===== SUMMARY ====="
-echo "PASS: $PASS_COUNT   FAIL: $FAIL_COUNT   SKIP: $SKIP_COUNT"
+echo "PASS: $PASS_COUNT   FAIL: $FAIL_COUNT   WARN: $WARN_COUNT   SKIP: $SKIP_COUNT"
+if [ "$WARN_COUNT" -gt 0 ]; then
+  echo
+  echo "Warned checks (inconclusive, re-run once network access is confirmed):"
+  printf '  - %s\n' "${WARNED_CHECKS[@]}"
+fi
 if [ "$FAIL_COUNT" -gt 0 ]; then
   echo
   echo "Failed checks:"

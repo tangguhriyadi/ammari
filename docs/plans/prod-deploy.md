@@ -933,14 +933,15 @@ No open questions remain blocking this plan.
 
 ## 9. Later (deliberately deferred, not blocking this launch)
 
-- **Separate, private backup bucket with its own access key.** This plan originally called for
-  a dedicated backup bucket distinct from the product-image bucket, each with its own S3
-  credentials, so that a compromised VPS (which only ever holds one write-capable key) couldn't
-  also read or delete backups. The actual prod setup (§4 step 7) instead keeps backups under a
-  private `backups/` prefix in the **same** bucket as `products/*`/`content/*`, using the app's
-  **same** S3 access key. Accepted risk for this early, pre-revenue launch: backups are encrypted
-  client-side (AES-256) before upload, so even a full compromise of that one key only yields
-  ciphertext, not readable backup content — and the key never gets delete/read-back scope
-  beyond what the app itself already needs. Revisit once revenue justifies the operational cost
-  of a second bucket + key (and, ideally, a write-only-scoped key for it, as this plan's original
-  §4 step 7 text proposed) — a real improvement, not a correctness requirement for launch.
+- **Separate, private backup bucket with its own access key (done).** This plan originally
+  called for a dedicated backup bucket distinct from the product-image bucket, each with its own
+  S3 credentials, so that a compromised VPS (which only ever holds one write-capable key)
+  couldn't also read or delete backups. The actual prod setup (§4 step 7) instead kept backups
+  under a private `backups/` prefix in the **same** bucket as `products/*`/`content/*`, using the
+  app's **same** S3 access key. Accepted risk for this early, pre-revenue launch at the time:
+  backups are encrypted client-side (AES-256) before upload, so even a full compromise of that
+  one key only yielded ciphertext, not readable backup content, and the key never had
+  delete/read-back scope beyond what the app itself already needed. Superseded by the
+  Cloudeka-to-R2 migration (`docs/plans/storage-r2.md`), which gave backups their own dedicated,
+  private `ammari-prod-backups` bucket and its own scoped token (free to create on R2, so there
+  was no cost reason left to defer it).

@@ -75,7 +75,7 @@ as `ubuntu` instead — see §0 below. If SSH is completely unreachable, Sumopod
 | Directory layout | `/opt/ammari-prod/` — `docker-compose.yml`, `remote-deploy.sh`, `active-slot-{admin,web}`, `deployed-sha-{admin,web}`, `deploy-history.log`, `.env` (per-slot image tags), `.caddy-config-hash` (hash of the last Caddyfile/cloudflare-snippet content `remote-deploy.sh` reloaded — see §1) all at the root; `env/` (real secrets, never in git), `caddy/` — mounted WHOLE into the caddy container as one directory, not individual file mounts (see §1.6) — holding `Caddyfile`, `certs/` (origin cert), `active-upstream.caddy` (generated, see §1); `cloudflare/` (AOP CA root + IP-range snippets, a separate directory mount); `backup/`, `monitoring/` as subdirectories. |
 | Env files — source of truth | **Your Mac**, `~/ammari-secrets/prod-{admin,web,db,backup}.env`. The VPS's own `/opt/ammari-prod/env/*.env` are copies pushed there by `upload-prod-env.sh` — never edit them directly on the VPS (§3). |
 | Cloudflare | `ammari.id` zone, SSL/TLS mode **Full (strict)**. **Zone-level** Authenticated Origin Pulls (not Global) — our own CA, leaf cert valid to **2036**. Separate Cloudflare **origin certificate** (Caddy's TLS identity, 15-year validity, valid to **~2041**) — two unrelated cert pairs, see `deploy-prod/cloudflare/README.md`. `www.ammari.id` 301-redirects to the apex. |
-| Media bucket | `ammariprod-cdy2yf`, Cloudeka, endpoint `https://kencana.basic.box.cloudeka.id`, region `kencana`. Public-read: `products/*`, `content/*`, `healthcheck/*`. Credentials in `env/admin.env`'s `S3_*`. Not yet migrated to R2 — see `docs/plans/storage-r2.md` Sessions 3–5. |
+| Media bucket | `ammari-prod`, Cloudflare R2, endpoint `https://d99c5045ed359887e8fdd591cc492ee9.r2.cloudflarestorage.com`, region `auto`. Public via the Cloudflare custom domain `img.ammari.id`, not `r2.dev` (never enabled). No bucket policy (R2 has none); the whole bucket is public, and every write path is audited to only ever write under `products/*`/`content/*`/`healthcheck/*` (`docs/plans/storage-r2.md` Session 1). Credentials in `env/admin.env`'s `S3_*`. Migrated from Cloudeka, see `docs/plans/storage-r2.md`. |
 | Backups bucket | `ammari-prod-backups`, Cloudflare R2, endpoint `https://d99c5045ed359887e8fdd591cc492ee9.r2.cloudflarestorage.com`, region `auto`, path-style addressing. **Private, no custom domain, never public.** Its own scoped API token — **separate** from the media bucket's key (`docs/plans/storage-r2.md` Session 2, superseding `docs/plans/prod-deploy.md` §9's old "same bucket, same key" scope-down). Credentials in `env/backup.env`'s `BACKUP_S3_*`, read only by `deploy-prod/backup/pg-backup.sh` and `deploy-prod/monitoring/backup-check.sh` — never `env/admin.env`. Object layout unchanged: `backups/daily/*` + `backups/weekly/*` inside this bucket. |
 | Resend | Separate prod API key, named `ammari-prod`, sending access restricted to the `mail.ammari.id` domain. |
 | Google OAuth | Same OAuth client ("Ammari") as dev, with `https://ammari.id/api/auth/callback/google` and `https://admin.ammari.id/api/auth/callback/google` added as redirect URIs; consent screen is "In production." |
@@ -326,13 +326,14 @@ Prompts for the same passphrase, extracts `ammari-secrets/` into the current dir
   `/opt/ammari-prod/backup/pg-backup.sh`.
 - `pg_dump --format=custom` of the running `db` container (over its own unix socket — the
   Postgres password never leaves that container) → piped straight into
-  `openssl enc -aes-256-cbc -pbkdf2` (never an unencrypted dump on disk) → uploaded to the prod
-  bucket.
+  `openssl enc -aes-256-cbc -pbkdf2` (never an unencrypted dump on disk) → uploaded to the
+  dedicated `ammari-prod-backups` R2 bucket (§0's Backups bucket row), using its own scoped
+  token, never the media bucket's credentials.
 - Daily backups go to `backups/daily/<timestamp>.dump.enc`. On Sundays, the same dump is **also**
   uploaded to `backups/weekly/<timestamp>.dump.enc`.
 - **Retention:** last 14 daily + last 8 weekly; older objects under those two prefixes are
-  pruned on every run. The prune logic only ever touches `backups/daily/`/`backups/weekly/` —
-  never `products/*`/`content/*` in the same bucket.
+  pruned on every run. The backups bucket holds nothing but these two prefixes, so there's no
+  `products/*`/`content/*` to worry about pruning around, unlike the old shared-bucket layout.
 
 ### 5.2 Check the last backup
 
@@ -515,7 +516,10 @@ their own host being down).
   confirm the environment's deployment-branch rule allows `main` (it's the actual protection
   here, since required-reviewer rules aren't offered on a private repo).
 - **An S3 upload (admin image upload, nightly backup, restore drill) takes 20s-2min instead of
-  failing or finishing quickly.** Confirmed against Cloudeka: a 7.6KB admin image upload PUT took
+  failing or finishing quickly.** Resolved by moving off Cloudeka entirely, see
+  `docs/plans/storage-r2.md`. Kept below as history, not a current symptom: `s3-diagnose.mjs`
+  remains a useful general tool, and a future provider swap might need the same diagnosis again.
+  Confirmed against Cloudeka: a 7.6KB admin image upload PUT took
   113s, a 176KB backup upload took ~23s — not a network issue (IPv4 connects in ~5ms, TLS in
   ~30ms from both VPSes; the host has no AAAA record, so IPv6 isn't involved either; a plain
   `fetch()` from inside the admin container reached the same host in 1.5s). The AWS SDK for JS
@@ -718,19 +722,25 @@ VPS/Cloudflare settings, and this script doesn't either, it only observes:
 deploy-prod/go-live-check.sh
 ```
 
-Prints one `PASS`/`FAIL`/`SKIP` line per check plus a summary, and exits non-zero if any check
-`FAIL`ed. Never prints a secret value. Two groups of checks:
+Prints one `PASS`/`FAIL`/`WARN`/`SKIP` line per check plus a summary, and exits non-zero if any
+check `FAIL`ed. `WARN` means inconclusive (a network/connection error kept a check from
+confirming anything either way), never treated as a pass. Never prints a secret value. Two
+groups of checks:
 
 - **External** (curl/nc, no SSH) — against the real `https://ammari.id`/`https://admin.ammari.id`
-  and the public S3 endpoint, exactly as a visitor/bot/payment-gateway reviewer or a port scan
+  and the public R2 endpoints, exactly as a visitor/bot/payment-gateway reviewer or a port scan
   would see them: both hosts return 200 and `/api/health` is ok; direct-to-origin TLS to
   `43.173.52.121` is rejected (Authenticated Origin Pulls); `www.ammari.id` 301s to the apex with
   path+query kept; `/robots.txt` allows indexing; `/api/test/*` 404s on both hosts;
   `/api/revalidate` 404s on the public web host; HSTS/`X-Content-Type-Options`/`Referrer-Policy`/
-  frame-protection headers are present with no stray `X-Robots-Tag: noindex`; an anonymous GET of
-  a `backups/` object returns 403; the PDP's CTA is WhatsApp (not "Tambah ke keranjang") if at
-  least one product is published yet (**`SKIP`**, not `FAIL`, on a brand-new catalog with nothing
-  published).
+  frame-protection headers are present with no stray `X-Robots-Tag: noindex`; the prod backups
+  bucket stays private: an anonymous GET of a nonexistent key, and an anonymous listing of the
+  real `backups/daily/` prefix, must both come back non-2xx with no object-listing XML
+  (`<Contents>`/`<Key>`) in the body (R2 may deny with 400/401/403, not Cloudeka's old 403, so the
+  exact code doesn't matter, only "not 2xx, no listing leaked"); the media bucket's custom domain
+  (`img.ammari.id`) must not list objects at its root, and a `HEAD` on a nonexistent key there
+  returns 404; the PDP's CTA is WhatsApp (not "Tambah ke keranjang") if at least one product is
+  published yet (**`SKIP`**, not `FAIL`, on a brand-new catalog with nothing published).
 
   `:8080`/`:8081`/`:5432` "closed from outside" is also checked via `nc`, but ONLY after a
   **control probe**: `nc -z` against a random, definitely-unused high port on `43.173.52.121`
