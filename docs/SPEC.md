@@ -560,12 +560,12 @@ step-by-step runbook) before the *first* deploy to any given environment (dev or
   running `require("sharp")` inside the built image (`apps/admin/Dockerfile`'s own comments walk
   through exactly how this was diagnosed) — don't assume a future Next version still needs the
   workaround, but don't remove it on faith either.
-- **Prod bucket policy:** the prod S3 bucket needs its own public-read policy for `products/*`
-  and `content/*` (and the `healthcheck/*` prefix used by `packages/storage`'s own check) —
-  template at `packages/storage/bucket-policy.prod.json` (mirrors `bucket-policy.dev.json`, not
-  yet applied — needs the real prod bucket's ARN filled in once that bucket exists). Apply and
-  verify with `pnpm --filter @ammari/storage policy:apply` — see docs/deploy.md's "Bucket
-  policy" section.
+- **Prod bucket public access:** the prod R2 bucket (`ammari-prod`) needs a Cloudflare custom
+  domain connected (R2 dashboard → bucket → Settings → Public access → Custom Domains →
+  `img.ammari.id`) before any uploaded image is reachable — there is no bucket-policy API on R2
+  and no per-prefix tooling to run; the whole bucket becomes public once the domain is
+  connected. Verify with `pnpm --filter @ammari/storage storage:check` — see docs/deploy.md's
+  "Public image access" section and `docs/plans/storage-r2.md`.
 - **`MAIN_SITE_URL` (apps/admin):** apps/web's own public base URL — `https://ammari.my.id` on
   dev, `https://ammari.id` in production (no trailing slash; must be `https://` once
   `NODE_ENV=production`, enforced by `apps/admin/src/lib/main-site-url.ts`). Every thank-you-card

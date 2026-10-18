@@ -116,24 +116,26 @@ chmod 600 ~/ammari-secrets/<name>
      just confirm it wasn't turned on at some point).
    - `ammari-prod-backups` → do **not** connect a custom domain, do **not** enable any public
      access toggle. It stays reachable only via the S3 API with its own scoped token.
-3. **Account ID** (needed to build the S3 endpoint — same for every bucket, not secret, but
-   account-specific so it doesn't belong hardcoded in a script either): Cloudflare dashboard → R2
-   → the account ID shown on the R2 overview page.
-   ```bash
-   pbpaste > ~/ammari-secrets/r2-account-id
-   ```
+3. **Account ID / endpoint** (same for every bucket, not secret, but account-specific) —
+   Cloudflare dashboard → R2 → the account ID shown on the R2 overview page builds the endpoint
+   `https://<account-id>.r2.cloudflarestorage.com`. No separate file for this: the endpoint is
+   non-secret and short-lived to look up, so it's a literal constant everywhere it's needed
+   (`deploy-prod/env/backup.env.example`'s `BACKUP_S3_ENDPOINT`, `deploy-prod/make-prod-env.sh`'s
+   `R2_ENDPOINT`) rather than a file read at runtime.
 4. **API tokens** (R2 → Manage R2 API Tokens → Create API Token → "Permissions: Object Read &
-   Write" → "Specify bucket(s)" → the one bucket). Create three, one per bucket:
+   Write" → "Specify bucket(s)" → the one bucket). Create three, one per bucket — one value per
+   file, named to match what `deploy-prod/make-prod-env.sh` and `docs/deploy-prod.md` §8.3
+   actually read:
    - `ammari-dev-rw` scoped to `ammari-dev` →
-     `pbpaste > ~/ammari-secrets/r2-dev-access-key-id` and
-     `pbpaste > ~/ammari-secrets/r2-dev-secret-access-key`.
+     `pbpaste > ~/ammari-secrets/r2-dev-access-key` and
+     `pbpaste > ~/ammari-secrets/r2-dev-secret-key`.
    - `ammari-prod-rw` scoped to `ammari-prod` →
-     `pbpaste > ~/ammari-secrets/r2-prod-access-key-id` and
-     `pbpaste > ~/ammari-secrets/r2-prod-secret-access-key`.
+     `pbpaste > ~/ammari-secrets/r2-prod-access-key` and
+     `pbpaste > ~/ammari-secrets/r2-prod-secret-key`.
    - `ammari-prod-backups-rw` scoped to `ammari-prod-backups` →
-     `pbpaste > ~/ammari-secrets/r2-prod-backups-access-key-id` and
-     `pbpaste > ~/ammari-secrets/r2-prod-backups-secret-access-key`.
-   - `chmod 600 ~/ammari-secrets/r2-*` once all seven files exist.
+     `pbpaste > ~/ammari-secrets/r2-backups-access-key` and
+     `pbpaste > ~/ammari-secrets/r2-backups-secret-key`.
+   - `chmod 600 ~/ammari-secrets/r2-*` once all six files exist.
 
 That's every dashboard step. Nothing else (no lifecycle rules, no CORS config — see "Open
 questions" for why) is required to go live.
@@ -238,31 +240,50 @@ correct and should be removed, not just left harmlessly redundant:
   `/code-review` (`security-reviewer` for the credential-handling change), not exercised
   automatically.
 
-### Session 3 — `make-prod-env.sh` / `upload-prod-env.sh` generate R2 values
+### Session 3 — `make-prod-env.sh` / `upload-prod-env.sh` generate R2 values (done)
 
 - `deploy-prod/make-prod-env.sh`:
-  - Read the account ID once from `~/ammari-secrets/r2-account-id` (fail with a clear message if
-    missing — mirrors the existing `prod-resend-api-key` required-file check).
-  - Replace the hardcoded `S3_ENDPOINT="https://kencana.basic.box.cloudeka.id"` /
-    `S3_REGION="kencana"` / `S3_BUCKET="ammariprod-cdy2yf"` lines with
-    `https://${account_id}.r2.cloudflarestorage.com` / `auto` / `ammari-prod`.
-  - Replace the two `prompt_secret "Enter prod S3 access key ID/secret ... (ammariprod-cdy2yf —
-    NOT dev's key...)"` calls — instead, read `r2-prod-access-key-id`/`r2-prod-secret-access-key`
-    from `~/ammari-secrets` the same way `prod-resend-api-key` is read (no prompt needed; the
-    owner already created and saved these in the checklist above). Keep a prompt as a fallback
-    only if the file is missing, same pattern as `resolve_from_dev_or_prompt`.
-  - Add the same read (not prompt) for `r2-prod-backups-access-key-id`/
-    `r2-prod-backups-secret-access-key`, and write `BACKUP_S3_ENDPOINT`/`BACKUP_S3_REGION`/
-    `BACKUP_S3_BUCKET=ammari-prod-backups`/`BACKUP_S3_ACCESS_KEY_ID`/
-    `BACKUP_S3_SECRET_ACCESS_KEY` into `prod-backup.env` (new `set_env_var` calls on `$BACKUP_DEST`,
-    alongside the existing `PG_BACKUP_ENCRYPTION_KEY`/`ALERT_EMAIL_TO` ones).
-  - Update the script's own header comment (currently documents the Cloudeka-specific behavior of
-    the S3 prompts) to match.
+  - No `~/ammari-secrets/r2-account-id` file after all — the R2 endpoint already fully encodes
+    the account ID and is non-secret (same literal value already committed in
+    `deploy-prod/env/backup.env.example`'s `BACKUP_S3_ENDPOINT`), so it's a hardcoded constant
+    in the script (`R2_ENDPOINT`), same as `R2_REGION="auto"`/`R2_PROD_MEDIA_BUCKET="ammari-prod"`/
+    `R2_PROD_BACKUPS_BUCKET="ammari-prod-backups"` — no per-run file read needed for these.
+  - Replaced the hardcoded Cloudeka `S3_ENDPOINT`/`S3_REGION`/`S3_BUCKET` lines and the two
+    `prompt_secret "Enter prod S3 access key ID/secret..."` calls with reads (never a prompt,
+    never a command-line argument) from `~/ammari-secrets/r2-prod-access-key` and
+    `r2-prod-secret-key` — matching the naming already established by
+    `deploy-prod/env/backup.env.example`'s own comment and `docs/deploy-prod.md` §8.3 for the
+    backups bucket (`r2-backups-access-key`/`r2-backups-secret-key`), not the `-access-key-id`/
+    `r2-account-id` naming this section originally sketched. No prompt fallback: a missing or
+    empty key file is a hard failure, by design (these are machine credentials, not something
+    to type from memory).
+  - Added the same reads for `r2-backups-access-key`/`r2-backups-secret-key`, and the default/
+    `--force` path now writes `BACKUP_S3_ENDPOINT`/`BACKUP_S3_REGION`/
+    `BACKUP_S3_BUCKET=ammari-prod-backups`/`BACKUP_S3_ACCESS_KEY_ID`/`BACKUP_S3_SECRET_ACCESS_KEY`
+    into `prod-backup.env`, closing the Session 2 TODO.
+  - **Added `--storage-only` mode** (Decision 2 below): edits the *existing*
+    `prod-admin.env`/`prod-web.env`/`prod-backup.env` in place, touching only the storage
+    variables (`S3_*` / `BACKUP_S3_*`) and leaving every other line — every non-storage secret —
+    byte-for-byte identical. Backs up each file it actually edits first
+    (`<name>.env.bak.<UTC timestamp>`, mode 600), and prints only the names of variables that
+    changed, never a value. Refuses to run if a target file doesn't exist yet, or if `--force`
+    is also passed (mutually exclusive). This is the mode the real prod cutover (below) actually
+    uses — plain `--force` still regenerates every secret and is for the first-time build or a
+    deliberate full rotation, not this migration.
+  - Updated the script's own header comment to match (no more Cloudeka-specific language).
 - `deploy-prod/upload-prod-env.sh`: no change — it already uploads all four files generically;
   `prod-backup.env` just has more keys in it now.
-- Tests: none automatable (writes real files under `$HOME`); the script already supports a
-  throwaway `HOME=/tmp/fake-home` dry run per its own header comment — use that to confirm it
-  writes without error, but this doesn't exercise real R2 credentials.
+- Tests: no real-bucket test (none automatable without real credentials). Verified with fake env
+  files and fake key files under a throwaway `HOME` in a temp directory: default mode builds all
+  four files with the right R2 constants; `--storage-only` changes only the five `S3_*` lines in
+  an admin env that still had old Cloudeka-shaped values (confirmed via `diff` — every other
+  line, including `STAFF_BETTER_AUTH_SECRET`/`DATABASE_URL`/`REVALIDATE_SECRET`, byte-for-byte
+  identical) and only the matching `BACKUP_S3_*` lines in the backup env; it refuses when a
+  required key file is missing or empty, and when the target files don't exist yet; `--force`
+  and `--storage-only` together are rejected. Re-ran the same `--storage-only` case under
+  `/bin/bash` (confirmed macOS's stock bash 3.2) to confirm no bash-4+-only syntax crept in —
+  the script uses no GNU-only `sed` (it never calls `sed` at all) and no bash-4+ constructs.
+  `shellcheck` and `bash -n` both pass.
 
 ### Session 4 — `go-live-check.sh`
 
@@ -305,33 +326,82 @@ correct and should be removed, not just left harmlessly redundant:
 
 **Dev:**
 1. Complete the owner checklist's dev bucket + token + custom domain steps.
-2. Land Sessions 1–5 above (merged to `dev`, deployed via the normal dev pipeline).
-3. On the VPS, by hand: edit `/opt/ammari/env/admin.env` and `/opt/ammari/env/web.env` with the
-   new `S3_ENDPOINT`/`S3_REGION=auto`/`S3_BUCKET=ammari-dev`/`S3_ACCESS_KEY_ID`/
-   `S3_SECRET_ACCESS_KEY` (admin only) and `STORAGE_PUBLIC_BASE_URL=https://img.ammari.my.id`
-   (both files) — keep `S3_KEY_PREFIX=dev/` unchanged.
-4. `docker compose up -d --force-recreate admin web` (dev has no blue/green — this is the normal
-   env-change recreate, `docs/deploy.md` has no numbered section for it but it's the same
-   operation as prod's §3.2).
-5. Verify: `pnpm --filter @ammari/storage storage:check` (point its `--env-file` at the updated
-   `apps/admin/.env` if testing from a local checkout, or run it inside the admin container
-   against the real env — same command either way) must print "Public read works." Then do one
-   real upload through the admin UI (any product image) and confirm it renders on the storefront.
-6. Only once that's confirmed, move to prod.
+2. Land Sessions 1–3 above (merged to `dev`, deployed via the normal dev pipeline) — Sessions 4
+   and 5 touch only prod-only scripts (`go-live-check.sh`) and docs, neither blocks the dev
+   switch.
+3. **On the VPS, by hand — the owner only, no Claude Code session touches this.** Dev's env
+   files live only on the VPS (unlike prod, there's no local `~/ammari-secrets/dev-*.env` source
+   of truth or a `make-dev-env.sh` generator) — edit them in place over SSH:
+   1. On your Mac, get the dev R2 credentials' *values* without ever typing or echoing them to a
+      terminal — open `~/ammari-secrets/r2-dev-access-key` and `r2-dev-secret-key` in a local
+      editor (or `pbcopy < ~/ammari-secrets/r2-dev-access-key`, then paste) and keep them ready
+      to paste into `env/admin.env` below. Same convention `docs/deploy-prod.md` §8.3 already
+      uses for the prod backups-bucket switch: paste with an editor, never `cat`/`echo` a key to
+      a terminal.
+   2. SSH in and switch to the `deploy` user — dev's own access pattern (`docs/deploy.md`
+      §"Reading logs and health status"), since dev keeps no dedicated `deploy`-user SSH key on
+      the Mac the way prod does:
+      ```bash
+      ssh ubuntu@43.129.55.61
+      sudo -iu deploy
+      cd /opt/ammari
+      $EDITOR env/admin.env
+      ```
+   3. In `env/admin.env`, change only these lines (every other line, including every
+      non-storage secret, stays as-is):
+      ```
+      S3_ENDPOINT=https://d99c5045ed359887e8fdd591cc492ee9.r2.cloudflarestorage.com
+      S3_REGION=auto
+      S3_BUCKET=ammari-dev
+      S3_ACCESS_KEY_ID=<paste the value from r2-dev-access-key>
+      S3_SECRET_ACCESS_KEY=<paste the value from r2-dev-secret-key>
+      S3_KEY_PREFIX=dev/                              # unchanged — same local/dev prefix split
+      STORAGE_PUBLIC_BASE_URL=https://img.ammari.my.id
+      ```
+   4. `$EDITOR env/web.env` and change only the one line it has (must match admin.env's value
+      exactly — `apps/web` holds no S3 credential at all, only this base URL):
+      ```
+      STORAGE_PUBLIC_BASE_URL=https://img.ammari.my.id
+      ```
+   5. `exit` back to `ubuntu`, then to your Mac, once both files are saved.
+4. `docker compose up -d --force-recreate admin web` (as `deploy`, still in `/opt/ammari` — dev
+   has no blue/green, so this is the normal env-change recreate; `docs/deploy.md` has no
+   numbered section for it, but it's the same operation as prod's §3.2).
+5. Verify, in order:
+   1. `docker compose logs --tail 50 admin` — confirm no `S3_*`/storage error on startup.
+   2. `pnpm --filter @ammari/storage storage:check` (point its `--env-file` at a local copy of
+      the updated `apps/admin/.env` values, or run it inside the admin container against the
+      real env — same command either way) must print "Public read works."
+   3. Do one real upload through the admin UI (any product image) and confirm it renders on
+      `https://ammari.my.id` — the `<img src>` should now resolve under `img.ammari.my.id`, not
+      the old Cloudeka host.
+   4. `docker compose logs admin | grep upload-timing` for that upload's `[upload-timing]`
+      line — confirm it's now low-hundreds-of-milliseconds, not the multi-second-to-two-minute
+      Cloudeka stalls `docs/deploy-prod.md`'s troubleshooting section documents. This is the
+      actual regression check for the reason this migration exists (see "Summary" above).
+6. **Existing DB rows that still point at the old Cloudeka bucket:** nothing to migrate, per
+   "Existing data" above — every `product_images`/content-image row keeps whatever Cloudeka
+   `storageKey` it already has, and its `<img>` now 404s (broken image icon) until someone
+   re-uploads that specific image through the admin UI, which mints a fresh key in the new R2
+   bucket and deletes the old row. Expected and fine for dev's test data; no bulk fix, script,
+   or migration needed — just re-upload each broken image once, same action an owner would take
+   for any broken image today.
+7. Only once step 5 is confirmed, move to prod.
 
 **Prod:**
 1. Complete the owner checklist's prod media bucket + prod backups bucket + tokens + custom domain
    steps (if not already done alongside dev's).
-2. `make-prod-env.sh --force` (Session 3's updated version) — regenerates `prod-admin.env`,
-   `prod-web.env`, `prod-backup.env` with R2 values; existing secrets not derived from storage
-   (auth secrets, OAuth, Resend) are preserved as today's script already guarantees via its
-   backup-then-rewrite behavior... **check this carefully**: `make-prod-env.sh` as written today
-   regenerates *every* secret fresh on each run (`openssl rand` for all of them), not just the
-   storage ones — running it `--force` would rotate `STAFF_BETTER_AUTH_SECRET` etc. too, which is
-   unnecessary churn and would log out every staff session. **Session 3 should also add a
-   `--storage-only` mode** (or equivalent: read-and-preserve the existing non-storage secrets from
-   the current `prod-*.env` files instead of regenerating them) so this run only touches the
-   storage-related keys. Treat this as part of Session 3's scope, not a separate decision.
+2. `make-prod-env.sh --storage-only` (Session 3's new mode) — edits the EXISTING
+   `prod-admin.env`/`prod-web.env`/`prod-backup.env` in place, changing only the `S3_*`/
+   `BACKUP_S3_*` lines to the R2 values (reading `r2-prod-access-key`/`r2-prod-secret-key`/
+   `r2-backups-access-key`/`r2-backups-secret-key` from `~/ammari-secrets`, never prompted).
+   Every other line — every auth/session/encryption secret, `PG_BACKUP_ENCRYPTION_KEY` — stays
+   byte-for-byte identical; a timestamped backup of each file it touches is made first. **Do
+   not** use `--force` here: that mode regenerates *every* secret fresh (`openssl rand` for all
+   of them, not just the storage ones), which would rotate `STAFF_BETTER_AUTH_SECRET` etc. too
+   and log out every staff session for no reason. `--force` is only for building the four files
+   from scratch the first time (or deliberately rotating everything); `--storage-only` is the
+   one that exists specifically for this migration.
 3. `deploy-prod/upload-prod-env.sh`.
 4. `docker compose up -d --force-recreate "admin-$(cat active-slot-admin)" "web-$(cat
    active-slot-web)"` (docs/deploy-prod.md §3.2 — this already exists as the documented env-change

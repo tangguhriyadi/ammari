@@ -216,54 +216,31 @@ UI (`/roles-staff`) once you're logged in, not for re-running this script with d
 Idempotent in the safe sense (re-running never duplicates a row or crashes), but not a "fix this
 person's role" tool. Log in at `https://admin.ammari.my.id` with the email you seeded to confirm.
 
-## Bucket policy: public-read for product/content images
+## Public image access: Cloudflare custom domain (R2)
 
 The storefront renders product and homepage-content images as plain `<img>` URLs
-(`STORAGE_PUBLIC_BASE_URL` + `storageKey` + size — `apps/web/src/lib/storage/public-url.ts`), so
-the bucket needs a policy allowing anonymous `s3:GetObject` under exactly those two prefixes.
-Without it, every image request comes back `AccessDenied`. `packages/storage/bucket-policy.dev.json`
-and `bucket-policy.prod.json` are the source of truth for which prefixes are public — keep both
-in sync with whatever `apps/admin/src/lib/products/image-keys.ts` and
-`apps/admin/src/lib/content/content-image-keys.ts` actually write under (currently `products/*`
-and `content/*`; everything else in the bucket stays private by default, since a bucket policy
-only ever adds allow rules). `packages/storage`'s own `storage:check` script covers
-`local/healthcheck/*` the same way.
+(`STORAGE_PUBLIC_BASE_URL` + `storageKey` + size — `apps/web/src/lib/storage/public-url.ts`).
+Object storage is Cloudflare R2 (`docs/plans/storage-r2.md` — migrated off the prior Cloudeka
+provider), which has no `PutBucketPolicy`/`GetBucketPolicy` API and no prefix-scoped
+public-read concept — there is no `policy:apply`/`policy:show` tooling or
+`bucket-policy.{dev,prod}.json` to maintain (both retired in that plan's Session 1). "Public" is
+instead a **whole-bucket** property, turned on once per bucket via a Cloudflare custom domain:
 
-**Dev — run this now** (the dev env already has a real bucket: the shared `ammaridev-uc1gfp`
-bucket, split by the `local/`/`dev/` key prefix):
+- **Dev** — bucket `ammari-dev`: R2 dashboard → the bucket → Settings → Public access → Custom
+  Domains → Connect Domain → `img.ammari.my.id`. Cloudflare provisions the DNS record and
+  certificate automatically (same account as the `ammari.my.id` zone).
+- **Prod** — bucket `ammari-prod`: same steps → `img.ammari.id`.
+- Leave the "Public Development URL" (`r2.dev`) toggle **off** on every bucket, including the
+  private backups bucket (`ammari-prod-backups`, which gets no custom domain at all — it stays
+  reachable only via the S3 API with its own scoped token).
 
-```bash
-# 1. Review exactly what would be sent — no credentials needed, no write.
-pnpm --filter @ammari/storage policy:apply -- --env dev --dry-run
-
-# 2. Apply it for real. Reads S3_* credentials from apps/admin/.env (the same vars
-#    apps/admin's own storage.ts requires) — point that file's S3_BUCKET/S3_ENDPOINT/etc at
-#    the real dev bucket before running this, same credentials used for local dev image
-#    upload/delete. Applies via PutBucketPolicy, then verifies with two anonymous (unsigned)
-#    HTTP requests — a temporary object under products/ must come back 200, a temporary
-#    object outside every public prefix must come back 403 — and deletes both test objects
-#    afterward either way.
-pnpm --filter @ammari/storage policy:apply -- --env dev
-
-# 3. Anytime after: read back what's actually live on the bucket, without writing anything.
-pnpm --filter @ammari/storage policy:show
-```
-
-If the provider rejects `PutBucketPolicy` outright (some S3-compatible providers don't
-implement it), the script prints the exact error from `--dry-run`'s JSON and stops — in that
-case, apply that same JSON by hand through the provider's console (Cloudeka: bucket settings →
-policy), then run `policy:apply -- --env dev --dry-run` again just to compare, or `policy:show`
-to confirm what's live.
-
-**Prod — done** (`docs/plans/prod-deploy.md` §4 step 7, §3 Session 7): the real prod bucket
-(`ammariprod-cdy2yf`) already exists, and `bucket-policy.prod.json`'s `REPLACE_WITH_PROD_BUCKET_NAME`
-placeholder is already filled in with it. Re-running `policy:apply`/`policy:show -- --env prod`
-(same three commands as above) requires the real `S3_*` credentials — these live only in
-`/opt/ammari-prod/env/admin.env` on the prod VPS, never in this repo or on a developer's own
-machine, so that run only ever happens from there (or against a copy of that one env file,
-never committed). `policy:apply` still refuses to apply a policy file whose bucket name doesn't
-match the configured `S3_BUCKET`, so it can't be pointed at the wrong bucket by mistake even by
-hand. See `docs/SPEC.md §11`'s pre-deploy checklist entry for this.
+Once connected, every object in the bucket is public at `https://img.ammari.my.id/<key>` (dev) /
+`https://img.ammari.id/<key>` (prod) — there is no per-prefix allow-list to keep in sync with
+`apps/admin/src/lib/products/image-keys.ts`/`content-image-keys.ts`; the whole-bucket model
+means every write path audited in `docs/plans/storage-r2.md` Session 1 is already covered.
+Point `STORAGE_PUBLIC_BASE_URL` at that URL in `admin.env`/`web.env` and verify with
+`pnpm --filter @ammari/storage storage:check` (prints "Public read works." against a real
+healthcheck object).
 
 ## Image tagging scheme
 
