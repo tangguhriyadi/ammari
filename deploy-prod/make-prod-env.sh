@@ -12,17 +12,23 @@
 #                   (auth secrets, OAuth, Resend, storage — everything), but backs each one up
 #                   first as prod-<name>.env.bak.<UTC timestamp> in the same directory.
 #   --storage-only Edits the EXISTING prod-admin.env/prod-web.env/prod-backup.env IN PLACE and
-#                   changes ONLY the storage-related variables (S3_* in the media envs,
-#                   BACKUP_S3_* in prod-backup.env) — every other line, including every
-#                   auth/session/encryption secret and PG_BACKUP_ENCRYPTION_KEY, is left
-#                   byte-for-byte untouched. Use this for a storage-provider swap (e.g. the
-#                   Cloudeka->R2 migration, docs/plans/storage-r2.md) so it never rotates
+#                   changes ONLY the storage-related variables (S3_*/STORAGE_PUBLIC_BASE_URL in
+#                   prod-admin.env, STORAGE_PUBLIC_BASE_URL only in prod-web.env, BACKUP_S3_* in
+#                   prod-backup.env) — every other line, including every auth/session/encryption
+#                   secret and PG_BACKUP_ENCRYPTION_KEY, is left byte-for-byte untouched. A
+#                   required storage variable is ADDED (appended) if the file doesn't already
+#                   have that line, or REPLACED in place if it does. Use this for a
+#                   storage-provider swap (e.g. the Cloudeka->R2 migration,
+#                   docs/plans/storage-r2.md) so it never rotates
 #                   STAFF_BETTER_AUTH_SECRET/CUSTOMER_BETTER_AUTH_SECRET etc. as a side effect
 #                   (that would log out every staff session for no reason). Requires the three
 #                   files to already exist (run without flags first if they don't). Backs up
-#                   each file it actually edits first, same naming as --force. Prints only the
-#                   NAMES of variables that changed, never a value. prod-db.env is never touched
-#                   in this mode (it holds no storage variable).
+#                   each file first, same naming as --force. Prints only the NAMES of variables
+#                   that changed, never a value, then a final per-file checklist of every
+#                   required variable's NAME with OK/MISSING and exits non-zero if anything is
+#                   still MISSING. Idempotent: rerunning with the same inputs reports nothing
+#                   changed. prod-db.env is never touched in this mode (it holds no storage
+#                   variable).
 #
 # $HOME is honored as-is (not hardcoded) so this can be dry-run against a throwaway HOME, e.g.:
 #   HOME=/tmp/fake-home deploy-prod/make-prod-env.sh
@@ -99,6 +105,12 @@ R2_ENDPOINT="https://d99c5045ed359887e8fdd591cc492ee9.r2.cloudflarestorage.com"
 R2_REGION="auto"
 R2_PROD_MEDIA_BUCKET="ammari-prod"
 R2_PROD_BACKUPS_BUCKET="ammari-prod-backups"
+# The prod media bucket's public CDN domain — read directly at runtime by both apps
+# (apps/admin/src/lib/storage.ts, apps/web/src/lib/storage/public-url.ts) as
+# STORAGE_PUBLIC_BASE_URL. Same value belongs in BOTH prod-admin.env and prod-web.env (same
+# bucket/CDN, docs/plans/prod-deploy.md §4 step 7) — mirrors how
+# deploy/switch-dev-storage-remote.sh sets dev's equivalent in both admin.env and web.env.
+R2_PROD_PUBLIC_BASE_URL="https://img.ammari.id"
 
 FORCE=0
 STORAGE_ONLY=0
@@ -243,7 +255,7 @@ make_backup_copy() {
 # identical. Never regenerates anything, never touches prod-db.env.
 run_storage_only() {
   local dest
-  for dest in "$ADMIN_DEST" "$BACKUP_DEST"; do
+  for dest in "$ADMIN_DEST" "$WEB_DEST" "$BACKUP_DEST"; do
     if [[ ! -f "$dest" ]]; then
       echo "Missing $dest — --storage-only requires the prod env files to already exist (run $0 without flags first)." >&2
       exit 1
@@ -260,21 +272,33 @@ run_storage_only() {
   echo "=== --storage-only: editing existing prod env files in place ==="
   echo "(every other line, including all non-storage secrets, is left untouched)"
 
-  # Sets KEY in FILE to VALUE only if the key exists in FILE and its current value differs —
-  # records the key name in STORAGE_ONLY_CHANGED (never the value) so only real changes get
-  # reported. Silently skips a key that isn't present in FILE at all (e.g. prod-web.env has no
-  # S3_* vars today), rather than erroring like set_env_var would on its own.
+  # Sets KEY in FILE to VALUE: replaces the existing "KEY=..." line if present and different
+  # (via set_env_var), or APPENDS a new "KEY=VALUE" line at the end if KEY isn't in FILE at all
+  # (e.g. a prod-backup.env from before the R2 migration has no BACKUP_S3_* lines yet, or
+  # STORAGE_PUBLIC_BASE_URL on a file predating that var's addition to the template). A no-op,
+  # and not recorded in STORAGE_ONLY_CHANGED, when KEY is already present with this exact value
+  # — so a second run reports nothing changed. Never prints a value, only the key NAME.
   STORAGE_ONLY_CHANGED=()
   update_storage_var() {
     local file="$1" key="$2" value="$3" old
-    if ! grep -q "^${key}=" "$file"; then
-      return 0
+    if grep -q "^${key}=" "$file"; then
+      old="$(get_env_value "$file" "$key" 2>/dev/null || true)"
+      if [[ "$old" == "$value" ]]; then
+        return 0
+      fi
+      set_env_var "$file" "$key" "$value"
+    else
+      # Guarantee a trailing newline first, so the appended line can't get glued onto the
+      # previous one if the file happens not to already end in one. Command substitution
+      # strips trailing newlines, so `tail -c1` of a file that already ends in "\n" comes back
+      # empty — checking for non-empty output (not comparing it to a literal "\n") is what
+      # correctly detects "last byte is something other than newline".
+      if [[ -s "$file" ]] && [[ -n "$(tail -c1 "$file")" ]]; then
+        printf '\n' >>"$file"
+      fi
+      printf '%s=%s\n' "$key" "$value" >>"$file"
+      chmod 600 "$file"
     fi
-    old="$(get_env_value "$file" "$key" 2>/dev/null || true)"
-    if [[ "$old" == "$value" ]]; then
-      return 0
-    fi
-    set_env_var "$file" "$key" "$value"
     STORAGE_ONLY_CHANGED+=("$key")
   }
 
@@ -298,22 +322,18 @@ run_storage_only() {
   update_storage_var "$ADMIN_DEST" "S3_BUCKET" "$R2_PROD_MEDIA_BUCKET"
   update_storage_var "$ADMIN_DEST" "S3_ACCESS_KEY_ID" "$r2_prod_access_key_id"
   update_storage_var "$ADMIN_DEST" "S3_SECRET_ACCESS_KEY" "$r2_prod_secret_access_key"
+  update_storage_var "$ADMIN_DEST" "STORAGE_PUBLIC_BASE_URL" "$R2_PROD_PUBLIC_BASE_URL"
   print_storage_only_changes "$ADMIN_DEST"
 
-  # prod-web.env holds no S3 credential today (apps/web never uploads/deletes/holds one) — only
-  # touch it if a future env file actually adds S3_* vars there.
-  if grep -q "^S3_" "$WEB_DEST" 2>/dev/null; then
-    make_backup_copy "$WEB_DEST"
-    STORAGE_ONLY_CHANGED=()
-    update_storage_var "$WEB_DEST" "S3_ENDPOINT" "$R2_ENDPOINT"
-    update_storage_var "$WEB_DEST" "S3_REGION" "$R2_REGION"
-    update_storage_var "$WEB_DEST" "S3_BUCKET" "$R2_PROD_MEDIA_BUCKET"
-    update_storage_var "$WEB_DEST" "S3_ACCESS_KEY_ID" "$r2_prod_access_key_id"
-    update_storage_var "$WEB_DEST" "S3_SECRET_ACCESS_KEY" "$r2_prod_secret_access_key"
-    print_storage_only_changes "$WEB_DEST"
-  else
-    echo "  $(basename "$WEB_DEST"): no S3_* vars present — nothing to change."
-  fi
+  # apps/web never uploads/deletes/holds an S3 credential (no S3_* vars there at all, by design
+  # — see deploy-prod/env/web.env.example) — only STORAGE_PUBLIC_BASE_URL, which it reads at
+  # runtime to render product/content image URLs
+  # (apps/web/src/lib/storage/public-url.ts). Same value as admin.env's own
+  # STORAGE_PUBLIC_BASE_URL (same bucket/CDN).
+  make_backup_copy "$WEB_DEST"
+  STORAGE_ONLY_CHANGED=()
+  update_storage_var "$WEB_DEST" "STORAGE_PUBLIC_BASE_URL" "$R2_PROD_PUBLIC_BASE_URL"
+  print_storage_only_changes "$WEB_DEST"
 
   make_backup_copy "$BACKUP_DEST"
   STORAGE_ONLY_CHANGED=()
@@ -325,6 +345,40 @@ run_storage_only() {
   print_storage_only_changes "$BACKUP_DEST"
 
   unset r2_prod_access_key_id r2_prod_secret_access_key r2_backups_access_key_id r2_backups_secret_access_key
+
+  # --- Verification: every required storage var present with a non-empty value -------------
+  # Prints a per-file checklist of key NAMES only (never values) and fails loudly (non-zero
+  # exit) if anything required is still missing, so a half-applied edit is never mistaken for
+  # success.
+  echo
+  echo "=== Verification (key names and status ONLY — no secret values are ever printed) ==="
+  overall_ok=0
+  check_required_vars() {
+    local file="$1"
+    shift
+    echo "  $(basename "$file"):"
+    local key value
+    for key in "$@"; do
+      value="$(get_env_value "$file" "$key" 2>/dev/null || true)"
+      if [[ -n "$value" ]]; then
+        echo "    $key: OK"
+      else
+        echo "    $key: MISSING"
+        overall_ok=1
+      fi
+    done
+  }
+  check_required_vars "$ADMIN_DEST" S3_ENDPOINT S3_REGION S3_BUCKET S3_ACCESS_KEY_ID \
+    S3_SECRET_ACCESS_KEY STORAGE_PUBLIC_BASE_URL
+  check_required_vars "$WEB_DEST" STORAGE_PUBLIC_BASE_URL
+  check_required_vars "$BACKUP_DEST" BACKUP_S3_ENDPOINT BACKUP_S3_REGION BACKUP_S3_BUCKET \
+    BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY
+
+  if [[ "$overall_ok" -ne 0 ]]; then
+    echo >&2
+    echo "One or more required storage variables are still MISSING — see checklist above." >&2
+    exit 1
+  fi
 
   echo
   echo "Done. Next: deploy-prod/upload-prod-env.sh to push the updated files to the VPS."
