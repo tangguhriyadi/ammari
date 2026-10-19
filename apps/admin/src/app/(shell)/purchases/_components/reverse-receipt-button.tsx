@@ -5,8 +5,21 @@ import { useRouter } from "next/navigation";
 import { Button, Dialog, useToast } from "@ammari/ui";
 import { reverseReceiptAction } from "../actions";
 
-/** "Batalkan penerimaan" (inventory.manage, D8): writes an exact reversing receipt; never edits. */
-export function ReverseReceiptButton({ receiptId, receiptNo }: { receiptId: string; receiptNo: string }) {
+const DEFAULT_DESCRIPTION =
+  "Stok dan nilai yang masuk dari penerimaan ini akan dibalik. Hanya bisa dilakukan jika barangnya belum dipakai atau disesuaikan sesudahnya.";
+
+/** "Batalkan penerimaan" (inventory.manage, D8): writes an exact reversing receipt; never edits.
+ * Shared by purchase and production-batch receipts — the server action dispatches on the
+ * receipt's own source; `description` lets each page say which follow-up blocks a reversal. */
+export function ReverseReceiptButton({
+  receiptId,
+  receiptNo,
+  description = DEFAULT_DESCRIPTION,
+}: {
+  receiptId: string;
+  receiptNo: string;
+  description?: string;
+}) {
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -40,7 +53,7 @@ export function ReverseReceiptButton({ receiptId, receiptNo }: { receiptId: stri
         open={open}
         onOpenChange={setOpen}
         title={`Batalkan penerimaan ${receiptNo}?`}
-        description="Stok dan nilai yang masuk dari penerimaan ini akan dibalik. Hanya bisa dilakukan jika barangnya belum dipakai atau disesuaikan sesudahnya."
+        description={description}
         confirmLabel="Batalkan penerimaan"
         confirmVariant="danger"
         onConfirm={handleConfirm}

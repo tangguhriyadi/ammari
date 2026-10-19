@@ -161,11 +161,12 @@ describe("postBatch", () => {
       // stranded value behind at zero stock.
       expect(await getFabricBalance(fabric.id, tx)).toEqual({ qty: 0, valueAmount: 0 });
 
-      // The finished-goods stock_movements row carries its own cost basis too (qty *
-      // unit_cost_amount) — this is what a later sale's moving-average HPP is computed from.
+      // Posting writes NO finished-goods stock (S4): the output enters stock only when received
+      // (lib/receipts/production.ts), valued at this frozen unit_cost_amount.
       const movements = await tx.select().from(stockMovements).where(eq(stockMovements.sku, variant.sku));
-      expect(movements).toHaveLength(1);
-      expect(movements[0]!.valueAmount).toBe(3 * 333_334);
+      expect(movements).toHaveLength(0);
+      const [posted] = await tx.select().from(productionBatches).where(eq(productionBatches.id, batch.id));
+      expect(posted).toMatchObject({ status: "posted", receiptStatus: "pending" });
     });
   });
 
@@ -362,8 +363,9 @@ describe("postBatch", () => {
       expect(succeeded).toHaveLength(1);
       expect(failed).toHaveLength(1);
 
-      const rows = await testDb.select().from(stockMovements).where(eq(stockMovements.sku, variant.sku));
-      expect(rows).toHaveLength(1); // exactly one movement, not two
+      // Exactly one fabric consumption row, not two (posting writes no finished-goods stock).
+      const rows = await testDb.select().from(fabricStockMovements).where(eq(fabricStockMovements.fabricId, fabric.id));
+      expect(rows.filter((row) => row.type === "production")).toHaveLength(1);
     } finally {
       await forceDeleteStockMovementsFixture(testDb, variant.sku);
       await forceDeleteFabricStockMovementsFixture(testDb, fabric.id);

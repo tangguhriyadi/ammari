@@ -3,6 +3,7 @@ import { Badge, Card, EmptyState, TableContainer, TableHead, Th, Tr, Td, CardLis
 import { formatDate, formatNumber } from "@ammari/ui/lib";
 import type { ListBatchesRow } from "@/lib/production/queries";
 import type { ProductionBatchStatus } from "@ammari/db/schema";
+import { ReceiptStatusBadge } from "./receipt-status-badge";
 
 const STATUS_LABELS: Record<ProductionBatchStatus, string> = { draft: "Draf", posted: "Diposting" };
 
@@ -32,6 +33,11 @@ export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
                 <span className="text-sm text-neutral-600">
                   {row.fabricYards !== null ? `${row.fabricYards} yard` : "—"} · {formatNumber(row.totalPcs)} pcs
                 </span>
+                {row.status === "posted" && (
+                  <span className="flex items-center gap-2 text-sm text-neutral-600">
+                    Hasil: <ReceiptStatusBadge status={row.receiptStatus} />
+                  </span>
+                )}
               </Card>
             </Link>
           </li>
@@ -46,6 +52,7 @@ export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
           <Th>Jumlah yard</Th>
           <Th>Pcs</Th>
           <Th>Status</Th>
+          <Th>Penerimaan hasil</Th>
         </TableHead>
         <tbody>
           {rows.map((row) => (
@@ -62,6 +69,7 @@ export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
               <Td>
                 <BatchStatusBadge status={row.status} />
               </Td>
+              <Td>{row.status === "posted" ? <ReceiptStatusBadge status={row.receiptStatus} /> : <span className="text-neutral-600">—</span>}</Td>
             </Tr>
           ))}
         </tbody>

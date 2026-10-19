@@ -2,10 +2,11 @@ import { expect, test } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
 import { createSupplier, purchaseAndReceiveAll } from "./helpers/purchase";
+import { postBatch, receiveAllBatchOutput } from "./helpers/production";
 import { E2E_PRODUCTION_STOCK_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
-test("a staffer purchases fabric and an accessory, sets a recipe, creates a draft batch with an extra-cost line, posts it, sees stock and HPP, adjusts it down, then runs a stock count", async ({
+test("a staffer purchases fabric and an accessory, sets a recipe, creates a draft batch with an extra-cost line, posts it (no stock yet), receives the output in two parts, sees stock and HPP, adjusts it down, then runs a stock count", async ({
   page,
 }) => {
   // Mobile-first per docs/SPEC.md (Stock/Production are daily-use, mobile-first admin pages) —
@@ -118,12 +119,11 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   // stock (10) — no shortage yet.
   await expect(page.getByText(`Butuh 5 pcs · Stok 10 pcs`)).toBeVisible();
 
-  // 7. Post it — stock must not move until this confirmed action.
-  await page.getByRole("button", { name: "Posting ke stok" }).click();
-  await page.getByRole("button", { name: "Posting", exact: true }).click();
-  // Posted batches render the read-only view (no post/delete controls at all) — unambiguous
-  // unlike "Diposting", which also appears as a field label in the read-only view itself.
-  await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
+  // 7. Post it. Since S4 (docs/plans/suppliers-goods-receipt.md) posting consumes material and
+  // freezes HPP but adds NO finished-goods stock.
+  await postBatch(page);
+  const batchUrl = page.url();
+  const batchNo = (await page.getByRole("heading", { level: 1 }).textContent())!.trim();
 
   // 8. The posted detail shows the full cost breakdown: Kain (fabric, computed from the purchase
   // average), Aksesoris (the accessory consumed), Biaya variabel (the extra-cost line), and
@@ -138,10 +138,68 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   // "Rp 204.000" appears twice (the HPP/pcs figure itself, and again next to its Batas HPP
   // badge below) — .first() is enough to confirm the value renders at all.
   await expect(page.getByText("Rp 204.000").first()).toBeVisible();
+  // ...and the "Hasil produksi" panel waits for the output.
+  await expect(page.getByRole("heading", { name: "Hasil produksi" })).toBeVisible();
+  await expect(page.getByText("Belum diterima", { exact: true })).toBeVisible();
 
-  // 9. Finished-goods stock increased by exactly the posted quantity.
+  // 9a. Finished-goods stock did NOT move at posting.
+  await page.goto(`/stock/${sku}`);
+  await expect(page.getByText("0 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  // 9b. The stock-count guard warns about the posted-but-unreceived batch, at 390px and 1280px,
+  // next to the standing "don't count defects" instruction.
+  await page.goto(`/stock/count/${productId}`);
+  const warning = page.getByRole("note");
+  await expect(warning.getByText("Ada hasil produksi yang belum diterima")).toBeVisible();
+  await expect(warning.getByRole("link", { name: batchNo })).toBeVisible();
+  await expect(warning.getByText(/Belum diterima · sisa 5 pcs/)).toBeVisible();
+  await expect(page.getByText("Jangan hitung barang cacat, hitung hanya barang yang bisa dijual.")).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(warning.getByRole("link", { name: batchNo })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  // 9c. Partial receipt: 2 of the 5 pcs. Stock rises by exactly 2.
+  await warning.getByRole("link", { name: batchNo }).click();
+  await expect(page).toHaveURL(batchUrl);
+  await page.getByRole("link", { name: "Terima hasil" }).click();
+  await expect(page).toHaveURL(/\/receive$/);
+  const outputInput = page.getByLabel(`${productName} · Sage · M`);
+  await expect(outputInput).toHaveValue("5"); // prefilled with what is left
+  await expect(page.getByText("Rencana 5 · Diterima 0 · Sisa 5 pcs")).toBeVisible();
+  // Over-receipt is blocked before it reaches the server, with a clear message.
+  await outputInput.fill("6");
+  await expect(page.getByText("Melebihi sisa batch (5 pcs).")).toBeVisible();
+  await outputInput.fill("2");
+  await page.getByRole("button", { name: "Simpan penerimaan" }).click();
+  await expect(page).toHaveURL(batchUrl, { timeout: 15_000 });
+  await expect(page.getByRole("status")).toContainText("berhasil dicatat");
+  await expect(page.getByText("Diterima sebagian", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("receipt-row")).toHaveCount(1);
+
+  await page.goto(`/stock/${sku}`);
+  await expect(page.getByText("2 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  // The production list shows the receipt status in both layouts.
+  await page.goto("/production");
+  await expect(page.locator("li").filter({ hasText: batchNo }).getByText("Diterima sebagian")).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.locator("tr").filter({ hasText: batchNo }).getByText("Diterima sebagian")).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  // The count-page warning now shows what is still outstanding.
+  await page.goto(`/stock/count/${productId}`);
+  await expect(page.getByRole("note").getByText(/Diterima sebagian · sisa 3 pcs/)).toBeVisible();
+
+  // 9d. Receive the rest: complete. Stock = all 5 posted pcs, and the warning is gone (the
+  // standing instruction stays).
+  await page.goto(batchUrl);
+  await receiveAllBatchOutput(page);
+  await expect(page.getByTestId("receipt-row")).toHaveCount(2);
   await page.goto(`/stock/${sku}`);
   await expect(page.getByText("5 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await page.goto(`/stock/count/${productId}`);
+  await expect(page.getByText("Jangan hitung barang cacat, hitung hanya barang yang bisa dijual.")).toBeVisible();
+  await expect(page.getByRole("note")).toHaveCount(0);
 
   // 10. Accessory stock decreased by exactly what the recipe + batch consumed (10 - 5 = 5).
   await page.goto(`/accessories/${accessoryId}`);
@@ -214,4 +272,86 @@ test("an inactive supplier still shows on the cost component that defaults to it
   await page.locator("#extra-cost-component-0").selectOption({ label: componentName });
   await expect(page.locator("#extra-cost-supplier-0 option:checked")).toHaveText("Tanpa supplier");
   await expect(page.locator("#extra-cost-supplier-0 option").filter({ hasText: supplierName })).toHaveCount(0);
+});
+
+test("a batch whose remaining output will never arrive is short-closed with a reason: stock keeps what was received, HPP stays, the unabsorbed value shows", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await loginAs(page, E2E_PRODUCTION_STOCK_EMAIL);
+  const unique = Date.now();
+
+  const fabricName = `E2E Bahan Tutup ${unique}`;
+  await page.goto("/fabrics/new");
+  await page.getByLabel("Nama bahan").fill(fabricName);
+  await page.getByLabel("Nama warna").fill("Sage");
+  await page.getByRole("button", { name: "Simpan" }).click();
+  await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
+
+  const productName = `Contoh Gamis Tutup E2E ${unique}`;
+  await page.goto("/products/new");
+  await page.getByLabel("Nama produk").fill(productName);
+  await page.locator("#product-fabric").selectOption({ label: fabricName });
+  await page.getByLabel("Harga dasar").fill("269.000");
+  const code = await page.getByLabel("Kode produk").inputValue();
+  await page.getByRole("switch", { name: "Aktif" }).click();
+  await page.getByRole("button", { name: "Simpan" }).click();
+  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
+  const productId = page.url().split("/products/")[1]!;
+  await page.getByRole("checkbox", { name: /Sage/ }).check();
+  await page.getByRole("checkbox", { name: "M", exact: true }).check();
+  await page.getByRole("button", { name: "Tambah varian" }).click();
+  const sku = generateSku({ code, closure: "front_zip", color: "Sage", size: "M" });
+  await expect(page.locator(`:text-is("${sku}"):visible`)).toBeVisible();
+
+  // 2 yards for Rp 200.000, a batch of 4 pcs using both: HPP/pcs = 200.000 / 4 = Rp 50.000.
+  await purchaseAndReceiveAll(page, [{ type: "Kain", itemName: fabricName, qty: "2", amount: "200.000" }]);
+  await page.goto("/production/new");
+  await page.locator("#batch-fabric").selectOption({ label: fabricName });
+  await page.locator("#batch-fabric-yards").fill("2");
+  await page.getByLabel("M", { exact: true }).fill("4");
+  await page.getByRole("button", { name: "Simpan draf" }).click();
+  await openCreated(page, "/production");
+  await postBatch(page);
+  const batchUrl = page.url();
+  const batchNo = (await page.getByRole("heading", { level: 1 }).textContent())!.trim();
+
+  // Receive 1 of the 4.
+  await page.getByRole("link", { name: "Terima hasil" }).click();
+  await page.getByLabel(`${productName} · Sage · M`).fill("1");
+  await page.getByRole("button", { name: "Simpan penerimaan" }).click();
+  await expect(page).toHaveURL(batchUrl, { timeout: 15_000 });
+  await expect(page.getByText("Diterima sebagian", { exact: true })).toBeVisible();
+
+  // Close it: a reason is required.
+  await page.getByRole("button", { name: "Tutup batch" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("Sisa 3 pcs yang belum diterima tidak akan ditunggu lagi.", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "Tutup batch" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Alasan wajib diisi.");
+  await dialog.getByLabel("Alasan").fill("Sisa kain rusak saat dijahit");
+  await dialog.getByRole("button", { name: "Tutup batch" }).click();
+  await expect(page.getByRole("status")).toContainText("Batch ditutup");
+  await expect(page.getByText("Ditutup", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Sisa kain rusak saat dijahit")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Terima hasil" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Tutup batch" })).toHaveCount(0);
+
+  // HPP/pcs is unchanged; the 3 pcs that never arrived show as unabsorbed value (3 × 50.000).
+  await expect(page.getByText("HPP/pcs")).toBeVisible();
+  await expect(page.getByText("Rp 50.000").first()).toBeVisible();
+  await expect(page.getByText("Nilai belum terserap")).toBeVisible();
+  await expect(page.getByText("Rp 150.000")).toBeVisible();
+
+  // Stock keeps exactly what was received, and the count page no longer warns about the batch.
+  await page.goto(`/stock/${sku}`);
+  await expect(page.getByText("1 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await page.goto(`/stock/count/${productId}`);
+  await expect(page.getByRole("note")).toHaveCount(0);
+
+  // The production list shows it closed, in both layouts.
+  await page.goto("/production");
+  await expect(page.locator("li").filter({ hasText: batchNo }).getByText("Ditutup")).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.locator("tr").filter({ hasText: batchNo }).getByText("Ditutup")).toBeVisible();
 });

@@ -3,6 +3,7 @@ import { Badge, Card } from "@ammari/ui";
 import { getBatchAccessoryConsumption, getBatchCosts, getBatchExtraCosts, type BatchLineRow } from "@/lib/production/queries";
 import { getCurrentCostAssumption } from "@/lib/products/queries";
 import { calculateBatasHpp } from "@/lib/products/batas-hpp";
+import { unabsorbedValue, type BatchReceiptSummary } from "@/lib/receipts/production";
 
 /** Only ever rendered by the caller (batch detail page) when the session holds
  * finance.view_profit — see ProductBatasHpp in products/[id]/page.tsx for the identical
@@ -11,15 +12,18 @@ import { calculateBatasHpp } from "@/lib/products/batas-hpp";
  * those queries) at all.
  *
  * Breakdown groups (plan requirement): Kain, Aksesoris (per item), Biaya variabel, Biaya tetap,
- * Total, HPP/pcs. */
+ * Total, HPP/pcs — plus, on a short-closed batch, "Nilai belum terserap" (§4.3, S4): the frozen
+ * cost of the planned pcs that never arrived. HPP/pcs itself is never rewritten. */
 export async function BatchCostsSection({
   batchId,
   fabricYards,
   lines,
+  receiptSummary,
 }: {
   batchId: string;
   fabricYards: number | null;
   lines: BatchLineRow[];
+  receiptSummary?: BatchReceiptSummary | null;
 }) {
   const costs = await getBatchCosts(batchId);
   if (!costs) return null;
@@ -35,6 +39,11 @@ export async function BatchCostsSection({
   // Every line in one batch shares the same unit cost (ceil(totalCost / totalPcs), written to
   // every line at posting) — showing the first is the same as showing "the" HPP/pcs.
   const unitCostAmount = lines[0]?.unitCostAmount ?? null;
+  const unitCostByLineId = new Map(lines.map((line) => [line.id, line.unitCostAmount]));
+  const unabsorbed =
+    receiptSummary?.receiptStatus === "closed"
+      ? unabsorbedValue(receiptSummary.lines.map((line) => ({ outstanding: line.outstanding, unitCostAmount: unitCostByLineId.get(line.id) ?? 0 })))
+      : null;
 
   return (
     <Card className="flex flex-col gap-4">
@@ -110,6 +119,13 @@ export async function BatchCostsSection({
         <div className="flex items-center justify-between gap-2 text-base">
           <dt className="text-neutral-600">HPP/pcs</dt>
           <dd className="font-semibold text-neutral-900 tabular-nums">{formatRupiah(unitCostAmount)}</dd>
+        </div>
+      )}
+
+      {unabsorbed !== null && (
+        <div className="flex items-center justify-between gap-2 text-base">
+          <dt className="text-neutral-600">Nilai belum terserap</dt>
+          <dd className="font-semibold text-neutral-900 tabular-nums">{formatRupiah(unabsorbed)}</dd>
         </div>
       )}
 

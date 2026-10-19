@@ -14,10 +14,9 @@ import {
   products,
   productVariants,
   staffUsers,
-  stockMovements,
   suppliers,
 } from "@ammari/db/schema";
-import type { CostComponentType, CostComponentUnit, ProductionBatchStatus } from "@ammari/db/schema";
+import type { CostComponentType, CostComponentUnit, ProductionBatchStatus, ProductionReceiptStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
@@ -30,6 +29,7 @@ import { generateBatchNumber } from "./batch-number";
 import { calculateUnitCost } from "./unit-cost";
 import { resolveAccessoryNeeds } from "./accessory-needs";
 import { lockSelectableSuppliers } from "@/lib/suppliers/queries";
+import { effectiveReceiptStatuses } from "@/lib/receipts/production";
 
 // ---------- Eligible SKUs for a fabric ----------
 
@@ -92,6 +92,8 @@ export interface ListBatchesRow {
   // it, never 0 (0 would falsely imply zero yards were actually used).
   fabricYards: number | null;
   status: ProductionBatchStatus;
+  /** Output receipt progress (S4); always 'pending' for a draft. */
+  receiptStatus: ProductionReceiptStatus;
   fabricName: string;
   totalPcs: number;
 }
@@ -114,6 +116,7 @@ export async function listBatches(
       producedAt: productionBatches.producedAt,
       fabricYards: productionBatches.fabricYards,
       status: productionBatches.status,
+      receiptStatus: productionBatches.receiptStatus,
       fabricName: fabrics.name,
       totalPcs: sql<number>`coalesce(sum(${productionBatchItems.qty})::int, 0)`,
     })
@@ -126,7 +129,11 @@ export async function listBatches(
     .limit(pagination.limit)
     .offset(pagination.offset);
 
-  return { rows, pagination };
+  // Show the EFFECTIVE receipt status, the same one the batch page shows (see
+  // BatchReceiptSummary.receiptStatus): a batch the previous release posted after migration 0025
+  // is stored 'pending' though its at-posting stock already counts as received.
+  const effective = await effectiveReceiptStatuses(rows, db);
+  return { rows: rows.map((row) => ({ ...row, receiptStatus: effective.get(row.id) ?? row.receiptStatus })), pagination };
 }
 
 // ---------- Detail ----------
@@ -162,6 +169,7 @@ export interface BatchDetail {
   fabricYards: number | null;
   notes: string | null;
   status: ProductionBatchStatus;
+  receiptStatus: ProductionReceiptStatus;
   postedAt: Date | null;
   postedByName: string | null;
   lines: BatchLineRow[];
@@ -183,6 +191,7 @@ export async function getBatchDetail(id: string, db: Database = defaultDb): Prom
       fabricYards: productionBatches.fabricYards,
       notes: productionBatches.notes,
       status: productionBatches.status,
+      receiptStatus: productionBatches.receiptStatus,
       postedAt: productionBatches.postedAt,
       postedByName: staffUsers.name,
     })
@@ -691,11 +700,17 @@ export interface PostedBatchResult {
  *    already use applies for free), write one fabric_stock_movements row and one
  *    accessory_movements row per resolved accessory (ref_type='production_batch').
  * 8. totalCost = fabricCost + Σ(accessory consumption costs) + Σ(production_batch_costs.total,
- *    variable AND fixed). unitCost = ceil(totalCost / totalPcs), written to every line.
- * 9. One stock_movements row per line (type='production', ref_type='production_batch_item').
- * 10. status='posted', posted_at, posted_by_staff_user_id, fabric_cost_amount (computed, not
- *     user-entered — see fabric-cost-estimate.ts for the draft's own non-binding estimate).
- * 11. One audit_log entry for the whole post. */
+ *    variable AND fixed). unitCost = ceil(totalCost / totalPcs), written to every line — frozen
+ *    from here on (HPP is never rewritten, D20).
+ * 9. status='posted', posted_at, posted_by_staff_user_id, fabric_cost_amount (computed, not
+ *    user-entered — see fabric-cost-estimate.ts for the draft's own non-binding estimate).
+ *    receipt_status stays at its 'pending' default.
+ * 10. One audit_log entry for the whole post.
+ *
+ * Posting writes NO finished-goods stock (docs/plans/suppliers-goods-receipt.md D4, session S4):
+ * material is really consumed at cutting/hand-off, but the sewn output arrives later. It enters
+ * sellable stock only when received (postGoodsReceiptForBatch, lib/receipts/production.ts), as a
+ * 'production' movement valued at this line's frozen unit_cost_amount. */
 export async function postBatch(id: string, actorStaffUserId: string, db: Database = defaultDb): Promise<PostedBatchResult> {
   return db.transaction(async (tx) => {
     const before = await lockProductionBatchForUpdate(tx, id);
@@ -819,26 +834,6 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
     const unitCostAmount = calculateUnitCost(totalCost, totalPcs);
 
     await tx.update(productionBatchItems).set({ unitCostAmount }).where(eq(productionBatchItems.productionBatchId, id));
-
-    // One movement per line, in a single INSERT — the partial unique index on
-    // (type, ref_type, ref_id) is a defense-in-depth backstop; the row lock above is what
-    // actually prevents a concurrent double-post from reaching this statement twice.
-    // valueAmount = qty * this line's own unitCostAmount — a 'production' movement is an inflow
-    // with its own known cost (the batch's costing, just computed above), the same role a
-    // raw-material 'purchase' plays for accessory_movements/fabric_stock_movements: it's the ONLY
-    // finished-goods movement type that moves a SKU's moving average with a fresh cost basis
-    // (see stock_movements.valueAmount's doc comment in catalog.ts).
-    await tx.insert(stockMovements).values(
-      lines.map((line) => ({
-        sku: line.sku,
-        qty: line.qty,
-        valueAmount: line.qty * unitCostAmount,
-        type: "production" as const,
-        refType: "production_batch_item" as const,
-        refId: line.id,
-        createdByStaffUserId: actorStaffUserId,
-      })),
-    );
 
     const [after] = await tx
       .update(productionBatches)

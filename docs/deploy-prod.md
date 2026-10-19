@@ -51,6 +51,7 @@ curl -I https://admin.ammari.id/api/health
 
 # Rollback: GitHub → Actions → "Deploy (prod)" → Run workflow
 #   branch: main   sha: <older commit sha>   skip_migrate: checked
+#   NEVER to a SHA before S3 (migration 0024) once any goods receipt exists — see §2.1
 ```
 
 For `sudo`-requiring tasks (installing/changing systemd timers, `ufw`, first-time setup), SSH in
@@ -230,6 +231,32 @@ against it.
 
 For a DB-layer disaster (corruption, bad manual change — not a bad app release), see §6's "Real
 disaster restore," not this section.
+
+### 2.1 Rollback limits: goods receipts (suppliers-goods-receipt plan, S3 and S4)
+
+**Never roll prod back to a release from before S3 (migration 0024, purchase documents and goods
+receipts) once any goods receipt exists** — check first with
+`select count(*) from goods_receipts;` (read-only). The schema stays compatible, but the old
+code does not know about receipts: its `/purchases` list shows every ledger row a receipt wrote
+as an ordinary purchase, with the old **Batalkan** (void) button. That button voids the ledger
+row and takes the stock out, but leaves the receipt itself un-reversed, so the purchase document
+keeps saying the goods were received while the stock and its value are gone. Nothing flags the
+mismatch afterwards, and there is no clean way to repair it from the UI.
+
+The safe alternative is to **roll forward with a fix**: revert or patch the bad change on `dev`,
+let it deploy to dev, fast-forward `main`, and run a normal deploy (§1). If the bad release must
+come down immediately, roll back only to a SHA that is S3 or later.
+
+**Rolling back from S4 (migration 0025, production output receipts) to S3 is safe**, with two
+things to know while the older release is live:
+
+- Batches posted under S4 that are still waiting for their output cannot be received: S3 has no
+  "Terima hasil". Their output stays out of stock until you roll forward again; nothing is lost.
+- A batch **posted** while S3 is live goes back to the old behaviour (stock added at posting).
+  After rolling forward, S4 counts those at-posting rows as received, so the batch page shows it
+  fully received and nothing is counted twice. Only the production list's "Penerimaan hasil"
+  column may still say "Belum diterima" for such a batch (the stored status was not backfilled);
+  the batch's own page is correct.
 
 ---
 

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getBatchDetail, getBatchExtraCosts, listEligibleSkusForFabric } from "@/lib/production/queries";
+import { getBatchReceiptSummary, listReceiptsForBatch } from "@/lib/receipts/production";
 import { listActiveCostComponents } from "@/lib/production/cost-components";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
@@ -9,6 +10,7 @@ import { listActiveSupplierOptions } from "@/lib/suppliers/queries";
 import { ProductionBatchForm } from "../_components/production-batch-form";
 import { ProductionBatchReadOnly } from "../_components/production-batch-readonly";
 import { BatchStatusBadge } from "../_components/production-batch-list";
+import { BatchOutputSection } from "../_components/batch-output-section";
 import { BatchCostsSection } from "../_components/batch-costs-section";
 import { AccessoryNeedsSection } from "../_components/accessory-needs-section";
 import { DraftControls } from "../_components/draft-controls";
@@ -30,16 +32,44 @@ export default async function ProductionBatchDetailPage({ params }: { params: Pr
       </div>
 
       {batch.status === "posted" ? (
-        <>
-          <ProductionBatchReadOnly batch={batch} />
-          {canViewProfit && (
-            <div className="mt-6">
-              <BatchCostsSection batchId={batch.id} fabricYards={batch.fabricYards} lines={batch.lines} />
-            </div>
-          )}
-        </>
+        <PostedView batch={batch} canViewProfit={canViewProfit} permissionKeys={session.permissionKeys} />
       ) : (
         <DraftView batch={batch} canViewProfit={canViewProfit} />
+      )}
+    </>
+  );
+}
+
+async function PostedView({
+  batch,
+  canViewProfit,
+  permissionKeys,
+}: {
+  batch: NonNullable<Awaited<ReturnType<typeof getBatchDetail>>>;
+  canViewProfit: boolean;
+  permissionKeys: readonly string[];
+}) {
+  const [summary, receipts] = await Promise.all([getBatchReceiptSummary(batch.id), listReceiptsForBatch(batch.id)]);
+  if (!summary) notFound();
+
+  return (
+    <>
+      <ProductionBatchReadOnly batch={batch} />
+      <div className="mt-6">
+        <BatchOutputSection
+          batchId={batch.id}
+          summary={summary}
+          receipts={receipts}
+          // Receiving needs inventory.receive (D10); the receive page also needs production.manage,
+          // which this page already required.
+          canReceive={permissionKeys.includes("inventory.receive")}
+          canManage={permissionKeys.includes("inventory.manage")}
+        />
+      </div>
+      {canViewProfit && (
+        <div className="mt-6">
+          <BatchCostsSection batchId={batch.id} fabricYards={batch.fabricYards} lines={batch.lines} receiptSummary={summary} />
+        </div>
       )}
     </>
   );

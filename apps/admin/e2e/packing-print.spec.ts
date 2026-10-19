@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
 import { purchaseAndReceiveAll } from "./helpers/purchase";
+import { postBatchAndReceiveAll } from "./helpers/production";
 import { E2E_PACKING_PRINT_EMAIL, E2E_PACKING_PRINT_WEBKIT_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -94,9 +95,8 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
     await page.locator(`#qty-${sku}`).fill("2");
     await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan draf" }), /\/production$/);
     await openCreated(page, "/production");
-    await page.getByRole("button", { name: "Posting ke stok" }).click();
-    await page.getByRole("button", { name: "Posting", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
+    // Since S4 posting adds no finished-goods stock; receiving the output does.
+    await postBatchAndReceiveAll(page);
 
     async function createOrder(): Promise<string> {
       await page.goto("/orders/new");

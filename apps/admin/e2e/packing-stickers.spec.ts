@@ -4,6 +4,7 @@ import { PDFDocument } from "pdf-lib";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
 import { purchaseAndReceiveAll } from "./helpers/purchase";
+import { postBatchAndReceiveAll } from "./helpers/production";
 import { E2E_PACKING_STICKERS_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -54,9 +55,8 @@ async function createPrintableOrder(page: Page, label: string): Promise<string> 
   await page.locator(`#qty-${sku}`).fill("1");
   await page.getByRole("button", { name: "Simpan draf" }).click();
   await openCreated(page, "/production");
-  await page.getByRole("button", { name: "Posting ke stok" }).click();
-  await page.getByRole("button", { name: "Posting", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
+  // Since S4 posting adds no finished-goods stock; receiving the output does.
+  await postBatchAndReceiveAll(page);
 
   await page.goto("/orders/new");
   await page.locator("#order-channel").selectOption({ label: "WhatsApp" });

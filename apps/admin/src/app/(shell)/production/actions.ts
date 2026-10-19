@@ -9,6 +9,7 @@ import { runAction, type ActionResult } from "@/lib/action-result";
 import * as productionQueries from "@/lib/production/queries";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { saveAccessoryOverride } from "@/lib/production/accessory-needs";
+import { closeBatchShort, postGoodsReceiptForBatch } from "@/lib/receipts/production";
 
 const lineSchema = z.object({
   sku: z.string().trim().min(1),
@@ -184,6 +185,68 @@ export async function setAccessoryOverrideAction(input: z.input<typeof setAccess
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await saveAccessoryOverride(parsed.data.batchId, parsed.data.accessoryId, parsed.data.overrideQty, session.staffUser.id);
+    return undefined;
+  });
+}
+
+// ---------- Output receipts (docs/plans/suppliers-goods-receipt.md S4) ----------
+// Permissions (D10): inventory.receive posts a receipt; inventory.manage short-closes a batch.
+// Reversing a receipt goes through the shared reverseReceiptAction (purchases/actions.ts,
+// inventory.manage), which dispatches on the receipt's source. Every action re-checks on the
+// server.
+
+/** An empty or "0" quantity means "none of this SKU in this delivery" and is dropped; anything
+ * else must be a whole, positive number of pcs. */
+const batchReceiptQtySchema = z.string().transform((value, ctx) => {
+  const trimmed = value.trim();
+  if (trimmed === "" || /^0+$/.test(trimmed)) return 0;
+  if (!/^\d{1,9}$/.test(trimmed)) {
+    ctx.addIssue({ code: "custom", message: "Jumlah diterima harus bilangan bulat." });
+    return z.NEVER;
+  }
+  return Number(trimmed);
+});
+
+const receiveBatchSchema = z.object({
+  batchId: z.string().uuid("Batch tidak ditemukan."),
+  receivedAt: z.string().date("Tanggal tidak valid."),
+  receivedByName: z.string().trim().max(200, "Nama penerima terlalu panjang.").optional(),
+  note: z.string().trim().max(1000, "Catatan terlalu panjang.").optional(),
+  lines: z
+    .array(z.object({ productionBatchItemId: z.string().uuid("SKU ini bukan bagian dari batch."), qtyAccepted: batchReceiptQtySchema }))
+    .max(500, "Terlalu banyak baris dalam satu penerimaan."),
+});
+
+export async function receiveBatchAction(input: z.input<typeof receiveBatchSchema>): Promise<ActionResult<{ receiptNo: string }>> {
+  const session = await requirePermission("inventory.receive");
+  const parsed = receiveBatchSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    const { receipt } = await postGoodsReceiptForBatch(
+      {
+        batchId: parsed.data.batchId,
+        receivedAt: parsed.data.receivedAt,
+        receivedByName: parsed.data.receivedByName || null,
+        note: parsed.data.note || null,
+        lines: parsed.data.lines,
+      },
+      session.staffUser.id,
+    );
+    return { receiptNo: receipt.receiptNo };
+  });
+}
+
+const closeBatchSchema = z.object({
+  batchId: z.string().uuid("Batch tidak ditemukan."),
+  reason: z.string().trim().min(1, "Alasan wajib diisi.").max(1000, "Alasan terlalu panjang."),
+});
+
+export async function closeBatchAction(input: z.input<typeof closeBatchSchema>): Promise<ActionResult> {
+  const session = await requirePermission("inventory.manage");
+  const parsed = closeBatchSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    await closeBatchShort(parsed.data.batchId, parsed.data.reason, session.staffUser.id);
     return undefined;
   });
 }

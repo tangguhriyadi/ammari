@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
 import { purchaseAndReceiveAll } from "./helpers/purchase";
+import { postBatchAndReceiveAll } from "./helpers/production";
 import { E2E_ORDERS_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -48,9 +49,8 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
   await page.getByRole("button", { name: "Simpan draf" }).click();
   await openCreated(page, "/production");
 
-  await page.getByRole("button", { name: "Posting ke stok" }).click();
-  await page.getByRole("button", { name: "Posting", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
+  // Since S4 posting adds no finished-goods stock; receiving the output does.
+  await postBatchAndReceiveAll(page);
 
   await page.goto(`/stock/${sku}`);
   await expect(page.getByText("5 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });

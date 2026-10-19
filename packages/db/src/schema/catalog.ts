@@ -29,6 +29,7 @@ import {
   PRODUCT_CLOSURES,
   PRODUCT_HIGHLIGHT_KEYS,
   PRODUCTION_BATCH_STATUSES,
+  PRODUCTION_RECEIPT_STATUSES,
   RAW_MATERIAL_MOVEMENT_REF_TYPES,
   RAW_MATERIAL_MOVEMENT_TYPES,
   SIZE_MODES,
@@ -46,6 +47,7 @@ import {
   type PurchaseStatus,
   type ProductClosure,
   type ProductionBatchStatus,
+  type ProductionReceiptStatus,
   type RawMaterialMovementRefType,
   type RawMaterialMovementType,
   type Size,
@@ -410,11 +412,40 @@ export const productionBatches = pgTable(
     postedByStaffUserId: uuid("posted_by_staff_user_id").references(() => staffUsers.id, {
       onDelete: "restrict",
     }),
+    // Migration 0025 (docs/plans/suppliers-goods-receipt.md D5, session S4). Posting no longer
+    // adds finished-goods stock; output enters stock only through goods receipts against this
+    // batch (lib/receipts/production.ts). This column tracks that progress and is recomputed from
+    // the receipts after every receipt/reversal; `closed` only by the short-close action. A NEW
+    // column on purpose: `status` keeps its exact draft/posted domain, so the freeze trigger
+    // (whose WHEN clause names its columns explicitly) and the previous release are untouched.
+    // Batches posted before 0025 were backfilled to `received` (their stock was added at posting).
+    receiptStatus: text("receipt_status").$type<ProductionReceiptStatus>().notNull().default("pending"),
+    // Short-close ("Tutup batch", D19/D27): who closed it, when, and why. Same columns and the same
+    // one-directional pair check as purchases' (its reopen columns arrive in 0027 with S6).
+    closedAt: timestamp("closed_at", { withTimezone: true, mode: "date" }),
+    closedByStaffUserId: uuid("closed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    closeReason: text("close_reason"),
     ...timestamps(),
   },
   (table) => [
     index("production_batches_fabric_id_idx").on(table.fabricId),
     index("production_batches_status_idx").on(table.status),
+    index("production_batches_receipt_status_idx").on(table.receiptStatus),
+    // ON DELETE RESTRICT FK — indexed, this codebase's standing rule.
+    index("production_batches_closed_by_staff_user_id_idx").on(table.closedByStaffUserId),
+    check("production_batches_receipt_status_check", checkIn(table.receiptStatus, PRODUCTION_RECEIPT_STATUSES)),
+    // A draft has no output to receive yet.
+    check("production_batches_draft_receipt_pending_check", sql`${table.status} <> 'draft' or ${table.receiptStatus} = 'pending'`),
+    // One-directional (§3.4): `closed` always carries its close stamp; a batch re-opened later
+    // (D18, S6) keeps the record of its last close.
+    check(
+      "production_batches_closed_status_check",
+      sql`${table.receiptStatus} <> 'closed' or ${table.closedAt} is not null`,
+    ),
+    check(
+      "production_batches_closed_pair_check",
+      sql`(${table.closedAt} is not null) = (${table.closedByStaffUserId} is not null)`,
+    ),
     // Nullable (draft) but never <= 0 once set — "required at posting" is an app-level check
     // (postBatch), same as fabric_cost_amount's own > 0-at-posting rule below.
     check("production_batches_fabric_yards_check", sql`${table.fabricYards} is null or ${table.fabricYards} > 0`),
@@ -594,8 +625,9 @@ export const productionBatchCosts = pgTable(
 // balance MUST lock that SKU's product_variants row (`SELECT ... FOR UPDATE`, see
 // lockVariantForUpdate / lockProductForUpdate) BEFORE computing the balance it checks against —
 // see adjustStock/saveStockCount in apps/admin/src/lib/stock/queries.ts for the pattern. A
-// purely-additive writer (e.g. postBatch in apps/admin/src/lib/production/queries.ts, which only
-// ever inserts positive qty) is safe without this today, but any FUTURE writer that can insert a
+// purely-additive writer (e.g. a production goods receipt in apps/admin/src/lib/receipts/production.ts,
+// which only ever inserts positive qty — it locks the variants anyway, for the shared lock order;
+// its REVERSAL inserts negative qty and does lock first) is safe without this, but any FUTURE writer that can insert a
 // negative qty (a sale, a return-adjustment, anything from the Dec 2026 checkout work) MUST
 // follow the same lock-first pattern — skipping it would silently reopen the negative-stock race
 // this table's two existing writers were built specifically to close.
@@ -614,7 +646,11 @@ export const stockMovements = pgTable(
     // shape, not anything raw-material-specific):
     //   - 'production': value_amount = qty * the batch line's unit_cost_amount (an inflow with
     //     its own known cost, same role a raw-material 'purchase' plays — this is the ONLY
-    //     movement type that moves the average upward with a fresh cost basis).
+    //     movement type that moves the average upward with a fresh cost basis). Since migration
+    //     0025 (S4) it is written by a GOODS RECEIPT of the batch's output
+    //     (ref_type='goods_receipt_item'), never at posting; a receipt reversal writes the exact
+    //     negation (negative qty, same ref_type, ref_id = the reversal's item). Rows with
+    //     ref_type='production_batch_item' are history from releases that added stock at posting.
     //   - 'sale' (a consumption, negative qty): value_amount =
     //     valueDeltaForConsumption(balanceBeforeLocked, -qty) — valued AT the current average,
     //     snapshotted onto order_items.unit_cost at the same moment (see lib/orders/queries.ts).
@@ -653,15 +689,17 @@ export const stockMovements = pgTable(
     index("stock_movements_sku_created_at_idx").on(table.sku, table.createdAt),
     index("stock_movements_ref_idx").on(table.refType, table.refId),
     index("stock_movements_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
-    // At most one ledger row per (type, source order_item/production_batch_item) — a retried
-    // import or batch save must not double-count a stock movement for the same source row.
+    // At most one ledger row per (type, source order_item/production_batch_item/goods_receipt_item)
+    // — a retried import, batch save or receipt must not double-count a stock movement for the
+    // same source row ('goods_receipt_item' added in migration 0025; the widened predicate is a
+    // strict superset of the old one).
     // `type` is part of the key, not just ref_type/ref_id: a sale and a later return of the
     // same order_item legitimately share the same ref_id with different types, and must both
     // be allowed to post. Manual adjustments (ref_type = 'manual') have no single natural
     // source, so they're exempt.
     uniqueIndex("stock_movements_type_ref_unique_idx")
       .on(table.type, table.refType, table.refId)
-      .where(sql`${table.refType} in ('order_item', 'production_batch_item')`),
+      .where(sql`${table.refType} in ('order_item', 'production_batch_item', 'goods_receipt_item')`),
     check("stock_movements_qty_check", sql`${table.qty} <> 0`),
     check("stock_movements_type_check", checkIn(table.type, STOCK_MOVEMENT_TYPES)),
     check("stock_movements_ref_type_check", checkIn(table.refType, STOCK_MOVEMENT_REF_TYPES)),

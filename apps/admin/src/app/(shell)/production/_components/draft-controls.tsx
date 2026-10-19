@@ -50,7 +50,7 @@ export function DraftControls({ batchId, canPost }: { batchId: string; canPost: 
         </Button>
         {canPost && (
           <Button type="button" onClick={() => setConfirmOpen("post")}>
-            Posting ke stok
+            Posting batch
           </Button>
         )}
       </div>
@@ -58,8 +58,8 @@ export function DraftControls({ batchId, canPost }: { batchId: string; canPost: 
       <Dialog
         open={confirmOpen === "post"}
         onOpenChange={(open) => !open && setConfirmOpen(null)}
-        title="Posting batch ini ke stok?"
-        description="Stok setiap SKU akan bertambah sesuai jumlah di batch ini, dan batch tidak bisa diubah lagi setelah diposting."
+        title="Posting batch ini?"
+        description="Bahan dan aksesoris dipakai dan HPP per pcs dihitung. Stok barang jadi belum bertambah: hasil jahitan masuk stok saat diterima lewat Terima hasil. Batch tidak bisa diubah lagi setelah diposting."
         confirmLabel="Posting"
         onConfirm={handlePost}
         loading={pending}

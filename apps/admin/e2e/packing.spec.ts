@@ -2,6 +2,7 @@ import { expect, test, type Locator } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
 import { purchaseAndReceiveAll } from "./helpers/purchase";
+import { postBatchAndReceiveAll } from "./helpers/production";
 import { E2E_PACKING_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -46,9 +47,8 @@ test("a staffer prints a card and ships one order, then cancelling a second (alr
   await page.locator(`#qty-${sku}`).fill("5");
   await page.getByRole("button", { name: "Simpan draf" }).click();
   await openCreated(page, "/production");
-  await page.getByRole("button", { name: "Posting ke stok" }).click();
-  await page.getByRole("button", { name: "Posting", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
+  // Since S4 posting adds no finished-goods stock; receiving the output does.
+  await postBatchAndReceiveAll(page);
 
   await page.goto(`/stock/${sku}`);
   await expect(page.getByText("5 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });
@@ -155,9 +155,8 @@ test("the packing queue renders correctly on a desktop-width browser: rows visib
   await page.locator(`#qty-${sku}`).fill("3");
   await page.getByRole("button", { name: "Simpan draf" }).click();
   await openCreated(page, "/production");
-  await page.getByRole("button", { name: "Posting ke stok" }).click();
-  await page.getByRole("button", { name: "Posting", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
+  // Since S4 posting adds no finished-goods stock; receiving the output does.
+  await postBatchAndReceiveAll(page);
 
   await page.goto(`/stock/${sku}`);
   await expect(page.getByText("3 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });

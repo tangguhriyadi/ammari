@@ -24,6 +24,8 @@ import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { formatPurchaseQty, getAcceptedByLine, getLineProgress, hasAtMostTwoDecimals, isUuid, lockPurchaseForUpdate } from "@/lib/purchases/queries";
 import { isOpenPurchaseStatus, statusAfterReceiptChange } from "@/lib/purchases/status";
+import { reverseProductionReceiptInTx } from "./production";
+import { assertReceivedAt } from "./received-at";
 import { sliceValue, toCentiQty } from "./valuation";
 
 // Goods receipts against purchase documents (docs/plans/suppliers-goods-receipt.md §5, session
@@ -84,11 +86,6 @@ async function bookedValueByLine(tx: Database, purchaseItemIds: readonly string[
   const byLine = new Map<string, number>();
   for (const row of rows) byLine.set(row.purchaseItemId!, (byLine.get(row.purchaseItemId!) ?? 0) + Number(row.value));
   return byLine;
-}
-
-function assertReceivedAt(receivedAt: string): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedAt)) throw new FieldError("receivedAt", "Tanggal terima tidak valid.");
-  if (receivedAt > todayInJakarta()) throw new FieldError("receivedAt", "Tanggal terima tidak boleh di masa depan.");
 }
 
 /** §5 `postGoodsReceiptForPurchase`, one transaction:
@@ -281,7 +278,8 @@ async function hasLaterBlockingMovement(
   return row !== undefined;
 }
 
-/** §5 `reverseGoodsReceipt` (purchase receipts; production receipts arrive in S4). Mirrors
+/** §5 `reverseGoodsReceipt`. A production-batch receipt is handed to
+ * reverseProductionReceiptInTx (./production.ts, S4); a purchase receipt mirrors
  * voidAccessoryPurchase:
  * 1. lock the purchase row, then the item rows in sorted order;
  * 2. reject if the receipt is already reversed or is itself a reversal;
@@ -294,7 +292,7 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
   return db.transaction(async (tx) => {
     const [peek] = await tx.select({ purchaseId: goodsReceipts.purchaseId }).from(goodsReceipts).where(eq(goodsReceipts.id, receiptId));
     if (!peek) throw new ActionError("Penerimaan tidak ditemukan.");
-    if (!peek.purchaseId) throw new ActionError("Pembatalan penerimaan hasil produksi belum tersedia.");
+    if (!peek.purchaseId) return reverseProductionReceiptInTx(tx, receiptId, actorStaffUserId);
 
     const purchase = await lockPurchaseForUpdate(tx, peek.purchaseId);
     if (!purchase) throw new Error("purchase not found for an existing receipt");

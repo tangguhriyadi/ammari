@@ -1,7 +1,9 @@
 # Plan: Suppliers + Goods Receipt (penerimaan barang) + Defect Stock
 
-Status: **owner answered both rounds of open questions (2026-10-19); all decisions recorded in §2.
-Awaiting go-ahead to start session 1.** Plan only — no code, no migration, no commit.
+Status (2026-10-19): **S1–S3 shipped** (commits `2bc3ce7`, `402e4a3`, `244eee0`; migrations
+0022–0024). **S4 implemented** (migration 0025, production output receipts), awaiting the owner's
+review and commit. S5–S7 not started. All decisions are recorded in §2; §10 has the one question
+still open (needed before S6).
 
 Three linked changes:
 
@@ -601,7 +603,8 @@ behind — and each ends with: related unit tests green, `pnpm typecheck && pnpm
 the matching `/code-review` reviewers, and no commit by the agent. TDD is **required** throughout:
 receipts and defects are stock (CLAUDE.md §Workflow 2).
 
-**S1 — Supplier master. Migration 0022** (`suppliers`).
+**S1 — Supplier master. Migration 0022** (`suppliers`). *Status: done (`2bc3ce7`; nav label
+later renamed "Pemasok" → "Supplier" in `23b5296`).*
 `lib/suppliers/queries.ts` (list/get/create/update/setActive + audit log, mirroring the master half
 of `lib/inventory/accessories.ts`). `/suppliers` list/new/detail-edit. Nav group rename + Pemasok.
 *Unit:* citext uniqueness collision, deactivate-not-delete, `kinds` subset/duplicate rejection,
@@ -609,14 +612,16 @@ name-only creation succeeds with every other field blank. *E2E* `suppliers.spec.
 only a name → visible at 390px **and** 1280px → edit adding bank details → deactivate → filter
 tabs.
 
-**S2 — Supplier on cost components and batch cost lines. Migration 0023.**
+**S2 — Supplier on cost components and batch cost lines. Migration 0023.** *Status: done
+(`402e4a3`).*
 Picker on the cost-component form; per-line picker on the batch form prefilled from the default;
 supplier shown in the posted cost breakdown. *Unit:* the snapshot is frozen on insert and survives
 a later supplier rename; a per-line override beats the master default; an inactive supplier cannot
 be chosen for a **new** line but keeps working on an existing one (the rule `syncExtraCostLines`
 already applies to components). *E2E:* extend `production-and-stock.spec.ts`.
 
-**S3 — Purchase documents + purchase receipts (accepted quantities only). Migration 0024**
+**S3 — Purchase documents + purchase receipts (accepted quantities only). Migration 0024** *Status:
+done (`244eee0`).*
 (`purchases`, `purchase_items`, `goods_receipts`, `goods_receipt_items`, the freeze trigger, the
 two ref-type CHECK widenings, `supplier_id` + the receipt unique index on both raw-material
 ledgers, the `inventory.receive` permission row + grants).
@@ -635,7 +640,17 @@ receive part → stock rose by exactly the accepted quantity → receive the res
 reverse → stock back.
 
 **S4 — Production output receipts. Migration 0025** (`receipt_status` + close columns + the
-backfill of existing posted batches; widened `stock_movements_type_ref_unique_idx`).
+backfill of existing posted batches; widened `stock_movements_type_ref_unique_idx`). *Status:
+implemented 2026-10-19, not yet committed. Settled while building it (no decision changed):
+(a) a batch short-close always stores `closed` — `PRODUCTION_RECEIPT_STATUSES` (§3.4) has no
+`cancelled`, so §5's "cancelled when nothing arrived" applies to purchases only; (b) a line's
+received quantity also counts any legacy at-posting `production_batch_item` stock row, so a
+batch the previous release posts after 0025 ran (rollback window, invisible to the backfill) is
+still never received twice; (c) a finished-goods receipt reversal is refused once a `sale` or
+`adjustment` for one of its SKUs was recorded after it (stock is pooled per SKU, same
+conservative rule as the raw-material void), with the negative-balance check as backstop;
+(d) `listStockLedger`'s link from a receipt-backed row to its batch stays in S7 as planned
+(those rows show no batch link until then).*
 `postBatch` stops writing finished-goods stock; `postGoodsReceiptForBatch`; the "Hasil produksi"
 panel and "Tutup batch". **Also the stock-count guard, pulled forward from S7** because this is
 the session that creates the risk: `/stock/count/[productId]` warns when the product has

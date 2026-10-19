@@ -41,8 +41,9 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   },
   // docs/plans/suppliers-goods-receipt.md D10 — posting a goods receipt, separate from
   // inventory.manage so the person standing next to the box can receive without being able to
-  // edit, close or reverse documents. Shipped to existing databases by migration 0024.
-  { key: "inventory.receive", group: "inventory", description: "Receive goods against purchase documents" },
+  // edit, close or reverse documents. Shipped to existing databases by migration 0024. Since S4
+  // (migration 0025) it also receives a posted production batch's output.
+  { key: "inventory.receive", group: "inventory", description: "Receive goods against purchase documents and production batches" },
   {
     key: "ads_expenses.manage",
     group: "ads_expenses",

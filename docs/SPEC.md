@@ -19,11 +19,14 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
   (`packages/storage`).
 - Customer auth + account (`apps/web`): email OTP + Google self-signup, mandatory PDP consent
   step, optional profile completion (§10.3).
+- Stock (`/stock`), production (`/production`), and raw-material stock (fabric and accessories),
+  all on append-only, moving-average ledgers (§5.1).
+- Suppliers (`/suppliers`), purchase documents with goods receipts (`/purchases`), and production
+  output receipts (§5.1a; docs/plans/suppliers-goods-receipt.md sessions S1–S4). Defect stock
+  (rejects at receipt, exchange, release) is planned in that plan's S5–S7.
 
 **Next:**
 
-- Stock (`/stock`).
-- Production (`/production`).
 - Orders import (`/import` — Shopee/TikTok Shop export parsing).
 - Packing (`/packing`) + QR thank-you cards.
 - Overview dashboard (§6 metrics).
@@ -117,6 +120,7 @@ pnpm workspaces + Turborepo:
 - Products & SKUs
 - Stock
 - Production
+- Suppliers and Purchases — purchase documents and goods receipts (§5.1a)
 - Settings — targets, cost assumptions, staff
 
 ### 3.2 Admin — first week of November 2026
@@ -239,11 +243,72 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
   (all-or-nothing), with a single `audit_log` entry for the whole batch.
 - `product_images` — `fabric_color_id` (optional FK to `fabric_colors`; null = applies to all
   colors).
-- `production_batches`
-- `production_batch_items`
-- `stock_movements` — an append-only ledger: signed `qty` (±), `type`
+- `production_batches` — `status` is `draft` → `posted`, one-way, and a posted batch is frozen by
+  DB triggers. **Posting** consumes the batch's fabric and accessories from raw-material stock at
+  their moving-average cost and freezes HPP/pcs (`ceil(total batch cost / planned pcs)`, written
+  to every line and never rewritten). Posting adds **no** finished-goods stock: the sewn output
+  enters stock only when it is received (§5.1a). Receipt progress lives in its own column,
+  `receipt_status` (`pending` / `partially_received` / `received` / `closed`; always `pending` for
+  a draft), recomputed after every receipt and reversal. `closed` is a short-close ("Tutup batch")
+  for output that will never arrive: a required reason plus `closed_at` /
+  `closed_by_staff_user_id` / `close_reason`; it moves no stock, keeps HPP/pcs as posted, and the
+  batch shows the frozen cost of the pcs that never arrived as "Nilai belum terserap". Batches
+  posted before migration 0025 already put their output into stock at posting; they were
+  backfilled to `received` and are never received again.
+- `production_batch_items` — one line per SKU: planned `qty` and the frozen `unit_cost_amount`.
+- `production_batch_costs` — extra cost lines (sewing fee, etc.), each with a snapshotted
+  component name/unit/type and optionally the supplier paid for that line (`supplier_id` plus a
+  `supplier_name` snapshot, prefilled from `cost_components.default_supplier_id`).
+- `stock_movements` — an append-only ledger: signed `qty` (±), signed `value_amount`, `type`
   (`production` / `sale` / `return` / `adjustment`), and a `reference`. Current stock for a SKU is
-  `SUM(qty)` over its movements — never a mutable stock counter.
+  `SUM(qty)` over its movements — never a mutable stock counter; its value is `SUM(value_amount)`
+  (moving average). A `production` row is written only by a goods receipt of a batch's output
+  (`ref_type = 'goods_receipt_item'`, valued at the batch line's frozen HPP/pcs) and is exactly
+  negated by that receipt's reversal; `production` rows with `ref_type = 'production_batch_item'`
+  are history written at posting by releases before migration 0025.
+
+### 5.1a Suppliers, raw materials, purchases & goods receipts
+
+The rule: **stock only moves when goods are received.** Recording a purchase moves no stock, and
+posting a production batch adds no finished-goods stock (it still consumes raw materials). Stock
+rises only through a goods receipt, by the quantity actually accepted, in as many partial
+receipts as it takes. Received quantity is immediately sellable; unreceived quantity simply isn't
+in stock (orders refuse it with the usual "stok tidak cukup"), and the main site marks a variant
+available only from received stock (its `available` flag is `SUM(qty) > 0`).
+
+- `suppliers` — the master list of who she buys from and who sews for her. Only `name` (`citext`,
+  unique) is required; optional kinds (Kain / Aksesoris / Jasa / Lainnya — a soft filter only,
+  never a restriction), phone/WhatsApp, address, bank details, notes. Deactivated, never deleted,
+  once referenced. Legacy free-text supplier names on older rows are not mapped onto it.
+- `accessories`, `accessory_movements`, `fabric_stock_movements` — raw-material stock on the same
+  append-only, signed `qty`/`value_amount` moving-average ledger shape as `stock_movements`. A
+  wrong purchase row is corrected only by a reversing `purchase_void` row, never edited. Receipt
+  rows carry `supplier_id` plus a supplier-name snapshot.
+- `purchases` + `purchase_items` — a purchase document (`PO-YYYYMM-NNN`): a required supplier,
+  the order date, and lines of fabric (yards, 2 decimals) or accessories (whole pcs), each storing
+  exactly what was entered: `qty_ordered` and `total_amount` (ongkir included), never a unit
+  price. `status`: `ordered` → `partially_received` → `received`, recomputed from the receipts;
+  `closed` / `cancelled` only by "Tutup pesanan" with a required reason (`cancelled` when nothing
+  arrived). Header and lines are editable only while nothing has been received; once a line has a
+  receipt, its quantity, total and item are frozen by a DB trigger. Each receipt is valued as a
+  cumulative-rounding slice of the line total, so partial receipts sum to exactly what was paid.
+  Single-row purchases recorded before purchase documents existed stay as they are, listed under
+  "Pembelian lama", never backfilled into documents.
+- `goods_receipts` + `goods_receipt_items` — one receipt table pair for both sources (a purchase
+  or a production batch), `GR-YYYYMM-NNN`. A receipt records accepted quantities per line (per
+  purchase line, or per batch variant), a receipt date (defaults to today in Jakarta,
+  backdatable, never in the future), the staff user who recorded it, and an optional "Diterima
+  oleh". Over-receipt is refused with an Indonesian message naming the line and what is left.
+  Concurrent receipts serialize on the source document's row lock. A wrong receipt is corrected
+  only by "Batalkan penerimaan", which writes an exactly negating reversal receipt plus reversing
+  ledger rows (`purchase_void` for raw materials, a negated `production` row for finished goods);
+  it is refused once the stock it brought in was consumed, sold (an order, packed or not) or
+  adjusted afterwards, pointing at "Sesuaikan stok" instead. Every receipt, reversal and close is
+  written to `audit_log`. Rejects / defect stock are not recorded yet (planned).
+- Stock count ("Hitung stok") guard: the count page lists that product's posted batches whose
+  output is not fully received (with a link), because goods physically in the house but not yet
+  received read as missing and must be received, not "corrected" by a count. It also always
+  shows "Jangan hitung barang cacat, hitung hanya barang yang bisa dijual."
 
 ### 5.2 Orders & finance
 
@@ -322,10 +387,17 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
   has exactly one role.
 - Permissions are constants defined in code (e.g. `orders.view`, `orders.import`,
   `packing.print_cards`, `stock.view`, `stock.adjust`, `production.manage`, `products.manage`,
-  `finance.view_profit`, `settings.manage`, `customers.view`, `vouchers.void`, `staff.manage`,
-  `roles.manage`, `audit_log.view`). A startup/seed step syncs them into the `permissions`
-  table. Roles and role→permission mappings live in the database and are editable from the admin
-  UI.
+  `inventory.view`, `inventory.manage`, `inventory.receive`, `finance.view_profit`,
+  `settings.manage`, `customers.view`, `vouchers.void`, `staff.manage`, `roles.manage`,
+  `audit_log.view`). A startup/seed step syncs them into the `permissions` table, and any key the
+  code matches by literal value also ships in a migration (CLAUDE.md). Roles and role→permission
+  mappings live in the database and are editable from the admin UI.
+- Inventory split (§5.1a): `inventory.view` reads raw-material stock, suppliers and purchases;
+  `inventory.receive` posts a goods receipt (purchase or production output) and nothing else, so
+  the person standing next to the delivery can receive without editing documents;
+  `inventory.manage` keeps the supplier master, purchase documents, "Tutup pesanan" / "Tutup
+  batch", and "Batalkan penerimaan". Posting a batch needs `production.manage` plus
+  `finance.view_profit`.
 - System roles (seeded, `is_system = true`):
   - `super_admin` (held by the husband): every permission, including `roles.manage`,
     `staff.manage`, `audit_log.view`, and risky actions (data corrections, voiding vouchers).

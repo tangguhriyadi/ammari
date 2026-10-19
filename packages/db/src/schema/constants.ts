@@ -101,8 +101,10 @@ export const STOCK_MOVEMENT_TYPES = ["production", "sale", "return", "adjustment
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 
 // "goods_receipt_item" (migration 0024, docs/plans/suppliers-goods-receipt.md §3.4): a
-// 'production' movement that originates from a goods receipt of a production batch line. Allowed
-// by the CHECK from 0024; nothing writes it until the production-receipt session (S4).
+// 'production' movement that originates from a goods receipt of a production batch line — the
+// only way finished goods enter stock from S4 (migration 0025) on. ref_id is the
+// goods_receipt_items.id (the receipt's own item, or for a reversal's negative row, the reversal's
+// item). "production_batch_item" rows are history: written at posting by releases before S4.
 export const STOCK_MOVEMENT_REF_TYPES = ["production_batch_item", "order_item", "manual", "goods_receipt_item"] as const;
 export type StockMovementRefType = (typeof STOCK_MOVEMENT_REF_TYPES)[number];
 
@@ -113,6 +115,16 @@ export type StockAdjustmentReason = (typeof STOCK_ADJUSTMENT_REASONS)[number];
 
 export const PRODUCTION_BATCH_STATUSES = ["draft", "posted"] as const;
 export type ProductionBatchStatus = (typeof PRODUCTION_BATCH_STATUSES)[number];
+
+/** How much of a POSTED batch's output has been received into sellable stock
+ * (docs/plans/suppliers-goods-receipt.md D5, migration 0025). Deliberately a separate column from
+ * `status` (which keeps its exact draft/posted meaning, so the freeze trigger and the previous
+ * release are untouched). A draft is always `pending`. `pending` → `partially_received` →
+ * `received` is recomputed from the receipts after every receipt and reversal; `closed` is set
+ * only by the short-close action ("Tutup batch", with a required reason). There is no
+ * `cancelled`: a posted batch already consumed its material, so closing one is always a close. */
+export const PRODUCTION_RECEIPT_STATUSES = ["pending", "partially_received", "received", "closed"] as const;
+export type ProductionReceiptStatus = (typeof PRODUCTION_RECEIPT_STATUSES)[number];
 
 /** Units a cost_components row (and the production_batch_costs lines that snapshot it) can be
  * priced per. "lusin" = a dozen — Pasar Baru suppliers commonly quote accessories this way. */

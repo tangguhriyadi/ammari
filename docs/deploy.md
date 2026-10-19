@@ -281,6 +281,15 @@ migration to stay backward-compatible with the previously-deployed release: roll
 ever swaps the app images back against whatever schema is currently live, never reverses a
 migration.
 
+**Do not roll dev back to a release from before S3** (migration 0024, purchase documents and
+goods receipts) once any goods receipt exists on dev (`select count(*) from goods_receipts;`).
+The old `/purchases` page lists the ledger rows a receipt wrote as plain purchases with the old
+void button, which voids the ledger row (stock and value leave) without reversing the receipt,
+so the purchase document and the stock silently disagree from then on. Roll forward with a fix
+instead (push the revert or patch to `dev`). Rolling back from S4 (migration 0025, production
+output receipts) to S3 is safe; see `docs/deploy-prod.md` §2.1 for what to expect while S3 is
+live.
+
 ## Image retention and disk space
 
 Every deploy pulls three fresh SHA-tagged images (admin/web/migrator). Nothing removed the old

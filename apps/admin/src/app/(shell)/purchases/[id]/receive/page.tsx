@@ -24,11 +24,17 @@ export default async function ReceivePurchasePage({ params }: { params: Promise<
       <Breadcrumb items={[...rootCrumbs("/purchases"), { label: document.purchaseNo, href: `/purchases/${id}` }, { label: "Terima barang" }]} />
       <PageHeader title="Terima barang" description={`${document.purchaseNo} · ${document.supplierName}`} />
       <ReceiveForm
-        purchaseId={id}
+        source={{ type: "purchase", purchaseId: id }}
         receiverName={session.staffUser.name}
         lines={document.lines
           .filter((line) => line.outstanding > 0)
-          .map((line) => ({ id: line.id, itemType: line.itemType, itemName: line.itemName, outstanding: line.outstanding }))}
+          .map((line) => ({
+            id: line.id,
+            itemName: line.itemName,
+            unit: line.itemType === "fabric" ? "yard" : "pcs",
+            wholeOnly: line.itemType === "accessory",
+            outstanding: line.outstanding,
+          }))}
       />
     </>
   );

@@ -18,7 +18,16 @@ vi.mock("@/lib/production/queries", () => ({
   updateDraft: updateDraftMock,
 }));
 
-const { createDraftAction, updateDraftAction, deleteDraftAction, postBatchAction } = await import("./actions");
+const { postGoodsReceiptForBatchMock, closeBatchShortMock } = vi.hoisted(() => ({
+  postGoodsReceiptForBatchMock: vi.fn().mockResolvedValue({ receipt: { receiptNo: "GR-202610-001" }, status: "partially_received" }),
+  closeBatchShortMock: vi.fn().mockResolvedValue({ id: "batch-1" }),
+}));
+vi.mock("@/lib/receipts/production", () => ({
+  postGoodsReceiptForBatch: postGoodsReceiptForBatchMock,
+  closeBatchShort: closeBatchShortMock,
+}));
+
+const { createDraftAction, updateDraftAction, deleteDraftAction, postBatchAction, receiveBatchAction, closeBatchAction } = await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
   return {
@@ -142,5 +151,52 @@ describe("extra cost line supplierId validation", () => {
     const [, input] = updateDraftMock.mock.calls[0]!;
     expect(input.extraCosts[0].supplierId).toBeNull();
     expect(input.extraCosts[1].supplierId).toBeUndefined();
+  });
+});
+
+describe("output receipt actions (S4): inventory.receive receives, inventory.manage short-closes", () => {
+  const receiveInput = {
+    batchId: NIL_ID,
+    receivedAt: "2026-10-05",
+    lines: [{ productionBatchItemId: NIL_ID, qtyAccepted: "2" }],
+  };
+
+  test("receiveBatchAction rejects a session without inventory.receive, even with production.manage", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage", "inventory.manage"]));
+    await expect(receiveBatchAction(receiveInput)).rejects.toThrow();
+    expect(postGoodsReceiptForBatchMock).not.toHaveBeenCalled();
+  });
+
+  test("receiveBatchAction parses whole pcs, drops blank and zero lines' quantities to 0, and refuses fractions", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.receive"]));
+    const result = await receiveBatchAction({
+      ...receiveInput,
+      lines: [
+        { productionBatchItemId: NIL_ID, qtyAccepted: " 2 " },
+        { productionBatchItemId: "11111111-1111-4111-8111-111111111111", qtyAccepted: "" },
+      ],
+    });
+    expect(result).toEqual({ ok: true, data: { receiptNo: "GR-202610-001" } });
+    expect(postGoodsReceiptForBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ lines: [{ productionBatchItemId: NIL_ID, qtyAccepted: 2 }, { productionBatchItemId: "11111111-1111-4111-8111-111111111111", qtyAccepted: 0 }] }),
+      "staff-1",
+    );
+
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.receive"]));
+    const fractional = await receiveBatchAction({ ...receiveInput, lines: [{ productionBatchItemId: NIL_ID, qtyAccepted: "1.5" }] });
+    expect(fractional).toEqual({ ok: false, error: "Jumlah diterima harus bilangan bulat." });
+  });
+
+  test("closeBatchAction needs inventory.manage and a reason", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.receive", "production.manage"]));
+    await expect(closeBatchAction({ batchId: NIL_ID, reason: "Tidak dilanjutkan" })).rejects.toThrow();
+    expect(closeBatchShortMock).not.toHaveBeenCalled();
+
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
+    expect(await closeBatchAction({ batchId: NIL_ID, reason: "   " })).toEqual({ ok: false, error: "Alasan wajib diisi." });
+
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
+    expect(await closeBatchAction({ batchId: NIL_ID, reason: "Tidak dilanjutkan" })).toEqual({ ok: true, data: undefined });
+    expect(closeBatchShortMock).toHaveBeenCalledWith(NIL_ID, "Tidak dilanjutkan", "staff-1");
   });
 });
