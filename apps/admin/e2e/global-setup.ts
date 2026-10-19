@@ -54,6 +54,13 @@ export const E2E_PRODUCT_HIGHLIGHTS_EMAIL = "product-highlights@e2e.ammari.test"
 // AND content.manage — owner gets every permission except OWNER_EXCLUDED_PERMISSION_KEYS, and
 // content.manage isn't in that list), same as E2E_PRODUCT_HIGHLIGHTS_EMAIL.
 export const E2E_STOREFRONT_EMAIL = "storefront@e2e.ammari.test";
+// A dedicated email/role for suppliers.spec.ts (docs/plans/suppliers-goods-receipt.md, session
+// 1) — same "fresh email, clean OTP throttle" reasoning as every dedicated fixture above (the
+// sign-in backdoor sends a real OTP, so each loginAs spends one of the 5-per-5-minutes budget).
+// The role holds EXACTLY inventory.view + inventory.manage, which doubles as a regression guard:
+// the whole supplier master must work on those two keys alone, with no new permission (D10/§7).
+export const E2E_SUPPLIERS_EMAIL = "suppliers@e2e.ammari.test";
+const E2E_SUPPLIERS_ROLE_KEY = "e2e_suppliers";
 // Dedicated emails for login-otp.spec.ts — it drives the REAL `/login` OTP form (not the
 // instant-sign-in backdoor every other spec uses), which legitimately sends real OTPs and is the
 // one spec that actually exercises the per-email 60s resend cooldown. TWO emails, not one: the
@@ -229,6 +236,10 @@ export default async function globalSetup(): Promise<void> {
   await ensureStaffFixture(E2E_PACKING_STICKERS_EMAIL, "E2E Packing Stickers", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PRODUCT_HIGHLIGHTS_EMAIL, "E2E Product Highlights", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_STOREFRONT_EMAIL, "E2E Storefront", OWNER_ROLE_KEY);
+
+  await ensureLimitedRole(E2E_SUPPLIERS_ROLE_KEY, ["inventory.view", "inventory.manage"]);
+  await ensureStaffFixture(E2E_SUPPLIERS_EMAIL, "E2E Suppliers", E2E_SUPPLIERS_ROLE_KEY);
+
   await ensureStaffFixture(E2E_LOGIN_OTP_EMAIL, "E2E Login OTP", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_LOGIN_OTP_MOBILE_EMAIL, "E2E Login OTP Mobile", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_LOGIN_OTP_RESEND_EMAIL, "E2E Login OTP Resend", OWNER_ROLE_KEY);

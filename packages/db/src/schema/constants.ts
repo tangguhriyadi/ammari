@@ -68,6 +68,16 @@ export const WHY_AMMARI_ICON_KEYS = [
 ] as const;
 export type WhyAmmariIconKey = (typeof WHY_AMMARI_ICON_KEYS)[number];
 
+/** What a supplier supplies (docs/plans/suppliers-goods-receipt.md D13) — a SOFT filter only,
+ * never a restriction: a picker sorts matching kinds first but must never refuse a supplier
+ * whose `kinds` don't list the kind being bought, because the owner's real suppliers don't
+ * respect those boundaries (a fabric shop that also sells buttons). Backs suppliers.kinds'
+ * subset CHECK; empty is valid and means "not categorized yet". Indonesian labels live in
+ * apps/admin's lib/suppliers/kinds.ts, never in the DB — same key↔label split
+ * PRODUCT_HIGHLIGHT_KEYS already uses, so wording changes need no migration. */
+export const SUPPLIER_KINDS = ["fabric", "accessory", "service", "other"] as const;
+export type SupplierKind = (typeof SUPPLIER_KINDS)[number];
+
 export const STOCK_MOVEMENT_TYPES = ["production", "sale", "return", "adjustment"] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 

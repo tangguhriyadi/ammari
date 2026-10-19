@@ -32,6 +32,7 @@ import {
   STOCK_ADJUSTMENT_REASONS,
   STOCK_MOVEMENT_REF_TYPES,
   STOCK_MOVEMENT_TYPES,
+  SUPPLIER_KINDS,
   type CostComponentType,
   type CostComponentUnit,
   type FabricPriceUnit,
@@ -640,6 +641,60 @@ export const stockMovements = pgTable(
 // never corrected in place, only ever offset by inserting a new adjustment row. See
 // accessory_movements below for the one ledger that DOES allow a single, narrow exception
 // (voiding a purchase) to the same append-only rule.
+
+// ---------- Supplier master — migration 0022 ----------
+
+// The owner's master list of who she buys from and who sews for her
+// (docs/plans/suppliers-goods-receipt.md, session 1). Only `name` is required (D13): she often
+// knows a Pasar Baru shop by name alone and nothing else, and a master that refuses to store
+// that is a master she works around instead of in.
+//
+// Deliberately NOT retrofitted onto the three existing free-text supplier columns
+// (fabrics.supplier, accessory_movements.supplier, fabric_stock_movements.supplier) — those are
+// reference labels on rows that already exist, and legacy names are not mapped onto this table
+// (D11). The FK columns that make a supplier transactional (purchases.supplier_id,
+// cost_components.default_supplier_id, production_batch_costs.supplier_id) arrive in later
+// sessions; each ledger row that gets one keeps its free-text `supplier` as a NAME SNAPSHOT, so
+// renaming a row here never rewrites history (same reasoning as
+// production_batch_costs.component_name).
+export const suppliers = pgTable(
+  "suppliers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // citext, same idiom as cost_components.name: "Laksmi" and "laksmi" are one supplier, not
+    // two, and the unique constraint is what guarantees it — never a check-then-insert in
+    // application code (CLAUDE.md).
+    name: citext("name").notNull().unique(),
+    // A SOFT filter only (D13) — see SUPPLIER_KINDS' own doc comment. Reuses products.highlights'
+    // exact three-constraint shape (allowed subset + no duplicates + max cardinality) rather
+    // than inventing a second array idiom; `text_array_has_duplicates` is the IMMUTABLE helper
+    // migration 0018 already created for that purpose (Postgres refuses a subquery inside a
+    // CHECK, so the no-duplicates half genuinely needs a function).
+    kinds: text("kinds").array().notNull().default(sql`'{}'::text[]`),
+    // One field for both calling and WhatsApp — the UI builds a wa.me link from it. Free text,
+    // no format CHECK (unlike customers.phone): this is a human-readable note a person dials,
+    // and the owner's real supplier contacts include things like "0812-xxx (Bu Ani)".
+    phone: text("phone"),
+    address: text("address"),
+    // Reference text for a human making a transfer — no pair check between the three bank
+    // fields on purpose: partial info ("BCA, Laksmi" with the number still on a chat screenshot)
+    // is realistic, and refusing it would push her back to notes on paper.
+    bankName: text("bank_name"),
+    bankAccountNo: text("bank_account_no"),
+    bankAccountName: text("bank_account_name"),
+    notes: text("notes"),
+    // No hard delete, ever, once referenced — "delete" in the UI means setting this false, the
+    // same rule cost_components/accessories/fabric_colors already follow. The ON DELETE RESTRICT
+    // FKs that later sessions point at this table are the backstop, not the primary guarantee.
+    isActive: boolean("is_active").notNull().default(true),
+    ...timestamps(),
+  },
+  (table) => [
+    check("suppliers_kinds_allowed_check", checkArraySubset(table.kinds, SUPPLIER_KINDS)),
+    check("suppliers_kinds_no_duplicates_check", sql`not text_array_has_duplicates(${table.kinds})`),
+    check("suppliers_kinds_max_check", sql`cardinality(${table.kinds}) <= ${sql.raw(String(SUPPLIER_KINDS.length))}`),
+  ],
+);
 
 // ---------- Raw-material inventory (accessories + fabric stock) — migration 0008 ----------
 

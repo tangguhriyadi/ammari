@@ -17,6 +17,7 @@ import {
   ShoppingBag,
   Store,
   Tags,
+  Truck,
   Upload,
   Users,
 } from "lucide-react";
@@ -96,7 +97,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Produk",
     href: "/products",
     icon: Package,
-    group: "Katalog",
+    // Renamed from "Katalog" (docs/plans/suppliers-goods-receipt.md D12): the group now holds
+    // Pemasok too, which is master data rather than anything in the product catalog. Group
+    // labels are derived from this file only — nothing asserts the string, and rootCrumbs()
+    // reads it straight back out for the breadcrumb.
+    group: "Data Master",
     permissionKeys: ["products.manage"],
     mobilePrimary: false,
   },
@@ -104,7 +109,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Bahan",
     href: "/fabrics",
     icon: Palette,
-    group: "Katalog",
+    group: "Data Master",
     permissionKeys: ["products.manage"],
     mobilePrimary: false,
   },
@@ -112,7 +117,18 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Aksesoris",
     href: "/accessories",
     icon: Tags,
-    group: "Katalog",
+    group: "Data Master",
+    permissionKeys: ["inventory.view", "inventory.manage"],
+    mobilePrimary: false,
+  },
+  {
+    // The supplier master (docs/plans/suppliers-goods-receipt.md, session 1). Same
+    // inventory.view/inventory.manage split as Aksesoris — reading the list needs
+    // `inventory.view`, every write needs `inventory.manage`; no new permission key.
+    label: "Pemasok",
+    href: "/suppliers",
+    icon: Truck,
+    group: "Data Master",
     permissionKeys: ["inventory.view", "inventory.manage"],
     mobilePrimary: false,
   },
