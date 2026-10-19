@@ -144,7 +144,8 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
 
   // 9a. Finished-goods stock did NOT move at posting.
   await page.goto(`/stock/${sku}`);
-  await expect(page.getByText("0 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });
+  // .first(): the sellable figure; the "Barang cacat" section below it (S5b) shows its own "0 pcs".
+  await expect(page.getByText("0 pcs", { exact: true }).first()).toBeVisible({ timeout: 15_000 });
 
   // 9b. The stock-count guard warns about the posted-but-unreceived batch, at 390px and 1280px,
   // next to the standing "don't count defects" instruction.
@@ -340,7 +341,7 @@ test("a batch whose remaining output will never arrive is short-closed with a re
   // HPP/pcs is unchanged; the 3 pcs that never arrived show as unabsorbed value (3 × 50.000).
   await expect(page.getByText("HPP/pcs")).toBeVisible();
   await expect(page.getByText("Rp 50.000").first()).toBeVisible();
-  await expect(page.getByText("Nilai belum terserap")).toBeVisible();
+  await expect(page.getByText("Nilai belum terserap", { exact: true })).toBeVisible();
   await expect(page.getByText("Rp 150.000")).toBeVisible();
 
   // Stock keeps exactly what was received, and the count page no longer warns about the batch.

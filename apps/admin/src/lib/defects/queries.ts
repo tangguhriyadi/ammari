@@ -1,5 +1,6 @@
 import "server-only";
 import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import {
   accessories,
   defectMovements,
@@ -7,10 +8,12 @@ import {
   fabrics,
   goodsReceiptItems,
   goodsReceipts,
+  productionBatches,
   productionBatchItems,
   products,
   productVariants,
   purchaseItems,
+  purchases,
   staffUsers,
   type DefectDisposalType,
   type DefectItemKind,
@@ -95,6 +98,50 @@ async function defectSettledByLine(
     .where(and(inArray(column, [...lineIds]), isNull(defectMovements.disposalType)))
     .groupBy(column);
   return new Map(rows.map((row) => [row.lineId!, { qty: Number(row.qty), valueAmount: Number(row.valueAmount) }]));
+}
+
+export interface LineDefectDispositions {
+  /** Still held in defect stock from this line (rejected − returned − released, net of reversals):
+   * the "Cacat" column, and the cap of every disposition dialog. Shrinks after a return/release. */
+  held: number;
+  /** Net returned to the supplier/tailor ("Ditukar"). */
+  returned: number;
+  /** Net released by lelang/hibah/dibuang ("Dilepas"). */
+  released: number;
+}
+
+/** Per source line, for the document line tables. A reversal is attributed to the type of the row
+ * it reverses (self-join), so a reversed return nets out of "Ditukar", not out of "Cacat". */
+async function dispositionsByLine(
+  column: typeof defectMovements.purchaseItemId | typeof defectMovements.productionBatchItemId,
+  lineIds: readonly string[],
+  db: Database,
+): Promise<Map<string, LineDefectDispositions>> {
+  if (lineIds.length === 0) return new Map();
+  const reversed = alias(defectMovements, "reversed");
+  const category = sql`coalesce(${reversed.type}, ${defectMovements.type})`;
+  const rows = await db
+    .select({
+      lineId: column,
+      held: sql<string>`sum(${defectMovements.qty})`,
+      returned: sql<string>`coalesce(sum(-${defectMovements.qty}) filter (where ${category} = 'return_out'), 0)`,
+      released: sql<string>`coalesce(sum(-${defectMovements.qty}) filter (where ${category} = 'dispose'), 0)`,
+    })
+    .from(defectMovements)
+    .leftJoin(reversed, eq(reversed.id, defectMovements.reversesMovementId))
+    .where(inArray(column, [...lineIds]))
+    .groupBy(column);
+  return new Map(
+    rows.map((row) => [row.lineId!, { held: Number(row.held), returned: Number(row.returned), released: Number(row.released) }]),
+  );
+}
+
+export function getDefectDispositionsByPurchaseLine(lineIds: readonly string[], db: Database = defaultDb) {
+  return dispositionsByLine(defectMovements.purchaseItemId, lineIds, db);
+}
+
+export function getDefectDispositionsByBatchLine(lineIds: readonly string[], db: Database = defaultDb) {
+  return dispositionsByLine(defectMovements.productionBatchItemId, lineIds, db);
 }
 
 export function getDefectSettledByPurchaseLine(lineIds: readonly string[], db: Database = defaultDb) {
@@ -253,6 +300,92 @@ export async function getDefectQtyBySku(skus: readonly string[], db: Database = 
   return new Map(rows.filter((row) => Number(row.qty) !== 0).map((row) => [row.sku!, Number(row.qty)]));
 }
 
+/** Defect quantity per fabric / per accessory (pooled), for the "Cacat" column on the raw-material
+ * stock lists (S5b). Quantity only. Items with no defect stock are absent. */
+async function defectQtyByItem(
+  column: typeof defectMovements.fabricId | typeof defectMovements.accessoryId,
+  ids: readonly string[],
+  db: Database,
+): Promise<Map<string, number>> {
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select({ id: column, qty: sql<string>`sum(${defectMovements.qty})` })
+    .from(defectMovements)
+    .where(inArray(column, [...ids]))
+    .groupBy(column);
+  return new Map(rows.filter((row) => Number(row.qty) !== 0).map((row) => [row.id!, Number(row.qty)]));
+}
+
+export function getDefectQtyByFabric(ids: readonly string[], db: Database = defaultDb) {
+  return defectQtyByItem(defectMovements.fabricId, ids, db);
+}
+
+export function getDefectQtyByAccessory(ids: readonly string[], db: Database = defaultDb) {
+  return defectQtyByItem(defectMovements.accessoryId, ids, db);
+}
+
+export interface ItemDefectMovementRow {
+  id: string;
+  type: DefectMovementType;
+  qty: number;
+  /** Cost data: stripped (null) by the caller for a viewer without finance.view_profit. */
+  valueAmount: number | null;
+  disposalType: DefectDisposalType | null;
+  proceedsAmount: number | null;
+  reversesType: DefectMovementType | null;
+  occurredAt: string;
+  note: string | null;
+  createdAt: Date;
+  reversedAt: Date | null;
+  /** The source document, for the link back: a purchase (fabric/accessory) or a batch (SKU). */
+  source: { kind: "purchase"; id: string; number: string } | { kind: "batch"; id: string; number: string };
+}
+
+export const ITEM_DEFECT_LEDGER_LIMIT = 100;
+
+/** One item's defect ledger (S5b: the defect section on /stock/[sku], /stock/fabrics/[id],
+ * /stock/accessories/[id]), newest first, each row naming its source document. The latest
+ * ITEM_DEFECT_LEDGER_LIMIT rows; the balance itself always comes from getDefectBalance. */
+export async function listItemDefectMovements(item: DefectItemRef, db: Database = defaultDb): Promise<ItemDefectMovementRow[]> {
+  const reversed = alias(defectMovements, "reversed");
+  const rows = await db
+    .select({
+      id: defectMovements.id,
+      type: defectMovements.type,
+      qty: defectMovements.qty,
+      valueAmount: defectMovements.valueAmount,
+      disposalType: defectMovements.disposalType,
+      proceedsAmount: defectMovements.proceedsAmount,
+      reversesType: reversed.type,
+      occurredAt: defectMovements.occurredAt,
+      note: defectMovements.note,
+      createdAt: defectMovements.createdAt,
+      reversedAt: defectMovements.reversedAt,
+      purchaseId: purchases.id,
+      purchaseNo: purchases.purchaseNo,
+      batchId: productionBatches.id,
+      batchNo: productionBatches.batchNo,
+    })
+    .from(defectMovements)
+    .leftJoin(reversed, eq(reversed.id, defectMovements.reversesMovementId))
+    .leftJoin(purchaseItems, eq(purchaseItems.id, defectMovements.purchaseItemId))
+    .leftJoin(purchases, eq(purchases.id, purchaseItems.purchaseId))
+    .leftJoin(productionBatchItems, eq(productionBatchItems.id, defectMovements.productionBatchItemId))
+    .leftJoin(productionBatches, eq(productionBatches.id, productionBatchItems.productionBatchId))
+    .where(itemCondition(item))
+    .orderBy(desc(defectMovements.createdAt), desc(defectMovements.id))
+    .limit(ITEM_DEFECT_LEDGER_LIMIT);
+  return rows.map(({ purchaseId, purchaseNo, batchId, batchNo, ...row }) => ({
+    ...row,
+    source: purchaseId ? { kind: "purchase" as const, id: purchaseId, number: purchaseNo! } : { kind: "batch" as const, id: batchId!, number: batchNo! },
+  }));
+}
+
+export function stripItemDefectAmounts(rows: readonly ItemDefectMovementRow[], canViewProfit: boolean): ItemDefectMovementRow[] {
+  if (canViewProfit) return [...rows];
+  return rows.map((row) => ({ ...row, valueAmount: null, proceedsAmount: null }));
+}
+
 export interface DefectStockSkuRow {
   sku: string;
   productId: string;
@@ -339,6 +472,9 @@ export interface DocumentDefectMovementRow {
   valueAmount: number | null;
   disposalType: DefectDisposalType | null;
   proceedsAmount: number | null;
+  /** For a 'reversal' row: the type of the row it reverses (so a reversed return and a reversed
+   * reject can be told apart); null otherwise. */
+  reversesType: DefectMovementType | null;
   occurredAt: string;
   receiptNo: string | null;
   note: string | null;
@@ -359,6 +495,7 @@ async function listDefectMovementsForLines(
   db: Database,
 ): Promise<DocumentDefectMovementRow[]> {
   if (lineIds.length === 0) return [];
+  const reversed = alias(defectMovements, "reversed");
   const rows = await db
     .select({
       id: defectMovements.id,
@@ -373,6 +510,7 @@ async function listDefectMovementsForLines(
       valueAmount: defectMovements.valueAmount,
       disposalType: defectMovements.disposalType,
       proceedsAmount: defectMovements.proceedsAmount,
+      reversesType: reversed.type,
       occurredAt: defectMovements.occurredAt,
       receiptNo: goodsReceipts.receiptNo,
       note: defectMovements.note,
@@ -389,6 +527,7 @@ async function listDefectMovementsForLines(
     .leftJoin(goodsReceiptItems, eq(goodsReceiptItems.id, defectMovements.goodsReceiptItemId))
     .leftJoin(goodsReceipts, eq(goodsReceipts.id, goodsReceiptItems.goodsReceiptId))
     .leftJoin(staffUsers, eq(staffUsers.id, defectMovements.createdByStaffUserId))
+    .leftJoin(reversed, eq(reversed.id, defectMovements.reversesMovementId))
     .where(inArray(column, [...lineIds]))
     .orderBy(desc(defectMovements.createdAt), desc(defectMovements.id));
   return rows.map(({ fabricName, accessoryName, productName, colorName, size, ...row }) => ({

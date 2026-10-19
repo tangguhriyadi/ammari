@@ -7,12 +7,20 @@ import type { StaffSessionData } from "@ammari/auth/staff";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getPurchaseById, stripPurchaseAmount, type PurchaseDetail } from "@/lib/inventory/purchases";
 import { formatPurchaseQty, getPurchaseDocument, isUuid, stripPurchaseDocumentAmounts, type PurchaseDocument } from "@/lib/purchases/queries";
-import { isOpenPurchaseStatus } from "@/lib/purchases/status";
-import { findPurchaseIdForReceiptMovement, listReceiptsForPurchase, type PurchaseReceiptRow } from "@/lib/receipts/queries";
-import { heldDefectValue, listDefectMovementsForPurchase, stripDefectMovementAmounts } from "@/lib/defects/queries";
+import { isOpenPurchaseStatus, TERMINAL_PURCHASE_STATUSES } from "@/lib/purchases/status";
+import {
+  findPurchaseIdForReceiptMovement,
+  getSellableReceiptValueForPurchase,
+  listReceiptsForPurchase,
+  type PurchaseReceiptRow,
+} from "@/lib/receipts/queries";
+import { getDefectBalance, listDefectMovementsForPurchase, stripDefectMovementAmounts, type DefectBalance } from "@/lib/defects/queries";
+import { purchaseVariance, summarizeDefectValues, type PurchaseVariance } from "@/lib/defects/variance";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { ClosePurchaseButton } from "../_components/close-purchase-button";
 import { DefectHistory } from "../_components/defect-history";
+import { DisposeDefectsButton, ReturnDefectsButton } from "../_components/defect-actions";
+import { PurchaseVariancePanel } from "../_components/defect-variance";
 import { PurchaseStatusBadge } from "../_components/purchase-status-badge";
 import { ReverseReceiptButton } from "../_components/reverse-receipt-button";
 import { VoidPurchaseButton } from "../_components/void-purchase-button";
@@ -50,15 +58,41 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
   const hasOutstanding = document.lines.some((line) => line.outstanding > 0);
   const canEdit = canManage && canViewProfit && document.status === "ordered" && !document.hasReceipts;
   const nothingArrived = document.lines.every((line) => line.accepted === 0 && line.rejected === 0);
-  const total = canViewProfit ? document.lines.reduce((sum, line) => sum + (line.totalAmountPaid ?? 0), 0) : null;
-  const defectValue = defectRows.length > 0 ? heldDefectValue(defectRows) : null;
+  const isTerminal = TERMINAL_PURCHASE_STATUSES.includes(document.status);
+  // Defect actions (inventory.manage, D10) on every line still holding defect stock.
+  const actionableLines = canManage ? document.lines.filter((line) => line.defectHeld > 0) : [];
+  // Cost data: queried only for finance.view_profit (the disposal preview and the §4.3 panel).
+  const [pools, variance] = canViewProfit
+    ? await Promise.all([
+        Promise.all(
+          actionableLines.map(async (line) => [
+            line.id,
+            await getDefectBalance(line.itemType === "fabric" ? { kind: "fabric", fabricId: line.itemId } : { kind: "accessory", accessoryId: line.itemId }),
+          ] as const),
+        ).then((entries) => new Map<string, DefectBalance>(entries)),
+        getSellableReceiptValueForPurchase(document.id).then((sellableValue): PurchaseVariance | null => {
+          const defects = summarizeDefectValues(defectRowsRaw);
+          return defects
+            ? purchaseVariance({
+                totalOrdered: document.lines.reduce((sum, line) => sum + (line.totalAmountPaid ?? 0), 0),
+                sellableValue,
+                closed: isTerminal,
+                defects,
+              })
+            : null;
+        }),
+      ])
+    : [new Map<string, DefectBalance>(), null];
 
   return (
     <>
       <Breadcrumb items={[...rootCrumbs("/purchases"), { label: document.purchaseNo }]} />
       <div className="flex items-center justify-between gap-2">
         <PageHeader title={document.purchaseNo} description={`Pesanan pembelian · ${formatDate(new Date(document.orderedAt))}`} />
-        <PurchaseStatusBadge status={document.status} />
+        <div className="flex flex-wrap justify-end gap-2">
+          {document.reopenedAt && <Badge variant="neutral">Dibuka kembali</Badge>}
+          <PurchaseStatusBadge status={document.status} />
+        </div>
       </div>
 
       <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
@@ -70,8 +104,6 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
             </Link>
           }
         />
-        {total !== null && <Row label="Total pesanan" value={formatRupiah(total)} />}
-        {defectValue !== null && <Row label="Nilai cacat" value={formatRupiah(defectValue)} />}
         {document.notes && <Row label="Catatan" value={document.notes} />}
         <Row label="Dibuat" value={`${formatDateTime(document.createdAt)}${document.createdByName ? ` · ${document.createdByName}` : ""}`} />
         {document.closedAt && (
@@ -83,7 +115,22 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
             {document.closeReason && <Row label="Alasan" value={document.closeReason} />}
           </>
         )}
+        {document.reopenedAt && (
+          <>
+            <Row
+              label="Dibuka kembali"
+              value={`${formatDateTime(document.reopenedAt)}${document.reopenedByName ? ` · ${document.reopenedByName}` : ""}`}
+            />
+            {document.reopenReason && <Row label="Alasan dibuka" value={document.reopenReason} />}
+          </>
+        )}
       </div>
+
+      {variance && (
+        <div className="mt-4">
+          <PurchaseVariancePanel variance={variance} />
+        </div>
+      )}
 
       {(isOpen && (canReceive || canManage)) || canEdit ? (
         <div className="mt-4 flex flex-wrap gap-2">
@@ -103,38 +150,75 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
 
       {isOpen && !hasOutstanding && (
         <p className="mt-4 text-base text-neutral-700">
-          Semua sisa sudah diterima atau dicatat cacat. Tutup pesanan untuk menyelesaikannya.
+          Semua sisa sudah diterima atau dicatat cacat. Barang cacat bisa dikembalikan ke supplier untuk ditukar atau dilepas. Tutup pesanan jika tidak ada lagi yang ditunggu.
         </p>
       )}
 
       <h2 className="mt-6 mb-3 text-lg font-semibold text-neutral-900">Barang</h2>
-      <PurchaseLines document={document} />
+      <PurchaseLines
+        document={document}
+        actions={
+          canManage
+            ? (line) =>
+                line.defectHeld > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    <ReturnDefectsButton
+                      sourceType="purchase"
+                      lineId={line.id}
+                      itemLabel={line.itemName}
+                      maxQty={line.defectHeld}
+                      isFabric={line.itemType === "fabric"}
+                      documentClosed={isTerminal}
+                    />
+                    <DisposeDefectsButton
+                      sourceType="purchase"
+                      lineId={line.id}
+                      itemLabel={line.itemName}
+                      maxQty={line.defectHeld}
+                      isFabric={line.itemType === "fabric"}
+                      pool={pools.get(line.id) ?? null}
+                    />
+                  </div>
+                ) : null
+            : undefined
+        }
+      />
 
       <h2 className="mt-6 mb-3 text-lg font-semibold text-neutral-900">Riwayat penerimaan</h2>
       <ReceiptHistory receipts={receipts} canReverse={canManage} />
 
       <h2 className="mt-6 mb-3 text-lg font-semibold text-neutral-900">Barang cacat</h2>
-      <DefectHistory rows={defectRows} emptyText="Tidak ada barang cacat dari pesanan ini." />
+      <DefectHistory rows={defectRows} emptyText="Tidak ada barang cacat dari pesanan ini." canReverse={canManage} />
     </>
   );
 }
 
-function PurchaseLines({ document }: { document: PurchaseDocument }) {
+type PurchaseLine = PurchaseDocument["lines"][number];
+
+/** Dipesan / Diterima / Cacat / Ditukar / Dilepas / Sisa (§7). "Cacat" is what is STILL held in
+ * defect stock from the line (it shrinks after a return or a release); together with Ditukar and
+ * Dilepas it adds up to everything that ever arrived defective. */
+function PurchaseLines({ document, actions }: { document: PurchaseDocument; actions?: (line: PurchaseLine) => ReactNode }) {
   const showTotals = document.lines.some((line) => line.totalAmountPaid !== null);
+  const showActions = actions !== undefined && document.lines.some((line) => line.defectHeld > 0);
+  const hasDefects = document.lines.some((line) => line.rejected !== 0);
   return (
     <>
       <CardList>
         {document.lines.map((line) => (
-          <li key={line.id}>
+          <li key={line.id} data-testid="purchase-line-card">
             <Card className="flex flex-col gap-2">
               <p className="text-base font-medium text-neutral-900">{line.itemName}</p>
               <dl className="grid grid-cols-2 gap-2 text-sm">
                 <QtyCell label="Dipesan" value={formatPurchaseQty(line.itemType, line.qtyOrdered)} />
                 <QtyCell label="Diterima" value={formatPurchaseQty(line.itemType, line.accepted)} />
-                <QtyCell label="Cacat" value={formatPurchaseQty(line.itemType, line.rejected)} />
+                <QtyCell label="Cacat" value={formatPurchaseQty(line.itemType, line.defectHeld)} />
+                <QtyCell label="Ditukar" value={formatPurchaseQty(line.itemType, line.returned)} />
+                <QtyCell label="Dilepas" value={formatPurchaseQty(line.itemType, line.released)} />
                 <QtyCell label="Sisa" value={formatPurchaseQty(line.itemType, line.outstanding)} />
               </dl>
               {line.totalAmountPaid !== null && <p className="text-sm text-neutral-600">Total dibayar {formatRupiah(line.totalAmountPaid)}</p>}
+              {actions?.(line)}
             </Card>
           </li>
         ))}
@@ -145,22 +229,33 @@ function PurchaseLines({ document }: { document: PurchaseDocument }) {
           <Th>Dipesan</Th>
           <Th>Diterima</Th>
           <Th>Cacat</Th>
+          <Th>Ditukar</Th>
+          <Th>Dilepas</Th>
           <Th>Sisa</Th>
           {showTotals && <Th>Total dibayar</Th>}
+          {showActions && <Th>Barang cacat</Th>}
         </TableHead>
         <tbody>
           {document.lines.map((line) => (
-            <Tr key={line.id}>
+            <Tr key={line.id} data-testid="purchase-line-row">
               <Td className="font-medium text-neutral-900">{line.itemName}</Td>
               <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.qtyOrdered)}</Td>
               <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.accepted)}</Td>
-              <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.rejected)}</Td>
+              <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.defectHeld)}</Td>
+              <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.returned)}</Td>
+              <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.released)}</Td>
               <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.outstanding)}</Td>
               {showTotals && <Td className="tabular-nums text-neutral-700">{line.totalAmountPaid !== null ? formatRupiah(line.totalAmountPaid) : "-"}</Td>}
+              {showActions && <Td>{actions?.(line)}</Td>}
             </Tr>
           ))}
         </tbody>
       </TableContainer>
+      {hasDefects && (
+        <p className="mt-2 text-sm text-neutral-600">
+          Cacat: stok cacat yang masih disimpan. Ditukar: dikembalikan ke supplier untuk diganti. Dilepas: dilelang, dihibahkan, atau dibuang.
+        </p>
+      )}
     </>
   );
 }

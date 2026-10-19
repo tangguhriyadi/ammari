@@ -2,6 +2,7 @@ import { PageHeader, Input, Pagination, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { listFabricsWithBalance } from "@/lib/inventory/fabric-stock";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { getDefectQtyByFabric } from "@/lib/defects/queries";
 import { StockTypeTabs } from "../_components/stock-type-tabs";
 import { FabricStockList } from "../_components/fabric-stock-list";
 
@@ -15,6 +16,7 @@ export default async function FabricStockPage({
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
 
   const { rows, pagination } = await listFabricsWithBalance({ q }, page, perPage);
+  const defectQty = await getDefectQtyByFabric(rows.map((row) => row.id));
 
   return (
     <>
@@ -29,7 +31,7 @@ export default async function FabricStockPage({
         <form method="GET">
           <Input name="q" defaultValue={q ?? ""} placeholder="Cari nama bahan..." aria-label="Cari bahan" />
         </form>
-        <FabricStockList rows={rows.map((row) => ({ ...row, valueAmount: canViewProfit ? row.valueAmount : null }))} />
+        <FabricStockList rows={rows.map((row) => ({ ...row, defectQty: defectQty.get(row.id) ?? 0, valueAmount: canViewProfit ? row.valueAmount : null }))} />
       </div>
       <Pagination pagination={pagination} basePath="/stock/fabrics" searchParams={{ q, perPage }} itemLabel="bahan" />
     </>

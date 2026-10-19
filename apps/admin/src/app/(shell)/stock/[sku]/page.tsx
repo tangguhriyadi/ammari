@@ -4,6 +4,8 @@ import { formatNumber } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getSkuDetail, listStockLedger } from "@/lib/stock/queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { getDefectBalance, listItemDefectMovements, stripItemDefectAmounts } from "@/lib/defects/queries";
+import { ItemDefectSection } from "../_components/item-defect-section";
 import { StockLedger } from "../_components/stock-ledger";
 import { StockStatusBadge } from "../_components/stock-list";
 import { SkuDetailControls } from "../_components/sku-detail-controls";
@@ -21,7 +23,12 @@ export default async function SkuDetailPage({
 
   const detail = await getSkuDetail(sku);
   if (!detail) notFound();
-  const { rows, pagination } = await listStockLedger(sku, page, perPage);
+  const canViewProfit = session.permissionKeys.includes("finance.view_profit");
+  const [{ rows, pagination }, defectBalance, defectRows] = await Promise.all([
+    listStockLedger(sku, page, perPage),
+    getDefectBalance({ kind: "sku", sku: detail.sku }),
+    listItemDefectMovements({ kind: "sku", sku: detail.sku }),
+  ]);
 
   return (
     <>
@@ -33,6 +40,13 @@ export default async function SkuDetailPage({
         {session.permissionKeys.includes("stock.adjust") && <SkuDetailControls sku={detail.sku} />}
       </div>
       <StockLedger sku={sku} rows={rows} pagination={pagination} searchParams={{ perPage }} />
+      <ItemDefectSection
+        kind="sku"
+        balance={{ qty: defectBalance.qty, valueAmount: canViewProfit ? defectBalance.valueAmount : null }}
+        rows={stripItemDefectAmounts(defectRows, canViewProfit)}
+        canOpenPurchase={session.permissionKeys.includes("inventory.view")}
+        canOpenBatch={session.permissionKeys.includes("production.manage")}
+      />
     </>
   );
 }

@@ -22,9 +22,12 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
 - Stock (`/stock`), production (`/production`), and raw-material stock (fabric and accessories),
   all on append-only, moving-average ledgers (§5.1).
 - Suppliers (`/suppliers`), purchase documents with goods receipts (`/purchases`), production
-  output receipts, and defect stock recorded at receipt (`/stock/defects`) (§5.1a;
-  docs/plans/suppliers-goods-receipt.md sessions S1–S5). Exchanging and releasing defects
-  (return to supplier, lelang / hibah / dibuang) is planned in that plan's S6–S7.
+  output receipts, defect stock recorded at receipt (`/stock/defects`, plus a "Cacat" figure on
+  every stock list and item page), and defect dispositions: return to the supplier/tailor for a
+  replacement (re-opening a closed document), release by lelang / hibah / dibuang, their
+  reversals, and read-only variance figures on each purchase and batch (§5.1a;
+  docs/plans/suppliers-goods-receipt.md sessions S1–S6). The `/receipts` list and the polish
+  sweep are that plan's S7.
 
 **Next:**
 
@@ -301,12 +304,12 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   quantity rejected (`qty_rejected`, "Ditolak (cacat)", into defect stock — see
   `defect_movements` below), a receipt date (defaults to today in Jakarta, backdatable, never in
   the future), the staff user who recorded it, and an optional "Diterima oleh". Accepted and
-  rejected **both** use up the line: settled = accepted + rejected (− returned to the supplier,
-  from S6) and outstanding = ordered − settled. Over-receipt (accepted + rejected beyond what is
+  rejected **both** use up the line: settled = accepted + rejected − returned to the supplier
+  and outstanding = ordered − settled. Over-receipt (accepted + rejected beyond what is
   left) is refused entirely with an Indonesian message naming the line and what is left. Only
   accepted units complete a line: a document or batch where everything arrived but some of it was
-  defective stays `partially_received` with nothing left to receive, until it is closed (or, from
-  S6, the defects are exchanged). For purchases, the arrival's value (the cumulative slice of the
+  defective stays `partially_received` with nothing left to receive, until it is closed or the
+  defects are exchanged. For purchases, the arrival's value (the cumulative slice of the
   line total) is split between accepted and rejected in proportion, the two parts summing exactly
   to the slice; for production, both are valued at the batch line's frozen HPP/pcs.
   Concurrent receipts serialize on the source document's row lock. A wrong receipt is corrected
@@ -328,8 +331,42 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   carries `disposal_type` — `auction` (Lelang, proceeds > 0), `donation` (Hibah, Rp 0) or
   `discarded` (Dibuang/Dimusnahkan, Rp 0, reported separately from Hibah as waste) — and
   `proceeds_amount`, stored for a future accounting module but booked nowhere today. Visible on
-  `/stock/defects` (tab "Cacat"), on each purchase and batch ("Cacat" column, "Barang cacat"
-  history, "Nilai cacat" with `finance.view_profit`), and read-only per SKU on the stock count.
+  `/stock/defects` (tab "Cacat"), on each purchase and batch (line columns Cacat / Ditukar /
+  Dilepas, where "Cacat" is what is still held; "Barang cacat" history with each row's type,
+  quantity, proceeds and notes), as a "Cacat" figure on `/stock`, `/stock/fabrics` and
+  `/stock/accessories`, as a "Barang cacat" section (balance + ledger linking each row to its
+  source document) on `/stock/[sku]`, `/stock/fabrics/[id]` and `/stock/accessories/[id]`, and
+  read-only per SKU on the stock count. Values and proceeds only with `finance.view_profit`.
+  A reversal must exactly negate the row it reverses (same item, source line and disposal type;
+  qty, value and proceeds negated, enforced by a DB trigger), and a reject's receipt item must
+  belong to its own source line (composite FKs).
+- **Defect dispositions** (all need `inventory.manage`, all audit-logged, all locking the
+  document row first and then the item row):
+  - **Return to supplier/tailor** ("Kembalikan ke supplier" / "Kembalikan ke penjahit"):
+    quantity (at most what the line still holds), date, required reason. The units leave defect
+    stock at the pool's average value and re-open exactly that much outstanding on the line; the
+    replacement arrives through the normal receipt on the same document, which can then reach
+    `received`. A return against a **closed or cancelled** document (or a short-closed batch)
+    re-opens it to `partially_received`, stamping `reopened_at` / `reopened_by_staff_user_id` /
+    `reopen_reason` (the return reason), with a "Dibuka kembali" badge; the last close record is
+    kept. No other action re-opens a document.
+  - **Release** ("Pelepasan"): quantity, type Lelang (proceeds entered by hand, required, > 0),
+    Hibah (Rp 0) or Dibuang/Dimusnahkan (Rp 0), date, required notes. Never creates outstanding
+    and never changes the document status. Proceeds are gross cash received, stored only, never
+    booked (no accounting entries).
+  - **Reversal** ("Batalkan" on a return or release): an exact copy-and-negate row (proceeds
+    negated too), never an edit. A return's reversal is refused once its replacement was received
+    ("Batalkan penerimaan pengganti dulu"); a reject is reversed only with its receipt. A reversal
+    never re-closes a re-opened document.
+- **Variance figures** (read-only, `finance.view_profit`). HPP/pcs is never rewritten. Purchase
+  ("Nilai pesanan"): Total pesanan, Nilai diterima, Nilai cacat masih disimpan, Nilai ditukar,
+  Nilai cacat dilepas per type (Lelang, Hibah and Dibuang/Dimusnahkan always on separate lines),
+  Hasil pelepasan, Kerugian bersih barang cacat (= released − proceeds; negative is shown as a
+  gain, "untung"), and Nilai belum terserap once closed. Batch (inside "Biaya batch"): the same
+  defect lines plus **HPP riil per pcs** = (value received into sellable stock at HPP/pcs + net
+  defect loss + Nilai belum terserap) / pcs received, which is (total batch cost − proceeds) /
+  sellable pcs once everything is settled; marked "Sementara" while defects are still held or
+  output is still expected.
 - Stock count ("Hitung stok") guard: the count page lists that product's posted batches whose
   output is not fully received (with a link), because goods physically in the house but not yet
   received read as missing and must be received, not "corrected" by a count. It also always
@@ -423,7 +460,8 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   `inventory.receive` posts a goods receipt (purchase or production output) and nothing else, so
   the person standing next to the delivery can receive without editing documents;
   `inventory.manage` keeps the supplier master, purchase documents, "Tutup pesanan" / "Tutup
-  batch", and "Batalkan penerimaan". Posting a batch needs `production.manage` plus
+  batch", "Batalkan penerimaan", and every defect disposition (return to supplier/tailor, which
+  can re-open a closed document; release by lelang / hibah / dibuang; and their reversals). Posting a batch needs `production.manage` plus
   `finance.view_profit`.
 - System roles (seeded, `is_system = true`):
   - `super_admin` (held by the husband): every permission, including `roles.manage`,

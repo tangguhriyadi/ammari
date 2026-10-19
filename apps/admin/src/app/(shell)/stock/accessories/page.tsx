@@ -2,6 +2,7 @@ import { PageHeader, Input, Pagination, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { listAccessories } from "@/lib/inventory/accessories";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { getDefectQtyByAccessory } from "@/lib/defects/queries";
 import { StockTypeTabs } from "../_components/stock-type-tabs";
 import { AccessoryStockList } from "../_components/accessory-stock-list";
 
@@ -15,6 +16,7 @@ export default async function AccessoryStockPage({
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
 
   const { rows, pagination } = await listAccessories({ q }, page, perPage);
+  const defectQty = await getDefectQtyByAccessory(rows.map((row) => row.id));
 
   return (
     <>
@@ -29,7 +31,7 @@ export default async function AccessoryStockPage({
         <form method="GET">
           <Input name="q" defaultValue={q ?? ""} placeholder="Cari nama aksesoris..." aria-label="Cari aksesoris" />
         </form>
-        <AccessoryStockList rows={rows.map((row) => ({ ...row, valueAmount: canViewProfit ? row.valueAmount : null }))} />
+        <AccessoryStockList rows={rows.map((row) => ({ ...row, defectQty: defectQty.get(row.id) ?? 0, valueAmount: canViewProfit ? row.valueAmount : null }))} />
       </div>
       <Pagination pagination={pagination} basePath="/stock/accessories" searchParams={{ q, perPage }} itemLabel="aksesoris" />
     </>

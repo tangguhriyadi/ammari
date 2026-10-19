@@ -2,6 +2,7 @@ import { PageHeader, FilterTabs, Input, Checkbox, Button, Pagination, Breadcrumb
 import { requirePermission } from "@/lib/auth/require-permission";
 import { listStockOverview, type ActiveFilter } from "@/lib/stock/queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { getDefectQtyBySku } from "@/lib/defects/queries";
 import { StockList } from "./_components/stock-list";
 import { StockTypeTabs } from "./_components/stock-type-tabs";
 
@@ -22,6 +23,8 @@ export default async function StockPage({
   const lowStockOnly = low === "1";
 
   const { rows, pagination } = await listStockOverview({ q, activeFilter, lowStockOnly }, page, perPage);
+  // S5b: defect stock per SKU, its own figure, never part of the sellable count.
+  const defectQtyBySku = await getDefectQtyBySku(rows.map((row) => row.sku));
 
   return (
     <>
@@ -48,7 +51,7 @@ export default async function StockPage({
           <Checkbox name="low" value="1" defaultChecked={lowStockOnly} label="Stok menipis saja" />
           <Button type="submit">Filter</Button>
         </form>
-        <StockList rows={rows} canAdjust={session.permissionKeys.includes("stock.adjust")} />
+        <StockList rows={rows} canAdjust={session.permissionKeys.includes("stock.adjust")} defectQtyBySku={defectQtyBySku} />
       </div>
       <Pagination
         pagination={pagination}

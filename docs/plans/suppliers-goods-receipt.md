@@ -1,8 +1,9 @@
 # Plan: Suppliers + Goods Receipt (penerimaan barang) + Defect Stock
 
-Status (2026-10-19): **S1–S4 shipped** (commits `2bc3ce7`, `402e4a3`, `244eee0`, `eb22b48`;
-migrations 0022–0025). **S5 implemented** (migration 0026, defect ledger + rejects at receipt),
-awaiting the owner's review and commit. S6–S7 not started. All decisions are recorded in §2
+Status (2026-10-20): **S1–S5 shipped** (commits `2bc3ce7`, `402e4a3`, `244eee0`, `eb22b48`,
+`6a8246f`; migrations 0022–0026). **S5b and S6 implemented** (migration 0027: defect read views on
+the stock lists and item pages; returns, re-open, releases, reversals, variance panels), awaiting
+the owner's review and commit. S7 not started. All decisions are recorded in §2
 (D1–D29); nothing is open (§10).
 
 Three linked changes:
@@ -718,6 +719,17 @@ value at the frozen unit cost. *E2E:* extend `purchases-receipt.spec.ts` and
 quantity only, assert the defect figure appears on the item page and on `/stock/defects` at both
 viewports, and assert the SKU cannot be oversold against its defect quantity.
 
+**S5b — Defect read views on the stock lists and item pages** (no migration). *Status:
+implemented 2026-10-20 together with S6, not yet committed.* A "Cacat" figure per SKU on `/stock`
+(next to the sellable count) and a "Cacat" column on `/stock/fabrics` and `/stock/accessories`
+(both layouts), and a "Barang cacat" section on `/stock/[sku]`, `/stock/fabrics/[id]`,
+`/stock/accessories/[id]`: the pooled balance plus the item's latest 100 defect rows, each linking
+to its source document (only when the session can open it: purchases need `inventory.view`,
+batches `production.manage`) and showing proceeds on a release; value and proceeds only with
+`finance.view_profit`. The reads live in `lib/defects/queries.ts` and are composed by the pages,
+so S5's structural guard (no `lib/stock` / `lib/inventory` / orders / storefront file references
+the defect ledger) still holds.
+
 **S6 — Defect dispositions: exchange and release. Migration 0027** — the smallest of the six:
 reopen columns (`reopened_at`, `reopened_by_staff_user_id`, `reopen_reason`) on `purchases` and
 `production_batches`, and nothing else. The disposal columns already shipped with the table in
@@ -737,6 +749,40 @@ pcs, "Kerugian bersih barang cacat", "Nilai belum terserap") against hand-comput
 a lelang and a hibah. *E2E:* the exchange round trip (receive with reject → return → replacement
 receipt → `received`), the lelang path (release with proceeds → short-close → net loss and proceeds
 shown), and the hibah path (Rp 0, proceeds input hidden), all at both viewports.
+*Status: implemented 2026-10-20, not yet committed. Settled while building it (no decision
+changed):
+(a) **migration 0027** adds the six re-open columns (nullable, all-three-or-none + non-blank reason
+CHECK, indexed RESTRICT FK) and, as S5 asked, the two missing database guards: a BEFORE INSERT
+trigger `check_defect_reversal_matches` (a `reversal` must copy the reversed row's item, source
+line and `disposal_type` and negate its qty, value and proceeds, and can never reverse a reversal;
+`goods_receipt_item_id` is deliberately not compared, per S5 note (d)), and composite FKs
+`(goods_receipt_item_id, purchase_item_id|production_batch_item_id) → goods_receipt_items`, so a
+reject (or its reversal) always names a receipt item of its own source line. All additive; the
+FKs are validated against existing rows when added;
+(b) **"Cacat" now means still held**: on both document line tables the columns are Dipesan /
+Diterima / Cacat / Ditukar / Dilepas / Sisa, and "Cacat" is computed as rejected − returned −
+released (net of reversals), so it shrinks after a return or a release (S5 note (f)); a legend
+under the table says so. Reversals are attributed to the type of the row they reverse (self-join);
+(c) `reverseDefectMovement` covers returns and releases only. A `reject` is reversed only through
+its receipt ("Batalkan penerimaan"), because a standalone reject reversal would break S5's 1:1
+`qty_rejected` ⇔ reject-row invariant that the per-line settled reader relies on; §5's mention of
+reversing a `reject` on its own is therefore not offered;
+(d) a return's reversal is refused when the line no longer has that much outstanding (its
+replacement already arrived), so it can never turn into over-receipt; a release's reversal is
+always allowed (it only adds back to the defect pool). Neither re-closes a re-opened document;
+(e) on a purchase, "Nilai belum terserap" = total − sellable value − defect value still held −
+defect value released, shown once the document is closed/cancelled (a returned unit whose
+replacement never came counts there). On a batch, **HPP riil per pcs** is computed as (value
+received into sellable stock at HPP/pcs + net defect loss + Nilai belum terserap) / pcs received,
+rounded half up. Once everything is settled this equals §4.3's (C − proceeds) / pcs accepted (C =
+Σ planned × HPP/pcs, the plan's own C = 10H); while defects are still held or output is still
+expected it reads as HPP/pcs plus losses so far and is labelled "Sementara", instead of the
+literal formula's misleading in-flight figure (e.g. C / 1 after the first pc arrives);
+(f) the dialogs (return, release, reverse) live on the document pages only; the item pages are
+read-only. Return/release buttons are labelled "Kembalikan ke supplier" on purchases and
+"Kembalikan ke penjahit" on batches, and the `return_out` label is "Dikembalikan untuk ditukar";
+(g) the e2e lives in its own `defect-dispositions.spec.ts` with its own fixture email on the
+`e2e_defects` role.*
 
 **S7 — Cross-cutting polish and the review sweep.**
 `/receipts` list; `listStockLedger`'s dual ref-type batch link; doc comments rewritten on

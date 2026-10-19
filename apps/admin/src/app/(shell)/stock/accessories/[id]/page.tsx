@@ -5,6 +5,8 @@ import { formatNumber } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getAccessoryBalance, getAccessoryById, listAccessoryLedger } from "@/lib/inventory/accessories";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { getDefectBalance, listItemDefectMovements, stripItemDefectAmounts } from "@/lib/defects/queries";
+import { ItemDefectSection } from "../../_components/item-defect-section";
 import { AccessoryLedger } from "../../_components/accessory-ledger";
 import { AccessoryStockControls } from "../../_components/accessory-stock-controls";
 
@@ -25,9 +27,11 @@ export default async function AccessoryStockDetailPage({
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
   const canManage = session.permissionKeys.includes("inventory.manage");
 
-  const [balance, { rows, pagination }] = await Promise.all([
+  const [balance, { rows, pagination }, defectBalance, defectRows] = await Promise.all([
     getAccessoryBalance(id),
     listAccessoryLedger(id, page, perPage),
+    getDefectBalance({ kind: "accessory", accessoryId: id }),
+    listItemDefectMovements({ kind: "accessory", accessoryId: id }),
   ]);
 
   return (
@@ -53,6 +57,13 @@ export default async function AccessoryStockDetailPage({
         basePath={`/stock/accessories/${id}`}
         searchParams={{ perPage }}
         canViewProfit={canViewProfit}
+      />
+      <ItemDefectSection
+        kind="accessory"
+        balance={{ qty: defectBalance.qty, valueAmount: canViewProfit ? defectBalance.valueAmount : null }}
+        rows={stripItemDefectAmounts(defectRows, canViewProfit)}
+        canOpenPurchase
+        canOpenBatch={session.permissionKeys.includes("production.manage")}
       />
     </>
   );

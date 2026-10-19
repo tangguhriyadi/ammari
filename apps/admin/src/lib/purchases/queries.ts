@@ -18,7 +18,7 @@ import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { nextDocumentNumber } from "@/lib/documents/document-number";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
-import { getDefectSettledByPurchaseLine } from "@/lib/defects/queries";
+import { getDefectDispositionsByPurchaseLine, getDefectSettledByPurchaseLine } from "@/lib/defects/queries";
 import { toCentiQty } from "@/lib/receipts/valuation";
 import { lockSelectableSuppliers } from "@/lib/suppliers/queries";
 import { closedStatus, isOpenPurchaseStatus, type LineProgress } from "./status";
@@ -343,8 +343,14 @@ export interface PurchaseDocumentLine {
   itemName: string;
   qtyOrdered: number;
   accepted: number;
-  /** Net rejected into defect stock at receipt ("Cacat"). */
+  /** Net rejected into defect stock at receipt (everything that ever arrived defective). */
   rejected: number;
+  /** Still held in defect stock from this line ("Cacat"): rejected − returned − released. */
+  defectHeld: number;
+  /** Net returned to the supplier ("Ditukar", S6). */
+  returned: number;
+  /** Net released by lelang/hibah/dibuang ("Dilepas", S6). */
+  released: number;
   /** qty_ordered − qtySettled (§4.2): rejects use up the ordered quantity too. */
   outstanding: number;
   /** Cost data — stripped by the caller for a viewer without finance.view_profit. */
@@ -363,6 +369,10 @@ export interface PurchaseDocument {
   closedAt: Date | null;
   closedByName: string | null;
   closeReason: string | null;
+  /** D18: set when a return-to-supplier re-opened a closed document ("Dibuka kembali"). */
+  reopenedAt: Date | null;
+  reopenedByName: string | null;
+  reopenReason: string | null;
   createdAt: Date;
   createdByName: string | null;
   hasReceipts: boolean;
@@ -378,6 +388,7 @@ function outstandingQty(qtyOrdered: number, settled: number): number {
 export async function getPurchaseDocument(id: string, db: Database = defaultDb): Promise<PurchaseDocument | null> {
   const createdBy = alias(staffUsers, "created_by");
   const closedBy = alias(staffUsers, "closed_by");
+  const reopenedBy = alias(staffUsers, "reopened_by");
   const [header] = await db
     .select({
       id: purchases.id,
@@ -391,6 +402,9 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
       closedAt: purchases.closedAt,
       closedByName: closedBy.name,
       closeReason: purchases.closeReason,
+      reopenedAt: purchases.reopenedAt,
+      reopenedByName: reopenedBy.name,
+      reopenReason: purchases.reopenReason,
       createdAt: purchases.createdAt,
       createdByName: createdBy.name,
     })
@@ -398,6 +412,7 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
     .innerJoin(suppliers, eq(suppliers.id, purchases.supplierId))
     .leftJoin(createdBy, eq(createdBy.id, purchases.createdByStaffUserId))
     .leftJoin(closedBy, eq(closedBy.id, purchases.closedByStaffUserId))
+    .leftJoin(reopenedBy, eq(reopenedBy.id, purchases.reopenedByStaffUserId))
     .where(eq(purchases.id, id))
     .limit(1);
   if (!header) return null;
@@ -422,6 +437,7 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
     getLineQuantities(id, db),
     hasAnyReceipt(db, id),
   ]);
+  const dispositions = await getDefectDispositionsByPurchaseLine(lineRows.map((line) => line.id), db);
 
   return {
     ...header,
@@ -436,6 +452,9 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
         qtyOrdered: line.qtyOrdered,
         accepted,
         rejected,
+        defectHeld: dispositions.get(line.id)?.held ?? 0,
+        returned: dispositions.get(line.id)?.returned ?? 0,
+        released: dispositions.get(line.id)?.released ?? 0,
         outstanding: outstandingQty(line.qtyOrdered, settled),
         totalAmountPaid: line.totalAmount,
       };

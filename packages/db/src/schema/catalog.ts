@@ -427,10 +427,15 @@ export const productionBatches = pgTable(
     // Batches posted before 0025 were backfilled to `received` (their stock was added at posting).
     receiptStatus: text("receipt_status").$type<ProductionReceiptStatus>().notNull().default("pending"),
     // Short-close ("Tutup batch", D19/D27): who closed it, when, and why. Same columns and the same
-    // one-directional pair check as purchases' (its reopen columns arrive in 0027 with S6).
+    // one-directional pair check as purchases'.
     closedAt: timestamp("closed_at", { withTimezone: true, mode: "date" }),
     closedByStaffUserId: uuid("closed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     closeReason: text("close_reason"),
+    // Re-open (D18, migration 0027): same three columns and rule as purchases'. New columns, so
+    // the freeze trigger (whose WHEN clause names its columns) never sees them.
+    reopenedAt: timestamp("reopened_at", { withTimezone: true, mode: "date" }),
+    reopenedByStaffUserId: uuid("reopened_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    reopenReason: text("reopen_reason"),
     ...timestamps(),
   },
   (table) => [
@@ -439,6 +444,11 @@ export const productionBatches = pgTable(
     index("production_batches_receipt_status_idx").on(table.receiptStatus),
     // ON DELETE RESTRICT FK — indexed, this codebase's standing rule.
     index("production_batches_closed_by_staff_user_id_idx").on(table.closedByStaffUserId),
+    index("production_batches_reopened_by_staff_user_id_idx").on(table.reopenedByStaffUserId),
+    check(
+      "production_batches_reopened_triple_check",
+      sql`num_nonnulls(${table.reopenedAt}, ${table.reopenedByStaffUserId}, ${table.reopenReason}) in (0, 3) and (${table.reopenReason} is null or btrim(${table.reopenReason}) <> '')`,
+    ),
     check("production_batches_receipt_status_check", checkIn(table.receiptStatus, PRODUCTION_RECEIPT_STATUSES)),
     // A draft has no output to receive yet.
     check("production_batches_draft_receipt_pending_check", sql`${table.status} <> 'draft' or ${table.receiptStatus} = 'pending'`),
@@ -1085,6 +1095,12 @@ export const purchases = pgTable(
     closedAt: timestamp("closed_at", { withTimezone: true, mode: "date" }),
     closedByStaffUserId: uuid("closed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     closeReason: text("close_reason"),
+    // Re-open (D18, migration 0027): only a return-to-supplier against a closed/cancelled document
+    // re-opens it, stamping who, when and why. The latest re-open wins; the close stamp above is
+    // kept (one-directional close check), so both events stay visible.
+    reopenedAt: timestamp("reopened_at", { withTimezone: true, mode: "date" }),
+    reopenedByStaffUserId: uuid("reopened_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    reopenReason: text("reopen_reason"),
     createdByStaffUserId: uuid("created_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     ...timestamps(),
   },
@@ -1093,6 +1109,12 @@ export const purchases = pgTable(
     index("purchases_status_idx").on(table.status),
     index("purchases_ordered_at_idx").on(table.orderedAt.desc()),
     index("purchases_closed_by_staff_user_id_idx").on(table.closedByStaffUserId),
+    index("purchases_reopened_by_staff_user_id_idx").on(table.reopenedByStaffUserId),
+    // All three re-open columns or none, and a reason is never blank.
+    check(
+      "purchases_reopened_triple_check",
+      sql`num_nonnulls(${table.reopenedAt}, ${table.reopenedByStaffUserId}, ${table.reopenReason}) in (0, 3) and (${table.reopenReason} is null or btrim(${table.reopenReason}) <> '')`,
+    ),
     index("purchases_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
     check("purchases_status_check", checkIn(table.status, PURCHASE_STATUSES)),
     // One-directional on purpose (§3.2): a terminal status always carries its close stamp, but a
@@ -1253,6 +1275,11 @@ export const goodsReceiptItems = pgTable(
     // Back the per-line SUM and the RESTRICT checks.
     index("goods_receipt_items_purchase_item_id_idx").on(table.purchaseItemId),
     index("goods_receipt_items_production_batch_item_id_idx").on(table.productionBatchItemId),
+    // Composite-FK targets (migration 0027) for defect_movements: a reject (and a reject's
+    // reversal) must name a receipt item of its OWN source line. Always satisfiable — `id` is the
+    // primary key.
+    unique("goods_receipt_items_id_purchase_item_id_key").on(table.id, table.purchaseItemId),
+    unique("goods_receipt_items_id_production_batch_item_id_key").on(table.id, table.productionBatchItemId),
     foreignKey({
       columns: [table.goodsReceiptId, table.sourceType, table.kind],
       foreignColumns: [goodsReceipts.id, goodsReceipts.sourceType, goodsReceipts.kind],
@@ -1405,6 +1432,23 @@ export const defectMovements = pgTable(
       columns: [table.productionBatchItemId, table.sku],
       foreignColumns: [productionBatchItems.id, productionBatchItems.sku],
       name: "defect_movements_production_batch_item_sku_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    // Migration 0027: the receipt item a reject (or a reject's reversal) names belongs to the same
+    // source line as the row itself. MATCH SIMPLE: rows without a receipt item (returns, releases
+    // and their reversals) or of the other source kind skip the check.
+    foreignKey({
+      columns: [table.goodsReceiptItemId, table.purchaseItemId],
+      foreignColumns: [goodsReceiptItems.id, goodsReceiptItems.purchaseItemId],
+      name: "defect_movements_receipt_item_purchase_item_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    foreignKey({
+      columns: [table.goodsReceiptItemId, table.productionBatchItemId],
+      foreignColumns: [goodsReceiptItems.id, goodsReceiptItems.productionBatchItemId],
+      name: "defect_movements_receipt_item_batch_item_fk",
     })
       .onDelete("restrict")
       .onUpdate("restrict"),

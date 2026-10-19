@@ -79,7 +79,18 @@ async function purchaseWithRejects(page: Page, layout: Layout): Promise<void> {
   // with "Dipesan". The desktop table's rows are only the lines.
   const lineRow = await layoutRow(page, layout, fabricName, layout.rowTag === "li" ? "Dipesan" : "yard");
   if (layout.rowTag === "tr") {
-    await expect(lineRow.getByRole("cell")).toHaveText(["E2E Katun Cacat " + marker, "10.00 yard", "8.00 yard", "2.00 yard", "0.00 yard", "Rp 1.000.000"]);
+    // Dipesan / Diterima / Cacat / Ditukar / Dilepas / Sisa (S6), then the line's defect actions.
+    await expect(lineRow.getByRole("cell")).toHaveText([
+      "E2E Katun Cacat " + marker,
+      "10.00 yard",
+      "8.00 yard",
+      "2.00 yard",
+      "0.00 yard",
+      "0.00 yard",
+      "0.00 yard",
+      "Rp 1.000.000",
+      /^Kembalikan ke supplier/,
+    ]);
   } else {
     await expect(lineRow).toContainText("Cacat2.00 yard");
     await expect(lineRow).toContainText("Sisa0.00 yard");
@@ -90,7 +101,7 @@ async function purchaseWithRejects(page: Page, layout: Layout): Promise<void> {
   await expect(defectRow).toContainText("Ditolak saat diterima");
   await expect(defectRow).toContainText("2.00 yard");
   await expect(defectRow).toContainText("Nilai Rp 200.000");
-  await expect(page.getByText("Nilai cacat")).toBeVisible();
+  await expect(page.getByTestId("variance-panel").getByText("Nilai cacat masih disimpan")).toBeVisible();
 
   // Sellable stock rose by the accepted 8 only.
   await page.goto(`/stock/fabrics?q=${encodeURIComponent(fabricName)}`);
@@ -173,7 +184,17 @@ test.describe("Barang cacat: ditolak saat penerimaan", () => {
     await expect(output.getByTestId("defect-row")).toContainText("1 pcs");
     await expect(output.getByTestId("defect-row")).toContainText("Nilai Rp 50.000");
     await setLayout(page, DESKTOP);
-    await expect(output.getByTestId("output-row").getByRole("cell")).toHaveText([variantLabel, sku, "4 pcs", "2 pcs", "1 pcs", "1 pcs"]);
+    await expect(output.getByTestId("output-row").getByRole("cell")).toHaveText([
+      variantLabel,
+      sku,
+      "4 pcs",
+      "2 pcs",
+      "1 pcs",
+      "0 pcs",
+      "0 pcs",
+      "1 pcs",
+      /^Kembalikan ke penjahit/,
+    ]);
     await setLayout(page, MOBILE);
 
     // Sellable stock is the 2 good pcs only.

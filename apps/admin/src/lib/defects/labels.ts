@@ -6,7 +6,7 @@ import type { DefectDisposalType, DefectItemKind, DefectMovementType } from "@am
 
 export const DEFECT_MOVEMENT_TYPE_LABELS: Record<DefectMovementType, string> = {
   reject: "Ditolak saat diterima",
-  return_out: "Dikembalikan ke supplier",
+  return_out: "Dikembalikan untuk ditukar",
   dispose: "Dilepas",
   reversal: "Pembatalan",
 };

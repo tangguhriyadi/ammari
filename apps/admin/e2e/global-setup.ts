@@ -73,6 +73,9 @@ const E2E_PURCHASES_ROLE_KEY = "e2e_purchases";
 // production+stock fixture has.
 export const E2E_DEFECTS_EMAIL = "defects@e2e.ammari.test";
 const E2E_DEFECTS_ROLE_KEY = "e2e_defects";
+// A second email on the SAME `e2e_defects` role, for defect-dispositions.spec.ts (session S6:
+// returns, re-open, releases, variance) — its own OTP throttle, no new permissions to maintain.
+export const E2E_DISPOSITIONS_EMAIL = "dispositions@e2e.ammari.test";
 // Dedicated emails for login-otp.spec.ts — it drives the REAL `/login` OTP form (not the
 // instant-sign-in backdoor every other spec uses), which legitimately sends real OTPs and is the
 // one spec that actually exercises the per-email 60s resend cooldown. TWO emails, not one: the
@@ -281,6 +284,7 @@ export default async function globalSetup(): Promise<void> {
     "inventory.receive",
   ]);
   await ensureStaffFixture(E2E_DEFECTS_EMAIL, "E2E Defects", E2E_DEFECTS_ROLE_KEY);
+  await ensureStaffFixture(E2E_DISPOSITIONS_EMAIL, "E2E Dispositions", E2E_DEFECTS_ROLE_KEY);
 
   await ensureStaffFixture(E2E_LOGIN_OTP_EMAIL, "E2E Login OTP", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_LOGIN_OTP_MOBILE_EMAIL, "E2E Login OTP Mobile", OWNER_ROLE_KEY);
@@ -330,6 +334,7 @@ export default async function globalSetup(): Promise<void> {
         E2E_PACKING_PRINT_WEBKIT_EMAIL,
         E2E_PURCHASES_EMAIL,
         E2E_DEFECTS_EMAIL,
+        E2E_DISPOSITIONS_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);

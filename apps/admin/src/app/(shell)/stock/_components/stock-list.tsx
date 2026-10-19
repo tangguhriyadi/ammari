@@ -24,7 +24,17 @@ function groupByProduct(rows: StockOverviewRow[]) {
   return Array.from(products.values());
 }
 
-export function StockList({ rows, canAdjust }: { rows: StockOverviewRow[]; canAdjust: boolean }) {
+/** `defectQtyBySku` (S5b): each SKU's defect stock, shown as its own "Cacat" figure next to the
+ * sellable count it is never part of. */
+export function StockList({
+  rows,
+  canAdjust,
+  defectQtyBySku = new Map(),
+}: {
+  rows: StockOverviewRow[];
+  canAdjust: boolean;
+  defectQtyBySku?: ReadonlyMap<string, number>;
+}) {
   if (rows.length === 0) {
     return <EmptyState title="Tidak ada SKU yang cocok" description="Coba ubah kata kunci atau filter." />;
   }
@@ -63,6 +73,11 @@ export function StockList({ rows, canAdjust }: { rows: StockOverviewRow[]; canAd
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   <span className="text-base font-semibold tabular-nums text-neutral-900">{formatNumber(row.currentStock)}</span>
+                  {(defectQtyBySku.get(row.sku) ?? 0) !== 0 && (
+                    <span className="text-sm tabular-nums text-neutral-600" data-testid="sku-defect-qty">
+                      Cacat {formatNumber(defectQtyBySku.get(row.sku) ?? 0)}
+                    </span>
+                  )}
                   <div className="flex gap-1">
                     {!row.isActive && <Badge variant="neutral">Nonaktif</Badge>}
                     <StockStatusBadge currentStock={row.currentStock} minStockQty={row.minStockQty} />

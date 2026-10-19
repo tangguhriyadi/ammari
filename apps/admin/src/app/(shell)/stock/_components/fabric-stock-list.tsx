@@ -7,6 +7,8 @@ export interface FabricStockListRow {
   name: string;
   supplier: string | null;
   qty: number;
+  /** Defect stock (S5b): never part of `qty`; 0 when none. */
+  defectQty: number;
   /** `null` for a session without finance.view_profit — stripped server-side by the page. */
   valueAmount: number | null;
 }
@@ -34,6 +36,7 @@ export function FabricStockList({ rows }: { rows: FabricStockListRow[] }) {
                     {row.supplier ? `${row.supplier} · ` : ""}
                     {row.qty.toFixed(2)} yard
                     {averageCost !== null && <> · ≈{formatRupiah(averageCost)}/yard</>}
+                    {row.defectQty !== 0 && <> · Cacat {row.defectQty.toFixed(2)} yard</>}
                   </p>
                 </Card>
               </Link>
@@ -47,6 +50,7 @@ export function FabricStockList({ rows }: { rows: FabricStockListRow[] }) {
           <Th>Nama</Th>
           <Th>Supplier</Th>
           <Th>Stok</Th>
+          <Th>Cacat</Th>
           <Th>Harga rata-rata</Th>
         </TableHead>
         <tbody>
@@ -61,6 +65,7 @@ export function FabricStockList({ rows }: { rows: FabricStockListRow[] }) {
                 </Td>
                 <Td className="text-neutral-700">{row.supplier ?? "—"}</Td>
                 <Td className="text-neutral-700 tabular-nums">{row.qty.toFixed(2)} yard</Td>
+                <Td className="text-neutral-700 tabular-nums" data-testid="fabric-defect-qty">{row.defectQty !== 0 ? `${row.defectQty.toFixed(2)} yard` : "-"}</Td>
                 <Td className="text-neutral-700 tabular-nums">{averageCost !== null ? `${formatRupiah(averageCost)}/yard` : "—"}</Td>
               </Tr>
             );

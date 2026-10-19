@@ -3,7 +3,7 @@ import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getBatchDetail, getBatchExtraCosts, listEligibleSkusForFabric } from "@/lib/production/queries";
 import { getBatchReceiptSummary, listReceiptsForBatch } from "@/lib/receipts/production";
-import { heldDefectValue, listDefectMovementsForBatch, stripDefectMovementAmounts } from "@/lib/defects/queries";
+import { getDefectBalance, heldDefectValue, listDefectMovementsForBatch, stripDefectMovementAmounts, type DefectBalance } from "@/lib/defects/queries";
 import { listActiveCostComponents } from "@/lib/production/cost-components";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
@@ -57,6 +57,10 @@ async function PostedView({
   ]);
   if (!summary) notFound();
   const defectRows = stripDefectMovementAmounts(defectRowsRaw, canViewProfit);
+  const canManage = permissionKeys.includes("inventory.manage");
+  // Cost data (the disposal dialog's live value preview): only for finance.view_profit.
+  const heldSkus = canManage && canViewProfit ? [...new Set(summary.lines.filter((line) => line.defectHeld > 0).map((line) => line.sku))] : [];
+  const pools = new Map<string, DefectBalance>(await Promise.all(heldSkus.map(async (sku) => [sku, await getDefectBalance({ kind: "sku", sku })] as const)));
 
   return (
     <>
@@ -71,12 +75,13 @@ async function PostedView({
           // Receiving needs inventory.receive (D10); the receive page also needs production.manage,
           // which this page already required.
           canReceive={permissionKeys.includes("inventory.receive")}
-          canManage={permissionKeys.includes("inventory.manage")}
+          canManage={canManage}
+          pools={pools}
         />
       </div>
       {canViewProfit && (
         <div className="mt-6">
-          <BatchCostsSection batchId={batch.id} fabricYards={batch.fabricYards} lines={batch.lines} receiptSummary={summary} />
+          <BatchCostsSection batchId={batch.id} fabricYards={batch.fabricYards} lines={batch.lines} receiptSummary={summary} defectRows={defectRowsRaw} />
         </div>
       )}
     </>

@@ -4,6 +4,9 @@ import { getBatchAccessoryConsumption, getBatchCosts, getBatchExtraCosts, type B
 import { getCurrentCostAssumption } from "@/lib/products/queries";
 import { calculateBatasHpp } from "@/lib/products/batas-hpp";
 import { unabsorbedValue, type BatchReceiptSummary } from "@/lib/receipts/production";
+import type { DocumentDefectMovementRow } from "@/lib/defects/queries";
+import { batchVariance, summarizeDefectValues } from "@/lib/defects/variance";
+import { DefectReleaseRows, formatNetLoss, VarianceRow } from "../../purchases/_components/defect-variance";
 
 /** Only ever rendered by the caller (batch detail page) when the session holds
  * finance.view_profit — see ProductBatasHpp in products/[id]/page.tsx for the identical
@@ -13,17 +16,22 @@ import { unabsorbedValue, type BatchReceiptSummary } from "@/lib/receipts/produc
  *
  * Breakdown groups (plan requirement): Kain, Aksesoris (per item), Biaya variabel, Biaya tetap,
  * Total, HPP/pcs — plus, on a short-closed batch, "Nilai belum terserap" (§4.3, S4): the frozen
- * cost of the planned pcs that never arrived. HPP/pcs itself is never rewritten. */
+ * cost of the planned pcs that never arrived — and, once the batch has output, the §4.3 variance
+ * (S6): defect value still held, released per type (Hibah and Dibuang separate, D29), proceeds,
+ * "Kerugian bersih barang cacat" and "HPP riil per pcs". HPP/pcs itself is never rewritten. */
 export async function BatchCostsSection({
   batchId,
   fabricYards,
   lines,
   receiptSummary,
+  defectRows = [],
 }: {
   batchId: string;
   fabricYards: number | null;
   lines: BatchLineRow[];
   receiptSummary?: BatchReceiptSummary | null;
+  /** The batch's defect rows WITH value (this section only renders for finance.view_profit). */
+  defectRows?: readonly DocumentDefectMovementRow[];
 }) {
   const costs = await getBatchCosts(batchId);
   if (!costs) return null;
@@ -44,6 +52,16 @@ export async function BatchCostsSection({
     receiptSummary?.receiptStatus === "closed"
       ? unabsorbedValue(receiptSummary.lines.map((line) => ({ outstanding: line.outstanding, unitCostAmount: unitCostByLineId.get(line.id) ?? 0 })))
       : null;
+  const defects = summarizeDefectValues(defectRows);
+  const variance =
+    receiptSummary && defects
+      ? batchVariance({
+          lines: receiptSummary.lines.map((line) => ({ received: line.received, outstanding: line.outstanding, unitCostAmount: unitCostByLineId.get(line.id) ?? 0 })),
+          closed: receiptSummary.receiptStatus === "closed",
+          defects,
+        })
+      : null;
+  const showVariance = variance !== null && (variance.sellablePcs > 0 || defectRows.length > 0);
 
   return (
     <Card className="flex flex-col gap-4">
@@ -126,6 +144,29 @@ export async function BatchCostsSection({
         <div className="flex items-center justify-between gap-2 text-base">
           <dt className="text-neutral-600">Nilai belum terserap</dt>
           <dd className="font-semibold text-neutral-900 tabular-nums">{formatRupiah(unabsorbed)}</dd>
+        </div>
+      )}
+
+      {showVariance && variance && (
+        <div className="flex flex-col gap-2 border-t border-neutral-200 pt-3" data-testid="variance-panel">
+          <p className="text-sm font-medium text-neutral-900">Barang cacat dan HPP riil</p>
+          <VarianceRow label="Nilai diterima" hint={`${variance.sellablePcs} pcs masuk stok`} value={formatRupiah(variance.sellableValue)} />
+          <DefectReleaseRows defects={variance.defects} />
+          {variance.defects.releasedTotal === 0 && variance.defects.netLoss === 0 && (
+            <VarianceRow label="Kerugian bersih barang cacat" value={formatNetLoss(0)} />
+          )}
+          {variance.hppRiilPerPcs !== null && (
+            <VarianceRow
+              label="HPP riil per pcs"
+              hint={
+                variance.provisional
+                  ? "Sementara: masih ada barang cacat disimpan atau hasil yang ditunggu"
+                  : "Nilai diterima ditambah kerugian bersih dan nilai belum terserap, dibagi pcs yang masuk stok"
+              }
+              value={formatRupiah(variance.hppRiilPerPcs)}
+              strong
+            />
+          )}
         </div>
       )}
 

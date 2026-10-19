@@ -5,6 +5,8 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { getFabricById } from "@/lib/products/fabric-queries";
 import { getFabricBalance, listFabricStockLedger } from "@/lib/inventory/fabric-stock";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { getDefectBalance, listItemDefectMovements, stripItemDefectAmounts } from "@/lib/defects/queries";
+import { ItemDefectSection } from "../../_components/item-defect-section";
 import { FabricLedger } from "../../_components/fabric-ledger";
 import { FabricStockControls } from "../../_components/fabric-stock-controls";
 
@@ -30,7 +32,12 @@ export default async function FabricStockDetailPage({
   // holds inventory.view/inventory.manage but not products.manage.
   const canViewMaster = session.permissionKeys.includes("products.manage");
 
-  const [balance, { rows, pagination }] = await Promise.all([getFabricBalance(id), listFabricStockLedger(id, page, perPage)]);
+  const [balance, { rows, pagination }, defectBalance, defectRows] = await Promise.all([
+    getFabricBalance(id),
+    listFabricStockLedger(id, page, perPage),
+    getDefectBalance({ kind: "fabric", fabricId: id }),
+    listItemDefectMovements({ kind: "fabric", fabricId: id }),
+  ]);
 
   return (
     <>
@@ -51,6 +58,13 @@ export default async function FabricStockDetailPage({
         basePath={`/stock/fabrics/${id}`}
         searchParams={{ perPage }}
         canViewProfit={canViewProfit}
+      />
+      <ItemDefectSection
+        kind="fabric"
+        balance={{ qty: defectBalance.qty, valueAmount: canViewProfit ? defectBalance.valueAmount : null }}
+        rows={stripItemDefectAmounts(defectRows, canViewProfit)}
+        canOpenPurchase
+        canOpenBatch={session.permissionKeys.includes("production.manage")}
       />
     </>
   );

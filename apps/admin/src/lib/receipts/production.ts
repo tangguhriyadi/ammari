@@ -14,7 +14,7 @@ import {
   type GoodsReceiptKind,
   type ProductionReceiptStatus,
 } from "@ammari/db/schema";
-import { getDefectSettledByBatchLine, insertRejectMovements, reverseRejectsInTx } from "@/lib/defects/queries";
+import { getDefectDispositionsByBatchLine, getDefectSettledByBatchLine, insertRejectMovements, reverseRejectsInTx } from "@/lib/defects/queries";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { nextDocumentNumber } from "@/lib/documents/document-number";
@@ -140,7 +140,7 @@ export async function effectiveReceiptStatuses(
   return result;
 }
 
-async function getBatchLineProgress(batchId: string, db: Database): Promise<BatchLineProgress[]> {
+export async function getBatchLineProgress(batchId: string, db: Database): Promise<BatchLineProgress[]> {
   const [lines, quantities] = await Promise.all([
     db.select({ id: productionBatchItems.id, qty: productionBatchItems.qty }).from(productionBatchItems).where(eq(productionBatchItems.productionBatchId, batchId)),
     getBatchQuantitiesByLine(batchId, db),
@@ -527,8 +527,14 @@ export interface BatchReceiptLine {
   size: string;
   planned: number;
   received: number;
-  /** Net pcs rejected into defect stock ("Cacat"). */
+  /** Net pcs rejected into defect stock at receipt (everything that ever arrived defective). */
   rejected: number;
+  /** Pcs still held in defect stock from this line ("Cacat"): rejected − returned − released. */
+  defectHeld: number;
+  /** Net pcs returned to the tailor ("Ditukar", S6). */
+  returned: number;
+  /** Net pcs released ("Dilepas", S6). */
+  released: number;
   /** planned − qtySettled (§4.2): rejects use up the planned pcs too. */
   outstanding: number;
 }
@@ -542,6 +548,10 @@ export interface BatchReceiptSummary {
   closedAt: Date | null;
   closedByName: string | null;
   closeReason: string | null;
+  /** D18: set when a return-to-tailor re-opened a closed batch ("Dibuka kembali"). */
+  reopenedAt: Date | null;
+  reopenedByName: string | null;
+  reopenReason: string | null;
   lines: BatchReceiptLine[];
 }
 
@@ -549,15 +559,20 @@ export interface BatchReceiptSummary {
  * columns at all — safe for every caller. */
 export async function getBatchReceiptSummary(batchId: string, db: Database = defaultDb): Promise<BatchReceiptSummary | null> {
   const closedBy = alias(staffUsers, "closed_by");
+  const reopenedBy = alias(staffUsers, "reopened_by");
   const [header] = await db
     .select({
       receiptStatus: productionBatches.receiptStatus,
       closedAt: productionBatches.closedAt,
       closedByName: closedBy.name,
       closeReason: productionBatches.closeReason,
+      reopenedAt: productionBatches.reopenedAt,
+      reopenedByName: reopenedBy.name,
+      reopenReason: productionBatches.reopenReason,
     })
     .from(productionBatches)
     .leftJoin(closedBy, eq(closedBy.id, productionBatches.closedByStaffUserId))
+    .leftJoin(reopenedBy, eq(reopenedBy.id, productionBatches.reopenedByStaffUserId))
     .where(eq(productionBatches.id, batchId))
     .limit(1);
   if (!header) return null;
@@ -566,6 +581,7 @@ export async function getBatchReceiptSummary(batchId: string, db: Database = def
     batchLinesQuery(db, batchId).orderBy(products.name, fabricColors.name, productVariants.size),
     getBatchQuantitiesByLine(batchId, db),
   ]);
+  const dispositions = await getDefectDispositionsByBatchLine(lineRows.map((row) => row.id), db);
   const progress = lineRows.map((row) => {
     const { received, rejected } = quantities.get(row.id) ?? NO_QUANTITIES;
     return { planned: row.qty, received, rejected };
@@ -584,6 +600,9 @@ export async function getBatchReceiptSummary(batchId: string, db: Database = def
         planned: row.qty,
         received,
         rejected,
+        defectHeld: dispositions.get(row.id)?.held ?? 0,
+        returned: dispositions.get(row.id)?.returned ?? 0,
+        released: dispositions.get(row.id)?.released ?? 0,
         outstanding: row.qty - settled,
       };
     }),

@@ -8,6 +8,8 @@ export interface AccessoryStockListRow {
   name: string;
   size: Size | null;
   qty: number;
+  /** Defect stock (S5b): never part of `qty`; 0 when none. */
+  defectQty: number;
   /** `null` for a session without finance.view_profit — stripped server-side by the page,
    * never just hidden client-side (same discipline as accessories/_components/accessory-list.tsx). */
   valueAmount: number | null;
@@ -38,6 +40,7 @@ export function AccessoryStockList({ rows }: { rows: AccessoryStockListRow[] }) 
                   <p className="text-sm text-neutral-600">
                     {formatNumber(row.qty)} pcs
                     {averageCost !== null && <> · ≈{formatRupiah(averageCost)}/pcs</>}
+                    {row.defectQty !== 0 && <> · Cacat {formatNumber(row.defectQty)} pcs</>}
                   </p>
                 </Card>
               </Link>
@@ -50,6 +53,7 @@ export function AccessoryStockList({ rows }: { rows: AccessoryStockListRow[] }) 
         <TableHead>
           <Th>Nama</Th>
           <Th>Stok</Th>
+          <Th>Cacat</Th>
           <Th>Harga rata-rata</Th>
         </TableHead>
         <tbody>
@@ -64,6 +68,7 @@ export function AccessoryStockList({ rows }: { rows: AccessoryStockListRow[] }) 
                   {row.size && <span className="ml-2 text-neutral-600">{row.size === "ALLSIZE" ? "Polos" : row.size}</span>}
                 </Td>
                 <Td className="text-neutral-700 tabular-nums">{formatNumber(row.qty)} pcs</Td>
+                <Td className="text-neutral-700 tabular-nums" data-testid="accessory-defect-qty">{row.defectQty !== 0 ? `${formatNumber(row.defectQty)} pcs` : "-"}</Td>
                 <Td className="text-neutral-700 tabular-nums">{averageCost !== null ? `${formatRupiah(averageCost)}/pcs` : "—"}</Td>
               </Tr>
             );

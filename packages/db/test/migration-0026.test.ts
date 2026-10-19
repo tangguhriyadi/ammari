@@ -247,7 +247,8 @@ describe("migration 0026", () => {
       expect(column).toMatchObject({ is_nullable: "NO", data_type: "numeric" });
       expect(column?.column_default).toBe("0");
       const triggers = await client`select tgname from pg_trigger where tgrelid = 'defect_movements'::regclass and not tgisinternal`;
-      expect(triggers.map((row) => row.tgname)).toEqual(["prevent_defect_movement_mutation"]);
+      // Migrated to head: later migrations may add their own triggers (0027's reversal check).
+      expect(triggers.map((row) => row.tgname)).toContain("prevent_defect_movement_mutation");
 
       const seeded = await seedReceipts(client);
       await assertDefectLedgerRules(client, seeded);

@@ -232,7 +232,7 @@ against it.
 For a DB-layer disaster (corruption, bad manual change — not a bad app release), see §6's "Real
 disaster restore," not this section.
 
-### 2.1 Rollback limits: goods receipts (suppliers-goods-receipt plan, S3 to S5)
+### 2.1 Rollback limits: goods receipts (suppliers-goods-receipt plan, S3 to S6)
 
 **Never roll prod back to a release from before S3 (migration 0024, purchase documents and goods
 receipts) once any goods receipt exists** — check first with
@@ -265,6 +265,13 @@ stays compatible, but S4 ignores `qty_rejected`: it treats rejected units as sti
 so they could be received a second time, and its **Batalkan penerimaan** reverses the good units
 but leaves that receipt's rejects in defect stock. If the count is not 0, roll forward with a fix
 instead, or reverse those receipts on S5 first and then roll back.
+
+**Rolling back from S6 (migration 0027, defect dispositions) to S5 is safe.** S5 already counts
+returns to the supplier as re-opened outstanding (a replacement can still be received, also on a
+re-opened document) and refuses to reverse a receipt whose defects were returned or released.
+While S5 is live nobody can return, release or reverse a defect, the line tables' "Cacat" column
+shows everything that ever arrived defective (not what is still held), and the variance panels
+are gone. Nothing needs repairing after rolling forward again.
 
 ---
 

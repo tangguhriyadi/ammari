@@ -297,6 +297,12 @@ outstanding (so they could be received a second time), and its "Batalkan penerim
 the good units but leaves the receipt's rejects in `defect_movements`. If rejects exist, roll
 forward with a fix instead; or reverse those receipts on S5 first, then roll back.
 
+**Rolling back from S6** (migration 0027, defect dispositions) to S5 is safe. S5 already reads
+returns correctly (they re-open outstanding, so a replacement can still be received on a re-opened
+document), refuses to reverse a receipt whose defects were returned or released, and simply
+cannot create or reverse returns/releases while it is live. Its "Cacat" column shows everything
+that arrived defective rather than what is still held, and the variance panels are absent.
+
 ## Image retention and disk space
 
 Every deploy pulls three fresh SHA-tagged images (admin/web/migrator). Nothing removed the old

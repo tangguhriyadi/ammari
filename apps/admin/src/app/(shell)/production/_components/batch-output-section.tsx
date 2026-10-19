@@ -5,7 +5,9 @@ import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import type { DocumentDefectMovementRow } from "@/lib/defects/queries";
 import { isOpenBatchReceiptStatus } from "@/lib/production/receipt-status";
 import type { BatchReceiptLine, BatchReceiptRow, BatchReceiptSummary } from "@/lib/receipts/production";
+import type { DefectBalance } from "@/lib/defects/queries";
 import { DefectHistory } from "../../purchases/_components/defect-history";
+import { DisposeDefectsButton, ReturnDefectsButton } from "../../purchases/_components/defect-actions";
 import { ReverseReceiptButton } from "../../purchases/_components/reverse-receipt-button";
 import { CloseBatchButton } from "./close-batch-button";
 import { ReceiptStatusBadge } from "./receipt-status-badge";
@@ -18,10 +20,11 @@ function variantLabel(line: Pick<BatchReceiptLine, "productName" | "colorName" |
   return `${line.productName} · ${line.colorName} · ${sizeLabel(line.size)}`;
 }
 
-/** "Hasil produksi" (docs/plans/suppliers-goods-receipt.md §7, S4 + S5): a posted batch's output,
- * per variant planned / received / defective / outstanding, its receipts, its defect history, and
- * the receive / close / reverse actions. Quantities for every session that can open the batch;
- * the defect VALUE only when the caller passes it (finance.view_profit). */
+/** "Hasil produksi" (docs/plans/suppliers-goods-receipt.md §7, S4 + S5 + S6): a posted batch's
+ * output, per variant planned / received / defective (still held) / returned / released /
+ * outstanding, its receipts, its defect history, and the receive / close / reverse actions plus,
+ * for inventory.manage, the defect dispositions per line. Quantities for every session that can
+ * open the batch; the defect VALUE only when the caller passes it (finance.view_profit). */
 export function BatchOutputSection({
   batchId,
   summary,
@@ -30,6 +33,7 @@ export function BatchOutputSection({
   defectValue,
   canReceive,
   canManage,
+  pools,
 }: {
   batchId: string;
   summary: BatchReceiptSummary;
@@ -40,6 +44,8 @@ export function BatchOutputSection({
   defectValue: number | null;
   canReceive: boolean;
   canManage: boolean;
+  /** Each held SKU's pooled defect balance (disposal preview); empty without finance.view_profit. */
+  pools: ReadonlyMap<string, DefectBalance>;
 }) {
   const isOpen = isOpenBatchReceiptStatus(summary.receiptStatus);
   // Open but fully settled (some of it as defects): nothing left to receive, only to close.
@@ -52,7 +58,10 @@ export function BatchOutputSection({
         <h2 id="batch-output-heading" className="text-lg font-semibold text-neutral-900">
           Hasil produksi
         </h2>
-        <ReceiptStatusBadge status={summary.receiptStatus} />
+        <div className="flex flex-wrap justify-end gap-2">
+          {summary.reopenedAt && <Badge variant="neutral">Dibuka kembali</Badge>}
+          <ReceiptStatusBadge status={summary.receiptStatus} />
+        </div>
       </div>
 
       {isOpen && (
@@ -65,11 +74,17 @@ export function BatchOutputSection({
         <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
           <Row label="Ditutup" value={`${formatDateTime(summary.closedAt)}${summary.closedByName ? ` · ${summary.closedByName}` : ""}`} />
           {summary.closeReason && <Row label="Alasan" value={summary.closeReason} />}
+          {summary.reopenedAt && (
+            <>
+              <Row label="Dibuka kembali" value={`${formatDateTime(summary.reopenedAt)}${summary.reopenedByName ? ` · ${summary.reopenedByName}` : ""}`} />
+              {summary.reopenReason && <Row label="Alasan dibuka" value={summary.reopenReason} />}
+            </>
+          )}
         </div>
       )}
 
       {isOpen && !hasOutstanding && (
-        <p className="text-base text-neutral-700">Semua sisa sudah diterima atau dicatat cacat. Tutup batch untuk menyelesaikannya.</p>
+        <p className="text-base text-neutral-700">Semua sisa sudah diterima atau dicatat cacat. Barang cacat bisa dikembalikan ke penjahit untuk diperbaiki atau dilepas. Tutup batch jika tidak ada lagi yang ditunggu.</p>
       )}
 
       {isOpen && (canReceive || canManage) && (
@@ -83,7 +98,34 @@ export function BatchOutputSection({
         </div>
       )}
 
-      <OutputLines lines={summary.lines} />
+      <OutputLines
+        lines={summary.lines}
+        actions={
+          canManage
+            ? (line) =>
+                line.defectHeld > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    <ReturnDefectsButton
+                      sourceType="production_batch"
+                      lineId={line.id}
+                      itemLabel={variantLabel(line)}
+                      maxQty={line.defectHeld}
+                      isFabric={false}
+                      documentClosed={summary.receiptStatus === "closed"}
+                    />
+                    <DisposeDefectsButton
+                      sourceType="production_batch"
+                      lineId={line.id}
+                      itemLabel={variantLabel(line)}
+                      maxQty={line.defectHeld}
+                      isFabric={false}
+                      pool={pools.get(line.sku) ?? null}
+                    />
+                  </div>
+                ) : null
+            : undefined
+        }
+      />
 
       <h3 className="mt-2 text-base font-semibold text-neutral-900">Riwayat penerimaan</h3>
       <ReceiptHistory receipts={receipts} canReverse={canManage} />
@@ -94,12 +136,16 @@ export function BatchOutputSection({
           <Row label="Nilai cacat" value={formatRupiah(defectValue)} />
         </div>
       )}
-      <DefectHistory rows={defectRows} emptyText="Tidak ada barang cacat dari batch ini." />
+      <DefectHistory rows={defectRows} emptyText="Tidak ada barang cacat dari batch ini." canReverse={canManage} />
     </section>
   );
 }
 
-function OutputLines({ lines }: { lines: BatchReceiptLine[] }) {
+/** Rencana / Diterima / Cacat / Ditukar / Dilepas / Sisa. "Cacat" is what is STILL held in defect
+ * stock (it shrinks after a return or a release). */
+function OutputLines({ lines, actions }: { lines: BatchReceiptLine[]; actions?: (line: BatchReceiptLine) => ReactNode }) {
+  const showActions = actions !== undefined && lines.some((line) => line.defectHeld > 0);
+  const hasDefects = lines.some((line) => line.rejected !== 0);
   return (
     <>
       <CardList>
@@ -111,9 +157,12 @@ function OutputLines({ lines }: { lines: BatchReceiptLine[] }) {
               <dl className="grid grid-cols-2 gap-2 text-sm">
                 <QtyCell label="Rencana" value={line.planned} />
                 <QtyCell label="Diterima" value={line.received} />
-                <QtyCell label="Cacat" value={line.rejected} />
+                <QtyCell label="Cacat" value={line.defectHeld} />
+                <QtyCell label="Ditukar" value={line.returned} />
+                <QtyCell label="Dilepas" value={line.released} />
                 <QtyCell label="Sisa" value={line.outstanding} />
               </dl>
+              {actions?.(line)}
             </Card>
           </li>
         ))}
@@ -125,7 +174,10 @@ function OutputLines({ lines }: { lines: BatchReceiptLine[] }) {
           <Th>Rencana</Th>
           <Th>Diterima</Th>
           <Th>Cacat</Th>
+          <Th>Ditukar</Th>
+          <Th>Dilepas</Th>
           <Th>Sisa</Th>
+          {showActions && <Th>Barang cacat</Th>}
         </TableHead>
         <tbody>
           {lines.map((line) => (
@@ -134,12 +186,20 @@ function OutputLines({ lines }: { lines: BatchReceiptLine[] }) {
               <Td className="font-mono text-sm text-neutral-700">{line.sku}</Td>
               <Td className="tabular-nums text-neutral-700">{line.planned} pcs</Td>
               <Td className="tabular-nums text-neutral-700">{line.received} pcs</Td>
-              <Td className="tabular-nums text-neutral-700">{line.rejected} pcs</Td>
+              <Td className="tabular-nums text-neutral-700">{line.defectHeld} pcs</Td>
+              <Td className="tabular-nums text-neutral-700">{line.returned} pcs</Td>
+              <Td className="tabular-nums text-neutral-700">{line.released} pcs</Td>
               <Td className="tabular-nums text-neutral-700">{line.outstanding} pcs</Td>
+              {showActions && <Td>{actions?.(line)}</Td>}
             </Tr>
           ))}
         </tbody>
       </TableContainer>
+      {hasDefects && (
+        <p className="text-sm text-neutral-600">
+          Cacat: stok cacat yang masih disimpan. Ditukar: dikembalikan ke penjahit untuk diperbaiki atau diganti. Dilepas: dilelang, dihibahkan, atau dibuang.
+        </p>
+      )}
     </>
   );
 }

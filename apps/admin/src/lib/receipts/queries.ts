@@ -579,6 +579,25 @@ export async function listReceiptsForPurchase(purchaseId: string, db: Database =
   return headers.map((header) => ({ ...header, items: itemsByReceipt.get(header.id) ?? [] }));
 }
 
+/** "Nilai diterima" (§4.3, S6): the net value one purchase document's receipts put into sellable
+ * raw-material stock (receipt rows plus their reversals' void rows). Cost data: callers gate it
+ * behind finance.view_profit. */
+export async function getSellableReceiptValueForPurchase(purchaseId: string, db: Database = defaultDb): Promise<number> {
+  const lines = await db.select({ id: purchaseItems.id }).from(purchaseItems).where(eq(purchaseItems.purchaseId, purchaseId));
+  if (lines.length === 0) return 0;
+  const lineIds = lines.map((line) => line.id);
+  let total = 0;
+  for (const ledger of [fabricStockMovements, accessoryMovements] as const) {
+    const [row] = await db
+      .select({ value: sql<string>`coalesce(sum(${ledger.valueAmount}), 0)::bigint` })
+      .from(ledger)
+      .innerJoin(goodsReceiptItems, sql`${goodsReceiptItems.id}::text = ${ledger.refId}`)
+      .where(and(eq(ledger.refType, "goods_receipt"), inArray(goodsReceiptItems.purchaseItemId, lineIds)));
+    total += Number(row?.value ?? 0);
+  }
+  return total;
+}
+
 /** For a raw-material ledger row written by a goods receipt: the purchase document it belongs to.
  * Lets the stock ledgers' existing `/purchases/<movement id>` links land on the right document. */
 export async function findPurchaseIdForReceiptMovement(movementId: string, db: Database = defaultDb): Promise<string | null> {
