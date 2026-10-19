@@ -75,8 +75,14 @@ function validateLines(lines: readonly PurchaseLineInput[]): void {
 }
 
 /** Every line's item must exist; an accessory must still be active to be newly ordered. Read with
- * FOR SHARE so a concurrent deactivation can't slip between this check and the insert. */
-async function assertItemsOrderable(tx: Tx, lines: readonly PurchaseLineInput[]): Promise<void> {
+ * FOR SHARE so a concurrent deactivation can't slip between this check and the insert.
+ * `alreadyOrderedAccessoryIds`: on an edit, accessories the document already orders stay allowed
+ * even if deactivated since (same rule as the supplier: keeping the current choice is fine). */
+async function assertItemsOrderable(
+  tx: Tx,
+  lines: readonly PurchaseLineInput[],
+  alreadyOrderedAccessoryIds: ReadonlySet<string> = new Set(),
+): Promise<void> {
   const fabricIds = [...new Set(lines.filter((line) => line.itemType === "fabric").map((line) => line.itemId))].sort();
   const accessoryIds = [...new Set(lines.filter((line) => line.itemType === "accessory").map((line) => line.itemId))].sort();
   if (fabricIds.length > 0) {
@@ -91,7 +97,7 @@ async function assertItemsOrderable(tx: Tx, lines: readonly PurchaseLineInput[])
       .orderBy(accessories.id)
       .for("share");
     if (rows.length !== accessoryIds.length) throw new FieldError("lines", "Aksesoris tidak ditemukan.");
-    const inactive = rows.find((row) => !row.isActive);
+    const inactive = rows.find((row) => !row.isActive && !alreadyOrderedAccessoryIds.has(row.id));
     if (inactive) throw new FieldError("lines", `Aksesoris "${inactive.name}" sudah nonaktif dan tidak bisa dipesan.`);
   }
 }
@@ -166,9 +172,10 @@ export async function updatePurchase(id: string, input: PurchaseInput, actorStaf
       throw new ActionError("Pesanan yang sudah ada penerimaan barangnya, atau sudah ditutup, tidak bisa diubah.");
     }
     if (input.supplierId !== before.supplierId) await lockSelectableSuppliers(tx, [input.supplierId], "supplierId");
-    await assertItemsOrderable(tx, input.lines);
-
     const beforeLines = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, id));
+    const currentAccessoryIds = new Set(beforeLines.flatMap((line) => (line.accessoryId ? [line.accessoryId] : [])));
+    await assertItemsOrderable(tx, input.lines, currentAccessoryIds);
+
     await tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id));
     const lines = await tx.insert(purchaseItems).values(lineValues(id, input.lines)).returning();
     const [purchase] = await tx

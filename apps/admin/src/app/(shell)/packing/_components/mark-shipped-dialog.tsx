@@ -47,7 +47,7 @@ export function MarkShippedDialog({ orderId, orderNo, hasActiveCard, open, onOpe
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={`Tandai dikirim — ${orderNo}`}
+      title={`Tandai dikirim: ${orderNo}`}
       description={
         hasActiveCard
           ? undefined

@@ -38,7 +38,7 @@ export const contentImageSchema = z
     (image) =>
       (image.mobileStorageKey === null && image.mobileWidth === null && image.mobileHeight === null) ||
       (image.mobileStorageKey !== null && image.mobileWidth !== null && image.mobileHeight !== null),
-    { message: "Crop mobile tidak lengkap — unggah ulang atau hapus crop mobile." },
+    { message: "Crop mobile tidak lengkap. Unggah ulang atau hapus crop mobile." },
   );
 export type ContentImage = z.infer<typeof contentImageSchema>;
 

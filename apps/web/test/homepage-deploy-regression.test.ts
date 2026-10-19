@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { type ChildProcess, spawn } from "node:child_process";
+import { rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +35,8 @@ import { ensureE2eDatabase } from "@ammari/db/test-e2e-db";
 
 const appRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
 const nextBin = path.join(appRoot, "node_modules", ".bin", "next");
+// Must match next.config.ts's distDir for DEPLOY_REGRESSION_TEST.
+const distDir = path.join(appRoot, ".next-deploy-regression-test");
 
 const BUILD_TIMEOUT_MS = 120_000;
 const START_TIMEOUT_MS = 30_000;
@@ -131,6 +134,15 @@ describe("homepage deploy regression", () => {
       } finally {
         await seedClient.end();
       }
+
+      // Start from an empty distDir, as CI does (fresh checkout, `.next` excluded by
+      // .dockerignore). `unstable_cache` (lib/content/homepage-data.ts) persists its entries to
+      // `<distDir>/cache/fetch-cache`, and `next build` does NOT clear that folder. Reusing the
+      // previous run's distDir therefore served the previous run's heading: fresh within the
+      // 1h TTL, and still once more after it (stale-while-revalidate), so this test failed on
+      // every run after the first. Production never has that leftover: the image copies only
+      // `.next/standalone`, `.next/static` and `public`, and the container has no volume.
+      await rm(distDir, { recursive: true, force: true });
 
       // Mirrors apps/web/Dockerfile's build stage EXACTLY: production build against an
       // unreachable placeholder DATABASE_URL, deployed environment-neutral.

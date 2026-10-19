@@ -95,7 +95,7 @@ export function StockLedger({
                   {row.reason ? REASON_LABELS[row.reason] : ""}
                   {row.reason && row.note ? " · " : ""}
                   {row.note ?? ""}
-                  {!row.reason && !row.note ? "—" : ""}
+                  {!row.reason && !row.note ? "-" : ""}
                 </Td>
                 <Td className={`tabular-nums font-medium ${row.qty >= 0 ? "text-success-700" : "text-danger-700"}`}>
                   {row.qty >= 0 ? "+" : ""}

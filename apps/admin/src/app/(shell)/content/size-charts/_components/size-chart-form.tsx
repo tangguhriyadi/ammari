@@ -210,7 +210,7 @@ export function SizeChartForm({
           <>
             {productCount > 0 && (
               <p className="text-sm text-neutral-600">
-                Dipakai oleh {productCount} produk — tidak bisa dihapus selama masih dipakai.
+                Dipakai oleh {productCount} produk, tidak bisa dihapus selama masih dipakai.
               </p>
             )}
             <Button type="button" variant="ghost" onClick={handleDelete} loading={deleting} disabled={productCount > 0}>

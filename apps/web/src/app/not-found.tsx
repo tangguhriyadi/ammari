@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Halaman Tidak Ditemukan — Ammari",
+  title: "Halaman Tidak Ditemukan | Ammari",
 };
 
 // Next ships a default not-found page for every app, composed through the ROOT layout like any

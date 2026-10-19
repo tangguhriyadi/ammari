@@ -24,8 +24,8 @@ import { HomepageSections } from "@/components/homepage/homepage-sections";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Ammari — Graceful in every thread",
-  description: "Ammari — syar'i gamis. Desain syar'i, bahan premium, nyaman dipakai seharian.",
+  title: "Ammari | Graceful in every thread",
+  description: "Ammari, syar'i gamis. Desain syar'i, bahan premium, nyaman dipakai seharian.",
 };
 
 async function getHomepageView() {

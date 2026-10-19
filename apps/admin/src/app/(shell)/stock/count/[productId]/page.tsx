@@ -23,8 +23,8 @@ export default async function StockCountPage({ params }: { params: Promise<{ pro
 
   return (
     <>
-      <Breadcrumb items={[...rootCrumbs("/stock"), { label: "Barang jadi", href: "/stock" }, { label: `Hitung stok — ${product.name}` }]} />
-      <PageHeader title={`Hitung stok — ${product.name}`} description="Masukkan jumlah fisik untuk setiap SKU yang berbeda dari sistem." />
+      <Breadcrumb items={[...rootCrumbs("/stock"), { label: "Barang jadi", href: "/stock" }, { label: `Hitung stok: ${product.name}` }]} />
+      <PageHeader title={`Hitung stok: ${product.name}`} description="Masukkan jumlah fisik untuk setiap SKU yang berbeda dari sistem." />
       <div className="mb-4 flex flex-col gap-3">
         <UnreceivedBatchesWarning batches={unreceivedBatches} canOpenBatches={session.permissionKeys.includes("production.manage")} />
         {/* Standing instruction (S4): the defect bin sits in the same house. Each SKU's defect

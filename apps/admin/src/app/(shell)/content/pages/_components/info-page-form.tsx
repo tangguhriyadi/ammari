@@ -104,7 +104,7 @@ export function InfoPageForm({
 
       {!publishedState && (
         <Card className="border-brand bg-brand/5">
-          <p className="text-base text-neutral-900">Halaman ini belum pernah diterbitkan — pengunjung melihat status &quot;sedang disiapkan&quot;.</p>
+          <p className="text-base text-neutral-900">Halaman ini belum pernah diterbitkan. Pengunjung melihat status &quot;sedang disiapkan&quot;.</p>
         </Card>
       )}
 

@@ -99,7 +99,7 @@ export function CostComponentList({ components }: { components: CostComponentRow
               <Td className="text-neutral-700">{COST_TYPE_LABELS[component.costType]}</Td>
               <Td className="text-neutral-700">{UNIT_LABELS[component.unit]}</Td>
               <Td className="text-neutral-700 tabular-nums">
-                {component.defaultUnitPrice !== null ? formatRupiah(component.defaultUnitPrice) : "—"}
+                {component.defaultUnitPrice !== null ? formatRupiah(component.defaultUnitPrice) : "-"}
               </Td>
               <Td className="text-neutral-700">{supplierLabel(component)}</Td>
               <Td>

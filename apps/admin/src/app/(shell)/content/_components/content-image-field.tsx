@@ -46,7 +46,7 @@ function clientValidationError(file: File): string | null {
     // <input> below makes Safari hand over a transcoded JPEG for a HEIC photo picked from the
     // library, but a HEIC opened directly via the Files app can still arrive as image/heic/heif
     // — this is the clear Indonesian rejection for exactly that case, not a server error.
-    return "Format file harus JPEG, PNG, atau WebP. Foto HEIC dari iPhone/iPad akan otomatis diubah ke JPEG saat dipilih dari Galeri — jika masih gagal, coba ekspor foto sebagai JPEG terlebih dahulu.";
+    return "Format file harus JPEG, PNG, atau WebP. Foto HEIC dari iPhone/iPad akan otomatis diubah ke JPEG saat dipilih dari Galeri. Jika masih gagal, coba ekspor foto sebagai JPEG terlebih dahulu.";
   }
   if (file.size > MAX_CLIENT_FILE_SIZE_BYTES) {
     return "Ukuran file maksimal 10 MB.";
@@ -250,7 +250,7 @@ export function ContentImageField({
         <div className="flex flex-col gap-2 border-t border-neutral-200 pt-3">
           <span className="text-sm font-medium text-neutral-700">Crop khusus mobile (opsional)</span>
           <p className="text-sm text-neutral-600">
-            Dipakai sebagai gambar hero di layar sempit (ponsel) jika diisi — jika tidak, gambar utama di atas dipakai untuk semua ukuran layar.
+            Dipakai sebagai gambar hero di layar sempit (ponsel) jika diisi. Jika tidak, gambar utama di atas dipakai untuk semua ukuran layar.
           </p>
 
           <input

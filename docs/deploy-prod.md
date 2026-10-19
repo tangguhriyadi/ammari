@@ -855,6 +855,149 @@ Reaching the server: see §1.5 for how a Caddyfile-only change (no admin/web ima
 gets reloaded on the normal deploy workflow, and §1.6 for why that reload is actually trustworthy
 (the single-file-bind-mount bug this headers change originally ran into on dev).
 
+## 13. Release: suppliers and goods receipt
+
+The first prod deploy of `docs/plans/suppliers-goods-receipt.md` (S1 to S7). Prod's last applied
+migration before this release is `0021`, so **one deploy applies 0022 to 0027 together**. S7
+adds no migration. Every one of the six is additive (new tables, nullable or defaulted columns,
+widened CHECK/index predicates, new triggers on new tables), so the release that is live on prod
+today keeps working against the migrated schema. That is what makes the rollback rules in §13.5
+possible at all.
+
+### 13.1 Migrations
+
+| Migration | Session | What it does |
+|---|---|---|
+| `0022_glossy_pepper_potts` | S1 | New `suppliers` table (name `citext` unique, optional kinds, phone, address, bank details, notes, `is_active`). |
+| `0023_faulty_loki` | S2 | `cost_components.default_supplier_id` and `production_batch_costs.supplier_id` + `supplier_name` snapshot (nullable, pair CHECK, indexed RESTRICT FKs). |
+| `0024_watery_aaron_stack` | S3 | `purchases`, `purchase_items`, `goods_receipts`, `goods_receipt_items`; the trigger that freezes a purchase line once it has a receipt; `goods_receipt` / `goods_receipt_item` added to the ledger ref-type CHECKs; `supplier_id` on `accessory_movements` and `fabric_stock_movements` plus a unique index so one receipt line can post only once; the `inventory.receive` permission row and its grants (§13.2). |
+| `0025_production_receipts` | S4 | `production_batches.receipt_status` (default `pending`) plus close columns and CHECKs; `stock_movements_type_ref_unique_idx` re-created with `goods_receipt_item` added; **backfill**: every already-posted batch is set to `received` (its stock was added at posting under the old rule). Idempotent. |
+| `0026_defect_movements` | S5 | `defect_movements` (defect stock ledger) with its immutability trigger; `goods_receipt_items.qty_rejected` (default 0); the composite-FK targets on `purchase_items` and `production_batch_items`. |
+| `0027_defect_dispositions` | S6 | Re-open columns (`reopened_at`, `reopened_by_staff_user_id`, `reopen_reason`) on `purchases` and `production_batches`; the `check_defect_reversal_matches` trigger; composite FKs tying a reject to its own source line. |
+
+Prod has no products and no purchases yet, so the 0025 backfill and every FK validation run over
+empty or near-empty tables.
+
+### 13.2 Permissions
+
+- **New:** `inventory.receive` (post a goods receipt, purchase or production output, including
+  "Ditolak (cacat)"). Migration 0024 grants it to **`super_admin` and `owner`** only.
+- **Reused, unchanged:** `inventory.view` (Supplier, Pembelian, Penerimaan, Stok cacat read),
+  `inventory.manage` (supplier master, purchase documents, Tutup pesanan / Tutup batch,
+  Batalkan penerimaan, Kembalikan, Pelepasan, Batalkan on a defect row), `production.manage`
+  (batch pages, Terima hasil page), `finance.view_profit` (every value, proceeds and variance
+  figure), `stock.view` (finished-goods defect section).
+- Any **custom role** created on prod through the admin UI does not get `inventory.receive`
+  automatically. If someone other than an owner/super_admin should receive goods, add it to
+  their role after the deploy. To see which roles have it (read-only, same `psql` recipe as
+  §13.5):
+  `select r.key from role_permissions rp join roles r on r.id = rp.role_id join permissions p on p.id = rp.permission_id where p.key = 'inventory.receive';`
+
+### 13.3 Pre-deploy checklist
+
+1. The exact SHA you will deploy is on `dev`, has auto-deployed to dev, and the smoke test in
+   §13.4 passed **on dev**.
+2. You have decided R1 and R2 in `docs/plans/suppliers-goods-receipt.md` §10 (fix first, or
+   ship knowingly). Neither blocks the first deliveries; both only matter once defects are
+   returned across several purchases of the same item, or two people act in the same second.
+3. Unit, e2e, typecheck, lint and build are green for that SHA (the S7 sweep; the
+   `apps/web` homepage deploy-regression test included).
+4. **Fresh backup:** run one now (§5.3) and confirm it landed (§5.2). Do not rely on last
+   night's.
+5. **Migration dry run against that backup**, on your Mac with Docker Desktop running, from a
+   checkout of the SHA you will deploy (`git checkout <sha> && pnpm install`):
+   ```bash
+   deploy-prod/restore-drill-local.sh --migrate
+   ```
+   It restores the newest `backups/daily/` object into a throwaway Postgres (never the real
+   `ammari` database, never prod), applies this checkout's migrations with the same
+   `src/migrate.ts` the deploy pipeline's migrator runs, prints the newest applied migrations,
+   and deletes everything. Pass `--object backups/daily/<key>` to use the backup from step 4 if
+   it is not the newest. **Required:** `Migrations applied successfully.` followed by
+   `==> Restore drill complete`. Any failure: do not deploy; the migrator's own error is printed
+   above it.
+6. Deploy normally (§1.1 to §1.4). Do not tick `skip_migrate`.
+
+### 13.4 Post-deploy smoke test (admin, logged in as the owner)
+
+Read-only first:
+
+1. The menu shows **Supplier** under "Data Master" and **Penerimaan** under "Operasional".
+2. `/suppliers`, `/purchases`, `/receipts`, `/stock/defects` and `/production` each open (no
+   403, no error page). `/receipts` shows "Belum ada penerimaan".
+3. On a posted batch from before this release (if any), "Penerimaan hasil" says "Diterima
+   lengkap" and no "Terima hasil" button is offered (the 0025 backfill).
+
+Then one write that moves no stock:
+
+4. Create a supplier named `Tes rilis`. Create a purchase for it with one accessory line.
+   Confirm it lists as "Dipesan". Open it, "Tutup pesanan" with reason `Tes rilis`: it becomes
+   "Dibatalkan" (nothing arrived), and stock is unchanged. Deactivate the `Tes rilis` supplier.
+   Both stay in the audit log, by design (nothing here is ever hard-deleted).
+
+The first real receipt (the next delivery) is the stock-moving check: after "Terima barang",
+the stock list rises by exactly the accepted quantity, `/receipts` shows the receipt, and the
+fabric/accessory ledger row links back to the purchase.
+
+### 13.5 Rollback, in one place
+
+The general rule (§2): roll back with `skip_migrate` ticked; migrations are never reversed. The
+schema is compatible with every older release, but older **code** does not understand receipts.
+Before rolling back, run the read-only checks below on the VPS, inside the `db` container (it
+already has the user and database in its own environment; `-c` with a `select` writes nothing):
+
+```bash
+ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121
+cd /opt/ammari-prod
+docker compose exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select count(*) from goods_receipts;"'
+```
+
+| Rolling back to | Safe when | Why |
+|---|---|---|
+| **The release live on prod before this one** (before S1), or any SHA before S3 (0024) | `select count(*) from goods_receipts;` is **0** | Old code lists receipt-written ledger rows as ordinary purchases with the old "Batalkan" button, which voids the stock but leaves the receipt un-reversed. Not repairable from the UI. A batch posted under the new release adds no stock under the old one either: its output stays out of stock until you roll forward and receive it. If the count is not 0, **roll forward with a fix instead**. |
+| S3 (from S4 or later) | always | Batches posted under S4 that still await output cannot be received until you roll forward. A batch posted while S3 is live adds stock at posting, and S4 later counts it as received. |
+| S4 (from S5 or later) | `select count(*) from goods_receipt_items where qty_rejected <> 0;` is **0** | S4 ignores rejects: they would read as still outstanding and could be received twice. Otherwise roll forward, or reverse those receipts first. |
+| S5 (from S6 or later) | always | Returns, releases and their reversals become unavailable; the "Cacat" column shows everything that ever arrived defective. Nothing to repair afterwards. |
+| S6 (from S7) | always | S7 has no migration. Only `/receipts` and the new ledger links disappear. |
+
+Only SHAs that went through dev have images in GHCR; the realistic rollback target is the release
+that was on prod before this one, which is the first row. Full detail: §2.1.
+
+### 13.6 Catatan untuk Ibu (alur kerja harian baru)
+
+Mulai rilis ini, **stok hanya bertambah saat barang benar-benar diterima**. Mencatat pesanan
+atau memposting batch belum menambah stok.
+
+- **Posting batch** (halaman Produksi): dilakukan saat kain dan aksesoris dipotong atau
+  diserahkan ke penjahit. Kain dan aksesoris langsung berkurang dan HPP per pcs dikunci, tetapi
+  stok barang jadi **belum** bertambah.
+- **Terima hasil** (di halaman batch): saat jahitan datang, isi jumlah pcs yang diterima per
+  ukuran dan warna. Hanya jumlah ini yang masuk stok dan langsung bisa dijual. Boleh dicicil
+  beberapa kali.
+- **Terima barang** (di halaman pesanan pembelian): saat kain atau aksesoris dari supplier
+  datang, isi jumlah yang diterima. Tanggal otomatis hari ini, boleh diganti ke tanggal
+  sebelumnya. Isi "Diterima oleh" kalau yang menerima orang lain.
+- **Ditolak (cacat)**: di form yang sama, isi jumlah barang yang datang rusak atau cacat.
+  Barang ini masuk **stok cacat**, tidak pernah ikut dijual atau dihitung. Jumlah diterima
+  ditambah ditolak tidak boleh melebihi sisa pesanan.
+- **Kembalikan** (Kembalikan ke supplier / Kembalikan ke penjahit): kalau barang cacat ditukar,
+  catat pengembaliannya. Sisa pesanan terbuka lagi sebanyak itu, lalu barang penggantinya
+  diterima lewat "Terima barang" atau "Terima hasil" seperti biasa.
+- **Pelepasan**: kalau barang cacat tidak ditukar, lepaskan lewat **Lelang** (isi hasil
+  penjualannya), **Hibah** (diberikan, Rp 0) atau **Dibuang/Dimusnahkan** (Rp 0). Catatan wajib
+  diisi.
+- **Tutup** (Tutup pesanan / Tutup batch): kalau sisanya memang tidak akan datang, tutup dengan
+  alasan. Stok tidak berubah. Pesanan yang tidak pernah menerima apa pun tercatat "Dibatalkan".
+- **Penerimaan** (menu baru): daftar semua penerimaan, bisa disaring per sumber, supplier,
+  tanggal dan status.
+- Saat **Hitung stok**, hitung hanya barang yang bisa dijual. Barang cacat jangan ikut dihitung,
+  dan barang yang sudah datang tapi belum diterima di sistem harus di-"Terima hasil" dulu, bukan
+  dikoreksi lewat hitung stok.
+- Salah catat? Jangan dihapus. Pakai **Batalkan penerimaan** atau **Batalkan** di baris yang
+  salah, lalu catat ulang.
+
+---
+
 ## Related docs
 
 - `docs/plans/prod-deploy.md` — full design and the owner's step-by-step setup checklist (§4).

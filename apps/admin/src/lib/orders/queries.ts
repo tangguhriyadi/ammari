@@ -215,7 +215,7 @@ export async function createOrder(input: CreateOrderInput, actorStaffUserId: str
 
   const subtotalAmount = input.items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
   const totalAmount = subtotalAmount + input.shippingAmount - input.discountAmount;
-  if (totalAmount < 0) throw new ActionError("Total pesanan tidak boleh negatif — periksa diskon.");
+  if (totalAmount < 0) throw new ActionError("Total pesanan tidak boleh negatif. Periksa diskon.");
 
   return db.transaction(async (tx) => {
     try {
@@ -314,7 +314,7 @@ export async function updateOrderItems(
 
     const subtotalAmount = items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
     const totalAmount = subtotalAmount + order.shippingAmount - order.discountAmount;
-    if (totalAmount < 0) throw new ActionError("Total pesanan tidak boleh negatif — periksa diskon.");
+    if (totalAmount < 0) throw new ActionError("Total pesanan tidak boleh negatif. Periksa diskon.");
 
     const [updated] = await tx.update(orders).set({ subtotalAmount, totalAmount }).where(eq(orders.id, orderId)).returning();
     if (!updated) throw new Error("failed to update order");
@@ -394,7 +394,7 @@ export async function transitionOrderStatus(
       .set({ status: toStatus, ...(timestampColumn ? { [timestampColumn]: new Date() } : {}), ...shippingFields })
       .where(and(eq(orders.id, orderId), eq(orders.status, fromStatus)))
       .returning();
-    if (!updated) throw new ActionError("Status pesanan sudah berubah — muat ulang halaman.");
+    if (!updated) throw new ActionError("Status pesanan sudah berubah. Muat ulang halaman.");
 
     await writeAuditLog(tx, {
       actorStaffUserId,

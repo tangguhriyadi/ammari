@@ -231,7 +231,7 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
           yard/pcs, this is just a second look against a typo (e.g. an extra digit). */}
       {yardsPerPcs !== null && yardsPerPcs > 6 && (
         <p role="status" className="text-base text-warning-700">
-          Pemakaian kain {yardsPerPcs.toFixed(2)} yard/pcs — pastikan tidak salah ketik.
+          Pemakaian kain {yardsPerPcs.toFixed(2)} yard/pcs. Pastikan tidak salah ketik.
         </p>
       )}
 
@@ -256,7 +256,7 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
           <div>
             <span className="text-sm font-medium text-neutral-900">Biaya bahan (estimasi)</span>
             <p className="min-h-11 content-center text-base text-neutral-900 tabular-nums">
-              {estimatedFabricCost !== null ? formatRupiah(estimatedFabricCost) : "—"}
+              {estimatedFabricCost !== null ? formatRupiah(estimatedFabricCost) : "-"}
             </p>
             <p className="text-sm text-neutral-600">
               Dihitung dari rata-rata harga beli bahan saat ini × jumlah yard. Nilai final dihitung ulang saat posting.

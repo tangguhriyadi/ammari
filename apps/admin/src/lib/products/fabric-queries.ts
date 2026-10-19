@@ -43,7 +43,17 @@ export async function listFabricsWithUsage(
   return { rows, pagination };
 }
 
+/** Every fabric, for a form's fabric picker. Never the paginated list above: called with no
+ * page it returns only the first 20 by name, so a picker silently lost every later fabric. */
+export async function listAllFabricsWithUsage(db: Database = defaultDb) {
+  return fabricsWithUsageQuery(db, undefined);
+}
+
 function queryFabricsPage(db: Database, where: ReturnType<typeof ilike> | undefined, pagination: Pagination) {
+  return fabricsWithUsageQuery(db, where).limit(pagination.limit).offset(pagination.offset);
+}
+
+function fabricsWithUsageQuery(db: Database, where: ReturnType<typeof ilike> | undefined) {
   return db
     .select({
       id: fabrics.id,
@@ -61,8 +71,7 @@ function queryFabricsPage(db: Database, where: ReturnType<typeof ilike> | undefi
     .where(where)
     .groupBy(fabrics.id)
     .orderBy(fabrics.name, fabrics.id)
-    .limit(pagination.limit)
-    .offset(pagination.offset);
+    .$dynamic();
 }
 
 export async function getFabricById(id: string, db: Database = defaultDb) {

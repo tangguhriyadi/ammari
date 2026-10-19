@@ -550,7 +550,7 @@ function AddVariantForm({
           </div>
         </div>
       ) : (
-        <p className="text-sm text-neutral-600">Produk ini menggunakan All Size — satu varian per warna.</p>
+        <p className="text-sm text-neutral-600">Produk ini menggunakan All Size: satu varian per warna.</p>
       )}
 
       {error && (

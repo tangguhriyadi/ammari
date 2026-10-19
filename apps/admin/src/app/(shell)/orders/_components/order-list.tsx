@@ -5,7 +5,7 @@ import type { OrderListRow } from "@/lib/orders/queries";
 import { ORDER_STATUS_BADGE_VARIANT, ORDER_STATUS_LABELS } from "@/lib/orders/status-labels";
 
 function buyerLabel(row: OrderListRow): string {
-  return row.customerName ?? row.buyerUsername ?? "—";
+  return row.customerName ?? row.buyerUsername ?? "-";
 }
 
 export function OrderList({ rows }: { rows: OrderListRow[] }) {

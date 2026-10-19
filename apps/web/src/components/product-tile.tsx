@@ -10,7 +10,7 @@ import { storageImageUrl } from "@/lib/storage/public-url";
  * specific colour), price. The whole tile is one link, `?color=` only when a colour is pinned. */
 export function ProductTile({ tile, imagePriority = false }: { tile: StorefrontProductTile; imagePriority?: boolean }) {
   const href = tile.fabricColorId ? `/products/${tile.slug}?color=${tile.fabricColorId}` : `/products/${tile.slug}`;
-  const colorLabel = tile.fabricColorId ? tile.colorName : tile.colorCount > 1 ? `${tile.colorName} — ${tile.colorCount} warna` : tile.colorName;
+  const colorLabel = tile.fabricColorId ? tile.colorName : tile.colorCount > 1 ? `${tile.colorName} · ${tile.colorCount} warna` : tile.colorName;
 
   return (
     <Link href={href} className="group flex flex-col gap-1.5">

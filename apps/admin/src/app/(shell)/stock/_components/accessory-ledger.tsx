@@ -19,7 +19,10 @@ const REASON_LABELS: Record<StockAdjustmentReason, string> = {
 };
 
 function typeLabel(row: AccessoryLedgerRow) {
-  if (row.type === "purchase") {
+  // A receipt reversal's purchase_void row (ref_type 'goods_receipt') links too: /purchases/<id>
+  // resolves either kind of receipt-backed row to its purchase document. A legacy void has no
+  // page of its own, so it stays plain text.
+  if (row.type === "purchase" || (row.type === "purchase_void" && row.refType === "goods_receipt")) {
     return (
       <Link href={`/purchases/${row.id}`} className="font-medium text-brand hover:underline">
         {TYPE_LABELS[row.type]}
@@ -103,7 +106,7 @@ export function AccessoryLedger({
                 {row.supplier ?? ""}
                 {row.supplier && row.note ? " · " : ""}
                 {row.note ?? ""}
-                {!row.supplier && !row.note ? "—" : ""}
+                {!row.supplier && !row.note ? "-" : ""}
               </Td>
               <Td className={`tabular-nums font-medium ${row.qty >= 0 ? "text-success-700" : "text-danger-700"}`}>
                 {row.qty >= 0 ? "+" : ""}

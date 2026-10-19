@@ -12,7 +12,7 @@ import { HomepageSections } from "@/components/homepage/homepage-sections";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Pratinjau — Ammari",
+  title: "Pratinjau | Ammari",
   robots: { index: false, follow: false },
 };
 
@@ -36,7 +36,7 @@ export default async function PreviewHomePage({
   return (
     <div className="flex flex-col">
       <p className="bg-warning-50 px-4 py-2 text-center text-sm text-warning-700" data-testid="preview-draft-banner">
-        Ini pratinjau draft — belum tayang di toko online. Tautan ini kedaluwarsa dalam beberapa
+        Ini pratinjau draft, belum tayang di toko online. Tautan ini kedaluwarsa dalam beberapa
         menit.
       </p>
       <HomepageSections view={view} />

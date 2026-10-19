@@ -3,7 +3,7 @@ import { getPublishedInfoPage } from "@ammari/db/storefront";
 import { InfoPageBody } from "@/components/info-page";
 
 export const metadata: Metadata = {
-  title: "Pengiriman — Ammari",
+  title: "Pengiriman | Ammari",
 };
 
 // Now CMS-driven — see how-to-order/page.tsx's own comment for the pattern. Never names the

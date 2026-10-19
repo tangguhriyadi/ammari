@@ -45,7 +45,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
       {canManage && <StatusActions orderId={detail.id} allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]} />}
 
       <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
-        <Row label="Pelanggan" value={detail.customerName ?? detail.buyerUsername ?? "—"} />
+        <Row label="Pelanggan" value={detail.customerName ?? detail.buyerUsername ?? "-"} />
         {detail.customerPhone && <Row label="No. HP" value={detail.customerPhone} />}
         {detail.channelOrderNo && <Row label="No. pesanan marketplace" value={detail.channelOrderNo} />}
         {detail.shippingAddress && <Row label="Alamat pengiriman" value={detail.shippingAddress} />}

@@ -25,10 +25,16 @@
 #   6. Removes the container, its network, and every temp file this script created — on success
 #      OR failure (EXIT trap) — nothing from this drill is left running or on disk afterward.
 #
-# Usage: deploy-prod/restore-drill-local.sh [--backup-env PATH] [--object KEY]
+# Usage: deploy-prod/restore-drill-local.sh [--backup-env PATH] [--object KEY] [--migrate]
 #   --backup-env PATH   override ~/ammari-secrets/prod-backup.env (testing only)
 #   --object KEY        restore this exact backups/daily/<KEY> or backups/weekly/<KEY> object
 #                        instead of auto-picking the newest backups/daily/ one
+#   --migrate           pre-deploy migration dry run: after the restore, apply THIS checkout's
+#                        packages/db migrations to the disposable copy (the same src/migrate.ts the
+#                        deploy pipeline's migrator image runs), print the newest applied
+#                        migrations, then clean up as usual. Check out the commit you are about to
+#                        deploy first. Needs `pnpm install` done in this checkout. The disposable
+#                        DATABASE_URL is passed in the migrator's environment only, never on argv.
 set -uo pipefail
 
 AWS_CLI_IMAGE="amazon/aws-cli:2.27.49"
@@ -36,6 +42,7 @@ PG_IMAGE="pgvector/pgvector:pg16"
 
 BACKUP_ENV="$HOME/ammari-secrets/prod-backup.env"
 OBJECT_OVERRIDE=""
+RUN_MIGRATIONS=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,9 +54,13 @@ while [ $# -gt 0 ]; do
       OBJECT_OVERRIDE="$2"
       shift 2
       ;;
+    --migrate)
+      RUN_MIGRATIONS=1
+      shift
+      ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [--backup-env PATH] [--object KEY]" >&2
+      echo "Usage: $0 [--backup-env PATH] [--object KEY] [--migrate]" >&2
       exit 2
       ;;
   esac
@@ -262,5 +273,20 @@ ROW_COUNTS="$(docker exec "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -At
 printf '%s\n' "$ROW_COUNTS" | while IFS='|' read -r table count; do
   printf '  %-50s %s\n' "$table" "$count"
 done
+
+if [ "$RUN_MIGRATIONS" -eq 1 ]; then
+  REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  echo "==> Migration dry run: applying ${REPO_ROOT}/packages/db/drizzle to the restored copy"
+  [ -n "${HOST_PORT:-}" ] || fail "could not determine the disposable Postgres port"
+  # No --env-file here (unlike `pnpm db:migrate`): the only DATABASE_URL this process may see is
+  # the disposable container's.
+  if ! (cd "$REPO_ROOT/packages/db" && DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${HOST_PORT}/${DB_NAME}" pnpm exec tsx src/migrate.ts); then
+    fail "migration dry run failed against the restored copy — do NOT deploy; see the migrator's output above"
+  fi
+  echo "==> Newest applied migrations (restored copy):"
+  docker exec "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -At -c \
+    "select id, to_timestamp(created_at / 1000) from drizzle.__drizzle_migrations order by id desc limit 8;" \
+    || fail "could not read drizzle.__drizzle_migrations"
+fi
 
 echo "==> Restore drill complete — s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY} restores cleanly."

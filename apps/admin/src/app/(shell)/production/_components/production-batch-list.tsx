@@ -31,7 +31,7 @@ export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
                   {formatDate(new Date(row.producedAt))} · {row.fabricName}
                 </span>
                 <span className="text-sm text-neutral-600">
-                  {row.fabricYards !== null ? `${row.fabricYards} yard` : "—"} · {formatNumber(row.totalPcs)} pcs
+                  {row.fabricYards !== null ? `${row.fabricYards} yard` : "-"} · {formatNumber(row.totalPcs)} pcs
                 </span>
                 {row.status === "posted" && (
                   <span className="flex items-center gap-2 text-sm text-neutral-600">
@@ -64,12 +64,12 @@ export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
               </Td>
               <Td className="text-neutral-700">{formatDate(new Date(row.producedAt))}</Td>
               <Td className="text-neutral-700">{row.fabricName}</Td>
-              <Td className="text-neutral-700 tabular-nums">{row.fabricYards !== null ? `${row.fabricYards} yard` : "—"}</Td>
+              <Td className="text-neutral-700 tabular-nums">{row.fabricYards !== null ? `${row.fabricYards} yard` : "-"}</Td>
               <Td className="text-neutral-700 tabular-nums">{formatNumber(row.totalPcs)}</Td>
               <Td>
                 <BatchStatusBadge status={row.status} />
               </Td>
-              <Td>{row.status === "posted" ? <ReceiptStatusBadge status={row.receiptStatus} /> : <span className="text-neutral-600">—</span>}</Td>
+              <Td>{row.status === "posted" ? <ReceiptStatusBadge status={row.receiptStatus} /> : <span className="text-neutral-600">-</span>}</Td>
             </Tr>
           ))}
         </tbody>

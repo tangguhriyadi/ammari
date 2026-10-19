@@ -48,7 +48,7 @@ const whatsappNumberField = z
   .string()
   .trim()
   .refine((value) => value === "" || normalizeWhatsappNumber(value) !== null, {
-    message: "Nomor WhatsApp tidak valid — gunakan format 08xx, +62xx, atau 62xx.",
+    message: "Nomor WhatsApp tidak valid. Gunakan format 08xx, +62xx, atau 62xx.",
   })
   .transform((value) => (value === "" ? null : normalizeWhatsappNumber(value)));
 

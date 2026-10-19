@@ -41,10 +41,10 @@ export async function generateMetadata({ params }: PageProps<"/products/[slug]">
   const firstImage = view.generalImages[0] ?? Object.values(view.imagesByColor)[0]?.[0];
   const description = product.storefrontDescription
     ? sanitizeStorefrontDescriptionHtml(product.storefrontDescription).replace(/<[^>]+>/g, " ").trim().slice(0, 160)
-    : `${product.name} — Ammari, syar'i gamis.`;
+    : `${product.name}, Ammari syar'i gamis.`;
 
   return {
-    title: `${product.name} — Ammari`,
+    title: `${product.name} | Ammari`,
     description,
     // DEPLOY_ENV convention matches app/robots.ts — only "production" is ever indexable.
     robots: { index: process.env.DEPLOY_ENV === "production", follow: process.env.DEPLOY_ENV === "production" },
@@ -122,7 +122,7 @@ export default async function ProductPage({
           <Link href="/shipping" className="underline">
             Lihat kebijakan pengiriman
           </Link>
-          . Penukaran ukuran dapat diajukan sesuai syarat yang berlaku —{" "}
+          . Penukaran ukuran dapat diajukan sesuai syarat yang berlaku,{" "}
           <Link href="/returns-exchange" className="underline">
             lihat kebijakan pengembalian &amp; penukaran
           </Link>

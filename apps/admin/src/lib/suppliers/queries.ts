@@ -162,6 +162,16 @@ export async function listActiveSupplierOptions(
     .orderBy(...preferredFirst, asc(suppliers.name), asc(suppliers.id));
 }
 
+/** EVERY supplier, inactive included, for a read-only list FILTER (e.g. /receipts): past
+ * documents still name a supplier that has since been deactivated. Never use this for a picker
+ * that writes (that is listActiveSupplierOptions). */
+export async function listSupplierFilterOptions(db: Database = defaultDb): Promise<(SupplierOption & { isActive: boolean })[]> {
+  return db
+    .select({ id: suppliers.id, name: suppliers.name, isActive: suppliers.isActive })
+    .from(suppliers)
+    .orderBy(desc(suppliers.isActive), asc(suppliers.name), asc(suppliers.id));
+}
+
 /** For a write that is about to point a row at one or more suppliers as a NEW selection:
  * `SELECT ... FOR SHARE` every id, and reject (field-scoped, Indonesian) any that doesn't exist
  * or is inactive. FOR SHARE, not a plain read, so a concurrent setSupplierActive(id, false)

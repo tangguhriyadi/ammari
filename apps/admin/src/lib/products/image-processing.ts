@@ -88,10 +88,10 @@ export async function processUploadedImage(buffer: Buffer): Promise<ProcessedIma
     width = result.info.width;
     height = result.info.height;
   } catch {
-    throw new ImageValidationError("Foto tidak bisa dibaca — rusak atau dimensinya terlalu besar.");
+    throw new ImageValidationError("Foto tidak bisa dibaca: rusak atau dimensinya terlalu besar.");
   }
   if (!width || !height) {
-    throw new ImageValidationError("Foto tidak bisa dibaca — rusak atau dimensinya terlalu besar.");
+    throw new ImageValidationError("Foto tidak bisa dibaca: rusak atau dimensinya terlalu besar.");
   }
 
   // Sequential, not Promise.all — sharp.concurrency(1) above already serializes libvips' own

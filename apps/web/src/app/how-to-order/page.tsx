@@ -3,7 +3,7 @@ import { getPublishedInfoPage } from "@ammari/db/storefront";
 import { InfoPageBody } from "@/components/info-page";
 
 export const metadata: Metadata = {
-  title: "Cara Pemesanan — Ammari",
+  title: "Cara Pemesanan | Ammari",
 };
 
 // Now CMS-driven (docs/plans/storefront-cms.md Phase 2, session 8) — seeded unpublished by

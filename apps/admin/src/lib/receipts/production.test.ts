@@ -8,7 +8,7 @@ import { ActionError, FieldError } from "@/lib/errors";
 import { getFabricBalance, recordFabricPurchase } from "@/lib/inventory/fabric-stock";
 import { createOrder } from "@/lib/orders/queries";
 import { createDraft, postBatch } from "@/lib/production/queries";
-import { adjustStock, currentBalanceForSkuLocked } from "@/lib/stock/queries";
+import { adjustStock, currentBalanceForSkuLocked, listStockLedger } from "@/lib/stock/queries";
 import {
   closeBatchShort,
   effectiveReceiptStatuses,
@@ -436,6 +436,25 @@ describe("storefront availability", () => {
       expect(await availability()).toBe(true);
       await reverseGoodsReceipt(receipt.id, staff.id, tx);
       expect(await availability()).toBe(false);
+    });
+  });
+});
+
+describe("listStockLedger links production rows back to their batch (S7)", () => {
+  test("a receipt row, its reversal row and a legacy at-posting row all resolve to the batch; other rows link nowhere", async () => {
+    await withRollback(async (tx) => {
+      const { staff, batch, variantA, lineA } = await postedBatch(tx);
+      const { receipt } = await receive(tx, batch.id, staff.id, [{ productionBatchItemId: lineA.id, qtyAccepted: 2 }]);
+      await reverseGoodsReceipt(receipt.id, staff.id, tx);
+      await makeLegacy(tx, batch.id, { backfilled: false });
+      await adjustStock({ sku: variantA.sku, deltaQty: -1, reason: "recount" }, staff.id, tx);
+
+      const { rows } = await listStockLedger(variantA.sku, undefined, undefined, tx);
+      const byRefType = (refType: string) => rows.filter((row) => row.refType === refType);
+      expect(byRefType("goods_receipt_item")).toHaveLength(2);
+      expect(byRefType("goods_receipt_item").every((row) => row.productionBatchId === batch.id)).toBe(true);
+      expect(byRefType("production_batch_item").map((row) => row.productionBatchId)).toEqual([batch.id]);
+      expect(rows.find((row) => row.type === "adjustment")?.productionBatchId).toBeNull();
     });
   });
 });

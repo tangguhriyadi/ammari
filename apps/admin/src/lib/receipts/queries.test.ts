@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { insertAccessory, insertStaffUser } from "@ammari/db/test-fixtures";
-import { accessoryMovements, auditLog, fabrics, fabricStockMovements, purchaseItems, purchases, suppliers } from "@ammari/db/schema";
+import { accessories, accessoryMovements, auditLog, fabrics, fabricStockMovements, purchaseItems, purchases, suppliers } from "@ammari/db/schema";
 import { ActionError, FieldError } from "@/lib/errors";
 import { getAccessoryBalance, recordAccessoryAdjustment, voidAccessoryPurchase } from "@/lib/inventory/accessories";
 import { getFabricBalance, recordFabricPurchase, voidFabricPurchase } from "@/lib/inventory/fabric-stock";
@@ -444,6 +444,51 @@ describe("legacy single-row purchases (D11): still listed, displayed and counted
       const documents = await listPurchaseDocuments({ q: purchase.purchaseNo }, undefined, undefined, tx);
       expect(documents.rows.map((row) => row.id)).toEqual([purchase.id]);
       expect(documents.rows[0]).toMatchObject({ itemCount: 2, totalAmountPaid: 1_000_100, status: "partially_received" });
+    });
+  });
+
+  test("editing keeps an accessory line whose accessory was deactivated since, but refuses adding a NEW inactive one", async () => {
+    await withRollback(async (tx) => {
+      const { staff, supplier, purchase, fabric, accessory } = await twoLinePurchase(tx);
+      await tx.update(accessories).set({ isActive: false }).where(eq(accessories.id, accessory.id));
+      const lines = (accessoryQty: number) => [
+        { itemType: "fabric" as const, itemId: fabric.id, qtyOrdered: 12, totalAmount: 1_200_000 },
+        { itemType: "accessory" as const, itemId: accessory.id, qtyOrdered: accessoryQty, totalAmount: 100 },
+      ];
+      await updatePurchase(purchase.id, { supplierId: supplier.id, orderedAt: "2026-10-02", lines: lines(3) }, staff.id, tx);
+
+      const other = await insertAccessory(tx);
+      await tx.update(accessories).set({ isActive: false }).where(eq(accessories.id, other.id));
+      await expect(
+        updatePurchase(
+          purchase.id,
+          { supplierId: supplier.id, orderedAt: "2026-10-02", lines: [...lines(3), { itemType: "accessory", itemId: other.id, qtyOrdered: 1, totalAmount: 10 }] },
+          staff.id,
+          tx,
+        ),
+      ).rejects.toThrow("sudah nonaktif");
+    });
+  });
+
+  test("a receipt reversal's purchase_void rows resolve to the same purchase document (S7 ledger link)", async () => {
+    await withRollback(async (tx) => {
+      const { staff, purchase, fabric, accessory, fabricLine, accessoryLine } = await twoLinePurchase(tx);
+      const { receipt } = await receive(tx, purchase.id, staff.id, [
+        { purchaseItemId: fabricLine.id, qtyAccepted: 1 },
+        { purchaseItemId: accessoryLine.id, qtyAccepted: 1 },
+      ]);
+      await reverseGoodsReceipt(receipt.id, staff.id, tx);
+      const [fabricVoid] = await tx
+        .select()
+        .from(fabricStockMovements)
+        .where(and(eq(fabricStockMovements.fabricId, fabric.id), eq(fabricStockMovements.type, "purchase_void")));
+      const [accessoryVoid] = await tx
+        .select()
+        .from(accessoryMovements)
+        .where(and(eq(accessoryMovements.accessoryId, accessory.id), eq(accessoryMovements.type, "purchase_void")));
+      expect(fabricVoid?.refType).toBe("goods_receipt");
+      expect(await findPurchaseIdForReceiptMovement(fabricVoid!.id, tx)).toBe(purchase.id);
+      expect(await findPurchaseIdForReceiptMovement(accessoryVoid!.id, tx)).toBe(purchase.id);
     });
   });
 

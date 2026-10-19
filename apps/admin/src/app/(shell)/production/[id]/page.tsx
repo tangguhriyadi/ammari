@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isUuid } from "@/lib/purchases/queries";
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getBatchDetail, getBatchExtraCosts, listEligibleSkusForFabric } from "@/lib/production/queries";
@@ -19,6 +20,8 @@ import { DraftControls } from "../_components/draft-controls";
 export default async function ProductionBatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission("production.manage");
   const { id } = await params;
+  // A malformed id would otherwise reach Postgres as a uuid cast error (a 500), not a 404.
+  if (!isUuid(id)) notFound();
   const batch = await getBatchDetail(id);
   if (!batch) notFound();
 

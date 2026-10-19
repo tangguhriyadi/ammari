@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { isUuid } from "@/lib/purchases/queries";
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getFabricById } from "@/lib/products/fabric-queries";
@@ -19,6 +20,8 @@ export default async function FabricStockDetailPage({
 }) {
   const session = await requirePermission("inventory.view");
   const { id } = await params;
+  // A malformed id would otherwise reach Postgres as a uuid cast error (a 500), not a 404.
+  if (!isUuid(id)) notFound();
   const { page, perPage } = await searchParams;
 
   const fabric = await getFabricById(id);

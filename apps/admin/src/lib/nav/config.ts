@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Boxes,
+  ClipboardCheck,
   Factory,
   FileText,
   History,
@@ -91,6 +92,16 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: Factory,
     group: "Operasional",
     permissionKeys: ["production.manage"],
+    mobilePrimary: false,
+  },
+  {
+    // Every goods receipt, both sources (docs/plans/suppliers-goods-receipt.md §7). ClipboardCheck,
+    // not PackageCheck: that one is already Packing.
+    label: "Penerimaan",
+    href: "/receipts",
+    icon: ClipboardCheck,
+    group: "Operasional",
+    permissionKeys: ["inventory.view"],
     mobilePrimary: false,
   },
   {

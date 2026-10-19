@@ -26,8 +26,8 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
   every stock list and item page), and defect dispositions: return to the supplier/tailor for a
   replacement (re-opening a closed document), release by lelang / hibah / dibuang, their
   reversals, and read-only variance figures on each purchase and batch (§5.1a;
-  docs/plans/suppliers-goods-receipt.md sessions S1–S6). The `/receipts` list and the polish
-  sweep are that plan's S7.
+  docs/plans/suppliers-goods-receipt.md, complete through S7), plus the all-receipts list
+  (`/receipts`, "Penerimaan").
 
 **Next:**
 
@@ -125,6 +125,7 @@ pnpm workspaces + Turborepo:
 - Stock
 - Production
 - Suppliers and Purchases — purchase documents and goods receipts (§5.1a)
+- Penerimaan (`/receipts`) — every goods receipt, both sources, read-only (§5.1a)
 - Settings — targets, cost assumptions, staff
 
 ### 3.2 Admin — first week of November 2026
@@ -319,6 +320,14 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   adjusted afterwards, pointing at "Sesuaikan stok" instead. A reversal also reverses the
   receipt's defect rows exactly, and is refused once those defects were returned or released.
   Every receipt, reversal and close is written to `audit_log`.
+  **`/receipts`** ("Penerimaan", `inventory.view`) lists every receipt and reversal of both
+  sources, newest receipt date first, filterable by source (Pembelian / Produksi), supplier (a
+  purchase's supplier, or any supplier on a batch's cost lines), date range and status
+  (Diterima / Dibatalkan / Pembatalan), each linking to its purchase or batch (the batch link
+  only for `production.manage`). Read-only: receiving and reversing stay on the source document.
+  Ledger rows link back too: on `/stock/[sku]` every `production` row (receipt, reversal, or
+  legacy at-posting row) links to its batch, and on the fabric/accessory ledgers every
+  receipt-backed `purchase` row and its reversal's `purchase_void` row link to the purchase.
 - `defect_movements` — **defect stock** (stok barang cacat), one append-only ledger for all three
   item kinds (`item_kind` `sku` / `fabric` / `accessory`, exactly one of `sku` / `fabric_id` /
   `accessory_id`, always naming its source purchase line or batch line). A separate table on
@@ -391,6 +400,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - `expenses`
 - `targets` — one row per month.
 - `cost_assumptions` — dated by `effective_from`; see §7 for the initial row.
+- Defect disposal proceeds (`defect_movements.proceeds_amount`, Lelang) are **not** finance data
+  yet: stored, visible on the source document and audit-logged, but booked nowhere (no journal,
+  no Overview metric). A known gap until a double-entry accounting module exists (§5.1a).
 
 ### 5.3 Customers & vouchers
 

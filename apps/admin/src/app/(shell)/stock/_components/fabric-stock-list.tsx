@@ -63,10 +63,10 @@ export function FabricStockList({ rows }: { rows: FabricStockListRow[] }) {
                     {row.name}
                   </Link>
                 </Td>
-                <Td className="text-neutral-700">{row.supplier ?? "—"}</Td>
+                <Td className="text-neutral-700">{row.supplier ?? "-"}</Td>
                 <Td className="text-neutral-700 tabular-nums">{row.qty.toFixed(2)} yard</Td>
                 <Td className="text-neutral-700 tabular-nums" data-testid="fabric-defect-qty">{row.defectQty !== 0 ? `${row.defectQty.toFixed(2)} yard` : "-"}</Td>
-                <Td className="text-neutral-700 tabular-nums">{averageCost !== null ? `${formatRupiah(averageCost)}/yard` : "—"}</Td>
+                <Td className="text-neutral-700 tabular-nums">{averageCost !== null ? `${formatRupiah(averageCost)}/yard` : "-"}</Td>
               </Tr>
             );
           })}

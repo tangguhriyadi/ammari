@@ -1,6 +1,7 @@
 import "server-only";
 import { and, count, desc, eq, ilike, or, sql } from "drizzle-orm";
-import { fabricColors, productionBatchItems, products, productVariants, staffUsers, stockMovements } from "@ammari/db/schema";
+import { alias } from "drizzle-orm/pg-core";
+import { fabricColors, goodsReceiptItems, productionBatchItems, products, productVariants, staffUsers, stockMovements } from "@ammari/db/schema";
 import type { Size, StockAdjustmentReason } from "@ammari/db/schema";
 import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
@@ -109,8 +110,9 @@ export interface StockLedgerRow {
   createdAt: Date;
   createdByName: string | null;
   runningBalance: number;
-  /** Resolved from ref_id only when ref_type = 'production_batch_item' — the ledger's "link to
-   * the production batch" (ref_id itself is the batch ITEM's id, not the batch's). */
+  /** The ledger's "link to the production batch": resolved from ref_id for ref_type
+   * 'production_batch_item' (legacy at-posting rows, ref_id = the batch ITEM's id) and
+   * 'goods_receipt_item' (receipt rows since S4, through the receipt item's batch line). */
   productionBatchId: string | null;
 }
 
@@ -189,6 +191,7 @@ export async function listStockLedger(
     .where(eq(stockMovements.sku, sku))
     .as("windowed");
 
+  const receiptBatchItems = alias(productionBatchItems, "receipt_batch_items");
   const rows = await db
     .select({
       id: windowed.id,
@@ -201,7 +204,7 @@ export async function listStockLedger(
       createdAt: windowed.createdAt,
       createdByName: staffUsers.name,
       runningBalance: sql<number>`${windowed.totalStock} - ${windowed.cumFromNewest} + ${windowed.qty}`,
-      productionBatchId: productionBatchItems.productionBatchId,
+      productionBatchId: sql<string | null>`coalesce(${productionBatchItems.productionBatchId}, ${receiptBatchItems.productionBatchId})`,
     })
     .from(windowed)
     .leftJoin(staffUsers, eq(staffUsers.id, windowed.createdByStaffUserId))
@@ -212,6 +215,16 @@ export async function listStockLedger(
       // so the id side is cast explicitly rather than relying on one.
       sql`${productionBatchItems.id}::text = ${windowed.refId} and ${windowed.refType} = 'production_batch_item'`,
     )
+    // Since S4 a 'production' row comes from a goods receipt (ref_type 'goods_receipt_item',
+    // reversals included): resolve it through the receipt item's batch line. Legacy at-posting
+    // rows keep resolving through the join above.
+    // The uuid side stays uncast so the PK index is used; CASE guarantees ref_id is only cast for
+    // this ref_type (an AND gives no evaluation-order guarantee, and other ref_ids may not be uuids).
+    .leftJoin(
+      goodsReceiptItems,
+      sql`${goodsReceiptItems.id} = case when ${windowed.refType} = 'goods_receipt_item' then ${windowed.refId}::uuid end`,
+    )
+    .leftJoin(receiptBatchItems, eq(receiptBatchItems.id, goodsReceiptItems.productionBatchItemId))
     .orderBy(desc(windowed.createdAt), desc(windowed.id))
     .limit(pagination.limit)
     .offset(pagination.offset);

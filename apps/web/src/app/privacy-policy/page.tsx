@@ -3,7 +3,7 @@ import { getPublishedInfoPage } from "@ammari/db/storefront";
 import { InfoPageBody } from "@/components/info-page";
 
 export const metadata: Metadata = {
-  title: "Kebijakan Privasi — Ammari",
+  title: "Kebijakan Privasi | Ammari",
 };
 
 // `/privacy-policy` must keep this EXACT URL — registered in the Google OAuth consent screen and

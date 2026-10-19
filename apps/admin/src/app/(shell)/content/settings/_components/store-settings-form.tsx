@@ -47,7 +47,7 @@ export function StoreSettingsForm({ initialValues }: { initialValues: StoreSetti
           placeholder="08xx-xxxx-xxxx"
           inputMode="tel"
         />
-        <p className="text-sm text-neutral-600">Format apa pun boleh (08xx, +62xx, 62xx) — disimpan otomatis dalam format yang benar.</p>
+        <p className="text-sm text-neutral-600">Format apa pun boleh (08xx, +62xx, 62xx). Nomor disimpan otomatis dalam format yang benar.</p>
       </div>
 
       <div className="flex flex-col gap-1.5">

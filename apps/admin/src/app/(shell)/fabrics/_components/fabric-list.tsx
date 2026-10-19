@@ -53,9 +53,9 @@ export function FabricList({ fabrics }: { fabrics: Fabric[] }) {
                   {fabric.name}
                 </Link>
               </Td>
-              <Td className="text-neutral-700">{fabric.supplier ?? "—"}</Td>
-              <Td className="text-neutral-700">{fabric.composition ?? "—"}</Td>
-              <Td className="text-neutral-700">{priceLabel(fabric) ?? "—"}</Td>
+              <Td className="text-neutral-700">{fabric.supplier ?? "-"}</Td>
+              <Td className="text-neutral-700">{fabric.composition ?? "-"}</Td>
+              <Td className="text-neutral-700">{priceLabel(fabric) ?? "-"}</Td>
               <Td className="text-neutral-700">{fabric.productCount} produk</Td>
             </Tr>
           ))}

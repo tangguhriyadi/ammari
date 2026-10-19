@@ -17,7 +17,7 @@ export async function AccessoryNeedsSection({ batchId }: { batchId: string }) {
 
       {unresolved.length > 0 && (
         <div className="rounded-lg border border-danger-200 bg-danger-50 p-3 text-sm text-danger-700">
-          <p className="font-medium">Resep aksesoris belum lengkap — posting akan ditolak untuk:</p>
+          <p className="font-medium">Resep aksesoris belum lengkap. Posting akan ditolak untuk:</p>
           <ul className="list-disc pl-5">
             {unresolved.map((row, index) => (
               <li key={index}>

@@ -50,7 +50,7 @@ function StickerCode({ code, isPreview, srLabel }: { code: string | null; isPrev
   if (!code) {
     return (
       <span className="text-sm text-neutral-500">
-        {label}—
+        {label}-
       </span>
     );
   }
@@ -315,7 +315,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} />
               </div>
               <p className="text-sm text-neutral-600">
-                {formatDate(new Date(row.orderDate))} · {row.customerName ?? row.buyerUsername ?? "—"}
+                {formatDate(new Date(row.orderDate))} · {row.customerName ?? row.buyerUsername ?? "-"}
               </p>
               <StickerCode code={row.stickerCode} isPreview={row.stickerCodeIsPreview} srLabel="Kode stiker" />
               <PickList items={items[row.id] ?? []} />
@@ -382,7 +382,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 <div className="flex flex-col gap-0.5">
                   <span className="whitespace-nowrap">{formatDate(new Date(row.orderDate))}</span>
                   <span className="max-w-60 truncate text-sm text-neutral-600">
-                    {row.customerName ?? row.buyerUsername ?? "—"}
+                    {row.customerName ?? row.buyerUsername ?? "-"}
                   </span>
                 </div>
               </Td>

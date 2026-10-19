@@ -22,14 +22,16 @@ const supplierKindsSchema = z
 // optional, and an empty string is stored as NULL rather than "" so "no phone recorded" has one
 // representation, not two.
 const supplierSchema = z.object({
-  name: z.string().trim().min(1, "Nama supplier wajib diisi."),
+  name: z.string().trim().min(1, "Nama supplier wajib diisi.").max(200, "Nama supplier terlalu panjang."),
   kinds: supplierKindsSchema.optional(),
-  phone: z.string().trim().optional(),
-  address: z.string().trim().optional(),
-  bankName: z.string().trim().optional(),
-  bankAccountNo: z.string().trim().optional(),
-  bankAccountName: z.string().trim().optional(),
-  notes: z.string().trim().optional(),
+  // Capped like every other free-text action input: the columns are unbounded `text`, and each
+  // update also copies the row into audit_log.
+  phone: z.string().trim().max(50, "Nomor telepon terlalu panjang.").optional(),
+  address: z.string().trim().max(1000, "Alamat terlalu panjang.").optional(),
+  bankName: z.string().trim().max(200, "Nama bank terlalu panjang.").optional(),
+  bankAccountNo: z.string().trim().max(100, "Nomor rekening terlalu panjang.").optional(),
+  bankAccountName: z.string().trim().max(200, "Nama pemilik rekening terlalu panjang.").optional(),
+  notes: z.string().trim().max(1000, "Catatan terlalu panjang.").optional(),
   isActive: z.boolean().default(true),
 });
 
@@ -62,6 +64,7 @@ export async function updateSupplierAction(
   input: z.input<typeof supplierSchema>,
 ): Promise<ActionResult<{ id: string }>> {
   const session = await requirePermission("inventory.manage");
+  if (!supplierQueries.isSupplierId(id)) return { ok: false, error: "Supplier tidak ditemukan." };
   const parsed = supplierSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {

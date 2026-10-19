@@ -100,7 +100,7 @@ export function AccessoryList({
                   </Link>
                   {row.size && <span className="ml-2 text-neutral-600">{row.size === "ALLSIZE" ? "Polos" : row.size}</span>}
                 </Td>
-                <Td className="text-neutral-700">{row.sizeGroup ?? "—"}</Td>
+                <Td className="text-neutral-700">{row.sizeGroup ?? "-"}</Td>
                 <Td className="text-neutral-700 tabular-nums">
                   {formatNumber(row.qty)} pcs
                   {averageCost !== null && <> · ≈{formatRupiah(averageCost)}/pcs</>}

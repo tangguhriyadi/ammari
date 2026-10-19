@@ -831,9 +831,16 @@ export const accessories = pgTable(
 // without a separate mutable "running average" column because every row's OWN value_amount is
 // computed ONCE, under the accessory's row lock, from the SUM-so-far, at the moment it's
 // inserted:
-//   - 'purchase': value_amount = the exact total amount paid (no rounding — it's literally what
-//     was entered), qty = the quantity bought. This is the ONLY movement type that can move the
-//     average (a consumption/adjustment is always valued AT whatever the average already is).
+//   - 'purchase': qty = the quantity that entered sellable stock. This is the ONLY movement type
+//     that can move the average (a consumption/adjustment is always valued AT whatever the
+//     average already is). Since migration 0024 (docs/plans/suppliers-goods-receipt.md S3) it is
+//     written only by a GOODS RECEIPT against a purchase document (ref_type 'goods_receipt',
+//     ref_id = the goods_receipt_items.id, supplier_id + the supplier name snapshot): qty = the
+//     ACCEPTED quantity and value_amount = its share of the line's cumulative-rounding slice of
+//     the ordered total (lib/receipts/valuation.ts), so a fully settled line sums to exactly what
+//     was paid. Rejected (defective) units never land here: they go to defect_movements with the
+//     rest of the slice, so defects never move the sellable average. Older rows with any other
+//     ref_type are legacy single-row purchases, where value_amount is literally the total paid.
 //   - 'production'/'adjustment' (a consumption, negative qty): value_amount =
 //     -round(qty_consumed * current_average_cost_per_unit) — EXCEPT when this movement brings
 //     SUM(qty) to exactly 0, in which case value_amount is instead set to exactly
@@ -844,6 +851,9 @@ export const accessories = pgTable(
 //     lib/inventory/moving-average.ts's valueDeltaForConsumption, and its dedicated test.
 //   - 'purchase_void': an EXACT reversal of one earlier 'purchase' row — value_amount/qty are
 //     literally the negation of that row's own values, never recomputed at the current average.
+//     A receipt-backed 'purchase' is reversed only through its receipt ("Batalkan penerimaan",
+//     reverseGoodsReceipt), whose void row carries ref_type 'goods_receipt' and ref_id = the
+//     REVERSAL receipt's item; the legacy void path refuses receipt-backed rows.
 // A purchase can be voided only if no later movement exists for this accessory (checked by
 // insertion order, under the row lock) — voiding "through" an intervening consumption would
 // retroactively invalidate that consumption's already-recorded cost snapshot. The rejection

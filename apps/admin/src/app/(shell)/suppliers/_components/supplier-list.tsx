@@ -112,8 +112,8 @@ export function SupplierList({ rows, canManage }: { rows: SupplierListRowData[];
                   {row.name}
                 </Link>
               </Td>
-              <Td className="text-neutral-700">{kindsText(row.kinds) ?? "—"}</Td>
-              <Td className="text-neutral-700">{row.phone ?? "—"}</Td>
+              <Td className="text-neutral-700">{kindsText(row.kinds) ?? "-"}</Td>
+              <Td className="text-neutral-700">{row.phone ?? "-"}</Td>
               <Td>
                 <div className="flex items-center gap-2">
                   {!row.isActive && <Badge variant="neutral">Nonaktif</Badge>}

@@ -11,6 +11,7 @@ import {
   deleteFabric,
   deleteFabricColor,
   listFabricColors,
+  listAllFabricsWithUsage,
   listFabricsWithUsage,
   updateFabricColor,
 } from "./fabric-queries";
@@ -255,6 +256,18 @@ describe("listFabricsWithUsage pagination", () => {
       expect(page1.rows).toHaveLength(20);
       expect(page2.rows).toHaveLength(1);
       expect(page1.rows[0]?.id).not.toBe(page2.rows[0]?.id);
+    });
+  });
+});
+
+describe("listAllFabricsWithUsage (pickers on /products/new, /products/[id], /production/new)", () => {
+  test("returns every fabric, not just the first list page of 20", async () => {
+    await withRollback(async (tx) => {
+      const prefix = `Picker Test ${Date.now()}`;
+      await tx.insert(fabrics).values(Array.from({ length: 25 }, (_, i) => ({ name: `${prefix} ${String(i).padStart(2, "0")}` })));
+      const names = (await listAllFabricsWithUsage(tx)).map((row) => row.name).filter((name) => name.startsWith(prefix));
+      expect(names).toHaveLength(25);
+      expect(names[24]).toBe(`${prefix} 24`);
     });
   });
 });

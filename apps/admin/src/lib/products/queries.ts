@@ -370,7 +370,7 @@ export async function addVariants(input: AddVariantsInput, actorStaffUserId: str
         },
         product_variants_product_color_size_key: {
           field: "fabricColorId",
-          message: "Warna dan ukuran ini sudah ada untuk produk ini — mungkin dibuat bersamaan di tab lain.",
+          message: "Warna dan ukuran ini sudah ada untuk produk ini. Mungkin dibuat bersamaan di tab lain.",
         },
       });
     }

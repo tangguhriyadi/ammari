@@ -175,7 +175,7 @@ export function HomepageOverview({ initialSections }: { initialSections: Homepag
             </Link>
             <Switch
               label="Tayang"
-              accessibleLabel={`Tayang — ${HOMEPAGE_SECTION_LABELS[section.key]}`}
+              accessibleLabel={`Tayang: ${HOMEPAGE_SECTION_LABELS[section.key]}`}
               checked={section.draftIsVisible}
               onCheckedChange={(checked) => handleToggleVisibility(section.key, checked)}
               pending={visibilityPending && pendingKey === section.key}

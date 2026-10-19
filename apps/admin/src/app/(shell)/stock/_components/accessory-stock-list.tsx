@@ -69,7 +69,7 @@ export function AccessoryStockList({ rows }: { rows: AccessoryStockListRow[] }) 
                 </Td>
                 <Td className="text-neutral-700 tabular-nums">{formatNumber(row.qty)} pcs</Td>
                 <Td className="text-neutral-700 tabular-nums" data-testid="accessory-defect-qty">{row.defectQty !== 0 ? `${formatNumber(row.defectQty)} pcs` : "-"}</Td>
-                <Td className="text-neutral-700 tabular-nums">{averageCost !== null ? `${formatRupiah(averageCost)}/pcs` : "—"}</Td>
+                <Td className="text-neutral-700 tabular-nums">{averageCost !== null ? `${formatRupiah(averageCost)}/pcs` : "-"}</Td>
               </Tr>
             );
           })}

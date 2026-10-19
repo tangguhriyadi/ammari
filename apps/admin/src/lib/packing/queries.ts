@@ -332,7 +332,7 @@ export async function mintThankYouCard(orderId: string, actorStaffUserId: string
     const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for("update").limit(1);
     if (!order) throw new ActionError("Pesanan tidak ditemukan.");
     if (order.status === "cancelled" || order.status === "returned") {
-      throw new ActionError("Pesanan ini sudah dibatalkan/diretur — tidak bisa mencetak kartu.");
+      throw new ActionError("Pesanan ini sudah dibatalkan/diretur, tidak bisa mencetak kartu.");
     }
 
     const [existingActive] = await tx

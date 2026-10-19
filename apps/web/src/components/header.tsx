@@ -19,13 +19,13 @@ export function Header() {
       <Container className="relative grid h-full grid-cols-[1fr_auto_1fr] items-center">
         <div className="flex items-center">
           <MobileNav />
-          <Link href="/" aria-label="Ammari — beranda" className="hidden lg:block">
+          <Link href="/" aria-label="Ammari, beranda" className="hidden lg:block">
             <Wordmark />
           </Link>
         </div>
 
         <div className="flex items-center justify-center">
-          <Link href="/" aria-label="Ammari — beranda" className="lg:hidden">
+          <Link href="/" aria-label="Ammari, beranda" className="lg:hidden">
             <Wordmark />
           </Link>
           <nav aria-label="Navigasi utama" className="hidden items-center gap-8 lg:flex">

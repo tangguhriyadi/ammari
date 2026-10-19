@@ -12,7 +12,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.BETTER_AUTH_URL ?? "http://localhost:3000"),
   title: "Ammari",
-  description: "Ammari — syar'i gamis",
+  description: "Ammari | syar'i gamis",
 };
 
 // Header/Footer wrap EVERY route (including claim/account/login/consent/privacy-policy/

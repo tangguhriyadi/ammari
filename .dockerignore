@@ -12,6 +12,8 @@ node_modules
 **/.next
 .next-e2e
 **/.next-e2e
+.next-deploy-regression-test
+**/.next-deploy-regression-test
 .turbo
 **/.turbo
 

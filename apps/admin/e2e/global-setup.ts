@@ -67,6 +67,11 @@ const E2E_SUPPLIERS_ROLE_KEY = "e2e_suppliers";
 // are visible; inventory.receive to post receipts.
 export const E2E_PURCHASES_EMAIL = "purchases@e2e.ammari.test";
 const E2E_PURCHASES_ROLE_KEY = "e2e_purchases";
+// A second email on the SAME `e2e_purchases` role, for receipts.spec.ts (session S7: the
+// all-receipts list /receipts) — its own OTP throttle, no new permissions to maintain. The role
+// has no production.manage, which receipts.spec.ts relies on to assert inventory.view alone
+// opens the page.
+export const E2E_RECEIPTS_EMAIL = "receipts@e2e.ammari.test";
 // A dedicated email/role for defects.spec.ts (docs/plans/suppliers-goods-receipt.md session S5:
 // rejects at receipt + defect visibility) — same "fresh email, clean OTP throttle" reasoning as
 // every fixture above. Builds its own product, batch and purchase, so it needs everything the
@@ -272,6 +277,7 @@ export default async function globalSetup(): Promise<void> {
     "inventory.receive",
   ]);
   await ensureStaffFixture(E2E_PURCHASES_EMAIL, "E2E Purchases", E2E_PURCHASES_ROLE_KEY);
+  await ensureStaffFixture(E2E_RECEIPTS_EMAIL, "E2E Receipts", E2E_PURCHASES_ROLE_KEY);
 
   await ensureLimitedRole(E2E_DEFECTS_ROLE_KEY, [
     "products.manage",
@@ -333,6 +339,7 @@ export default async function globalSetup(): Promise<void> {
         E2E_PACKING_PRINT_EMAIL,
         E2E_PACKING_PRINT_WEBKIT_EMAIL,
         E2E_PURCHASES_EMAIL,
+        E2E_RECEIPTS_EMAIL,
         E2E_DEFECTS_EMAIL,
         E2E_DISPOSITIONS_EMAIL,
       ]),

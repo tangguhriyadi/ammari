@@ -1,10 +1,10 @@
 # Plan: Suppliers + Goods Receipt (penerimaan barang) + Defect Stock
 
-Status (2026-10-20): **S1–S5 shipped** (commits `2bc3ce7`, `402e4a3`, `244eee0`, `eb22b48`,
-`6a8246f`; migrations 0022–0026). **S5b and S6 implemented** (migration 0027: defect read views on
-the stock lists and item pages; returns, re-open, releases, reversals, variance panels), awaiting
-the owner's review and commit. S7 not started. All decisions are recorded in §2
-(D1–D29); nothing is open (§10).
+Status (2026-10-20): **Complete.** S1–S6 shipped (commits `2bc3ce7`, `402e4a3`, `244eee0`,
+`eb22b48`, `6a8246f`, `33d1ded`; migrations 0022–0027). **S7 implemented** (no migration: the
+`/receipts` list, ledger links, review sweep, release notes in `docs/deploy-prod.md` §13), awaiting
+the owner's review and commit. All decisions are recorded in §2 (D1–D29); two review findings
+(R1, R2) await an owner decision (§10).
 
 Three linked changes:
 
@@ -784,7 +784,24 @@ read-only. Return/release buttons are labelled "Kembalikan ke supplier" on purch
 (g) the e2e lives in its own `defect-dispositions.spec.ts` with its own fixture email on the
 `e2e_defects` role.*
 
-**S7 — Cross-cutting polish and the review sweep.**
+**S7 — Cross-cutting polish and the review sweep.** *Status: implemented 2026-10-20, not yet
+committed. No migration (the existing `goods_receipts` / `production_batch_costs` indexes back the
+list). Settled while building it (no decision changed):
+(a) `/receipts` filters: source, supplier, date range (inclusive, on `received_at`) and status,
+where status is **Diterima** (a receipt not reversed), **Dibatalkan** (a receipt later reversed)
+or **Pembatalan** (the reversal document itself). For a production receipt the supplier filter
+matches any supplier on the batch's cost lines (its tailor), since a batch has no supplier of its
+own; the column shows those names, or "-". Filters are one GET form (selects plus Terapkan), not
+`FilterTabs`, because tabs carry only one query param. The batch link renders only for
+`production.manage`; the purchase link always (the page already requires `inventory.view`);
+(b) ledger links: `listStockLedger` resolves `goods_receipt_item` rows (receipts and their
+reversals) through the receipt item's batch line, legacy `production_batch_item` rows as before;
+on the raw-material ledgers a receipt reversal's `purchase_void` row now links to its purchase
+too (`/purchases/<movement id>` already redirected any receipt-backed row);
+(c) the `postBatch` and `stock_movements.valueAmount` comments were already rewritten in S4; S7
+rewrote the `accessory_movements` one (which `fabric_stock_movements` defers to);
+(d) the pre-deploy migration dry run reuses `deploy-prod/restore-drill-local.sh`, which gained a
+`--migrate` flag.*
 `/receipts` list; `listStockLedger`'s dual ref-type batch link; doc comments rewritten on
 `stock_movements.valueAmount`, `postBatch` and
 `accessory_movements`; `docs/SPEC.md` §5.1/§5.2 updated with the new tables, the "stock only moves
@@ -816,7 +833,29 @@ CLAUDE.md). If sessions are reordered, renumber — nothing in the plan depends 
 
 ## 10. Still open
 
-Nothing. Round 1's Q1–Q9, round 2's N1–N5 and the last question, N-new-1 (a third disposal type
+Two findings from the S7 review sweep (database-reviewer), both about rules this plan set, so
+they are recorded here for an owner decision rather than changed in S7:
+
+- **R1, a return re-prices the replacement through the pooled average.** A `return_out` is valued
+  at the item's pooled defect average (§4.2, D23), and the slice's `valueBefore` subtracts that
+  value (S5 note (b)). When two purchase lines of the same item carry defects at different
+  costs, the replacement on the returning line is valued with the other line's cost mixed in.
+  Confirmed in a rolled-back probe: line A (10 yd, Rp 1.000: 5 good, 5 defect) and line B
+  (10 yd, Rp 200: 5 good, 5 defect); returning A's 5 is booked at Rp 300 (pool average), so A's
+  5-yd replacement enters sellable stock at Rp 300 instead of Rp 500, and B's 5 defect yards are
+  left holding Rp 300 instead of Rp 100. Totals still reconcile; value moves between documents
+  and into the sellable average. Options: value a `return_out` at the returning line's own net
+  reject value (per-line, not pooled, for returns only), or accept it as the price of D23.
+- **R2, "later movement" checks use `created_at` (transaction start).** Receipt reversal refuses
+  when a consumption/sale/adjustment happened after the receipt, judged by `created_at`
+  (`hasLaterBlockingMovement`, `hasLaterBlockingStockMovement`, and the legacy void path). A
+  consumption whose transaction began before the receipt's, then waited on the item lock, gets
+  an earlier `created_at` and is missed; only the negative-balance backstop remains. Needs two
+  people acting within the same second or so. Fixing it properly needs a monotonic order (e.g. a
+  `clock_timestamp()` or identity column, i.e. a migration) or an order-independent rule like
+  the one S5 note (f) chose for defects.
+
+Before S7: nothing. Round 1's Q1–Q9, round 2's N1–N5 and the last question, N-new-1 (a third disposal type
 "Dibuang/Dimusnahkan"), are all answered and live in §2 as D1–D29. N-new-1 was answered **yes** by
 the owner on 2026-10-19 and recorded as D29; because the defect table ships complete in migration
 0026, its CHECKs already allow all three disposal types.

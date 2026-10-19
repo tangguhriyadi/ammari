@@ -40,7 +40,7 @@ function assertMinDimensions(variant: ContentImageVariant, width: number, height
   const minHeight = isMobile ? MIN_CONTENT_IMAGE_MOBILE_HEIGHT : MIN_CONTENT_IMAGE_DESKTOP_HEIGHT;
   if (width < minWidth || height < minHeight) {
     throw new ActionError(
-      `Gambar terlalu kecil untuk ${isMobile ? "crop mobile" : "gambar ini"} — minimal ${minWidth}x${minHeight} piksel ` +
+      `Gambar terlalu kecil untuk ${isMobile ? "crop mobile" : "gambar ini"}, minimal ${minWidth}x${minHeight} piksel ` +
         `(gambar yang diunggah berukuran ${width}x${height} piksel).`,
     );
   }

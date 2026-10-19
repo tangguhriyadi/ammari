@@ -4,7 +4,7 @@ import { PageHeader, Button, Breadcrumb } from "@ammari/ui";
 import type { ProductHighlightKey } from "@ammari/db/highlights";
 import { requireAnyPermission } from "@/lib/auth/require-any-permission";
 import { getProductDetail, getCurrentCostAssumption } from "@/lib/products/queries";
-import { listFabricColors, listFabricsWithUsage } from "@/lib/products/fabric-queries";
+import { listFabricColors, listAllFabricsWithUsage } from "@/lib/products/fabric-queries";
 import { listProductColorGroups, listProductImages } from "@/lib/products/image-queries";
 import { calculateBatasHpp } from "@/lib/products/batas-hpp";
 import { listActiveAccessories, listDistinctSizeGroups } from "@/lib/inventory/accessories";
@@ -33,7 +33,7 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
   if (!detail) notFound();
   const { product, variants } = detail;
 
-  const { rows: fabrics } = canManageProducts ? await listFabricsWithUsage(undefined, undefined, undefined) : { rows: [] };
+  const fabrics = canManageProducts ? await listAllFabricsWithUsage() : [];
   const availableColors = canManageProducts ? await listFabricColors(product.fabricId, { activeOnly: true }) : [];
   const colorGroups = canManageProducts ? await listProductColorGroups(product.id) : [];
   const images = await listProductImages(product.id);

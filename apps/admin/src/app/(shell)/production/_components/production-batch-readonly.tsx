@@ -16,7 +16,7 @@ export function ProductionBatchReadOnly({ batch }: { batch: BatchDetail }) {
         </div>
         <div>
           <dt className="text-sm text-neutral-600">Jumlah yard</dt>
-          <dd className="text-neutral-900">{batch.fabricYards !== null ? batch.fabricYards : "—"}</dd>
+          <dd className="text-neutral-900">{batch.fabricYards !== null ? batch.fabricYards : "-"}</dd>
         </div>
         <div>
           <dt className="text-sm text-neutral-600">Diposting pada</dt>

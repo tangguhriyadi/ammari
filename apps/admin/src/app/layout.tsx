@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Ammari Admin",
-  description: "Ammari — admin dashboard",
+  description: "Ammari | admin dashboard",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -74,7 +74,7 @@ async function assertProductRefIsPublishable(ref: HomepageProductRef, db: Databa
     .where(eq(products.id, ref.productId))
     .limit(1);
   if (!product || !product.isPublishedOnStorefront || !product.isActive) {
-    throw new ActionError("Salah satu produk yang dipilih sudah tidak tayang di toko online — pilih produk lain.");
+    throw new ActionError("Salah satu produk yang dipilih sudah tidak tayang di toko online. Pilih produk lain.");
   }
   if (ref.fabricColorId) {
     const [variant] = await db
@@ -88,7 +88,7 @@ async function assertProductRefIsPublishable(ref: HomepageProductRef, db: Databa
         ),
       )
       .limit(1);
-    if (!variant) throw new ActionError("Salah satu warna yang dipilih sudah tidak aktif untuk produk tersebut — pilih warna lain.");
+    if (!variant) throw new ActionError("Salah satu warna yang dipilih sudah tidak aktif untuk produk tersebut. Pilih warna lain.");
   }
 }
 

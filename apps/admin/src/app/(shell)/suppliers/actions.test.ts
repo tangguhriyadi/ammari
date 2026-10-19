@@ -63,6 +63,18 @@ describe("supplier input validation", () => {
     expect(result).toEqual({ ok: false, error: "Jenis supplier tidak boleh duplikat." });
   });
 
+  test("over-long free text is refused before any database write (a Server Action is a public POST)", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
+    await expect(createSupplierAction({ name: "x".repeat(201) })).resolves.toEqual({ ok: false, error: "Nama supplier terlalu panjang." });
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
+    await expect(createSupplierAction({ name: "Toko Laksmi", notes: "x".repeat(1001) })).resolves.toEqual({ ok: false, error: "Catatan terlalu panjang." });
+  });
+
+  test("updateSupplierAction refuses a non-uuid id", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
+    await expect(updateSupplierAction("not-a-uuid", { name: "Toko Laksmi" })).resolves.toEqual({ ok: false, error: "Supplier tidak ditemukan." });
+  });
+
   test("setSupplierActiveAction refuses a non-uuid id", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
     const result = await setSupplierActiveAction({ id: "not-a-uuid", isActive: false });
