@@ -6,8 +6,11 @@ import type { ProductionReceiptStatus } from "@ammari/db/schema";
 export interface BatchLineProgress {
   /** Planned pcs on the batch line (production_batch_items.qty, frozen at posting). */
   planned: number;
-  /** Net received pcs (receipts minus reversals, plus any legacy at-posting stock row). */
+  /** Net pcs accepted into sellable stock (receipts minus reversals, plus any legacy at-posting
+   * stock row). */
   received: number;
+  /** Net pcs rejected into defect stock (S5). Counts as "arrived" but never completes a line. */
+  rejected: number;
 }
 
 /** Statuses a receipt may still be posted against, and a short-close may still be applied to. */
@@ -17,11 +20,12 @@ export function isOpenBatchReceiptStatus(status: ProductionReceiptStatus): boole
   return OPEN_BATCH_RECEIPT_STATUSES.includes(status);
 }
 
-/** `received` when every line received its planned pcs, `pending` when nothing has arrived on any
- * line (e.g. after the only receipt was reversed), `partially_received` otherwise. */
+/** `received` when every line ACCEPTED its planned pcs, `pending` when nothing (good or defective)
+ * has arrived on any line (e.g. after the only receipt was reversed), `partially_received`
+ * otherwise — including a line fully settled with rejects, which is then short-closed. */
 export function batchReceiptProgressStatus(lines: readonly BatchLineProgress[]): "pending" | "partially_received" | "received" {
   if (lines.length > 0 && lines.every((line) => line.received === line.planned)) return "received";
-  if (lines.every((line) => line.received === 0)) return "pending";
+  if (lines.every((line) => line.received === 0 && line.rejected === 0)) return "pending";
   return "partially_received";
 }
 

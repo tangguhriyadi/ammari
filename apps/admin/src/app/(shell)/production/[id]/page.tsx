@@ -3,6 +3,7 @@ import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getBatchDetail, getBatchExtraCosts, listEligibleSkusForFabric } from "@/lib/production/queries";
 import { getBatchReceiptSummary, listReceiptsForBatch } from "@/lib/receipts/production";
+import { heldDefectValue, listDefectMovementsForBatch, stripDefectMovementAmounts } from "@/lib/defects/queries";
 import { listActiveCostComponents } from "@/lib/production/cost-components";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
@@ -49,8 +50,13 @@ async function PostedView({
   canViewProfit: boolean;
   permissionKeys: readonly string[];
 }) {
-  const [summary, receipts] = await Promise.all([getBatchReceiptSummary(batch.id), listReceiptsForBatch(batch.id)]);
+  const [summary, receipts, defectRowsRaw] = await Promise.all([
+    getBatchReceiptSummary(batch.id),
+    listReceiptsForBatch(batch.id),
+    listDefectMovementsForBatch(batch.id),
+  ]);
   if (!summary) notFound();
+  const defectRows = stripDefectMovementAmounts(defectRowsRaw, canViewProfit);
 
   return (
     <>
@@ -60,6 +66,8 @@ async function PostedView({
           batchId={batch.id}
           summary={summary}
           receipts={receipts}
+          defectRows={defectRows}
+          defectValue={defectRows.length > 0 ? heldDefectValue(defectRows) : null}
           // Receiving needs inventory.receive (D10); the receive page also needs production.manage,
           // which this page already required.
           canReceive={permissionKeys.includes("inventory.receive")}

@@ -18,6 +18,10 @@ export default async function ReceivePurchasePage({ params }: { params: Promise<
   const document = await getPurchaseDocument(id);
   if (!document) notFound();
   if (!isOpenPurchaseStatus(document.status)) redirect(`/purchases/${id}`);
+  // Open but nothing left to receive: every line is fully settled, some of it as defects (S5) —
+  // the document stays partially received until it is closed (or, from S6, exchanged).
+  const openLines = document.lines.filter((line) => line.outstanding > 0);
+  if (openLines.length === 0) redirect(`/purchases/${id}`);
 
   return (
     <>
@@ -26,15 +30,14 @@ export default async function ReceivePurchasePage({ params }: { params: Promise<
       <ReceiveForm
         source={{ type: "purchase", purchaseId: id }}
         receiverName={session.staffUser.name}
-        lines={document.lines
-          .filter((line) => line.outstanding > 0)
-          .map((line) => ({
-            id: line.id,
-            itemName: line.itemName,
-            unit: line.itemType === "fabric" ? "yard" : "pcs",
-            wholeOnly: line.itemType === "accessory",
-            outstanding: line.outstanding,
-          }))}
+        lines={openLines.map((line) => ({
+          id: line.id,
+          itemName: line.itemName,
+          unit: line.itemType === "fabric" ? "yard" : "pcs",
+          wholeOnly: line.itemType === "accessory",
+          outstanding: line.outstanding,
+          rejected: line.rejected,
+        }))}
       />
     </>
   );

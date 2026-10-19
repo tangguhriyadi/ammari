@@ -1,9 +1,9 @@
 # Plan: Suppliers + Goods Receipt (penerimaan barang) + Defect Stock
 
-Status (2026-10-19): **S1–S3 shipped** (commits `2bc3ce7`, `402e4a3`, `244eee0`; migrations
-0022–0024). **S4 implemented** (migration 0025, production output receipts), awaiting the owner's
-review and commit. S5–S7 not started. All decisions are recorded in §2; §10 has the one question
-still open (needed before S6).
+Status (2026-10-19): **S1–S4 shipped** (commits `2bc3ce7`, `402e4a3`, `244eee0`, `eb22b48`;
+migrations 0022–0025). **S5 implemented** (migration 0026, defect ledger + rejects at receipt),
+awaiting the owner's review and commit. S6–S7 not started. All decisions are recorded in §2
+(D1–D29); nothing is open (§10).
 
 Three linked changes:
 
@@ -82,7 +82,7 @@ insert-only. Last applied migration is `0021`.
 ## 2. Decisions
 
 Owner-answered questions are marked **[owner]**; the rest are design decisions that follow from
-them. Everything here is settled; §10 lists what is still open.
+them. Everything here is settled; nothing is open.
 
 | # | Decision |
 |---|---|
@@ -109,11 +109,12 @@ them. Everything here is settled; §10 lists what is still open.
 | D21 | **Receipt date defaults to today (Jakarta), backdatable; the receiver is the logged-in staff user, plus an optional free-text "Diterima oleh" [owner Q3].** |
 | D22 | **Received quantity is immediately sellable [owner Q4]** — no extra gate. Unreceived quantity simply isn't in stock, and the existing "stok tidak cukup" check already refuses it. |
 | D23 | **Defect stock is pooled per item [owner N1]**, and every movement names its source line, so "which order or batch did these defects come from" stays answerable while only the *value* average is pooled — consistent with every other balance in this system. No lot-level defect costing. |
-| D24 | **Releasing a defect (`dispose`) has exactly two types [owner N2]**: **Lelang** (auction — `proceeds_amount` entered by hand, required, **> 0**) and **Hibah** (donation — proceeds fixed at **Rp 0**). Both need a date (`occurred_at`, defaults today, backdatable) and required free-text notes; `disposal_type` carries the category, so there is no separate closed-set reason. Both remove quantity *and* value from the defect pool through the defect ledger, with an audit entry and the same reversing-entry rule as everything else (D8). `proceeds_amount` is **stored but not booked** — no journal entries, no accounting module in this plan; it is persisted precisely so a future double-entry module can book it as other income. Proceeds mean **gross cash actually received** (what reached her hand or account), with no fee breakdown, since there is no expense module to tie fees to yet. |
+| D24 | **Releasing a defect (`dispose`) has three types [owner N2, extended by D29]**: **Lelang** (auction — `proceeds_amount` entered by hand, required, **> 0**), **Hibah** (donation — proceeds fixed at **Rp 0**) and **Dibuang/Dimusnahkan** (discarded — proceeds fixed at **Rp 0**, D29). All need a date (`occurred_at`, defaults today, backdatable) and required free-text notes; `disposal_type` carries the category, so there is no separate closed-set reason. All three remove quantity *and* value from the defect pool through the defect ledger, with an audit entry and the same reversing-entry rule as everything else (D8). `proceeds_amount` is **stored but not booked** — no journal entries, no accounting module in this plan; it is persisted precisely so a future double-entry module can book it as other income. Proceeds mean **gross cash actually received** (what reached her hand or account), with no fee breakdown, since there is no expense module to tie fees to yet. |
 | D25 | **Regrading a defect into sellable stock is out of scope [owner N2]**, and deliberately unreachable today (the two ledgers are separate tables, so no manual adjustment can do it). The future shape is recorded in §3.5 so nobody improvises it: one new `DEFECT_MOVEMENT_TYPES` value that moves quantity and value out of the defect pool and inserts a matching sellable `adjustment` in the same transaction. |
 | D26 | **No Overview dashboard tile for defect stock now [owner N3]**, so nobody adds one ad hoc mid-session. SPEC §6 is untouched by this plan. |
 | D27 | **A posted batch's planned quantity is not editable [owner N4]** — short-close instead, which is what it is for, and the existing freeze trigger already guarantees it. "Sisa" on a short-closed batch stays non-zero forever; the `closed` badge is what resolves that visually. |
 | D28 | **No per-supplier payable or amount-owed view now [owner N5]**, but the schema must stay able to support one: `purchases.supplier_id` plus `production_batch_costs.supplier_id` (D9) are together sufficient, and neither may be "simplified" away. |
+| D29 | **A third disposal type, "Dibuang/Dimusnahkan" (`discarded`), proceeds fixed at Rp 0 [owner, answering N-new-1, 2026-10-19]**, alongside Lelang and Hibah. Hibah and Dibuang are both Rp 0 but mean different things — a donation is a deliberate giveaway worth showing (zakat/CSR), discarding is pure waste — so **wherever S6 shows disposal figures, discarded is reported separately from donation**, never folded into it. Because `defect_movements` and its disposal columns ship in migration 0026 (S5), the 0026 CHECKs already allow all three types (`DEFECT_DISPOSAL_TYPES = ['auction','donation','discarded']`, with `donation` and `discarded` sharing the `proceeds_amount = 0` CHECK); S6 adds the radio option and the reporting, with no CHECK migration. |
 
 ---
 
@@ -263,13 +264,13 @@ CHECK migration two sessions later, and an unused allowed value in a CHECK costs
 | `fabric_id` | → `fabrics` restrict, nullable | |
 | `accessory_id` | → `accessories` restrict, nullable | |
 | | | CHECK exactly one of the three is non-null **and** agrees with `item_kind`. These are the balance key; keeping them denormalized (rather than joining through the source line) is the same choice `production_batch_items.fabric_id` makes. |
-| `type` | text CHECK in `DEFECT_MOVEMENT_TYPES = ['reject','return_out','dispose','reversal']` | One `dispose` type carrying a `disposal_type`, **not** one movement type per disposal kind: the quantity/value mechanics are identical and only the proceeds differ, so a third or fourth disposal kind later (N-new-1) is one array value and one radio option, with no new code path. |
+| `type` | text CHECK in `DEFECT_MOVEMENT_TYPES = ['reject','return_out','dispose','reversal']` | One `dispose` type carrying a `disposal_type`, **not** one movement type per disposal kind: the quantity/value mechanics are identical and only the proceeds differ, so a further disposal kind later is one array value and one radio option, with no new code path (D29's `discarded` shipped this way, in 0026 itself). |
 | `qty` | numeric(10,2) signed, CHECK `<> 0` | CHECK `type <> 'reject' or qty > 0`; CHECK `type not in ('return_out','dispose') or qty < 0`; a `reversal`'s sign is the exact negation of the row it reverses (app-enforced, same as `accessory_movements`' `purchase_void`). CHECK `item_kind = 'fabric' or qty = round(qty)`. |
 | `value_amount` | bigint signed | Defect stock is its own moving-average pool per item — see §4.2/§4.3. |
 | `goods_receipt_item_id` | → `goods_receipt_items` restrict, nullable | Set on `reject` rows (and on a reversal of one). CHECK `type <> 'reject' or goods_receipt_item_id is not null`. `uniqueIndex(goods_receipt_item_id) where type = 'reject'` — one reject movement per receipt line. |
 | `purchase_item_id` / `production_batch_item_id` | → restrict, nullable | The source **line**, always set (copied from the receipt item on a `reject`), CHECK exactly one. This is what makes `qtySettled` per line computable without a join chain, and what makes "show this document's defects" a single indexed read. Composite FKs `(purchase_item_id, fabric_id) → purchase_items(id, fabric_id)`, the accessory twin, and `(production_batch_item_id, sku) → production_batch_items(id, sku)` guarantee a defect's item always matches its own source line (needs `unique(production_batch_items.id, sku)`, added in 0026). |
-| `disposal_type` | text CHECK in `DEFECT_DISPOSAL_TYPES = ['auction','donation']`, nullable | Set on a `dispose` row **and copied onto its reversal**, so "proceeds by type" nets with a plain `SUM` and no self-join, exactly as `qty`/`value_amount` already do. CHECKs: `disposal_type is null or type in ('dispose','reversal')`; `type <> 'dispose' or disposal_type is not null`. |
-| `proceeds_amount` | bigint signed, nullable | Whole rupiah (never a float — CLAUDE.md). CHECKs: `(disposal_type is null) = (proceeds_amount is null)` (both or neither, the same pair-check idiom as `fabrics_price_amount_unit_pair_check`); `type <> 'dispose' or disposal_type <> 'auction' or proceeds_amount > 0`; `type <> 'dispose' or disposal_type <> 'donation' or proceeds_amount = 0` (D24). Signed because a reversal carries the exact negation — app-enforced, like every other reversal column. Deliberately **not** netted against `value_amount`: the ledger records the cost that left the defect pool; proceeds are separate cash a future accounting module books as other income. |
+| `disposal_type` | text CHECK in `DEFECT_DISPOSAL_TYPES = ['auction','donation','discarded']` (D29), nullable | Set on a `dispose` row **and copied onto its reversal**, so "proceeds by type" nets with a plain `SUM` and no self-join, exactly as `qty`/`value_amount` already do. CHECKs: `disposal_type is null or type in ('dispose','reversal')`; `type <> 'dispose' or disposal_type is not null`. |
+| `proceeds_amount` | bigint signed, nullable | Whole rupiah (never a float — CLAUDE.md). CHECKs: `(disposal_type is null) = (proceeds_amount is null)` (both or neither, the same pair-check idiom as `fabrics_price_amount_unit_pair_check`); `type <> 'dispose' or disposal_type <> 'auction' or proceeds_amount > 0`; `type <> 'dispose' or disposal_type not in ('donation','discarded') or proceeds_amount = 0` (D24, D29). Signed because a reversal carries the exact negation — app-enforced, like every other reversal column. Deliberately **not** netted against `value_amount`: the ledger records the cost that left the defect pool; proceeds are separate cash a future accounting module books as other income. |
 | `occurred_at` | date (Jakarta) | Defaults today, backdatable, same role as `received_at`. |
 | `reverses_movement_id` | self-FK restrict, **unique** | CHECK `(type='reversal') = (reverses_movement_id is not null)`. A reversal copies the reversed row's item and source-line columns so every per-line `SUM` nets correctly with no self-join. |
 | `reversed_at`, `reversed_by_staff_user_id` | | Set once on the original. Same pair checks as `goods_receipts`. |
@@ -399,7 +400,8 @@ Batch of 10 pcs, posted HPP/pcs = **H**, total cost **C = 10H**:
 **The variance figures are always net of proceeds** (D20/D24):
 `HPP riil per pcs = (total batch cost − proceeds) / pcs accepted into sellable stock`, and
 `Kerugian bersih = defect value released − proceeds`. The hibah row is just the lelang row with
-P = 0, so there is one formula, not two. Net loss can in principle come out negative (defects
+P = 0, so there is one formula, not two; a Dibuang/Dimusnahkan release (D29) uses the same formula
+with P = 0 too, but its loss is reported on its own line (waste), never added into Hibah's. Net loss can in principle come out negative (defects
 auctioned above their carried cost); that is a gain and is displayed as such rather than clamped
 to zero.
 
@@ -555,9 +557,10 @@ movement (`inventory.manage`). Header/line editing is allowed only while no rece
 enforced server-side and not merely by hiding the button.
 
 **Disposal form** (`inventory.manage`, D24) — a small dialog on the defect line: quantity (capped
-at *stok cacat tersedia*), **Jenis pelepasan** as two radio options "Lelang" / "Hibah", a
+at *stok cacat tersedia*), **Jenis pelepasan** as three radio options "Lelang" / "Hibah" /
+"Dibuang/Dimusnahkan" (D29), a
 **"Hasil lelang"** rupiah input shown and required only for Lelang (hidden and forced to Rp 0 for
-Hibah), **Tanggal** (defaults today, backdatable), and required **Catatan**. The form shows the
+Hibah and Dibuang/Dimusnahkan), **Tanggal** (defaults today, backdatable), and required **Catatan**. The form shows the
 defect value being released and the resulting **Kerugian bersih** live as the proceeds are typed,
 so the owner sees the consequence before saving.
 
@@ -572,7 +575,8 @@ single column — this is a page the wife uses standing next to a box.
 table and the same actions, plus the §4.3 variance lines inside the existing
 `finance.view_profit`-gated `BatchCostsSection`.
 
-**Defect stock visibility** — reuse the existing structure rather than inventing one:
+**Defect stock visibility** — reuse the existing structure rather than inventing one (the first
+two bullets are S5b, see S5's status note; the tab shipped in S5):
 - a "Cacat" column on `/stock`, `/stock/fabrics`, `/stock/accessories`;
 - a "Stok cacat" figure plus a defect-ledger section on `/stock/[sku]`, `/stock/fabrics/[id]`,
   `/stock/accessories/[id]`, each row linking back to its source document and showing proceeds on
@@ -667,7 +671,37 @@ assert the count-page warning at both viewports.
 
 **S5 — Defect ledger + rejects at receipt (both sources). Migration 0026** (`defect_movements`,
 its immutability trigger, `goods_receipt_items.qty_rejected`, `unique(production_batch_items.id,
-sku)` and the two `purchase_items` composite-FK targets).
+sku)` and the two `purchase_items` composite-FK targets). *Status: implemented 2026-10-19, not yet
+committed. Settled while building it (no decision changed):
+(a) **read surface split per §9** (the owner scoped this session's visibility to the "Cacat" tab,
+the purchase/batch detail pages and the stock count): shipped are `/stock/defects` (tab "Cacat",
+both kinds, each section behind its own key, value behind `finance.view_profit`), the "Cacat"
+column + "Barang cacat" history + "Nilai cacat" on purchases and batches, the "Ditolak (cacat)"
+field, and the read-only per-SKU defect figure on the stock count. The "Cacat" column on the three
+stock lists and the defect sections on the three item detail pages (`/stock/[sku]`,
+`/stock/fabrics/[id]`, `/stock/accessories/[id]`) move to **S5b**, to land with or before S7 —
+"rejects can be recorded" and "rejects are visible somewhere" still ship together;
+(b) the per-line settled reader takes the defect part of qtySettled as SUM over the line's rows
+with `disposal_type IS NULL` (rejects, returns and their reversals), and the slice's
+`valueBefore` adds those rows' value, so S6's returns already flow through §4.2 correctly; this
+relies on §3.5's rule that a `dispose` reversal copies `disposal_type`;
+(c) the item indexes are `(sku|fabric_id|accessory_id, created_at)`, not led by `item_kind` (a
+non-null item column already implies its kind, and the leftmost column must back each RESTRICT
+FK); the source-line columns have only the composite FKs, no single-column ones (same
+consolidation `production_batch_items` uses);
+(d) a reject's reversal points `goods_receipt_item_id` at the reversal receipt's item, the same
+convention the raw-material ledgers' `ref_id` follows;
+(e) "Terima barang" / "Terima hasil" are hidden, and the receive pages redirect back, when the
+document is open but nothing is outstanding (everything arrived, some of it defective);
+(f) a receipt reversal is refused when ANY non-reversed `return_out`/`dispose` exists on the same
+source line (order-independent: `created_at` is the transaction start time, so "later" is not
+reliable); S6 must write and reverse those rows under the same item-row lock, copy
+`disposal_type` onto a release's reversal (the settled rule depends on it; nothing at DB level
+enforces a reversal matching its original yet), and label the "Cacat" column as received-defective
+(it does not shrink after a return); rolling back from S5 is documented in `docs/deploy.md`; (g) the SKU-cannot-be-oversold guard is a unit test (orders, stock list, SKU detail,
+stock count and the storefront `available` flag, plus a source-file guard that none of those
+modules references the defect ledger); the e2e lives in its own `defects.spec.ts` with its own
+fixture user rather than extending the two S3/S4 specs.*
 `lib/defects/*` (balance per item, ledger listing, the reject write), the §4.2 split of a slice
 between the sellable and defect ledgers, the `qtySettled`/`outstanding` change in both receipt
 paths, the "Ditolak (cacat)" field on the receipt form, and all the read-only defect visibility
@@ -693,7 +727,8 @@ reopen columns (`reopened_at`, `reopened_by_staff_user_id`, `reopen_reason`) on 
 *Unit:* a return re-opens exactly its own quantity of `outstanding` and a replacement receipt then
 completes the document (the §4.2 worked example, end to end); a return against a closed document
 re-opens it and stamps the reopen columns; a release does **not** create outstanding; `auction`
-requires proceeds > 0 and `donation` forces exactly 0; a release requires non-blank notes; neither
+requires proceeds > 0 and `donation` and `discarded` force exactly 0, with donation and discarded
+reported as separate figures (D29); a release requires non-blank notes; neither
 disposition can exceed `stillHeld`; reversal of each disposition, including that a reversed release
 negates its proceeds so the net-loss figures return to their prior values; a receipt reversal is
 rejected once its defects have been returned or released; the defect pool's value is exactly 0 when
@@ -733,22 +768,9 @@ CLAUDE.md). If sessions are reordered, renumber — nothing in the plan depends 
 
 ---
 
-## 10. Still open (one question, with a recommendation)
+## 10. Still open
 
-Round 1's Q1–Q9 and round 2's N1–N5 are all answered and now live in §2 as D1–D28. One question
-remains, and it does not block starting S1 — it only needs answering before **S6**.
-
-**N-new-1 — Is a third disposal type, "Dibuang/Dimusnahkan" (discarded, Rp 0), also needed?**
-The owner named only two (Lelang, Hibah). *Recommend:* **yes, add it in S6 alongside the other
-two.** Hibah and Dibuang are both Rp 0 but mean completely different things, and the difference is
-one the owner will care about later: a donation is a deliberate giveaway worth being able to show
-(and potentially relevant to zakat/CSR records), while discarding is pure waste that belongs in a
-waste figure. Folding waste into "Hibah" would mislabel it permanently in the only record that
-exists, and there will realistically be unsellable fabric offcuts and ruined pieces that simply go
-in the bin. The cost of adding it is essentially zero *because* of the shape chosen in §3.5: all
-disposal types route through one `dispose` movement type carrying `disposal_type` +
-`proceeds_amount`, so a third kind is one array value, one radio option, and one extra CHECK branch
-(`donation` and `discarded` share the `proceeds_amount = 0` rule) — no new code path, no migration
-beyond the CHECK, and nothing in §4.2/§4.3 changes. Equally, if the owner is confident everything
-unsellable gets donated rather than binned, dropping it costs nothing either — which is exactly why
-this is worth one explicit yes/no rather than a guess.
+Nothing. Round 1's Q1–Q9, round 2's N1–N5 and the last question, N-new-1 (a third disposal type
+"Dibuang/Dimusnahkan"), are all answered and live in §2 as D1–D29. N-new-1 was answered **yes** by
+the owner on 2026-10-19 and recorded as D29; because the defect table ships complete in migration
+0026, its CHECKs already allow all three disposal types.

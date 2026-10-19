@@ -11,7 +11,17 @@ import { saveStockCountAction } from "../actions";
 
 type SkuRow = Awaited<ReturnType<typeof listProductSkusForCount>>[number];
 
-export function StockCountForm({ productId, skus }: { productId: string; skus: SkuRow[] }) {
+export function StockCountForm({
+  productId,
+  skus,
+  defectQtyBySku,
+}: {
+  productId: string;
+  skus: SkuRow[];
+  /** Defect pcs per SKU (S5), read-only: shown so the counter knows to leave them out, never
+   * counted and never submitted. SKUs without defects are absent. */
+  defectQtyBySku: Record<string, number>;
+}) {
   const router = useRouter();
   const toast = useToast();
   // sku -> physical count the operator typed, as a string (so a cleared input isn't coerced to
@@ -52,32 +62,40 @@ export function StockCountForm({ productId, skus }: { productId: string; skus: S
       }}
     >
       <div className="flex flex-col gap-2">
-        {skus.map((row) => (
-          <div key={row.sku} className="flex items-center gap-3 rounded-lg border border-neutral-200 p-3">
-            <ColorSwatch hex={row.colorHex} />
-            <div className="flex-1">
-              <p className="text-base text-neutral-900">
-                {row.colorName} · {row.size === "ALLSIZE" ? "All Size" : row.size}
-              </p>
-              <p className="text-sm text-neutral-600">{row.sku} · Sistem: {formatNumber(row.currentStock)}</p>
+        {skus.map((row) => {
+          const defectQty = defectQtyBySku[row.sku];
+          return (
+            <div key={row.sku} className="flex items-center gap-3 rounded-lg border border-neutral-200 p-3">
+              <ColorSwatch hex={row.colorHex} />
+              <div className="flex-1">
+                <p className="text-base text-neutral-900">
+                  {row.colorName} · {row.size === "ALLSIZE" ? "All Size" : row.size}
+                </p>
+                <p className="text-sm text-neutral-600">{row.sku} · Sistem: {formatNumber(row.currentStock)}</p>
+                {defectQty !== undefined && (
+                  <p className="text-sm text-neutral-600" data-testid="count-defect-qty">
+                    Cacat: {formatNumber(defectQty)} pcs (tidak ikut dihitung)
+                  </p>
+                )}
+              </div>
+              <div className="w-28">
+                <Label htmlFor={`count-${row.sku}`} className="sr-only">
+                  Jumlah fisik untuk {row.sku}
+                </Label>
+                <Input
+                  id={`count-${row.sku}`}
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  step={1}
+                  placeholder={String(row.currentStock)}
+                  value={physicalCounts[row.sku] ?? ""}
+                  onChange={(event) => setPhysicalCounts((prev) => ({ ...prev, [row.sku]: event.target.value }))}
+                />
+              </div>
             </div>
-            <div className="w-28">
-              <Label htmlFor={`count-${row.sku}`} className="sr-only">
-                Jumlah fisik untuk {row.sku}
-              </Label>
-              <Input
-                id={`count-${row.sku}`}
-                type="number"
-                inputMode="numeric"
-                min={0}
-                step={1}
-                placeholder={String(row.currentStock)}
-                value={physicalCounts[row.sku] ?? ""}
-                onChange={(event) => setPhysicalCounts((prev) => ({ ...prev, [row.sku]: event.target.value }))}
-              />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {error && (

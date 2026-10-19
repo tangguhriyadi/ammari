@@ -97,6 +97,27 @@ export type GoodsReceiptSourceType = (typeof GOODS_RECEIPT_SOURCE_TYPES)[number]
 export const GOODS_RECEIPT_KINDS = ["receipt", "reversal"] as const;
 export type GoodsReceiptKind = (typeof GOODS_RECEIPT_KINDS)[number];
 
+/** What a defect_movements row is about (docs/plans/suppliers-goods-receipt.md §3.5, migration
+ * 0026): a finished-goods SKU (production output), a fabric or an accessory (purchase lines).
+ * Exactly one of defect_movements.sku/fabric_id/accessory_id is set, agreeing with this. */
+export const DEFECT_ITEM_KINDS = ["sku", "fabric", "accessory"] as const;
+export type DefectItemKind = (typeof DEFECT_ITEM_KINDS)[number];
+
+/** The defect ledger's vocabulary (§3.5). `reject` (S5): units that arrived defective at a goods
+ * receipt, mirroring goods_receipt_items.qty_rejected 1:1. `return_out` (S6): defects sent back to
+ * the supplier/tailor for exchange. `dispose` (S6): defects released, with a `disposal_type`.
+ * `reversal`: the exact negation of one earlier row (D8). Created complete in 0026 so S6 needs no
+ * CHECK migration; nothing writes `return_out`/`dispose` until S6. */
+export const DEFECT_MOVEMENT_TYPES = ["reject", "return_out", "dispose", "reversal"] as const;
+export type DefectMovementType = (typeof DEFECT_MOVEMENT_TYPES)[number];
+
+/** How a defect is released (D24 + the owner's answer to N-new-1, recorded as D29): `auction`
+ * (Lelang, proceeds > 0 entered by hand), `donation` (Hibah, Rp 0, a deliberate giveaway) and
+ * `discarded` (Dibuang/Dimusnahkan, Rp 0, pure waste). Donation and discarded are both Rp 0 but are
+ * always reported separately. Indonesian labels live in apps/admin, never in the DB. */
+export const DEFECT_DISPOSAL_TYPES = ["auction", "donation", "discarded"] as const;
+export type DefectDisposalType = (typeof DEFECT_DISPOSAL_TYPES)[number];
+
 export const STOCK_MOVEMENT_TYPES = ["production", "sale", "return", "adjustment"] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 

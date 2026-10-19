@@ -21,6 +21,9 @@ import { sizeCharts } from "./content";
 import {
   COST_COMPONENT_TYPES,
   COST_COMPONENT_UNITS,
+  DEFECT_DISPOSAL_TYPES,
+  DEFECT_ITEM_KINDS,
+  DEFECT_MOVEMENT_TYPES,
   FABRIC_PRICE_UNITS,
   GOODS_RECEIPT_KINDS,
   GOODS_RECEIPT_SOURCE_TYPES,
@@ -40,6 +43,9 @@ import {
   SUPPLIER_KINDS,
   type CostComponentType,
   type CostComponentUnit,
+  type DefectDisposalType,
+  type DefectItemKind,
+  type DefectMovementType,
   type FabricPriceUnit,
   type GoodsReceiptKind,
   type GoodsReceiptSourceType,
@@ -529,6 +535,9 @@ export const productionBatchItems = pgTable(
     index("production_batch_items_production_batch_id_idx").on(table.productionBatchId),
     index("production_batch_items_sku_idx").on(table.sku),
     unique("production_batch_items_batch_sku_key").on(table.productionBatchId, table.sku),
+    // Composite-FK target for defect_movements (migration 0026): a defect row's SKU always
+    // matches its own source batch line.
+    unique("production_batch_items_id_sku_key").on(table.id, table.sku),
     check("production_batch_items_qty_check", sql`${table.qty} > 0`),
     check("production_batch_items_unit_cost_amount_check", sql`${table.unitCostAmount} >= 0`),
     // Together these guarantee production_batches.fabric_id === product_variants.fabric_id for
@@ -1143,6 +1152,11 @@ export const purchaseItems = pgTable(
     uniqueIndex("purchase_items_purchase_id_accessory_id_key")
       .on(table.purchaseId, table.accessoryId)
       .where(sql`${table.accessoryId} is not null`),
+    // Composite-FK targets for defect_movements (migration 0026, §3.2): a defect row's fabric/
+    // accessory always matches its own source purchase line. Nullable columns are fine as FK
+    // targets under MATCH SIMPLE, exactly as product_images_fabric_color_fabric_fk relies on.
+    unique("purchase_items_id_fabric_id_key").on(table.id, table.fabricId),
+    unique("purchase_items_id_accessory_id_key").on(table.id, table.accessoryId),
   ],
 );
 
@@ -1209,8 +1223,10 @@ export const goodsReceipts = pgTable(
 );
 
 // One line of a receipt. `qty_accepted` is deliberately NOT named qty_received: "received" is
-// accepted + rejected (rejects arrive with migration 0026, S5). Signed: a reversal item is the
-// exact negation of the original's, so every per-line balance stays a plain SUM.
+// accepted + rejected. `qty_rejected` (migration 0026, S5) is what arrived defective; it is
+// mirrored 1:1 into a defect_movements 'reject' row in the same transaction and never enters
+// sellable stock. Signed: a reversal item is the exact negation of the original's, so every
+// per-line balance stays a plain SUM.
 export const goodsReceiptItems = pgTable(
   "goods_receipt_items",
   {
@@ -1227,6 +1243,9 @@ export const goodsReceiptItems = pgTable(
       onDelete: "restrict",
     }),
     qtyAccepted: numeric("qty_accepted", { precision: 10, scale: 2, mode: "number" }).notNull(),
+    // Defaulted, so the previous release's inserts (which never name it) stay valid (expand/
+    // contract) and every pre-0026 row reads as "nothing rejected".
+    qtyRejected: numeric("qty_rejected", { precision: 10, scale: 2, mode: "number" }).notNull().default(0),
     ...createdAtOnly(),
   },
   (table) => [
@@ -1247,20 +1266,29 @@ export const goodsReceiptItems = pgTable(
       "goods_receipt_items_exactly_one_source_check",
       sql`(${table.purchaseItemId} is null) <> (${table.productionBatchItemId} is null) and (${table.sourceType} = 'purchase') = (${table.purchaseItemId} is not null)`,
     ),
-    // A receipt adds, a reversal removes (§3.3). Written as >= 0 / <= 0 plus a separate "must do
-    // something" check, because from 0026 a line may legitimately accept 0 and reject 2 — that
-    // migration widens only the nonzero check to `qty_accepted + qty_rejected <> 0`.
+    // A receipt adds, a reversal removes (§3.3), for both quantities. Written as >= 0 / <= 0 plus
+    // a separate "must do something" check, because a line may legitimately accept 0 and reject
+    // 2. Migration 0026 widened the nonzero check from `qty_accepted <> 0` to the sum (a strict
+    // superset of the old predicate for every row the previous release writes).
     check(
       "goods_receipt_items_qty_accepted_sign_check",
       sql`(${table.kind} = 'receipt' and ${table.qtyAccepted} >= 0) or (${table.kind} = 'reversal' and ${table.qtyAccepted} <= 0)`,
     ),
-    check("goods_receipt_items_qty_nonzero_check", sql`${table.qtyAccepted} <> 0`),
+    check(
+      "goods_receipt_items_qty_rejected_sign_check",
+      sql`(${table.kind} = 'receipt' and ${table.qtyRejected} >= 0) or (${table.kind} = 'reversal' and ${table.qtyRejected} <= 0)`,
+    ),
+    check("goods_receipt_items_qty_nonzero_check", sql`${table.qtyAccepted} + ${table.qtyRejected} <> 0`),
     // Production output is whole pcs. Accessory purchase lines are whole pcs too, enforced in the
     // receipt code (this row doesn't know its purchase line's item_type) and by
     // purchase_items_accessory_whole_qty_check on the ordered side.
     check(
       "goods_receipt_items_production_whole_qty_check",
       sql`${table.sourceType} <> 'production_batch' or ${table.qtyAccepted} = round(${table.qtyAccepted})`,
+    ),
+    check(
+      "goods_receipt_items_production_whole_rejected_check",
+      sql`${table.sourceType} <> 'production_batch' or ${table.qtyRejected} = round(${table.qtyRejected})`,
     ),
     // One line per source line per receipt.
     uniqueIndex("goods_receipt_items_receipt_purchase_item_key")
@@ -1269,5 +1297,171 @@ export const goodsReceiptItems = pgTable(
     uniqueIndex("goods_receipt_items_receipt_batch_item_key")
       .on(table.goodsReceiptId, table.productionBatchItemId)
       .where(sql`${table.productionBatchItemId} is not null`),
+  ],
+);
+
+// ---------- Defect stock — migration 0026 ----------
+// docs/plans/suppliers-goods-receipt.md §3.5, D14/D23, session S5.
+
+// The append-only ledger of DEFECT stock (stok barang cacat) for all three item kinds. A separate
+// table on purpose (D14), not an is_defect flag on the sellable ledgers: no existing query over
+// stock_movements / accessory_movements / fabric_stock_movements can ever see these units, so
+// "never sellable, never ordered, never packed, never counted as sellable" is structural rather
+// than a WHERE clause every reader would have to remember. Only the stock pages, the source
+// documents and /stock/defects read it, deliberately.
+//
+// Defect stock is its own moving-average pool per item (D23): balance = SUM(qty), value =
+// SUM(value_amount), never a stored counter, exactly like every other ledger here.
+//   - 'reject' (S5): units that arrived defective at a goods receipt, one row per receipt line
+//     with qty_rejected > 0 (1:1, enforced by the partial unique index below), valued at the
+//     defect share of the line's §4.2 slice (purchases) or qty x the frozen unit_cost_amount
+//     (production). Rejects never touch the sellable average that feeds HPP.
+//   - 'return_out' / 'dispose' (S6): outflows valued through valueDeltaForConsumption at this
+//     pool's own average. Nothing writes them until S6; the columns and CHECKs ship now so S6 needs
+//     no CHECK migration.
+//   - 'reversal': the exact negation of one earlier row (D8), copying its item, source-line and
+//     disposal columns so every per-line / per-type SUM nets without a self-join. A reversal of a
+//     'reject' points goods_receipt_item_id at the REVERSAL receipt's item (same convention the
+//     raw-material ledgers' ref_id follows).
+// Per-line rule the receipt code relies on (lib/defects/queries.ts): rows with disposal_type NULL
+// are exactly the rejects, returns and their reversals, i.e. the part of qtySettled (§4.2, D16)
+// that lives in this ledger; rows with disposal_type set are releases and their reversals, which
+// never change qtySettled.
+//
+// DB-immutable (prevent_defect_movement_mutation, hand-authored in migration 0026): DELETE is
+// always rejected; UPDATE only for reversed_at/reversed_by_staff_user_id, from NULL, once.
+export const defectMovements = pgTable(
+  "defect_movements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    itemKind: text("item_kind").$type<DefectItemKind>().notNull(),
+    // The balance key: exactly one is set, agreeing with item_kind. Denormalized (rather than
+    // joined through the source line) for the same reason production_batch_items.fabric_id is.
+    sku: text("sku").references(() => productVariants.sku, { onDelete: "restrict" }),
+    fabricId: uuid("fabric_id").references(() => fabrics.id, { onDelete: "restrict" }),
+    accessoryId: uuid("accessory_id").references(() => accessories.id, { onDelete: "restrict" }),
+    type: text("type").$type<DefectMovementType>().notNull(),
+    // Yards (2 decimals) for fabric, whole pcs otherwise (CHECK below). Signed.
+    qty: numeric("qty", { precision: 10, scale: 2, mode: "number" }).notNull(),
+    valueAmount: bigint("value_amount", { mode: "number" }).notNull(),
+    goodsReceiptItemId: uuid("goods_receipt_item_id").references(() => goodsReceiptItems.id, { onDelete: "restrict" }),
+    // The source LINE, always set (exactly one). No single-column FKs: superseded by the
+    // composite FKs below, which also guarantee the item matches the line (same consolidation
+    // production_batch_items uses for its own batch/sku columns).
+    purchaseItemId: uuid("purchase_item_id"),
+    productionBatchItemId: uuid("production_batch_item_id"),
+    disposalType: text("disposal_type").$type<DefectDisposalType>(),
+    // Whole rupiah, gross cash actually received (D24). Stored, never booked: no journal entry
+    // anywhere. Deliberately NOT netted against value_amount (which is the COST that left the
+    // pool). Signed: a reversal carries the exact negation.
+    proceedsAmount: bigint("proceeds_amount", { mode: "number" }),
+    // Asia/Jakarta calendar date (the receipt's received_at for a 'reject'); a display/reporting
+    // label only, the ledger's own order stays insertion order.
+    occurredAt: date("occurred_at", { mode: "string" }).notNull(),
+    reversesMovementId: uuid("reverses_movement_id").references((): AnyPgColumn => defectMovements.id, {
+      onDelete: "restrict",
+    }),
+    reversedAt: timestamp("reversed_at", { withTimezone: true, mode: "date" }),
+    reversedByStaffUserId: uuid("reversed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    note: text("note"),
+    createdByStaffUserId: uuid("created_by_staff_user_id")
+      .notNull()
+      .references(() => staffUsers.id, { onDelete: "restrict" }),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    // The balance query's shape (WHERE item = ? ORDER BY created_at), and the leftmost index each
+    // item column's ON DELETE RESTRICT check needs. item_kind is not a leading column: a non-null
+    // item column already implies its kind.
+    index("defect_movements_sku_created_at_idx").on(table.sku, table.createdAt),
+    index("defect_movements_fabric_id_created_at_idx").on(table.fabricId, table.createdAt),
+    index("defect_movements_accessory_id_created_at_idx").on(table.accessoryId, table.createdAt),
+    index("defect_movements_purchase_item_id_idx").on(table.purchaseItemId),
+    index("defect_movements_production_batch_item_id_idx").on(table.productionBatchItemId),
+    index("defect_movements_goods_receipt_item_id_idx").on(table.goodsReceiptItemId),
+    index("defect_movements_reversed_by_staff_user_id_idx").on(table.reversedByStaffUserId),
+    index("defect_movements_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
+    // One 'reject' movement per receipt line: a double-posted reject is impossible at the DB level.
+    uniqueIndex("defect_movements_reject_goods_receipt_item_unique_idx")
+      .on(table.goodsReceiptItemId)
+      .where(sql`${table.type} = 'reject'`),
+    // One reversal per movement; doubles as the self-FK's RESTRICT index.
+    unique("defect_movements_reverses_movement_id_key").on(table.reversesMovementId),
+    foreignKey({
+      columns: [table.purchaseItemId, table.fabricId],
+      foreignColumns: [purchaseItems.id, purchaseItems.fabricId],
+      name: "defect_movements_purchase_item_fabric_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    foreignKey({
+      columns: [table.purchaseItemId, table.accessoryId],
+      foreignColumns: [purchaseItems.id, purchaseItems.accessoryId],
+      name: "defect_movements_purchase_item_accessory_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    foreignKey({
+      columns: [table.productionBatchItemId, table.sku],
+      foreignColumns: [productionBatchItems.id, productionBatchItems.sku],
+      name: "defect_movements_production_batch_item_sku_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check("defect_movements_item_kind_check", checkIn(table.itemKind, DEFECT_ITEM_KINDS)),
+    check(
+      "defect_movements_exactly_one_item_check",
+      sql`num_nonnulls(${table.sku}, ${table.fabricId}, ${table.accessoryId}) = 1 and (${table.itemKind} = 'sku') = (${table.sku} is not null) and (${table.itemKind} = 'fabric') = (${table.fabricId} is not null) and (${table.itemKind} = 'accessory') = (${table.accessoryId} is not null)`,
+    ),
+    // Exactly one source line, of the kind the item implies (a SKU comes from a batch line, a
+    // fabric/accessory from a purchase line) — together with exactly_one_item this makes the
+    // matching composite FK above always apply.
+    check(
+      "defect_movements_exactly_one_source_check",
+      sql`(${table.purchaseItemId} is null) <> (${table.productionBatchItemId} is null) and (${table.itemKind} = 'sku') = (${table.productionBatchItemId} is not null)`,
+    ),
+    check("defect_movements_type_check", checkIn(table.type, DEFECT_MOVEMENT_TYPES)),
+    check("defect_movements_qty_nonzero_check", sql`${table.qty} <> 0`),
+    check("defect_movements_reject_qty_check", sql`${table.type} <> 'reject' or ${table.qty} > 0`),
+    check("defect_movements_outflow_qty_check", sql`${table.type} not in ('return_out', 'dispose') or ${table.qty} < 0`),
+    check("defect_movements_whole_qty_check", sql`${table.itemKind} = 'fabric' or ${table.qty} = round(${table.qty})`),
+    check(
+      "defect_movements_reject_receipt_item_check",
+      sql`${table.type} <> 'reject' or ${table.goodsReceiptItemId} is not null`,
+    ),
+    check("defect_movements_disposal_type_check", checkIn(table.disposalType, DEFECT_DISPOSAL_TYPES)),
+    check(
+      "defect_movements_disposal_type_movement_check",
+      sql`${table.disposalType} is null or ${table.type} in ('dispose', 'reversal')`,
+    ),
+    check("defect_movements_dispose_has_type_check", sql`${table.type} <> 'dispose' or ${table.disposalType} is not null`),
+    // Both or neither, same idiom as fabrics_price_amount_unit_pair_check.
+    check(
+      "defect_movements_proceeds_pair_check",
+      sql`(${table.disposalType} is null) = (${table.proceedsAmount} is null)`,
+    ),
+    check(
+      "defect_movements_auction_proceeds_check",
+      sql`${table.type} <> 'dispose' or ${table.disposalType} <> 'auction' or ${table.proceedsAmount} > 0`,
+    ),
+    // Hibah and Dibuang/Dimusnahkan are both exactly Rp 0 (D24, D29).
+    check(
+      "defect_movements_zero_proceeds_check",
+      sql`${table.type} <> 'dispose' or ${table.disposalType} not in ('donation', 'discarded') or ${table.proceedsAmount} = 0`,
+    ),
+    check(
+      "defect_movements_dispose_note_check",
+      sql`${table.type} <> 'dispose' or (${table.note} is not null and btrim(${table.note}) <> '')`,
+    ),
+    // Mirror goods_receipts' reversal columns exactly.
+    check(
+      "defect_movements_reverses_movement_id_pair_check",
+      sql`(${table.type} = 'reversal') = (${table.reversesMovementId} is not null)`,
+    ),
+    check(
+      "defect_movements_reversed_pair_check",
+      sql`(${table.reversedAt} is not null) = (${table.reversedByStaffUserId} is not null)`,
+    ),
+    check("defect_movements_reversed_at_type_check", sql`${table.reversedAt} is null or ${table.type} <> 'reversal'`),
   ],
 );

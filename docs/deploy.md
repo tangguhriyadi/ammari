@@ -290,6 +290,13 @@ instead (push the revert or patch to `dev`). Rolling back from S4 (migration 002
 output receipts) to S3 is safe; see `docs/deploy-prod.md` §2.1 for what to expect while S3 is
 live.
 
+**Rolling back from S5** (migration 0026, defect stock / rejects at receipt) to S4 is safe only
+while no receipt line has a reject (`select count(*) from goods_receipt_items where qty_rejected
+<> 0;` is 0). The S4 release ignores `qty_rejected`: it treats rejected units as still
+outstanding (so they could be received a second time), and its "Batalkan penerimaan" reverses
+the good units but leaves the receipt's rejects in `defect_movements`. If rejects exist, roll
+forward with a fix instead; or reverse those receipts on S5 first, then roll back.
+
 ## Image retention and disk space
 
 Every deploy pulls three fresh SHA-tagged images (admin/web/migrator). Nothing removed the old

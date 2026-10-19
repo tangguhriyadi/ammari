@@ -60,3 +60,18 @@ export function sliceValue(input: SliceInput): number {
   const target = cumulativeValue(input.totalAmount, ordered, before + now);
   return Math.max(0, target - input.valueBefore);
 }
+
+/** §4.2: one arrival's slice split between the sellable ledger (accepted) and the defect ledger
+ * (rejected), in proportion to the two quantities. The accepted part is
+ * roundHalfUp(slice × accepted / (accepted + rejected)) and the rejected part is the rest, so the
+ * two always sum to EXACTLY the slice (cumulative rounding over two parts), both are non-negative,
+ * and an all-accepted or all-rejected arrival puts the whole slice on one side. Integer-scaled:
+ * quantities in hundredths, no float multiplication of money. */
+export function splitSlice(slice: number, qtyAccepted: number, qtyRejected: number): { accepted: number; rejected: number } {
+  if (!Number.isSafeInteger(slice) || slice < 0) throw new Error(`invalid slice: ${slice}`);
+  const accepted = toCentiQty(qtyAccepted);
+  const rejected = toCentiQty(qtyRejected);
+  if (accepted < 0n || rejected < 0n || accepted + rejected <= 0n) throw new Error("an arrival needs a positive quantity");
+  const acceptedValue = Number(divideRoundHalfUp(BigInt(slice) * accepted, accepted + rejected));
+  return { accepted: acceptedValue, rejected: slice - acceptedValue };
+}

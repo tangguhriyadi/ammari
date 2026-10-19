@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { Badge, Button, Card, CardList, TableContainer, TableHead, Th, Tr, Td } from "@ammari/ui";
-import { formatDate, formatDateTime } from "@ammari/ui/lib";
+import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
+import type { DocumentDefectMovementRow } from "@/lib/defects/queries";
 import { isOpenBatchReceiptStatus } from "@/lib/production/receipt-status";
 import type { BatchReceiptLine, BatchReceiptRow, BatchReceiptSummary } from "@/lib/receipts/production";
+import { DefectHistory } from "../../purchases/_components/defect-history";
 import { ReverseReceiptButton } from "../../purchases/_components/reverse-receipt-button";
 import { CloseBatchButton } from "./close-batch-button";
 import { ReceiptStatusBadge } from "./receipt-status-badge";
@@ -16,23 +18,32 @@ function variantLabel(line: Pick<BatchReceiptLine, "productName" | "colorName" |
   return `${line.productName} · ${line.colorName} · ${sizeLabel(line.size)}`;
 }
 
-/** "Hasil produksi" (docs/plans/suppliers-goods-receipt.md §7, S4): a posted batch's output, per
- * variant planned / received / outstanding, its receipts, and the receive / close / reverse
- * actions. Quantities only, never cost: safe for every session that can open the batch. */
+/** "Hasil produksi" (docs/plans/suppliers-goods-receipt.md §7, S4 + S5): a posted batch's output,
+ * per variant planned / received / defective / outstanding, its receipts, its defect history, and
+ * the receive / close / reverse actions. Quantities for every session that can open the batch;
+ * the defect VALUE only when the caller passes it (finance.view_profit). */
 export function BatchOutputSection({
   batchId,
   summary,
   receipts,
+  defectRows,
+  defectValue,
   canReceive,
   canManage,
 }: {
   batchId: string;
   summary: BatchReceiptSummary;
   receipts: BatchReceiptRow[];
+  /** Already stripped of cost for a session without finance.view_profit. */
+  defectRows: DocumentDefectMovementRow[];
+  /** Value still held in defect stock from this batch; null when not shown. */
+  defectValue: number | null;
   canReceive: boolean;
   canManage: boolean;
 }) {
   const isOpen = isOpenBatchReceiptStatus(summary.receiptStatus);
+  // Open but fully settled (some of it as defects): nothing left to receive, only to close.
+  const hasOutstanding = summary.lines.some((line) => line.outstanding > 0);
   const outstandingPcs = summary.lines.reduce((sum, line) => sum + Math.max(0, line.outstanding), 0);
 
   return (
@@ -57,9 +68,13 @@ export function BatchOutputSection({
         </div>
       )}
 
+      {isOpen && !hasOutstanding && (
+        <p className="text-base text-neutral-700">Semua sisa sudah diterima atau dicatat cacat. Tutup batch untuk menyelesaikannya.</p>
+      )}
+
       {isOpen && (canReceive || canManage) && (
         <div className="flex flex-wrap gap-2">
-          {canReceive && (
+          {canReceive && hasOutstanding && (
             <Link href={`/production/${batchId}/receive`}>
               <Button>Terima hasil</Button>
             </Link>
@@ -72,6 +87,14 @@ export function BatchOutputSection({
 
       <h3 className="mt-2 text-base font-semibold text-neutral-900">Riwayat penerimaan</h3>
       <ReceiptHistory receipts={receipts} canReverse={canManage} />
+
+      <h3 className="mt-2 text-base font-semibold text-neutral-900">Barang cacat</h3>
+      {defectValue !== null && (
+        <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
+          <Row label="Nilai cacat" value={formatRupiah(defectValue)} />
+        </div>
+      )}
+      <DefectHistory rows={defectRows} emptyText="Tidak ada barang cacat dari batch ini." />
     </section>
   );
 }
@@ -85,9 +108,10 @@ function OutputLines({ lines }: { lines: BatchReceiptLine[] }) {
             <Card className="flex flex-col gap-2">
               <p className="text-base font-medium text-neutral-900">{variantLabel(line)}</p>
               <p className="font-mono text-sm text-neutral-600">{line.sku}</p>
-              <dl className="grid grid-cols-3 gap-2 text-sm">
+              <dl className="grid grid-cols-2 gap-2 text-sm">
                 <QtyCell label="Rencana" value={line.planned} />
                 <QtyCell label="Diterima" value={line.received} />
+                <QtyCell label="Cacat" value={line.rejected} />
                 <QtyCell label="Sisa" value={line.outstanding} />
               </dl>
             </Card>
@@ -100,6 +124,7 @@ function OutputLines({ lines }: { lines: BatchReceiptLine[] }) {
           <Th>SKU</Th>
           <Th>Rencana</Th>
           <Th>Diterima</Th>
+          <Th>Cacat</Th>
           <Th>Sisa</Th>
         </TableHead>
         <tbody>
@@ -109,6 +134,7 @@ function OutputLines({ lines }: { lines: BatchReceiptLine[] }) {
               <Td className="font-mono text-sm text-neutral-700">{line.sku}</Td>
               <Td className="tabular-nums text-neutral-700">{line.planned} pcs</Td>
               <Td className="tabular-nums text-neutral-700">{line.received} pcs</Td>
+              <Td className="tabular-nums text-neutral-700">{line.rejected} pcs</Td>
               <Td className="tabular-nums text-neutral-700">{line.outstanding} pcs</Td>
             </Tr>
           ))}
@@ -151,6 +177,7 @@ function ReceiptHistory({ receipts, canReverse }: { receipts: BatchReceiptRow[];
               {receipt.items.map((item) => (
                 <li key={item.productionBatchItemId}>
                   {item.label}: {item.qtyAccepted} pcs
+                  {item.qtyRejected !== 0 && <> · ditolak (cacat) {item.qtyRejected} pcs</>}
                 </li>
               ))}
             </ul>

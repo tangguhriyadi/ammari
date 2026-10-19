@@ -22,19 +22,22 @@ import { lockAccessoryForUpdate, lockFabricForUpdate } from "@/lib/inventory/db"
 import { getAccessoryBalance } from "@/lib/inventory/accessories";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
-import { formatPurchaseQty, getAcceptedByLine, getLineProgress, hasAtMostTwoDecimals, isUuid, lockPurchaseForUpdate } from "@/lib/purchases/queries";
+import { getDefectSettledByPurchaseLine, insertRejectMovements, reverseRejectsInTx } from "@/lib/defects/queries";
+import { formatPurchaseQty, getLineProgress, getLineQuantities, hasAtMostTwoDecimals, isUuid, lockPurchaseForUpdate } from "@/lib/purchases/queries";
 import { isOpenPurchaseStatus, statusAfterReceiptChange } from "@/lib/purchases/status";
 import { reverseProductionReceiptInTx } from "./production";
 import { assertReceivedAt } from "./received-at";
-import { sliceValue, toCentiQty } from "./valuation";
+import { sliceValue, splitSlice, toCentiQty } from "./valuation";
 
-// Goods receipts against purchase documents (docs/plans/suppliers-goods-receipt.md §5, session
-// S3). A receipt is the ONLY way a purchase document's goods enter raw-material stock (D3). This
-// session records accepted quantities only; rejects/defect stock arrive in S5.
+// Goods receipts against purchase documents (docs/plans/suppliers-goods-receipt.md §5, sessions
+// S3 + S5). A receipt is the ONLY way a purchase document's goods enter raw-material stock (D3).
+// Rejected units (S5) go to the defect ledger with their value, never to sellable stock.
 
 export interface ReceiptLineInput {
   purchaseItemId: string;
   qtyAccepted: number;
+  /** Units that arrived defective ("Ditolak (cacat)"); 0 when omitted. */
+  qtyRejected?: number;
 }
 
 export interface PostPurchaseReceiptInput {
@@ -68,8 +71,10 @@ async function lockItemsInOrder(tx: Tx, lines: readonly { itemType: PurchaseItem
   }
 }
 
-/** Net value already booked on the sellable ledger for each purchase line (its receipt rows plus
- * their reversals' void rows), keyed by purchase_items.id. */
+/** Net value already booked against each purchase line's settled quantity, keyed by
+ * purchase_items.id: its sellable receipt rows plus their reversals' void rows, plus the defect
+ * rows that are part of qtySettled (rejects, returns and their reversals; never releases — see
+ * getDefectSettledByPurchaseLine). This is the `valueBefore` of the next §4.2 slice. */
 async function bookedValueByLine(tx: Database, purchaseItemIds: readonly string[]): Promise<Map<string, number>> {
   if (purchaseItemIds.length === 0) return new Map();
   const fromLedger = async (ledger: typeof fabricStockMovements | typeof accessoryMovements) =>
@@ -85,6 +90,9 @@ async function bookedValueByLine(tx: Database, purchaseItemIds: readonly string[
   const rows = [...(await fromLedger(fabricStockMovements)), ...(await fromLedger(accessoryMovements))];
   const byLine = new Map<string, number>();
   for (const row of rows) byLine.set(row.purchaseItemId!, (byLine.get(row.purchaseItemId!) ?? 0) + Number(row.value));
+  for (const [lineId, defect] of await getDefectSettledByPurchaseLine(purchaseItemIds, tx)) {
+    byLine.set(lineId, (byLine.get(lineId) ?? 0) + defect.valueAmount);
+  }
   return byLine;
 }
 
@@ -92,22 +100,28 @@ async function bookedValueByLine(tx: Database, purchaseItemIds: readonly string[
  * 1. lock the purchase row FIRST (two phones receiving the same purchase serialize; the second
  *    re-reads and either posts the remainder or fails cleanly);
  * 2. require an open status (ordered / partially received);
- * 3. recompute accepted/outstanding per line INSIDE the lock and reject over-receipt (D17) with a
- *    message naming the line and what is left, and reject a receipt where every line is zero;
+ * 3. recompute qtySettled/outstanding per line INSIDE the lock and reject over-receipt (D17:
+ *    accepted + rejected together may not exceed what is left) with a message naming the line and
+ *    what is left, and reject a receipt where every line is zero;
  * 4. lock the item rows in sorted order;
  * 5. insert the receipt header and its items;
- * 6. per line, one 'purchase' movement on the raw-material ledger (ref_type 'goods_receipt',
- *    ref_id = the receipt item, value = the §4.2 slice, purchased_at = received_at, supplier id +
- *    name snapshot);
+ * 6. per line, value the arrival (accepted + rejected) as the §4.2 slice and split it between the
+ *    two ledgers in proportion: the accepted part as one 'purchase' movement on the raw-material
+ *    ledger (ref_type 'goods_receipt', ref_id = the receipt item, purchased_at = received_at,
+ *    supplier id + name snapshot), the rejected part as one 'reject' row on the defect ledger. So
+ *    a reject never touches the sellable balance or the sellable moving average (D14);
  * 7. recompute and store the document status;
  * 8. one audit entry for the whole receipt. */
 export async function postGoodsReceiptForPurchase(input: PostPurchaseReceiptInput, actorStaffUserId: string, db: Database = defaultDb) {
   assertReceivedAt(input.receivedAt);
-  const requested = input.lines.filter((line) => line.qtyAccepted !== 0);
+  const requested = input.lines
+    .map((line) => ({ ...line, qtyRejected: line.qtyRejected ?? 0 }))
+    .filter((line) => line.qtyAccepted !== 0 || line.qtyRejected !== 0);
   if (requested.length === 0) throw new FieldError("lines", "Isi jumlah diterima minimal untuk satu barang.");
   const seen = new Set<string>();
   for (const line of requested) {
-    if (!hasAtMostTwoDecimals(line.qtyAccepted)) throw new FieldError("lines", "Jumlah diterima tidak valid.");
+    if (line.qtyAccepted !== 0 && !hasAtMostTwoDecimals(line.qtyAccepted)) throw new FieldError("lines", "Jumlah diterima tidak valid.");
+    if (line.qtyRejected !== 0 && !hasAtMostTwoDecimals(line.qtyRejected)) throw new FieldError("lines", "Jumlah ditolak tidak valid.");
     if (seen.has(line.purchaseItemId)) throw new FieldError("lines", "Satu barang hanya boleh muncul sekali dalam satu penerimaan.");
     seen.add(line.purchaseItemId);
   }
@@ -151,26 +165,29 @@ export async function postGoodsReceiptForPurchase(input: PostPurchaseReceiptInpu
         },
       ]),
     );
-    const acceptedBefore = await getAcceptedByLine(purchase.id, tx);
+    const quantitiesBefore = await getLineQuantities(purchase.id, tx);
 
     const planned = requested.map((request) => {
       const line = linesById.get(request.purchaseItemId);
       if (!line) throw new FieldError("lines", "Barang ini bukan bagian dari pesanan.");
-      if (line.itemType === "accessory" && !Number.isInteger(request.qtyAccepted)) {
-        throw new FieldError("lines", `Jumlah diterima untuk ${line.itemName} harus bilangan bulat.`);
+      if (line.itemType === "accessory" && !(Number.isInteger(request.qtyAccepted) && Number.isInteger(request.qtyRejected))) {
+        throw new FieldError("lines", `Jumlah diterima dan ditolak untuk ${line.itemName} harus bilangan bulat.`);
       }
-      const settledBefore = acceptedBefore.get(line.id) ?? 0;
+      const settledBefore = quantitiesBefore.get(line.id)?.settled ?? 0;
       const outstandingCenti = toCentiQty(line.qtyOrdered) - toCentiQty(settledBefore);
-      if (toCentiQty(request.qtyAccepted) > outstandingCenti) {
+      // D17: accepted AND rejected both use up what is left; over-receipt is refused entirely.
+      if (toCentiQty(request.qtyAccepted) + toCentiQty(request.qtyRejected) > outstandingCenti) {
         const remaining = Number(outstandingCenti) / 100;
         throw new FieldError(
           "lines",
           remaining <= 0
             ? `${line.itemName} sudah diterima lengkap, tidak bisa menerima lagi.`
-            : `Jumlah diterima untuk ${line.itemName} melebihi sisa pesanan. Sisa yang belum diterima: ${formatPurchaseQty(line.itemType, remaining)}.`,
+            : request.qtyRejected === 0
+              ? `Jumlah diterima untuk ${line.itemName} melebihi sisa pesanan. Sisa yang belum diterima: ${formatPurchaseQty(line.itemType, remaining)}.`
+              : `Jumlah diterima ditambah ditolak untuk ${line.itemName} melebihi sisa pesanan. Sisa yang belum diterima: ${formatPurchaseQty(line.itemType, remaining)}.`,
         );
       }
-      return { line, qty: request.qtyAccepted, settledBefore };
+      return { line, qtyAccepted: request.qtyAccepted, qtyRejected: request.qtyRejected, settledBefore };
     });
 
     await lockItemsInOrder(tx, planned.map((plan) => plan.line));
@@ -203,25 +220,40 @@ export async function postGoodsReceiptForPurchase(input: PostPurchaseReceiptInpu
           sourceType: "purchase" as const,
           kind: "receipt" as const,
           purchaseItemId: plan.line.id,
-          qtyAccepted: plan.qty,
+          qtyAccepted: plan.qtyAccepted,
+          qtyRejected: plan.qtyRejected,
         })),
       )
       .returning();
     const itemByLine = new Map(items.map((item) => [item.purchaseItemId!, item]));
 
     const movements = [];
+    const rejects = [];
     for (const plan of planned) {
       const item = itemByLine.get(plan.line.id)!;
-      const valueAmount = sliceValue({
+      const slice = sliceValue({
         totalAmount: plan.line.totalAmount,
         qtyOrdered: plan.line.qtyOrdered,
         settledBefore: plan.settledBefore,
         valueBefore: bookedBefore.get(plan.line.id) ?? 0,
-        qtyNow: plan.qty,
+        qtyNow: Number(toCentiQty(plan.qtyAccepted) + toCentiQty(plan.qtyRejected)) / 100,
       });
+      const value = splitSlice(slice, plan.qtyAccepted, plan.qtyRejected);
+      if (plan.qtyRejected !== 0) {
+        rejects.push({
+          item: plan.line.itemType === "fabric" ? { kind: "fabric" as const, fabricId: plan.line.itemId } : { kind: "accessory" as const, accessoryId: plan.line.itemId },
+          source: { purchaseItemId: plan.line.id },
+          goodsReceiptItemId: item.id,
+          qty: plan.qtyRejected,
+          valueAmount: value.rejected,
+          occurredAt: input.receivedAt,
+          note: `${purchase.purchaseNo} · ${receiptNo}`,
+        });
+      }
+      if (plan.qtyAccepted === 0) continue;
       const common = {
-        qty: plan.qty,
-        valueAmount,
+        qty: plan.qtyAccepted,
+        valueAmount: value.accepted,
         type: "purchase" as const,
         refType: "goods_receipt" as const,
         refId: item.id,
@@ -238,6 +270,7 @@ export async function postGoodsReceiptForPurchase(input: PostPurchaseReceiptInpu
       if (!movement) throw new Error("failed to insert receipt ledger movement");
       movements.push(movement);
     }
+    const defects = await insertRejectMovements(tx, rejects, actorStaffUserId);
 
     const status = statusAfterReceiptChange(purchase.status, await getLineProgress(purchase.id, tx));
     if (status !== purchase.status) await tx.update(purchases).set({ status }).where(eq(purchases.id, purchase.id));
@@ -247,7 +280,7 @@ export async function postGoodsReceiptForPurchase(input: PostPurchaseReceiptInpu
       action: "receive",
       entityType: "goods_receipt",
       entityId: receipt.id,
-      after: { receipt, items, movements, purchaseStatus: { before: purchase.status, after: status } },
+      after: { receipt, items, movements, defects, purchaseStatus: { before: purchase.status, after: status } },
     });
     return { receipt, status };
   });
@@ -284,10 +317,13 @@ async function hasLaterBlockingMovement(
  * 1. lock the purchase row, then the item rows in sorted order;
  * 2. reject if the receipt is already reversed or is itself a reversal;
  * 3. reject if any later consumption/adjustment/void exists for an affected item (you cannot
- *    un-receive fabric a batch has already cut), pointing at "Sesuaikan stok" instead;
- * 4. insert a kind='reversal' receipt whose items are the exact negation, one exact 'purchase_void'
- *    row per original ledger row (voids_movement_id set), stamp voided_at on those rows and
- *    reversed_at on the original receipt, recompute the document's status, one audit entry. */
+ *    un-receive fabric a batch has already cut), pointing at "Sesuaikan stok" instead; and reject
+ *    if the receipt's defects have since been returned or released (reverseRejectsInTx);
+ * 4. insert a kind='reversal' receipt whose items are the exact negation (accepted AND rejected),
+ *    one exact 'purchase_void' row per original ledger row (voids_movement_id set), one exact
+ *    'reversal' row per original 'reject' defect row, stamp voided_at / reversed_at on the
+ *    originals and reversed_at on the original receipt, recompute the document's status, one
+ *    audit entry. */
 export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: string, db: Database = defaultDb) {
   return db.transaction(async (tx) => {
     const [peek] = await tx.select({ purchaseId: goodsReceipts.purchaseId }).from(goodsReceipts).where(eq(goodsReceipts.id, receiptId));
@@ -306,6 +342,7 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
         id: goodsReceiptItems.id,
         purchaseItemId: goodsReceiptItems.purchaseItemId,
         qtyAccepted: goodsReceiptItems.qtyAccepted,
+        qtyRejected: goodsReceiptItems.qtyRejected,
         itemType: purchaseItems.itemType,
         fabricId: purchaseItems.fabricId,
         accessoryId: purchaseItems.accessoryId,
@@ -329,7 +366,10 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
         .from(accessoryMovements)
         .where(and(eq(accessoryMovements.refType, "goods_receipt"), eq(accessoryMovements.type, "purchase"), inArray(accessoryMovements.refId, itemIds))),
     ]);
-    if (fabricRows.length + accessoryRows.length !== items.length) throw new Error("receipt items and ledger rows disagree");
+    // A line that only rejected (accepted 0) has no sellable ledger row.
+    if (fabricRows.length + accessoryRows.length !== items.filter((item) => item.qtyAccepted !== 0).length) {
+      throw new Error("receipt items and ledger rows disagree");
+    }
 
     for (const row of fabricRows) {
       if (row.voidedAt !== null) throw new Error("a receipt ledger row was voided outside its receipt");
@@ -378,6 +418,7 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
           kind: "reversal" as const,
           purchaseItemId: item.purchaseItemId,
           qtyAccepted: -item.qtyAccepted,
+          qtyRejected: -item.qtyRejected,
         })),
       )
       .returning();
@@ -436,6 +477,12 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
       voids.push(voidRow);
     }
 
+    const { reversals: defectReversals } = await reverseRejectsInTx(
+      tx,
+      { items, reversalItemIdFor: reversalRefFor, occurredAt: reversal.receivedAt, note: `Pembatalan ${receipt.receiptNo}` },
+      actorStaffUserId,
+    );
+
     await tx.update(goodsReceipts).set({ reversedAt: now, reversedByStaffUserId: actorStaffUserId }).where(eq(goodsReceipts.id, receipt.id));
 
     const status = statusAfterReceiptChange(purchase.status, await getLineProgress(purchase.id, tx));
@@ -447,7 +494,7 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
       entityType: "goods_receipt",
       entityId: receipt.id,
       before: receipt,
-      after: { reversal, items: reversalItems, voids, purchaseStatus: { before: purchase.status, after: status } },
+      after: { reversal, items: reversalItems, voids, defectReversals, purchaseStatus: { before: purchase.status, after: status } },
     });
     return { reversal, status };
   });
@@ -460,6 +507,7 @@ export interface ReceiptListItem {
   itemType: PurchaseItemType;
   itemName: string;
   qtyAccepted: number;
+  qtyRejected: number;
 }
 
 export interface PurchaseReceiptRow {
@@ -504,6 +552,7 @@ export async function listReceiptsForPurchase(purchaseId: string, db: Database =
       goodsReceiptId: goodsReceiptItems.goodsReceiptId,
       purchaseItemId: goodsReceiptItems.purchaseItemId,
       qtyAccepted: goodsReceiptItems.qtyAccepted,
+      qtyRejected: goodsReceiptItems.qtyRejected,
       itemType: purchaseItems.itemType,
       fabricName: fabrics.name,
       accessoryName: accessories.name,
@@ -523,6 +572,7 @@ export async function listReceiptsForPurchase(purchaseId: string, db: Database =
       itemType: row.itemType,
       itemName: (row.fabricName ?? row.accessoryName)!,
       qtyAccepted: row.qtyAccepted,
+      qtyRejected: row.qtyRejected,
     });
     itemsByReceipt.set(row.goodsReceiptId, list);
   }

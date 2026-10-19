@@ -187,6 +187,19 @@ describe("output receipt actions (S4): inventory.receive receives, inventory.man
     expect(fractional).toEqual({ ok: false, error: "Jumlah diterima harus bilangan bulat." });
   });
 
+  test("receiveBatchAction passes rejected pcs through (S5) and refuses fractional rejects", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.receive"]));
+    await receiveBatchAction({ ...receiveInput, lines: [{ productionBatchItemId: NIL_ID, qtyAccepted: "0", qtyRejected: " 2 " }] });
+    expect(postGoodsReceiptForBatchMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lines: [{ productionBatchItemId: NIL_ID, qtyAccepted: 0, qtyRejected: 2 }] }),
+      "staff-1",
+    );
+
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.receive"]));
+    const fractional = await receiveBatchAction({ ...receiveInput, lines: [{ productionBatchItemId: NIL_ID, qtyAccepted: "1", qtyRejected: "0.5" }] });
+    expect(fractional).toEqual({ ok: false, error: "Jumlah ditolak harus bilangan bulat." });
+  });
+
   test("closeBatchAction needs inventory.manage and a reason", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.receive", "production.manage"]));
     await expect(closeBatchAction({ batchId: NIL_ID, reason: "Tidak dilanjutkan" })).rejects.toThrow();

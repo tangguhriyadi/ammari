@@ -197,15 +197,22 @@ export async function setAccessoryOverrideAction(input: z.input<typeof setAccess
 
 /** An empty or "0" quantity means "none of this SKU in this delivery" and is dropped; anything
  * else must be a whole, positive number of pcs. */
-const batchReceiptQtySchema = z.string().transform((value, ctx) => {
-  const trimmed = value.trim();
-  if (trimmed === "" || /^0+$/.test(trimmed)) return 0;
-  if (!/^\d{1,9}$/.test(trimmed)) {
-    ctx.addIssue({ code: "custom", message: "Jumlah diterima harus bilangan bulat." });
-    return z.NEVER;
-  }
-  return Number(trimmed);
-});
+function wholePcsSchema(message: string) {
+  return z.string().transform((value, ctx) => {
+    const trimmed = value.trim();
+    if (trimmed === "" || /^0+$/.test(trimmed)) return 0;
+    if (!/^\d{1,9}$/.test(trimmed)) {
+      ctx.addIssue({ code: "custom", message });
+      return z.NEVER;
+    }
+    return Number(trimmed);
+  });
+}
+
+const batchReceiptQtySchema = wholePcsSchema("Jumlah diterima harus bilangan bulat.");
+/** "Ditolak (cacat)" (S5): pcs that arrived defective go to defect stock, never to sellable stock.
+ * Optional so an older client that never sends it still reads as "nothing rejected". */
+const batchRejectedQtySchema = wholePcsSchema("Jumlah ditolak harus bilangan bulat.").optional();
 
 const receiveBatchSchema = z.object({
   batchId: z.string().uuid("Batch tidak ditemukan."),
@@ -213,7 +220,13 @@ const receiveBatchSchema = z.object({
   receivedByName: z.string().trim().max(200, "Nama penerima terlalu panjang.").optional(),
   note: z.string().trim().max(1000, "Catatan terlalu panjang.").optional(),
   lines: z
-    .array(z.object({ productionBatchItemId: z.string().uuid("SKU ini bukan bagian dari batch."), qtyAccepted: batchReceiptQtySchema }))
+    .array(
+      z.object({
+        productionBatchItemId: z.string().uuid("SKU ini bukan bagian dari batch."),
+        qtyAccepted: batchReceiptQtySchema,
+        qtyRejected: batchRejectedQtySchema,
+      }),
+    )
     .max(500, "Terlalu banyak baris dalam satu penerimaan."),
 });
 

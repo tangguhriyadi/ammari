@@ -6,8 +6,12 @@ import { toCentiQty } from "@/lib/receipts/valuation";
 
 export interface LineProgress {
   qtyOrdered: number;
-  /** Net accepted so far (receipts minus reversals). */
+  /** Net accepted into sellable stock so far (receipts minus reversals). */
   accepted: number;
+  /** Net rejected into defect stock so far (receipts minus reversals, S5). Rejects count as
+   * "arrived" (D19) but never complete a line: only accepted units do (§4.2's worked example —
+   * 8 good + 2 defective of 10 is `partially_received` with nothing outstanding). */
+  rejected: number;
 }
 
 /** Statuses a receipt may still be posted against, and a close may still be applied to. */
@@ -18,12 +22,15 @@ export function isOpenPurchaseStatus(status: PurchaseStatus): boolean {
   return OPEN_PURCHASE_STATUSES.includes(status);
 }
 
+/** D19: nothing arrived means accepted = 0 AND rejected = 0 on every line. */
 function nothingArrived(lines: readonly LineProgress[]): boolean {
-  return lines.every((line) => toCentiQty(line.accepted) === 0n);
+  return lines.every((line) => toCentiQty(line.accepted) === 0n && toCentiQty(line.rejected) === 0n);
 }
 
-/** `received` when every line's accepted equals its ordered quantity, `ordered` when nothing has
- * arrived on any line (e.g. after the only receipt was reversed), `partially_received` otherwise. */
+/** `received` when every line's ACCEPTED equals its ordered quantity, `ordered` when nothing has
+ * arrived on any line (e.g. after the only receipt was reversed), `partially_received` otherwise —
+ * including a line fully settled with rejects, which the owner then short-closes (or, from S6,
+ * exchanges). */
 export function receiptProgressStatus(lines: readonly LineProgress[]): "ordered" | "partially_received" | "received" {
   if (lines.length > 0 && lines.every((line) => toCentiQty(line.accepted) === toCentiQty(line.qtyOrdered))) return "received";
   if (nothingArrived(lines)) return "ordered";

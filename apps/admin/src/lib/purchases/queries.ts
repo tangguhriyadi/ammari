@@ -18,6 +18,8 @@ import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { nextDocumentNumber } from "@/lib/documents/document-number";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
+import { getDefectSettledByPurchaseLine } from "@/lib/defects/queries";
+import { toCentiQty } from "@/lib/receipts/valuation";
 import { lockSelectableSuppliers } from "@/lib/suppliers/queries";
 import { closedStatus, isOpenPurchaseStatus, type LineProgress } from "./status";
 
@@ -188,32 +190,59 @@ export async function updatePurchase(id: string, input: PurchaseInput, actorStaf
   });
 }
 
-/** Net accepted quantity per purchase line (receipts minus reversals) — always a SUM over
- * goods_receipt_items, never a stored counter. Safe to call unlocked for display; a write that
- * decides on it must have locked the purchase row first. */
-export async function getAcceptedByLine(purchaseId: string, db: Database = defaultDb): Promise<Map<string, number>> {
+export interface PurchaseLineQuantities {
+  /** Net accepted into sellable stock (receipts minus reversals). */
+  accepted: number;
+  /** Net rejected into defect stock at receipt (receipts minus reversals, S5). */
+  rejected: number;
+  /** §4.2/D16 qtySettled = accepted + rejected − returned out (all net of reversals): what has used
+   * up the line's ordered quantity. Outstanding is always qty_ordered − settled. */
+  settled: number;
+}
+
+/** Per purchase line, always SUMs (over goods_receipt_items and the defect ledger), never a stored
+ * counter. Lines with no receipt yet are absent (read as all zeros). Safe to call unlocked for
+ * display; a write that decides on it must have locked the purchase row first. */
+export async function getLineQuantities(purchaseId: string, db: Database = defaultDb): Promise<Map<string, PurchaseLineQuantities>> {
   const rows = await db
     .select({
       purchaseItemId: goodsReceiptItems.purchaseItemId,
       accepted: sql<string>`sum(${goodsReceiptItems.qtyAccepted})`,
+      rejected: sql<string>`sum(${goodsReceiptItems.qtyRejected})`,
     })
     .from(goodsReceiptItems)
     .innerJoin(purchaseItems, eq(purchaseItems.id, goodsReceiptItems.purchaseItemId))
     .where(eq(purchaseItems.purchaseId, purchaseId))
     .groupBy(goodsReceiptItems.purchaseItemId);
-  return new Map(rows.map((row) => [row.purchaseItemId!, Number(row.accepted)]));
+  const defectSettled = await getDefectSettledByPurchaseLine(
+    rows.map((row) => row.purchaseItemId!),
+    db,
+  );
+  return new Map(
+    rows.map((row) => {
+      const accepted = Number(row.accepted);
+      const defect = defectSettled.get(row.purchaseItemId!)?.qty ?? 0;
+      const settled = Number(toCentiQty(accepted) + toCentiQty(defect)) / 100;
+      return [row.purchaseItemId!, { accepted, rejected: Number(row.rejected), settled }];
+    }),
+  );
 }
 
+const NO_QUANTITIES: PurchaseLineQuantities = { accepted: 0, rejected: 0, settled: 0 };
+
 export async function getLineProgress(purchaseId: string, db: Database): Promise<LineProgress[]> {
-  const [lines, accepted] = await Promise.all([
+  const [lines, quantities] = await Promise.all([
     db.select({ id: purchaseItems.id, qtyOrdered: purchaseItems.qtyOrdered }).from(purchaseItems).where(eq(purchaseItems.purchaseId, purchaseId)),
-    getAcceptedByLine(purchaseId, db),
+    getLineQuantities(purchaseId, db),
   ]);
-  return lines.map((line) => ({ qtyOrdered: line.qtyOrdered, accepted: accepted.get(line.id) ?? 0 }));
+  return lines.map((line) => {
+    const { accepted, rejected } = quantities.get(line.id) ?? NO_QUANTITIES;
+    return { qtyOrdered: line.qtyOrdered, accepted, rejected };
+  });
 }
 
 /** D19: one close action with a required reason. `cancelled` when nothing arrived (net accepted
- * 0 on every line), `closed` otherwise. Moves no stock and changes no cost. Only an open document
+ * AND net rejected 0 on every line), `closed` otherwise. Moves no stock and changes no cost. Only an open document
  * (ordered / partially received) can be closed; a fully received one has nothing left to close. */
 export async function closePurchase(id: string, reason: string, actorStaffUserId: string, db: Database = defaultDb) {
   const trimmed = reason.trim();
@@ -314,6 +343,9 @@ export interface PurchaseDocumentLine {
   itemName: string;
   qtyOrdered: number;
   accepted: number;
+  /** Net rejected into defect stock at receipt ("Cacat"). */
+  rejected: number;
+  /** qty_ordered − qtySettled (§4.2): rejects use up the ordered quantity too. */
   outstanding: number;
   /** Cost data — stripped by the caller for a viewer without finance.view_profit. */
   totalAmountPaid: number | null;
@@ -337,10 +369,10 @@ export interface PurchaseDocument {
   lines: PurchaseDocumentLine[];
 }
 
-/** Outstanding in integer hundredths, so a fabric line of 10.00 with 9.90 accepted reads 0.10, not
+/** Outstanding in integer hundredths, so a fabric line of 10.00 with 9.90 settled reads 0.10, not
  * 0.09999999999999964. */
-function outstandingQty(qtyOrdered: number, accepted: number): number {
-  return (Math.round(qtyOrdered * 100) - Math.round(accepted * 100)) / 100;
+function outstandingQty(qtyOrdered: number, settled: number): number {
+  return (Math.round(qtyOrdered * 100) - Math.round(settled * 100)) / 100;
 }
 
 export async function getPurchaseDocument(id: string, db: Database = defaultDb): Promise<PurchaseDocument | null> {
@@ -370,7 +402,7 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
     .limit(1);
   if (!header) return null;
 
-  const [lineRows, accepted, hasReceipts] = await Promise.all([
+  const [lineRows, quantities, hasReceipts] = await Promise.all([
     db
       .select({
         id: purchaseItems.id,
@@ -387,7 +419,7 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
       .leftJoin(accessories, eq(accessories.id, purchaseItems.accessoryId))
       .where(eq(purchaseItems.purchaseId, id))
       .orderBy(asc(purchaseItems.createdAt), asc(purchaseItems.id)),
-    getAcceptedByLine(id, db),
+    getLineQuantities(id, db),
     hasAnyReceipt(db, id),
   ]);
 
@@ -395,15 +427,16 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
     ...header,
     hasReceipts,
     lines: lineRows.map((line) => {
-      const lineAccepted = accepted.get(line.id) ?? 0;
+      const { accepted, rejected, settled } = quantities.get(line.id) ?? NO_QUANTITIES;
       return {
         id: line.id,
         itemType: line.itemType,
         itemId: (line.fabricId ?? line.accessoryId)!,
         itemName: (line.fabricName ?? line.accessoryName)!,
         qtyOrdered: line.qtyOrdered,
-        accepted: lineAccepted,
-        outstanding: outstandingQty(line.qtyOrdered, lineAccepted),
+        accepted,
+        rejected,
+        outstanding: outstandingQty(line.qtyOrdered, settled),
         totalAmountPaid: line.totalAmount,
       };
     }),

@@ -183,6 +183,13 @@
       "when": 1792416829686,
       "tag": "0025_production_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792419040300,
+      "tag": "0026_defect_movements",
+      "breakpoints": true
     }
   ]
 }

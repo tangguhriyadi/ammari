@@ -93,6 +93,12 @@ describe("input validation", () => {
     expect(result).toEqual({ ok: false, error: "Jumlah diterima tidak valid." });
   });
 
+  test("receivePurchaseAction refuses a malformed rejected quantity (S5)", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.receive"]));
+    const result = await receivePurchaseAction({ ...RECEIVE_INPUT, lines: [{ purchaseItemId: NIL_ID, qtyAccepted: "1", qtyRejected: "abc" }] });
+    expect(result).toEqual({ ok: false, error: "Jumlah ditolak tidak valid." });
+  });
+
   test("closePurchaseAction refuses a blank reason", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
     const result = await closePurchaseAction({ purchaseId: NIL_ID, reason: "   " });

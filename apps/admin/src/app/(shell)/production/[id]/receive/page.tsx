@@ -24,6 +24,9 @@ export default async function ReceiveBatchOutputPage({ params }: { params: Promi
   if (!summary) notFound();
   // The summary's effective status, not the stored one — see BatchReceiptSummary.receiptStatus.
   if (!isOpenBatchReceiptStatus(summary.receiptStatus)) redirect(`/production/${id}`);
+  // Open but nothing left to receive: every line is fully settled, some of it as defects (S5).
+  const openLines = summary.lines.filter((line) => line.outstanding > 0);
+  if (openLines.length === 0) redirect(`/production/${id}`);
 
   return (
     <>
@@ -32,17 +35,16 @@ export default async function ReceiveBatchOutputPage({ params }: { params: Promi
       <ReceiveForm
         source={{ type: "production_batch", batchId: id }}
         receiverName={session.staffUser.name}
-        lines={summary.lines
-          .filter((line) => line.outstanding > 0)
-          .map((line) => ({
-            id: line.id,
-            itemName: `${line.productName} · ${line.colorName} · ${line.size === "ALLSIZE" ? "All Size" : line.size}`,
-            unit: "pcs",
-            wholeOnly: true,
-            outstanding: line.outstanding,
-            planned: line.planned,
-            received: line.received,
-          }))}
+        lines={openLines.map((line) => ({
+          id: line.id,
+          itemName: `${line.productName} · ${line.colorName} · ${line.size === "ALLSIZE" ? "All Size" : line.size}`,
+          unit: "pcs",
+          wholeOnly: true,
+          outstanding: line.outstanding,
+          planned: line.planned,
+          received: line.received,
+          rejected: line.rejected,
+        }))}
       />
     </>
   );

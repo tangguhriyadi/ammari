@@ -72,23 +72,30 @@ export async function updatePurchaseAction(id: string, input: z.input<typeof pur
 
 /** An empty or "0" quantity means "nothing of this line arrived in this delivery" and is dropped;
  * anything else must be a valid positive quantity with at most two decimals. */
-const receiptQtySchema = z.string().transform((value, ctx) => {
-  const trimmed = value.trim();
-  if (trimmed === "" || /^0+(\.0+)?$/.test(trimmed)) return 0;
-  const parsed = parseDecimalQuantity(trimmed);
-  if (parsed === null || parsed > MAX_QTY) {
-    ctx.addIssue({ code: "custom", message: "Jumlah diterima tidak valid." });
-    return z.NEVER;
-  }
-  return parsed;
-});
+function receiptQuantity(message: string) {
+  return z.string().transform((value, ctx) => {
+    const trimmed = value.trim();
+    if (trimmed === "" || /^0+(\.0+)?$/.test(trimmed)) return 0;
+    const parsed = parseDecimalQuantity(trimmed);
+    if (parsed === null || parsed > MAX_QTY) {
+      ctx.addIssue({ code: "custom", message });
+      return z.NEVER;
+    }
+    return parsed;
+  });
+}
+
+const receiptQtySchema = receiptQuantity("Jumlah diterima tidak valid.");
+/** "Ditolak (cacat)" (S5): units that arrived defective go to defect stock, never to sellable
+ * stock. Optional so an older client that never sends it still reads as "nothing rejected". */
+const rejectedQtySchema = receiptQuantity("Jumlah ditolak tidak valid.").optional();
 
 const receiveSchema = z.object({
   purchaseId: z.string().uuid(),
   receivedAt: z.string().date("Tanggal tidak valid."),
   receivedByName: z.string().trim().max(200).optional(),
   note: z.string().trim().max(1000).optional(),
-  lines: z.array(z.object({ purchaseItemId: z.string().uuid(), qtyAccepted: receiptQtySchema })).max(MAX_LINES),
+  lines: z.array(z.object({ purchaseItemId: z.string().uuid(), qtyAccepted: receiptQtySchema, qtyRejected: rejectedQtySchema })).max(MAX_LINES),
 });
 
 export async function receivePurchaseAction(input: z.input<typeof receiveSchema>): Promise<ActionResult<{ receiptNo: string }>> {

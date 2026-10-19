@@ -9,8 +9,10 @@ import { getPurchaseById, stripPurchaseAmount, type PurchaseDetail } from "@/lib
 import { formatPurchaseQty, getPurchaseDocument, isUuid, stripPurchaseDocumentAmounts, type PurchaseDocument } from "@/lib/purchases/queries";
 import { isOpenPurchaseStatus } from "@/lib/purchases/status";
 import { findPurchaseIdForReceiptMovement, listReceiptsForPurchase, type PurchaseReceiptRow } from "@/lib/receipts/queries";
+import { heldDefectValue, listDefectMovementsForPurchase, stripDefectMovementAmounts } from "@/lib/defects/queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { ClosePurchaseButton } from "../_components/close-purchase-button";
+import { DefectHistory } from "../_components/defect-history";
 import { PurchaseStatusBadge } from "../_components/purchase-status-badge";
 import { ReverseReceiptButton } from "../_components/reverse-receipt-button";
 import { VoidPurchaseButton } from "../_components/void-purchase-button";
@@ -40,12 +42,16 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
   const canManage = session.permissionKeys.includes("inventory.manage");
   const canReceive = session.permissionKeys.includes("inventory.receive");
   const document = stripPurchaseDocumentAmounts(documentRaw, canViewProfit);
-  const receipts = await listReceiptsForPurchase(document.id);
+  const [receipts, defectRowsRaw] = await Promise.all([listReceiptsForPurchase(document.id), listDefectMovementsForPurchase(document.id)]);
+  const defectRows = stripDefectMovementAmounts(defectRowsRaw, canViewProfit);
 
   const isOpen = isOpenPurchaseStatus(document.status);
+  // Open but fully settled (some of it as defects): nothing left to receive, only to close.
+  const hasOutstanding = document.lines.some((line) => line.outstanding > 0);
   const canEdit = canManage && canViewProfit && document.status === "ordered" && !document.hasReceipts;
-  const nothingArrived = document.lines.every((line) => line.accepted === 0);
+  const nothingArrived = document.lines.every((line) => line.accepted === 0 && line.rejected === 0);
   const total = canViewProfit ? document.lines.reduce((sum, line) => sum + (line.totalAmountPaid ?? 0), 0) : null;
+  const defectValue = defectRows.length > 0 ? heldDefectValue(defectRows) : null;
 
   return (
     <>
@@ -65,6 +71,7 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
           }
         />
         {total !== null && <Row label="Total pesanan" value={formatRupiah(total)} />}
+        {defectValue !== null && <Row label="Nilai cacat" value={formatRupiah(defectValue)} />}
         {document.notes && <Row label="Catatan" value={document.notes} />}
         <Row label="Dibuat" value={`${formatDateTime(document.createdAt)}${document.createdByName ? ` · ${document.createdByName}` : ""}`} />
         {document.closedAt && (
@@ -80,7 +87,7 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
 
       {(isOpen && (canReceive || canManage)) || canEdit ? (
         <div className="mt-4 flex flex-wrap gap-2">
-          {isOpen && canReceive && (
+          {isOpen && canReceive && hasOutstanding && (
             <Link href={`/purchases/${document.id}/receive`}>
               <Button>Terima barang</Button>
             </Link>
@@ -94,11 +101,20 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
         </div>
       ) : null}
 
+      {isOpen && !hasOutstanding && (
+        <p className="mt-4 text-base text-neutral-700">
+          Semua sisa sudah diterima atau dicatat cacat. Tutup pesanan untuk menyelesaikannya.
+        </p>
+      )}
+
       <h2 className="mt-6 mb-3 text-lg font-semibold text-neutral-900">Barang</h2>
       <PurchaseLines document={document} />
 
       <h2 className="mt-6 mb-3 text-lg font-semibold text-neutral-900">Riwayat penerimaan</h2>
       <ReceiptHistory receipts={receipts} canReverse={canManage} />
+
+      <h2 className="mt-6 mb-3 text-lg font-semibold text-neutral-900">Barang cacat</h2>
+      <DefectHistory rows={defectRows} emptyText="Tidak ada barang cacat dari pesanan ini." />
     </>
   );
 }
@@ -112,9 +128,10 @@ function PurchaseLines({ document }: { document: PurchaseDocument }) {
           <li key={line.id}>
             <Card className="flex flex-col gap-2">
               <p className="text-base font-medium text-neutral-900">{line.itemName}</p>
-              <dl className="grid grid-cols-3 gap-2 text-sm">
+              <dl className="grid grid-cols-2 gap-2 text-sm">
                 <QtyCell label="Dipesan" value={formatPurchaseQty(line.itemType, line.qtyOrdered)} />
                 <QtyCell label="Diterima" value={formatPurchaseQty(line.itemType, line.accepted)} />
+                <QtyCell label="Cacat" value={formatPurchaseQty(line.itemType, line.rejected)} />
                 <QtyCell label="Sisa" value={formatPurchaseQty(line.itemType, line.outstanding)} />
               </dl>
               {line.totalAmountPaid !== null && <p className="text-sm text-neutral-600">Total dibayar {formatRupiah(line.totalAmountPaid)}</p>}
@@ -127,6 +144,7 @@ function PurchaseLines({ document }: { document: PurchaseDocument }) {
           <Th>Barang</Th>
           <Th>Dipesan</Th>
           <Th>Diterima</Th>
+          <Th>Cacat</Th>
           <Th>Sisa</Th>
           {showTotals && <Th>Total dibayar</Th>}
         </TableHead>
@@ -136,6 +154,7 @@ function PurchaseLines({ document }: { document: PurchaseDocument }) {
               <Td className="font-medium text-neutral-900">{line.itemName}</Td>
               <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.qtyOrdered)}</Td>
               <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.accepted)}</Td>
+              <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.rejected)}</Td>
               <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.outstanding)}</Td>
               {showTotals && <Td className="tabular-nums text-neutral-700">{line.totalAmountPaid !== null ? formatRupiah(line.totalAmountPaid) : "-"}</Td>}
             </Tr>
@@ -179,6 +198,7 @@ function ReceiptHistory({ receipts, canReverse }: { receipts: PurchaseReceiptRow
               {receipt.items.map((item) => (
                 <li key={item.purchaseItemId}>
                   {item.itemName}: {formatPurchaseQty(item.itemType, item.qtyAccepted)}
+                  {item.qtyRejected !== 0 && <> · ditolak (cacat) {formatPurchaseQty(item.itemType, item.qtyRejected)}</>}
                 </li>
               ))}
             </ul>

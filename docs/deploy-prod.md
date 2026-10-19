@@ -232,7 +232,7 @@ against it.
 For a DB-layer disaster (corruption, bad manual change — not a bad app release), see §6's "Real
 disaster restore," not this section.
 
-### 2.1 Rollback limits: goods receipts (suppliers-goods-receipt plan, S3 and S4)
+### 2.1 Rollback limits: goods receipts (suppliers-goods-receipt plan, S3 to S5)
 
 **Never roll prod back to a release from before S3 (migration 0024, purchase documents and goods
 receipts) once any goods receipt exists** — check first with
@@ -257,6 +257,14 @@ things to know while the older release is live:
   fully received and nothing is counted twice. Only the production list's "Penerimaan hasil"
   column may still say "Belum diterima" for such a batch (the stored status was not backfilled);
   the batch's own page is correct.
+
+**Rolling back from S5 (migration 0026, defect stock / rejects at receipt) to S4 is safe only
+while no receipt line has a reject.** Check first with
+`select count(*) from goods_receipt_items where qty_rejected <> 0;` (read-only). The schema
+stays compatible, but S4 ignores `qty_rejected`: it treats rejected units as still outstanding,
+so they could be received a second time, and its **Batalkan penerimaan** reverses the good units
+but leaves that receipt's rejects in defect stock. If the count is not 0, roll forward with a fix
+instead, or reverse those receipts on S5 first and then roll back.
 
 ---
 

@@ -21,9 +21,10 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
   step, optional profile completion (§10.3).
 - Stock (`/stock`), production (`/production`), and raw-material stock (fabric and accessories),
   all on append-only, moving-average ledgers (§5.1).
-- Suppliers (`/suppliers`), purchase documents with goods receipts (`/purchases`), and production
-  output receipts (§5.1a; docs/plans/suppliers-goods-receipt.md sessions S1–S4). Defect stock
-  (rejects at receipt, exchange, release) is planned in that plan's S5–S7.
+- Suppliers (`/suppliers`), purchase documents with goods receipts (`/purchases`), production
+  output receipts, and defect stock recorded at receipt (`/stock/defects`) (§5.1a;
+  docs/plans/suppliers-goods-receipt.md sessions S1–S5). Exchanging and releasing defects
+  (return to supplier, lelang / hibah / dibuang) is planned in that plan's S6–S7.
 
 **Next:**
 
@@ -295,20 +296,46 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   Single-row purchases recorded before purchase documents existed stay as they are, listed under
   "Pembelian lama", never backfilled into documents.
 - `goods_receipts` + `goods_receipt_items` — one receipt table pair for both sources (a purchase
-  or a production batch), `GR-YYYYMM-NNN`. A receipt records accepted quantities per line (per
-  purchase line, or per batch variant), a receipt date (defaults to today in Jakarta,
-  backdatable, never in the future), the staff user who recorded it, and an optional "Diterima
-  oleh". Over-receipt is refused with an Indonesian message naming the line and what is left.
+  or a production batch), `GR-YYYYMM-NNN`. A receipt records, per line (per purchase line, or per
+  batch variant), the quantity accepted (`qty_accepted`, good, into sellable stock) and the
+  quantity rejected (`qty_rejected`, "Ditolak (cacat)", into defect stock — see
+  `defect_movements` below), a receipt date (defaults to today in Jakarta, backdatable, never in
+  the future), the staff user who recorded it, and an optional "Diterima oleh". Accepted and
+  rejected **both** use up the line: settled = accepted + rejected (− returned to the supplier,
+  from S6) and outstanding = ordered − settled. Over-receipt (accepted + rejected beyond what is
+  left) is refused entirely with an Indonesian message naming the line and what is left. Only
+  accepted units complete a line: a document or batch where everything arrived but some of it was
+  defective stays `partially_received` with nothing left to receive, until it is closed (or, from
+  S6, the defects are exchanged). For purchases, the arrival's value (the cumulative slice of the
+  line total) is split between accepted and rejected in proportion, the two parts summing exactly
+  to the slice; for production, both are valued at the batch line's frozen HPP/pcs.
   Concurrent receipts serialize on the source document's row lock. A wrong receipt is corrected
   only by "Batalkan penerimaan", which writes an exactly negating reversal receipt plus reversing
   ledger rows (`purchase_void` for raw materials, a negated `production` row for finished goods);
   it is refused once the stock it brought in was consumed, sold (an order, packed or not) or
-  adjusted afterwards, pointing at "Sesuaikan stok" instead. Every receipt, reversal and close is
-  written to `audit_log`. Rejects / defect stock are not recorded yet (planned).
+  adjusted afterwards, pointing at "Sesuaikan stok" instead. A reversal also reverses the
+  receipt's defect rows exactly, and is refused once those defects were returned or released.
+  Every receipt, reversal and close is written to `audit_log`.
+- `defect_movements` — **defect stock** (stok barang cacat), one append-only ledger for all three
+  item kinds (`item_kind` `sku` / `fabric` / `accessory`, exactly one of `sku` / `fabric_id` /
+  `accessory_id`, always naming its source purchase line or batch line). A separate table on
+  purpose: defect stock can never be sold, ordered, packed, shown as available on the main site,
+  or counted as sellable, because none of those paths reads this table. Balance and value per
+  item are `SUM(qty)` / `SUM(value_amount)` (its own moving-average pool, never mixed into the
+  sellable average or HPP). Types: `reject` (written by a receipt, 1:1 with `qty_rejected`),
+  `return_out` and `dispose` (exchange and release, S6), and `reversal` (exact negation, never an
+  edit; a DB trigger makes rows immutable except for the reversal stamp). A release (`dispose`)
+  carries `disposal_type` — `auction` (Lelang, proceeds > 0), `donation` (Hibah, Rp 0) or
+  `discarded` (Dibuang/Dimusnahkan, Rp 0, reported separately from Hibah as waste) — and
+  `proceeds_amount`, stored for a future accounting module but booked nowhere today. Visible on
+  `/stock/defects` (tab "Cacat"), on each purchase and batch ("Cacat" column, "Barang cacat"
+  history, "Nilai cacat" with `finance.view_profit`), and read-only per SKU on the stock count.
 - Stock count ("Hitung stok") guard: the count page lists that product's posted batches whose
   output is not fully received (with a link), because goods physically in the house but not yet
   received read as missing and must be received, not "corrected" by a count. It also always
-  shows "Jangan hitung barang cacat, hitung hanya barang yang bisa dijual."
+  shows "Jangan hitung barang cacat, hitung hanya barang yang bisa dijual.", and each SKU row
+  shows its defect quantity read-only ("Cacat: N pcs (tidak ikut dihitung)"), never part of the
+  system count and never submitted.
 
 ### 5.2 Orders & finance
 

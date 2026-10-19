@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { cumulativeValue, sliceValue, toCentiQty } from "./valuation";
+import { cumulativeValue, sliceValue, splitSlice, toCentiQty } from "./valuation";
 
 // docs/plans/suppliers-goods-receipt.md §4.2: each receipt is a cumulative-rounding slice of the
 // line's total, so partial receipts sum to EXACTLY what was paid.
@@ -112,5 +112,70 @@ describe("sliceValue: guards", () => {
 
   test("refuses a non-positive arrival", () => {
     expect(() => sliceValue({ totalAmount: 100, qtyOrdered: 2, settledBefore: 0, valueBefore: 0, qtyNow: 0 })).toThrow();
+  });
+});
+
+describe("splitSlice (§4.2, S5): one slice split between the sellable and the defect ledger", () => {
+  test("8 good + 2 defective of a Rp 1.000.000 slice: 800.000 sellable, 200.000 defect", () => {
+    expect(splitSlice(1_000_000, 8, 2)).toEqual({ accepted: 800_000, rejected: 200_000 });
+  });
+
+  test("the two parts always sum to exactly the slice, both non-negative, across awkward splits", () => {
+    for (const [slice, accepted, rejected] of [
+      [1, 1, 1],
+      [10, 1, 2],
+      [333_333, 0.33, 0.67],
+      [7, 2.5, 0.01],
+      [1_000_001, 3, 7],
+      [0, 1, 1],
+    ] as const) {
+      const parts = splitSlice(slice, accepted, rejected);
+      expect(parts.accepted + parts.rejected).toBe(slice);
+      expect(parts.accepted).toBeGreaterThanOrEqual(0);
+      expect(parts.rejected).toBeGreaterThanOrEqual(0);
+      expect(Number.isInteger(parts.accepted)).toBe(true);
+    }
+  });
+
+  test("rounds half up on integers, never float multiplication (1 of 2 units of Rp 3 is Rp 2)", () => {
+    expect(splitSlice(3, 1, 1)).toEqual({ accepted: 2, rejected: 1 });
+    expect(splitSlice(10, 0.35, 0.65)).toEqual({ accepted: 4, rejected: 6 });
+  });
+
+  test("all accepted or all rejected puts the whole slice on one side", () => {
+    expect(splitSlice(12_345, 5, 0)).toEqual({ accepted: 12_345, rejected: 0 });
+    expect(splitSlice(12_345, 0, 5)).toEqual({ accepted: 0, rejected: 12_345 });
+  });
+
+  test("a fully settled line (slices over accepted + rejected) sums to exactly total_amount with no stranded rupiah", () => {
+    const total = 1_000_003;
+    const ordered = 9.99;
+    // Three arrivals of (accepted, rejected): settled is the sum of both.
+    const arrivals: [number, number][] = [
+      [3.33, 0.5],
+      [2, 1.16],
+      [1, 2],
+    ];
+    let settled = 0;
+    let booked = 0;
+    let sellable = 0;
+    let defect = 0;
+    for (const [accepted, rejected] of arrivals) {
+      const qtyNow = (Math.round(accepted * 100) + Math.round(rejected * 100)) / 100;
+      const slice = sliceValue({ totalAmount: total, qtyOrdered: ordered, settledBefore: settled, valueBefore: booked, qtyNow });
+      const parts = splitSlice(slice, accepted, rejected);
+      sellable += parts.accepted;
+      defect += parts.rejected;
+      booked += slice;
+      settled = (Math.round(settled * 100) + Math.round(qtyNow * 100)) / 100;
+    }
+    expect(settled).toBe(ordered);
+    expect(sellable + defect).toBe(total);
+  });
+
+  test("refuses a negative slice or an empty arrival", () => {
+    expect(() => splitSlice(-1, 1, 1)).toThrow();
+    expect(() => splitSlice(10, 0, 0)).toThrow();
+    expect(() => splitSlice(10, -1, 2)).toThrow();
   });
 });
