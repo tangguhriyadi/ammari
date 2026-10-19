@@ -7,6 +7,7 @@ import { Button, Input, Label, Select, Textarea, useToast } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import type { EligibleSkuRow, ProductUsingFabricRow } from "@/lib/production/queries";
+import type { SupplierOption } from "@/lib/suppliers/queries";
 import { estimateFabricCost } from "@/lib/production/fabric-cost-estimate";
 import type { RawMaterialBalance } from "@/lib/inventory/moving-average";
 import { parseDecimalQuantity } from "@/lib/production/decimal-quantity";
@@ -44,6 +45,9 @@ interface ProductionBatchFormCommonProps {
   /** Only meaningful (and only ever non-empty) when canViewProfit — harmless to pass `[]`
    * otherwise. */
   activeCostComponents: ActiveCostComponentOption[];
+  /** Active suppliers for the cost lines' picker — same canViewProfit-only contract as
+   * activeCostComponents. */
+  supplierOptions: SupplierOption[];
 }
 
 // A discriminated union, not optional `batchId?`/`fabrics?`/`fixedFabricName?` on a single
@@ -56,7 +60,15 @@ export type ProductionBatchFormProps =
   | ({ mode: "edit"; batchId: string; fixedFabricName: string; fixedFabricBalance: RawMaterialBalance } & ProductionBatchFormCommonProps);
 
 export function ProductionBatchForm(props: ProductionBatchFormProps) {
-  const { mode, initialValues, eligibleSkus: initialEligibleSkus, canViewProfit, initialExtraCosts, activeCostComponents } = props;
+  const {
+    mode,
+    initialValues,
+    eligibleSkus: initialEligibleSkus,
+    canViewProfit,
+    initialExtraCosts,
+    activeCostComponents,
+    supplierOptions,
+  } = props;
   const router = useRouter();
   const toast = useToast();
   const [fabricId, setFabricId] = useState(initialValues.fabricId);
@@ -143,7 +155,12 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
         notes,
         lines,
         extraCosts: initialExtraCosts !== undefined
-          ? extraCostLines.map((line) => ({ id: line.id, costComponentId: line.costComponentId, unitPrice: line.unitPrice }))
+          ? extraCostLines.map((line) => ({
+              id: line.id,
+              costComponentId: line.costComponentId,
+              unitPrice: line.unitPrice,
+              supplierId: line.supplierId || null,
+            }))
           : undefined,
       };
       const result =
@@ -247,6 +264,7 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
           </div>
           <ExtraCostLines
             activeComponents={activeCostComponents}
+            supplierOptions={supplierOptions}
             lines={extraCostLines}
             onChange={setExtraCostLines}
             totalPcs={totalPcs}

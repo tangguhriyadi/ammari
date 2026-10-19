@@ -1,9 +1,10 @@
 import "server-only";
-import { and, count, eq, ilike } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { suppliers } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
-import { ActionError, mapUniqueViolation } from "@/lib/errors";
-import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
+import { ActionError, FieldError, mapUniqueViolation } from "@/lib/errors";
+import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
+import type { SupplierKind } from "./kinds";
 
 // `suppliers.name` is citext UNIQUE (migration 0022), so "Laksmi" and "laksmi" collide — the
 // constraint is the source of truth and this map only runs AFTER an insert/update has already
@@ -134,4 +135,63 @@ export async function setSupplierActive(id: string, isActive: boolean, actorStaf
     });
     return after;
   });
+}
+
+// ---------- Picker support (cost components, batch cost lines) ----------
+
+export interface SupplierOption {
+  id: string;
+  name: string;
+}
+
+/** ACTIVE suppliers only, as a picker's option list — an inactive supplier must never be offered
+ * for a NEW selection (it still displays on the records that already reference it; those callers
+ * add it back as their own current value). `kinds` is a SOFT filter (plan D13): suppliers tagged
+ * with `preferredKind` sort first, everyone else still follows, nobody is hidden. Only id + name
+ * leave this function: the picker needs nothing else, and the bank/contact columns have no
+ * business on a cost-component or production page. */
+export async function listActiveSupplierOptions(
+  preferredKind: SupplierKind | undefined,
+  db: Database = defaultDb,
+): Promise<SupplierOption[]> {
+  const preferredFirst = preferredKind ? [desc(sql`${preferredKind} = any(${suppliers.kinds})`)] : [];
+  return db
+    .select({ id: suppliers.id, name: suppliers.name })
+    .from(suppliers)
+    .where(eq(suppliers.isActive, true))
+    .orderBy(...preferredFirst, asc(suppliers.name), asc(suppliers.id));
+}
+
+/** For a write that is about to point a row at one or more suppliers as a NEW selection:
+ * `SELECT ... FOR SHARE` every id, and reject (field-scoped, Indonesian) any that doesn't exist
+ * or is inactive. FOR SHARE, not a plain read, so a concurrent setSupplierActive(id, false)
+ * (an UPDATE, which needs a conflicting row lock) blocks until this transaction commits instead
+ * of slipping in between this check and the caller's own INSERT/UPDATE: the check and the write
+ * see the same supplier state. Only meaningful inside a real transaction. Returns the locked rows
+ * by id, so the caller can snapshot each supplier's CURRENT name from the same read. */
+export async function lockSelectableSuppliers(
+  tx: Tx,
+  ids: readonly string[],
+  field: string,
+): Promise<Map<string, SupplierOption>> {
+  const uniqueIds = [...new Set(ids)].sort();
+  if (uniqueIds.length === 0) return new Map();
+  for (const id of uniqueIds) {
+    if (!isSupplierId(id)) throw new FieldError(field, "Supplier tidak ditemukan.");
+  }
+  const rows = await tx
+    .select({ id: suppliers.id, name: suppliers.name, isActive: suppliers.isActive })
+    .from(suppliers)
+    .where(inArray(suppliers.id, uniqueIds))
+    .orderBy(suppliers.id)
+    .for("share");
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  for (const id of uniqueIds) {
+    const row = byId.get(id);
+    if (!row) throw new FieldError(field, "Supplier tidak ditemukan.");
+    if (!row.isActive) {
+      throw new FieldError(field, `Supplier "${row.name}" sudah dinonaktifkan dan tidak bisa dipilih lagi.`);
+    }
+  }
+  return new Map(rows.map((row) => [row.id, { id: row.id, name: row.name }]));
 }

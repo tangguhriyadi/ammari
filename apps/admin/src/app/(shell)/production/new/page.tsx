@@ -4,6 +4,7 @@ import { listFabricsWithUsage } from "@/lib/products/fabric-queries";
 import { listActiveCostComponents } from "@/lib/production/cost-components";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { listActiveSupplierOptions } from "@/lib/suppliers/queries";
 import { ProductionBatchForm } from "../_components/production-batch-form";
 
 export default async function NewProductionBatchPage() {
@@ -11,6 +12,7 @@ export default async function NewProductionBatchPage() {
   const { rows: fabrics } = await listFabricsWithUsage(undefined, undefined, undefined);
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
   const activeCostComponents = canViewProfit ? await listActiveCostComponents() : [];
+  const supplierOptions = canViewProfit ? await listActiveSupplierOptions("service") : [];
 
   return (
     <>
@@ -24,6 +26,7 @@ export default async function NewProductionBatchPage() {
         canViewProfit={canViewProfit}
         initialExtraCosts={canViewProfit ? [] : undefined}
         activeCostComponents={activeCostComponents}
+        supplierOptions={supplierOptions}
       />
     </>
   );

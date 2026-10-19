@@ -16,6 +16,9 @@ const costComponentSchema = z.object({
   costType: z.enum(COST_COMPONENT_TYPES).default("variable"),
   isActive: z.boolean(),
   sortOrder: z.coerce.number().int("Urutan harus bilangan bulat.").default(0),
+  // Optional default supplier (plan D9): null = none. Omitted only by a caller that predates the
+  // field, which leaves an existing value untouched (see CostComponentInput.defaultSupplierId).
+  defaultSupplierId: z.string().uuid("Supplier tidak valid.").nullable().optional(),
 });
 
 export async function createCostComponentAction(
@@ -33,6 +36,7 @@ export async function createCostComponentAction(
         costType: parsed.data.costType,
         isActive: parsed.data.isActive,
         sortOrder: parsed.data.sortOrder,
+        defaultSupplierId: parsed.data.defaultSupplierId,
       },
       session.staffUser.id,
     );
@@ -57,6 +61,7 @@ export async function updateCostComponentAction(
         costType: parsed.data.costType,
         isActive: parsed.data.isActive,
         sortOrder: parsed.data.sortOrder,
+        defaultSupplierId: parsed.data.defaultSupplierId,
       },
       session.staffUser.id,
     );

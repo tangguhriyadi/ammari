@@ -5,6 +5,7 @@ import { getBatchDetail, getBatchExtraCosts, listEligibleSkusForFabric } from "@
 import { listActiveCostComponents } from "@/lib/production/cost-components";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { listActiveSupplierOptions } from "@/lib/suppliers/queries";
 import { ProductionBatchForm } from "../_components/production-batch-form";
 import { ProductionBatchReadOnly } from "../_components/production-batch-readonly";
 import { BatchStatusBadge } from "../_components/production-batch-list";
@@ -57,6 +58,7 @@ async function DraftView({
   // pattern used by products/[id]/page.tsx.
   const extraCosts = canViewProfit ? await getBatchExtraCosts(batch.id) : [];
   const activeCostComponents = canViewProfit ? await listActiveCostComponents() : [];
+  const supplierOptions = canViewProfit ? await listActiveSupplierOptions("service") : [];
   const fabricBalance = canViewProfit ? await getFabricBalance(batch.fabricId) : { qty: 0, valueAmount: 0 };
 
   return (
@@ -85,10 +87,16 @@ async function DraftView({
                 componentName: line.componentName,
                 costType: line.costType,
                 unitPrice: String(line.unitPrice),
+                supplierId: line.supplierId ?? "",
+                currentSupplier:
+                  line.supplierId !== null && line.supplierName !== null
+                    ? { id: line.supplierId, name: line.supplierName, isActive: line.supplierIsActive ?? false }
+                    : null,
               }))
             : undefined
         }
         activeCostComponents={activeCostComponents}
+        supplierOptions={supplierOptions}
       />
       <div className="mt-6">
         <AccessoryNeedsSection batchId={batch.id} />

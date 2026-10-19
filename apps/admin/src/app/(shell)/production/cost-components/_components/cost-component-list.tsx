@@ -28,6 +28,14 @@ export interface CostComponentRow {
   defaultUnitPrice: number | null;
   costType: CostComponentType;
   isActive: boolean;
+  defaultSupplierName: string | null;
+  defaultSupplierIsActive: boolean | null;
+}
+
+/** The default supplier as one label, "-" when none; an inactive one stays visible, marked. */
+function supplierLabel(component: CostComponentRow): string {
+  if (component.defaultSupplierName === null) return "-";
+  return component.defaultSupplierIsActive === false ? `${component.defaultSupplierName} (nonaktif)` : component.defaultSupplierName;
 }
 
 export function CostComponentList({ components }: { components: CostComponentRow[] }) {
@@ -57,6 +65,7 @@ export function CostComponentList({ components }: { components: CostComponentRow
                   {COST_TYPE_LABELS[component.costType]} · {UNIT_LABELS[component.unit]}
                   {component.defaultUnitPrice !== null ? ` · ${formatRupiah(component.defaultUnitPrice)}` : ""}
                 </p>
+                <p className="text-sm text-neutral-600">Supplier: {supplierLabel(component)}</p>
               </Link>
               {!component.isActive && <Badge variant="neutral">Nonaktif</Badge>}
               <Switch
@@ -76,6 +85,7 @@ export function CostComponentList({ components }: { components: CostComponentRow
           <Th>Jenis</Th>
           <Th>Satuan</Th>
           <Th>Harga default</Th>
+          <Th>Supplier</Th>
           <Th>Status</Th>
         </TableHead>
         <tbody>
@@ -91,6 +101,7 @@ export function CostComponentList({ components }: { components: CostComponentRow
               <Td className="text-neutral-700 tabular-nums">
                 {component.defaultUnitPrice !== null ? formatRupiah(component.defaultUnitPrice) : "—"}
               </Td>
+              <Td className="text-neutral-700">{supplierLabel(component)}</Td>
               <Td>
                 <div className="flex items-center gap-2">
                   {!component.isActive && <Badge variant="neutral">Nonaktif</Badge>}

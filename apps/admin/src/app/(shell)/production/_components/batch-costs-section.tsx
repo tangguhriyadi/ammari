@@ -78,6 +78,7 @@ export async function BatchCostsSection({
             <div key={line.id} className="flex items-center justify-between gap-2 text-sm text-neutral-700">
               <span>
                 {line.componentName} ({line.quantity} {line.componentUnit} × {formatRupiah(line.unitPrice)})
+                {line.supplierName !== null && <span className="block text-neutral-600">Supplier: {line.supplierName}</span>}
               </span>
               <span className="tabular-nums">{formatRupiah(line.total)}</span>
             </div>
@@ -90,7 +91,10 @@ export async function BatchCostsSection({
           <p className="text-sm text-neutral-600">Biaya tetap</p>
           {fixedCosts.map((line) => (
             <div key={line.id} className="flex items-center justify-between gap-2 text-sm text-neutral-700">
-              <span>{line.componentName}</span>
+              <span>
+                {line.componentName}
+                {line.supplierName !== null && <span className="block text-neutral-600">Supplier: {line.supplierName}</span>}
+              </span>
               <span className="tabular-nums">{formatRupiah(line.total)}</span>
             </div>
           ))}

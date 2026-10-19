@@ -6,6 +6,8 @@ import { formatRupiah } from "@ammari/ui/lib";
 import type { CostComponentType, CostComponentUnit } from "@ammari/db/schema";
 import { previewLineTotal } from "@/lib/production/line-total-preview";
 import type { ProductUsingFabricRow } from "@/lib/production/queries";
+import type { SupplierOption } from "@/lib/suppliers/queries";
+import { SupplierSelect, type CurrentSupplier } from "./supplier-select";
 
 export interface ActiveCostComponentOption {
   id: string;
@@ -13,6 +15,15 @@ export interface ActiveCostComponentOption {
   unit: CostComponentUnit;
   costType: CostComponentType;
   defaultUnitPrice: number | null;
+  /** Prefills a NEW line's supplier (plan D9) — only while that supplier is still active; an
+   * inactive default is never preselected, same as it is never offered. */
+  defaultSupplierId: string | null;
+  defaultSupplierIsActive: boolean | null;
+}
+
+/** The supplier a new line starts with when this component is picked: its default, if active. */
+function prefillSupplierId(component: ActiveCostComponentOption | undefined): string {
+  return component?.defaultSupplierId && component.defaultSupplierIsActive ? component.defaultSupplierId : "";
 }
 
 export interface ExtraCostLineState {
@@ -40,10 +51,18 @@ export interface ExtraCostLineState {
    * (fixed), computed server-side (see ExtraCostLineInput's own doc comment in queries.ts). */
   costType: CostComponentType;
   unitPrice: string;
+  /** "" for none. Unlike the component, editable on an existing line too while the batch is a
+   * draft — see syncExtraCostLines' doc comment. */
+  supplierId: string;
+  /** EXISTING line only: the supplier saved on it (its name snapshot), so a since-deactivated
+   * supplier keeps showing as the selected value. */
+  currentSupplier?: CurrentSupplier | null;
 }
 
 export interface ExtraCostLinesProps {
   activeComponents: ActiveCostComponentOption[];
+  /** Active suppliers only — see SupplierSelect. */
+  supplierOptions: SupplierOption[];
   lines: ExtraCostLineState[];
   onChange: (lines: ExtraCostLineState[]) => void;
   /** The batch's current total pcs (summed across its lines) — a 'variable' line's effective
@@ -64,7 +83,7 @@ function effectiveQuantity(line: ExtraCostLineState, totalPcs: number): number {
 /** The "Biaya lain" section of a production batch draft — only ever rendered by the caller when
  * the session holds finance.view_profit (see ProductionBatchForm), same gating as the fabric
  * cost estimate right above it. */
-export function ExtraCostLines({ activeComponents, lines, onChange, totalPcs, productsUsingFabric }: ExtraCostLinesProps) {
+export function ExtraCostLines({ activeComponents, supplierOptions, lines, onChange, totalPcs, productsUsingFabric }: ExtraCostLinesProps) {
   const componentById = new Map(activeComponents.map((component) => [component.id, component]));
 
   function updateLine(index: number, patch: Partial<ExtraCostLineState>) {
@@ -84,6 +103,7 @@ export function ExtraCostLines({ activeComponents, lines, onChange, totalPcs, pr
         costComponentId: first?.id ?? "",
         costType: first?.costType ?? "variable",
         unitPrice: first?.defaultUnitPrice !== null && first?.defaultUnitPrice !== undefined ? String(first.defaultUnitPrice) : "",
+        supplierId: prefillSupplierId(first),
       },
     ]);
   }
@@ -136,6 +156,9 @@ export function ExtraCostLines({ activeComponents, lines, onChange, totalPcs, pr
                         unitPrice: component?.defaultUnitPrice !== null && component?.defaultUnitPrice !== undefined
                           ? String(component.defaultUnitPrice)
                           : line.unitPrice,
+                        // Picking a different component re-prefills from ITS default, the same
+                        // way the price above does; she can still override it below.
+                        supplierId: prefillSupplierId(component),
                       });
                     }}
                   >
@@ -156,14 +179,26 @@ export function ExtraCostLines({ activeComponents, lines, onChange, totalPcs, pr
                 Hapus
               </Button>
             </div>
-            <div>
-              <Label htmlFor={`extra-cost-price-${index}`}>{priceLabel}</Label>
-              <Input
-                id={`extra-cost-price-${index}`}
-                value={line.unitPrice}
-                onChange={(event) => updateLine(index, { unitPrice: event.target.value })}
-                placeholder="0"
-              />
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <Label htmlFor={`extra-cost-price-${index}`}>{priceLabel}</Label>
+                <Input
+                  id={`extra-cost-price-${index}`}
+                  value={line.unitPrice}
+                  onChange={(event) => updateLine(index, { unitPrice: event.target.value })}
+                  placeholder="0"
+                />
+              </div>
+              <div>
+                <Label htmlFor={`extra-cost-supplier-${index}`}>Supplier</Label>
+                <SupplierSelect
+                  id={`extra-cost-supplier-${index}`}
+                  value={line.supplierId}
+                  onChange={(supplierId) => updateLine(index, { supplierId })}
+                  options={supplierOptions}
+                  current={line.currentSupplier}
+                />
+              </div>
             </div>
             {line.costType === "variable" &&
               (totalPcs > 0 ? (

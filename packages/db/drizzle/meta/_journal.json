@@ -162,6 +162,13 @@
       "when": 1792393547632,
       "tag": "0022_glossy_pepper_potts",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792398709128,
+      "tag": "0023_faulty_loki",
+      "breakpoints": true
     }
   ]
 }

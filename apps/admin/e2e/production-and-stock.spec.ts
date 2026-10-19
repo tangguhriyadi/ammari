@@ -1,8 +1,15 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
 import { E2E_PRODUCTION_STOCK_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
+
+async function createSupplier(page: Page, name: string): Promise<void> {
+  await page.goto("/suppliers/new");
+  await page.getByLabel("Nama supplier").fill(name);
+  await page.getByRole("button", { name: "Simpan", exact: true }).click();
+  await expect(page).toHaveURL(/\/suppliers$/);
+}
 
 test("a staffer purchases fabric and an accessory, sets a recipe, creates a draft batch with an extra-cost line, posts it, sees stock and HPP, adjusts it down, then runs a stock count", async ({
   page,
@@ -79,17 +86,31 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page).toHaveURL(/\/purchases$/);
 
-  // 4. Create a cost component (variable, per pcs) on the management page — picked by the batch
-  // form below.
+  // 4. Two suppliers (plan S2, D9): the tailor who is the cost component's default, and a second
+  // one the batch line below overrides it with.
+  const tailorName = `E2E Penjahit ${unique}`;
+  const overrideName = `E2E Penjahit Pengganti ${unique}`;
+  await createSupplier(page, tailorName);
+  await createSupplier(page, overrideName);
+
+  // 4b. Create a cost component (variable, per pcs) on the management page, with the tailor as
+  // its default supplier — picked by the batch form below.
   const componentName = `E2E Ongkos ${unique}`;
   await page.goto("/production/cost-components/new");
   await page.locator("#component-name").fill(componentName);
   await page.locator("#component-price").fill("2.000");
+  await page.locator("#component-supplier").selectOption({ label: tailorName });
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page).toHaveURL(/\/production\/cost-components$/);
   // Renders twice in the DOM (a mobile card and a desktop table row, one hidden via CSS per
   // breakpoint; see cost-component-list.tsx) — this test runs at the 390px viewport set above.
   await expect(page.locator(`:text-is("${componentName}"):visible`)).toBeVisible();
+  // The default supplier shows on the list in BOTH layouts (CLAUDE.md: list pages are asserted at
+  // 390px and 1280px): the phone card, then the desktop table's own column.
+  await expect(page.locator("li").filter({ hasText: componentName }).getByText(`Supplier: ${tailorName}`)).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.locator("tr").filter({ hasText: componentName }).getByRole("cell", { name: tailorName, exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
 
   // 5. Create a production draft: fabric yards (fabric cost is now a computed ESTIMATE, never
   // hand-typed) and one extra-cost line using the component just created — its quantity is
@@ -103,6 +124,9 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await page.locator("#extra-cost-component-0").selectOption({ label: componentName });
   // Unit price is prefilled from the component's default (2.000) — left as-is; there is no
   // quantity field to fill (it's computed from the batch's total pcs below).
+  // The line's supplier is prefilled from the component's default too, then overridden per line.
+  await expect(page.locator("#extra-cost-supplier-0 option:checked")).toHaveText(tailorName);
+  await page.locator("#extra-cost-supplier-0").selectOption({ label: overrideName });
   await page.getByLabel("M", { exact: true }).fill("5");
   await page.getByRole("button", { name: "Simpan draf" }).click();
   await openCreated(page, "/production");
@@ -124,6 +148,9 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await expect(page.getByText("Rp 1.000.000")).toBeVisible(); // Kain
   await expect(page.getByText(`${accessoryName} (5 pcs)`)).toBeVisible();
   await expect(page.getByText(`${componentName} (5 pcs × Rp 2.000)`)).toBeVisible();
+  // The line's own supplier (the override, not the component's default) is snapshotted onto it.
+  await expect(page.getByText(`Supplier: ${overrideName}`)).toBeVisible();
+  await expect(page.getByText(`Supplier: ${tailorName}`)).toHaveCount(0);
   await expect(page.getByText("HPP/pcs")).toBeVisible();
   // "Rp 204.000" appears twice (the HPP/pcs figure itself, and again next to its Batas HPP
   // badge below) — .first() is enough to confirm the value renders at all.
@@ -161,4 +188,47 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
 
   await page.goto(`/stock/${sku}`);
   await expect(page.getByText("10 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });
+});
+
+test("an inactive supplier still shows on the cost component that defaults to it, but is never offered for a new batch line", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await loginAs(page, E2E_PRODUCTION_STOCK_EMAIL);
+  const unique = Date.now();
+
+  const supplierName = `E2E Penjahit Lama ${unique}`;
+  await createSupplier(page, supplierName);
+
+  const componentName = `E2E Ongkos Lama ${unique}`;
+  await page.goto("/production/cost-components/new");
+  await page.locator("#component-name").fill(componentName);
+  await page.locator("#component-supplier").selectOption({ label: supplierName });
+  await page.getByRole("button", { name: "Simpan" }).click();
+  await expect(page).toHaveURL(/\/production\/cost-components$/);
+
+  // Deactivate the supplier (the phone card's switch on /suppliers).
+  await page.goto("/suppliers");
+  const supplierCard = page.locator("li").filter({ hasText: supplierName });
+  await supplierCard.getByRole("switch").click();
+  await expect(supplierCard.getByText("Nonaktif", { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  // Still displayed, marked, on the component's list (both layouts) and its edit form.
+  await page.goto("/production/cost-components");
+  await expect(page.locator("li").filter({ hasText: componentName }).getByText(`Supplier: ${supplierName} (nonaktif)`)).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(
+    page.locator("tr").filter({ hasText: componentName }).getByRole("cell", { name: `${supplierName} (nonaktif)`, exact: true }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await page.locator("li").filter({ hasText: componentName }).getByRole("link").click();
+  await expect(page.locator("#component-supplier option:checked")).toHaveText(`${supplierName} (nonaktif)`);
+
+  // A new batch line using that component is NOT prefilled with it, and can't pick it at all.
+  await page.goto("/production/new");
+  await page.getByRole("button", { name: "+ Tambah biaya" }).click();
+  await page.locator("#extra-cost-component-0").selectOption({ label: componentName });
+  await expect(page.locator("#extra-cost-supplier-0 option:checked")).toHaveText("Tanpa supplier");
+  await expect(page.locator("#extra-cost-supplier-0 option").filter({ hasText: supplierName })).toHaveCount(0);
 });

@@ -112,3 +112,35 @@ describe("postBatchAction requires BOTH production.manage AND finance.view_profi
     await expect(postBatchAction({ id: NIL_ID })).rejects.toThrow();
   });
 });
+
+describe("extra cost line supplierId validation", () => {
+  test("a non-uuid supplierId is rejected before reaching the query layer", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage", "finance.view_profit"]));
+    updateDraftMock.mockClear();
+    const result = await updateDraftAction(NIL_ID, {
+      producedAt: "2026-10-01",
+      fabricYards: "10",
+      lines: [],
+      extraCosts: [{ costComponentId: NIL_ID, unitPrice: "1000", supplierId: "bukan-uuid" }],
+    });
+    expect(result).toEqual({ ok: false, error: "Supplier tidak valid." });
+    expect(updateDraftMock).not.toHaveBeenCalled();
+  });
+
+  test("null and omitted supplierId are both forwarded as-is", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage", "finance.view_profit"]));
+    updateDraftMock.mockClear();
+    await updateDraftAction(NIL_ID, {
+      producedAt: "2026-10-01",
+      fabricYards: "10",
+      lines: [],
+      extraCosts: [
+        { costComponentId: NIL_ID, unitPrice: "1000", supplierId: null },
+        { costComponentId: NIL_ID, unitPrice: "1000" },
+      ],
+    });
+    const [, input] = updateDraftMock.mock.calls[0]!;
+    expect(input.extraCosts[0].supplierId).toBeNull();
+    expect(input.extraCosts[1].supplierId).toBeUndefined();
+  });
+});

@@ -447,9 +447,18 @@ export const costComponents = pgTable(
     // below) — "delete" in the UI always means setting this false, same as fabric_colors.
     isActive: boolean("is_active").notNull().default(true),
     sortOrder: integer("sort_order").notNull().default(0),
+    // Migration 0023 (docs/plans/suppliers-goods-receipt.md D9). Who is USUALLY paid for this
+    // component (e.g. the tailor behind "Ongkos jahit") — only ever a PREFILL for a new
+    // production_batch_costs line, never read at posting and never copied onto an existing line
+    // when changed here. Nullable: most components have no single supplier. A supplier
+    // deactivated after being set here keeps displaying (and keeps being saved unchanged), but
+    // can't be newly chosen — see updateCostComponent.
+    defaultSupplierId: uuid("default_supplier_id").references(() => suppliers.id, { onDelete: "restrict" }),
     ...timestamps(),
   },
   (table) => [
+    // ON DELETE RESTRICT FK — indexed for the same reason every other RESTRICT FK here is.
+    index("cost_components_default_supplier_id_idx").on(table.defaultSupplierId),
     check("cost_components_unit_check", checkIn(table.unit, COST_COMPONENT_UNITS)),
     check("cost_components_cost_type_check", checkIn(table.costType, COST_COMPONENT_TYPES)),
     check("cost_components_default_unit_price_check", sql`${table.defaultUnitPrice} >= 0`),
@@ -536,10 +545,30 @@ export const productionBatchCosts = pgTable(
     total: bigint("total", { mode: "number" })
       .notNull()
       .generatedAlwaysAs(sql`round(quantity * unit_price)`),
+    // Migration 0023 (docs/plans/suppliers-goods-receipt.md D9/D28). Who is paid for THIS line —
+    // per line, not per batch (sewing by A and finishing by B in one batch). Prefilled from
+    // cost_components.default_supplier_id when the line is added, overridable while the batch is
+    // a draft. `supplier_name` is a SNAPSHOT of suppliers.name taken whenever the supplier is set
+    // (same reasoning as component_name: a tailor renamed later must never rewrite this line).
+    // Both nullable: lines from before 0023, and lines nobody attributed, carry neither — the
+    // pair check below keeps them together. Frozen once the batch posts by the existing
+    // prevent_posted_batch_cost_mutation trigger (migration 0007), which rejects ANY update to a
+    // posted batch's cost lines — nothing to change there.
+    supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }),
+    supplierName: text("supplier_name"),
     ...createdAtOnly(),
   },
   (table) => [
     index("production_batch_costs_production_batch_id_idx").on(table.productionBatchId),
+    // ON DELETE RESTRICT FK — indexed (same reasoning as cost_component_id below), and the
+    // future per-supplier payable view (D28) reads by it.
+    index("production_batch_costs_supplier_id_idx").on(table.supplierId),
+    // Both-or-neither, same idiom as fabrics_price_amount_unit_pair_check. Every pre-0023 row
+    // (and every row the previous release inserts) has both NULL, so this holds for them.
+    check(
+      "production_batch_costs_supplier_pair_check",
+      sql`(${table.supplierId} is null) = (${table.supplierName} is null)`,
+    ),
     // cost_component_id is NOT NULL + ON DELETE RESTRICT — indexed for the same reason every
     // other FK in this schema is: an unindexed RESTRICT check seq-scans this (append-only,
     // only-grows) table on every cost-component delete attempt.
@@ -652,9 +681,9 @@ export const stockMovements = pgTable(
 // Deliberately NOT retrofitted onto the three existing free-text supplier columns
 // (fabrics.supplier, accessory_movements.supplier, fabric_stock_movements.supplier) — those are
 // reference labels on rows that already exist, and legacy names are not mapped onto this table
-// (D11). The FK columns that make a supplier transactional (purchases.supplier_id,
-// cost_components.default_supplier_id, production_batch_costs.supplier_id) arrive in later
-// sessions; each ledger row that gets one keeps its free-text `supplier` as a NAME SNAPSHOT, so
+// (D11). The FK columns that make a supplier transactional: cost_components.default_supplier_id
+// and production_batch_costs.supplier_id (+ its supplier_name snapshot) arrived in migration
+// 0023; purchases.supplier_id arrives later. Each ledger row that gets one keeps a NAME SNAPSHOT, so
 // renaming a row here never rewrites history (same reasoning as
 // production_batch_costs.component_name).
 export const suppliers = pgTable(

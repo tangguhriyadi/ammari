@@ -15,6 +15,7 @@ import {
   productVariants,
   staffUsers,
   stockMovements,
+  suppliers,
 } from "@ammari/db/schema";
 import type { CostComponentType, CostComponentUnit, ProductionBatchStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
@@ -28,6 +29,7 @@ import { lockProductionBatchForUpdate, type Tx } from "./db";
 import { generateBatchNumber } from "./batch-number";
 import { calculateUnitCost } from "./unit-cost";
 import { resolveAccessoryNeeds } from "./accessory-needs";
+import { lockSelectableSuppliers } from "@/lib/suppliers/queries";
 
 // ---------- Eligible SKUs for a fabric ----------
 
@@ -244,6 +246,16 @@ export interface ExtraCostLineRow {
   quantity: number;
   unitPrice: number;
   total: number;
+  /** Who is paid for this line (plan D9). `supplierName` is the line's own SNAPSHOT, taken when
+   * the supplier was set, and is what every display uses, so a later rename of the supplier
+   * never changes what a (posted) batch says. Both null for a line nobody attributed, including
+   * every line from before migration 0023. */
+  supplierId: string | null;
+  supplierName: string | null;
+  /** The referenced supplier's CURRENT active state (null when there is none) — lets the draft
+   * form keep showing a since-deactivated supplier as the line's current value without offering
+   * it as a new choice. Never used for the name (see supplierName). */
+  supplierIsActive: boolean | null;
 }
 
 /** Same gating contract as getBatchCosts — itemized extra costs are cost data too. */
@@ -258,8 +270,12 @@ export async function getBatchExtraCosts(id: string, db: Database = defaultDb): 
       quantity: productionBatchCosts.quantity,
       unitPrice: productionBatchCosts.unitPrice,
       total: productionBatchCosts.total,
+      supplierId: productionBatchCosts.supplierId,
+      supplierName: productionBatchCosts.supplierName,
+      supplierIsActive: suppliers.isActive,
     })
     .from(productionBatchCosts)
+    .leftJoin(suppliers, eq(suppliers.id, productionBatchCosts.supplierId))
     .where(eq(productionBatchCosts.productionBatchId, id))
     .orderBy(productionBatchCosts.createdAt);
 }
@@ -334,6 +350,14 @@ export interface ExtraCostLineInput {
    * save (see syncExtraCostLines) and re-verified again at posting; a 'fixed' line's quantity is
    * always exactly 1 (its unit_price IS the flat per-batch amount). */
   unitPrice: number;
+  /** Who is paid for this line (plan D9), with three meanings:
+   *  - `undefined`: a NEW line takes the component's default supplier (if that supplier is
+   *    still active, else none); an EXISTING line keeps whatever it has;
+   *  - `null`: no supplier;
+   *  - an id: that supplier. Must be ACTIVE when it is a new choice (a new line, or an existing
+   *    line whose supplier changes); an existing line re-submitting its current, since-
+   *    deactivated supplier is left alone. */
+  supplierId?: string | null;
 }
 
 export interface CreateDraftInput {
@@ -400,7 +424,16 @@ async function insertLines(tx: Tx, productionBatchId: string, fabricId: string, 
  * `totalPcs`, recomputed on every single save regardless of whether totalPcs actually changed, so
  * it can never silently drift; a 'fixed' line's quantity is always exactly 1. A 'variable' line
  * can't be saved while totalPcs is 0 (quantity > 0 is a DB CHECK) — rejected with a friendly
- * message rather than a raw constraint error. */
+ * message rather than a raw constraint error.
+ *
+ * Supplier (plan D9, see ExtraCostLineInput.supplierId): unlike the component, a line's supplier
+ * MAY change while the batch is a draft — it is who gets paid, not what the line is. Whenever it
+ * is set or changed, `supplier_name` is snapshotted from the supplier's current name in the same
+ * statement; an unchanged supplier is never re-snapshotted (a rename between two draft saves
+ * doesn't silently rewrite the line). Every newly chosen supplier is checked and FOR SHARE-locked
+ * by lockSelectableSuppliers before anything is written, so a concurrent deactivation can't slip
+ * in between the check and the write. A posted batch never reaches here (updateDraft rejects it),
+ * and prevent_posted_batch_cost_mutation rejects any change to its lines regardless. */
 async function syncExtraCostLines(
   tx: Tx,
   productionBatchId: string,
@@ -418,6 +451,41 @@ async function syncExtraCostLines(
       throw new ActionError("Salah satu baris biaya tidak ditemukan di batch ini.");
     }
   }
+
+  const newLines = lines.filter((line) => !line.id);
+  const componentIds = [...new Set(newLines.map((line) => line.costComponentId))];
+  const components = componentIds.length > 0 ? await tx.select().from(costComponents).where(inArray(costComponents.id, componentIds)) : [];
+  const componentById = new Map(components.map((component) => [component.id, component]));
+
+  // Explicit new choices: a new line naming a supplier, or an existing line changing to one.
+  // These must be active, or the whole save is rejected.
+  const chosenSupplierIds = lines
+    .filter((line) => typeof line.supplierId === "string")
+    .filter((line) => !line.id || existingById.get(line.id)!.supplierId !== line.supplierId)
+    .map((line) => line.supplierId as string);
+  const chosenSuppliers = await lockSelectableSuppliers(tx, chosenSupplierIds, "supplierId");
+
+  // Implicit defaults: a new line that said nothing takes its component's default — but only
+  // while that supplier is active. A deactivated default is silently not applied (the picker
+  // never offered it either), rather than blocking the save over a prefill she never chose.
+  const defaultSupplierIds = [
+    ...new Set(
+      newLines
+        .filter((line) => line.supplierId === undefined)
+        .map((line) => componentById.get(line.costComponentId)?.defaultSupplierId)
+        .filter((id): id is string => typeof id === "string"),
+    ),
+  ].sort();
+  const activeDefaults =
+    defaultSupplierIds.length > 0
+      ? await tx
+          .select({ id: suppliers.id, name: suppliers.name })
+          .from(suppliers)
+          .where(and(inArray(suppliers.id, defaultSupplierIds), eq(suppliers.isActive, true)))
+          .orderBy(suppliers.id)
+          .for("share")
+      : [];
+  const activeDefaultById = new Map(activeDefaults.map((row) => [row.id, row]));
 
   const submittedIds = new Set(lines.filter((line) => line.id).map((line) => line.id!));
   const toDeleteIds = existing.filter((row) => !submittedIds.has(row.id)).map((row) => row.id);
@@ -437,18 +505,19 @@ async function syncExtraCostLines(
       );
     }
     const quantity = existingRow.costType === "variable" ? totalPcs : 1;
+    const supplierChange =
+      line.supplierId === undefined || line.supplierId === existingRow.supplierId
+        ? {}
+        : line.supplierId === null
+          ? { supplierId: null, supplierName: null }
+          : { supplierId: line.supplierId, supplierName: chosenSuppliers.get(line.supplierId)!.name };
     await tx
       .update(productionBatchCosts)
-      .set({ quantity, unitPrice: line.unitPrice })
+      .set({ quantity, unitPrice: line.unitPrice, ...supplierChange })
       .where(and(eq(productionBatchCosts.id, line.id), eq(productionBatchCosts.productionBatchId, productionBatchId)));
   }
 
-  const newLines = lines.filter((line) => !line.id);
   if (newLines.length === 0) return;
-
-  const componentIds = [...new Set(newLines.map((line) => line.costComponentId))];
-  const components = await tx.select().from(costComponents).where(inArray(costComponents.id, componentIds));
-  const componentById = new Map(components.map((component) => [component.id, component]));
 
   const values = newLines.map((line) => {
     const component = componentById.get(line.costComponentId);
@@ -471,6 +540,14 @@ async function syncExtraCostLines(
         `Tambahkan minimal satu baris produksi (SKU) sebelum menambah biaya variabel "${component.name}".`,
       );
     }
+    const supplier =
+      line.supplierId === undefined
+        ? component.defaultSupplierId
+          ? activeDefaultById.get(component.defaultSupplierId)
+          : undefined
+        : line.supplierId === null
+          ? undefined
+          : chosenSuppliers.get(line.supplierId);
     return {
       productionBatchId,
       costComponentId: component.id,
@@ -479,6 +556,8 @@ async function syncExtraCostLines(
       costType: component.costType,
       quantity: component.costType === "variable" ? totalPcs : 1,
       unitPrice: line.unitPrice,
+      supplierId: supplier?.id ?? null,
+      supplierName: supplier?.name ?? null,
     };
   });
   await tx.insert(productionBatchCosts).values(values);

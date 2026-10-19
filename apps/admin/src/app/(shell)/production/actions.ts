@@ -37,6 +37,10 @@ const extraCostLineSchema = z.object({
   id: z.string().uuid().optional(),
   costComponentId: z.string().uuid("Pilih komponen biaya."),
   unitPrice: draftCostAmount,
+  // Who is paid for this line (plan D9). Omitted = new line takes the component's default /
+  // existing line keeps its own; null = none; an id = that supplier (must be active when newly
+  // chosen). See ExtraCostLineInput.supplierId in lib/production/queries.ts.
+  supplierId: z.string().uuid("Supplier tidak valid.").nullable().optional(),
 });
 
 const draftFieldsSchema = z.object({
