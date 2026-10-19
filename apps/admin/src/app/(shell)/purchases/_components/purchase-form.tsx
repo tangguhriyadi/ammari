@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
-import { Button, Input, Label, Select, Textarea } from "@ammari/ui";
+import { Button, Input, Label, Select, Textarea, useToast } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { recordPurchaseAction } from "../actions";
@@ -17,6 +17,7 @@ type PurchaseItemType = "fabric" | "accessory";
 
 export function PurchaseForm({ fabrics, accessories }: { fabrics: PurchaseItemOption[]; accessories: PurchaseItemOption[] }) {
   const router = useRouter();
+  const toast = useToast();
   const [type, setType] = useState<PurchaseItemType>("fabric");
   const [itemId, setItemId] = useState(fabrics[0]?.id ?? "");
   const [purchasedAt, setPurchasedAt] = useState(todayInJakarta());
@@ -62,7 +63,8 @@ export function PurchaseForm({ fabrics, accessories }: { fabrics: PurchaseItemOp
         setError(result.error);
         return;
       }
-      router.push(`/purchases/${result.data.id}`);
+      toast.success("Pembelian berhasil dicatat");
+      router.push("/purchases");
     });
   }
 
@@ -135,7 +137,7 @@ export function PurchaseForm({ fabrics, accessories }: { fabrics: PurchaseItemOp
         </p>
       )}
       <div>
-        <Label htmlFor="purchase-supplier">Pemasok</Label>
+        <Label htmlFor="purchase-supplier">Supplier</Label>
         <Input id="purchase-supplier" value={supplier} onChange={(event) => setSupplier(event.target.value)} placeholder="Opsional" />
       </div>
       <div>

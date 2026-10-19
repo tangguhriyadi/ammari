@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Button, ColorSwatch, Input, Label } from "@ammari/ui";
+import { Button, ColorSwatch, Input, Label, useToast } from "@ammari/ui";
 import { formatNumber } from "@ammari/ui/lib";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import type { listProductSkusForCount } from "@/lib/stock/queries";
@@ -13,15 +13,11 @@ type SkuRow = Awaited<ReturnType<typeof listProductSkusForCount>>[number];
 
 export function StockCountForm({ productId, skus }: { productId: string; skus: SkuRow[] }) {
   const router = useRouter();
+  const toast = useToast();
   // sku -> physical count the operator typed, as a string (so a cleared input isn't coerced to
   // "0" while they're still typing) — only non-blank, differing entries are submitted.
   const [physicalCounts, setPhysicalCounts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  // Distinct from `saving` — the button's `disabled` is `true` both WHILE saving and AFTER a
-  // successful save (isDirty becomes false either way), so without a separate signal a user who
-  // just saved sees the exact same inert button as mid-save, with no confirmation anything
-  // happened. Cleared as soon as the user starts a new edit.
-  const [justSaved, setJustSaved] = useState(false);
   const [saving, startTransition] = useTransition();
 
   const isDirty = Object.keys(physicalCounts).length > 0;
@@ -29,7 +25,6 @@ export function StockCountForm({ productId, skus }: { productId: string; skus: S
 
   function handleSave() {
     setError(null);
-    setJustSaved(false);
     const lines = Object.entries(physicalCounts)
       .filter(([, value]) => value.trim() !== "")
       .map(([sku, value]) => ({ sku, physicalQty: Number.parseInt(value, 10) }))
@@ -42,7 +37,8 @@ export function StockCountForm({ productId, skus }: { productId: string; skus: S
         return;
       }
       setPhysicalCounts({});
-      setJustSaved(true);
+      toast.success("Hitung stok berhasil disimpan");
+      router.push("/stock");
       router.refresh();
     });
   }
@@ -77,10 +73,7 @@ export function StockCountForm({ productId, skus }: { productId: string; skus: S
                 step={1}
                 placeholder={String(row.currentStock)}
                 value={physicalCounts[row.sku] ?? ""}
-                onChange={(event) => {
-                  setJustSaved(false);
-                  setPhysicalCounts((prev) => ({ ...prev, [row.sku]: event.target.value }));
-                }}
+                onChange={(event) => setPhysicalCounts((prev) => ({ ...prev, [row.sku]: event.target.value }))}
               />
             </div>
           </div>
@@ -90,11 +83,6 @@ export function StockCountForm({ productId, skus }: { productId: string; skus: S
       {error && (
         <p role="alert" className="text-base text-danger-700">
           {error}
-        </p>
-      )}
-      {justSaved && (
-        <p aria-live="polite" className="text-base text-success-700">
-          Tersimpan.
         </p>
       )}
 

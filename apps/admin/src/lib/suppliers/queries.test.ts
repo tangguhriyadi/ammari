@@ -74,8 +74,8 @@ describe("supplier master CRUD", () => {
 
   test("renaming one supplier onto another's name is rejected the same way", async () => {
     await withRollback(async (tx) => {
-      const first = uniqueName("Pemasok Satu");
-      const second = uniqueName("Pemasok Dua");
+      const first = uniqueName("Supplier Satu");
+      const second = uniqueName("Supplier Dua");
       await createSupplier({ name: first }, null, tx);
       const other = await createSupplier({ name: second }, null, tx);
 
@@ -88,21 +88,21 @@ describe("supplier master CRUD", () => {
       // Cast: the whole point is to get past the TypeScript layer and prove the CHECK
       // constraint is the real backstop for a request that bypasses the form's own validation.
       await expect(
-        createSupplier({ name: uniqueName("Pemasok Aneh"), kinds: ["kain"] as unknown as string[] }, null, tx),
+        createSupplier({ name: uniqueName("Supplier Aneh"), kinds: ["kain"] as unknown as string[] }, null, tx),
       ).rejects.toThrow();
     });
   });
 
   test("a duplicated kind is rejected by the database", async () => {
     await withRollback(async (tx) => {
-      await expect(createSupplier({ name: uniqueName("Pemasok Dobel"), kinds: ["fabric", "fabric"] }, null, tx)).rejects.toThrow();
+      await expect(createSupplier({ name: uniqueName("Supplier Dobel"), kinds: ["fabric", "fabric"] }, null, tx)).rejects.toThrow();
     });
   });
 
   test("all four kinds at once is valid (the max-cardinality CHECK is a backstop, not a limit she can hit)", async () => {
     await withRollback(async (tx) => {
       const created = await createSupplier(
-        { name: uniqueName("Pemasok Serba Ada"), kinds: ["fabric", "accessory", "service", "other"] },
+        { name: uniqueName("Supplier Serba Ada"), kinds: ["fabric", "accessory", "service", "other"] },
         null,
         tx,
       );
@@ -178,7 +178,7 @@ describe("listSuppliers", () => {
       const marker = randomUUID().slice(0, 8);
       // 11, because resolvePagination only honors PAGE_SIZE_OPTIONS (10/20/50/100) — a
       // perPage=1 would silently fall back to the default and test nothing.
-      const names = Array.from({ length: 11 }, (_, index) => `Pemasok ${String(index).padStart(2, "0")} ${marker}`);
+      const names = Array.from({ length: 11 }, (_, index) => `Supplier ${String(index).padStart(2, "0")} ${marker}`);
       for (const name of names) await createSupplier({ name }, null, tx);
 
       const page1 = await listSuppliers({ q: marker }, "1", "10", tx);

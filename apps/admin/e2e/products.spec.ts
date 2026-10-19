@@ -23,13 +23,14 @@ test("owner creates a fabric, adds colors, creates a product with variants, and 
   const fabricName = `E2E Bahan ${unique}`;
   await page.goto("/fabrics/new");
   await page.getByLabel("Nama bahan").fill(fabricName);
-  // exact: true — the new color row's "Kode pemasok (opsional)" label otherwise substring-matches
-  // "Pemasok" too (same class of bug as "Produk" vs "Produksi" elsewhere in this app's e2e).
-  await page.getByLabel("Pemasok", { exact: true }).fill("E2E Supplier");
+  // exact: true — the new color row's "Kode supplier (opsional)" label otherwise substring-matches
+  // "Supplier" too (same class of bug as "Produk" vs "Produksi" elsewhere in this app's e2e).
+  await page.getByLabel("Supplier", { exact: true }).fill("E2E Supplier");
   await page.getByLabel("Nama warna").fill("Sage");
   await page.getByRole("button", { name: "Simpan" }).click();
-  // Creating a fabric redirects straight to its detail page now, not the list.
+  // Creating a fabric redirects to its new detail page (create is the one exception to list redirects).
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
+  await expect(page.getByRole("status")).toContainText("Bahan berhasil ditambahkan");
   // The color's name shows up as an editable input's value, not text content — after the
   // navigation's server round-trip, the SSR'd HTML has a literal value="Sage" attribute on that
   // row's input, so a CSS attribute selector finds it.

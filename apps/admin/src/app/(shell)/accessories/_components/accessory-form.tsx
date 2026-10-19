@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { Button, Input, Label, Select, Switch, Textarea } from "@ammari/ui";
+import { Button, Input, Label, Select, Switch, Textarea, useToast } from "@ammari/ui";
 import { SIZES, type Size } from "@ammari/db/schema";
 import { createAccessoryAction, listDistinctSizeGroupsAction, updateAccessoryAction } from "../actions";
 
@@ -34,6 +34,7 @@ export type AccessoryFormProps =
 export function AccessoryForm(props: AccessoryFormProps) {
   const { initialValues } = props;
   const router = useRouter();
+  const toast = useToast();
   const [name, setName] = useState(initialValues.name);
   const [size, setSize] = useState<Size | "">(initialValues.size);
   const [sizeGroup, setSizeGroup] = useState(initialValues.sizeGroup);
@@ -58,7 +59,8 @@ export function AccessoryForm(props: AccessoryFormProps) {
         setError(result.error);
         return;
       }
-      router.push(`/accessories/${result.data.id}`);
+      toast.success(props.mode === "create" ? "Aksesori berhasil ditambahkan" : "Perubahan berhasil disimpan");
+      router.push("/accessories");
     });
   }
 

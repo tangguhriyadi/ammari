@@ -45,7 +45,7 @@ export function FabricStockList({ rows }: { rows: FabricStockListRow[] }) {
       <TableContainer>
         <TableHead>
           <Th>Nama</Th>
-          <Th>Pemasok</Th>
+          <Th>Supplier</Th>
           <Th>Stok</Th>
           <Th>Harga rata-rata</Th>
         </TableHead>

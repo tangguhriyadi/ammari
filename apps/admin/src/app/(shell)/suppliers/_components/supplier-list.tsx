@@ -31,8 +31,8 @@ export function SupplierList({ rows, canManage }: { rows: SupplierListRowData[];
   if (rows.length === 0) {
     return (
       <EmptyState
-        title="Belum ada pemasok"
-        description="Tambah pemasok untuk mencatat dari siapa kain, aksesoris, atau jasa jahit dibeli."
+        title="Belum ada supplier"
+        description="Tambah supplier untuk mencatat dari siapa kain, aksesoris, atau jasa jahit dibeli."
       />
     );
   }

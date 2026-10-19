@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Button, Input, Label, Textarea, Dialog } from "@ammari/ui";
+import { Button, Input, Label, Textarea, Dialog, useToast } from "@ammari/ui";
 import { formatNumber } from "@ammari/ui/lib";
 import { parseRupiah } from "@/lib/products/money";
 import { meterPriceToYardPrice, yardPriceToMeterPrice } from "@/lib/products/fabric-price";
@@ -55,6 +55,7 @@ export function FabricForm({
   productCount?: number;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [values, setValues] = useState<FabricFormValues>(initialValues ?? EMPTY_VALUES);
   // The two displayed price text fields — kept as plain editable text, not re-derived from
   // `values` on every render, so the user can keep typing (including transient invalid states
@@ -142,6 +143,7 @@ export function FabricForm({
           setFieldErrors(result.fieldErrors ?? {});
           return;
         }
+        toast.success("Perubahan berhasil disimpan");
         router.push("/fabrics");
         router.refresh();
         return;
@@ -159,6 +161,9 @@ export function FabricForm({
         setFieldErrors(result.fieldErrors ?? {});
         return;
       }
+      toast.success("Bahan berhasil ditambahkan");
+      // Create is the one exception to "redirect to the list": land on the new fabric's detail
+      // page so colors can be managed right away.
       router.push(`/fabrics/${result.data.id}`);
       router.refresh();
     });
@@ -201,7 +206,7 @@ export function FabricForm({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="fabric-supplier">Pemasok</Label>
+        <Label htmlFor="fabric-supplier">Supplier</Label>
         <Input
           id="fabric-supplier"
           value={values.supplier}

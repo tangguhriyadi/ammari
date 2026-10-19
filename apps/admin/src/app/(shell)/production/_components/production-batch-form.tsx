@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { Button, Input, Label, Select, Textarea } from "@ammari/ui";
+import { Button, Input, Label, Select, Textarea, useToast } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import type { EligibleSkuRow, ProductUsingFabricRow } from "@/lib/production/queries";
@@ -58,6 +58,7 @@ export type ProductionBatchFormProps =
 export function ProductionBatchForm(props: ProductionBatchFormProps) {
   const { mode, initialValues, eligibleSkus: initialEligibleSkus, canViewProfit, initialExtraCosts, activeCostComponents } = props;
   const router = useRouter();
+  const toast = useToast();
   const [fabricId, setFabricId] = useState(initialValues.fabricId);
   const [eligibleSkus, setEligibleSkus] = useState(initialEligibleSkus);
   const [fabricBalance, setFabricBalance] = useState<RawMaterialBalance | null>(
@@ -153,7 +154,8 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
         setError(result.error);
         return;
       }
-      router.push(`/production/${result.data.id}`);
+      toast.success(props.mode === "create" ? "Batch produksi berhasil ditambahkan" : "Perubahan berhasil disimpan");
+      router.push("/production");
     });
   }
 

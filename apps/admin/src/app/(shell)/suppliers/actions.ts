@@ -15,14 +15,14 @@ import * as supplierQueries from "@/lib/suppliers/queries";
 // checkbox was clicked first — same shape as products' highlightsSchema.
 const supplierKindsSchema = z
   .array(z.enum(SUPPLIER_KINDS))
-  .refine((kinds) => new Set(kinds).size === kinds.length, "Jenis pemasok tidak boleh duplikat.")
+  .refine((kinds) => new Set(kinds).size === kinds.length, "Jenis supplier tidak boleh duplikat.")
   .transform((kinds) => SUPPLIER_KINDS.filter((kind) => kinds.includes(kind)));
 
 // Only `name` is required (docs/plans/suppliers-goods-receipt.md D13) — every other field is
 // optional, and an empty string is stored as NULL rather than "" so "no phone recorded" has one
 // representation, not two.
 const supplierSchema = z.object({
-  name: z.string().trim().min(1, "Nama pemasok wajib diisi."),
+  name: z.string().trim().min(1, "Nama supplier wajib diisi."),
   kinds: supplierKindsSchema.optional(),
   phone: z.string().trim().optional(),
   address: z.string().trim().optional(),

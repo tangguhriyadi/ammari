@@ -1,5 +1,6 @@
 import { expect, test, type Locator } from "@playwright/test";
 import { loginAs } from "./helpers/login";
+import { openCreated } from "./helpers/open-created";
 import { E2E_PACKING_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -42,14 +43,14 @@ test("a staffer prints a card and ships one order, then cancelling a second (alr
   await page.locator("#purchase-qty").fill("10");
   await page.locator("#purchase-amount").fill("1.000.000");
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/purchases\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/purchases$/);
 
   await page.goto("/production/new");
   await page.locator("#batch-fabric").selectOption({ label: fabricName });
   await page.locator("#batch-fabric-yards").fill("10");
   await page.locator(`#qty-${sku}`).fill("5");
   await page.getByRole("button", { name: "Simpan draf" }).click();
-  await expect(page).toHaveURL(/\/production\/[0-9a-f-]+$/);
+  await openCreated(page, "/production");
   await page.getByRole("button", { name: "Posting ke stok" }).click();
   await page.getByRole("button", { name: "Posting", exact: true }).click();
   await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
@@ -67,7 +68,7 @@ test("a staffer prints a card and ships one order, then cancelling a second (alr
     await page.locator("#order-channel").selectOption({ label: "WhatsApp" });
     await page.locator(`#qty-${sku}`).fill(qty);
     await page.getByRole("button", { name: "Simpan pesanan" }).click();
-    await expect(page).toHaveURL(/\/orders\/[0-9a-f-]+$/, { timeout: 15_000 });
+    await openCreated(page, "/orders");
     const orderNo = (await page.locator("h1").textContent())!.trim();
     return { orderNo, url: page.url() };
   }
@@ -157,14 +158,14 @@ test("the packing queue renders correctly on a desktop-width browser: rows visib
   await page.locator("#purchase-qty").fill("10");
   await page.locator("#purchase-amount").fill("1.000.000");
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/purchases\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/purchases$/);
 
   await page.goto("/production/new");
   await page.locator("#batch-fabric").selectOption({ label: fabricName });
   await page.locator("#batch-fabric-yards").fill("10");
   await page.locator(`#qty-${sku}`).fill("3");
   await page.getByRole("button", { name: "Simpan draf" }).click();
-  await expect(page).toHaveURL(/\/production\/[0-9a-f-]+$/);
+  await openCreated(page, "/production");
   await page.getByRole("button", { name: "Posting ke stok" }).click();
   await page.getByRole("button", { name: "Posting", exact: true }).click();
   await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
@@ -178,7 +179,7 @@ test("the packing queue renders correctly on a desktop-width browser: rows visib
     await page.locator("#order-channel").selectOption({ label: "WhatsApp" });
     await page.locator(`#qty-${sku}`).fill(qty);
     await page.getByRole("button", { name: "Simpan pesanan" }).click();
-    await expect(page).toHaveURL(/\/orders\/[0-9a-f-]+$/, { timeout: 15_000 });
+    await openCreated(page, "/orders");
     return (await page.locator("h1").textContent())!.trim();
   }
   const orderANo = await createOrder("1");

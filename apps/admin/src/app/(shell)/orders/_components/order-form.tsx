@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Button, Input, Label, Select, Textarea } from "@ammari/ui";
+import { Button, Input, Label, Select, Textarea, useToast } from "@ammari/ui";
 import { MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
 import type { ChannelId } from "@ammari/db/schema";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
@@ -17,6 +17,7 @@ type CustomerMode = "none" | "existing" | "new";
 
 export function OrderForm({ channels, variants }: { channels: ChannelOption[]; variants: OrderableVariantRow[] }) {
   const router = useRouter();
+  const toast = useToast();
   const [channelId, setChannelId] = useState<ChannelId>(channels[0]?.id ?? "offline");
   const [channelOrderNo, setChannelOrderNo] = useState("");
   const [orderDate, setOrderDate] = useState(todayInJakarta());
@@ -106,7 +107,8 @@ export function OrderForm({ channels, variants }: { channels: ChannelOption[]; v
         setError(result.error);
         return;
       }
-      router.push(`/orders/${result.data.id}`);
+      toast.success("Pesanan berhasil ditambahkan");
+      router.push("/orders");
     });
   }
 

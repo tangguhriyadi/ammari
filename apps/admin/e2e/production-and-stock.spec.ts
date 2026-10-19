@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { loginAs } from "./helpers/login";
+import { openCreated } from "./helpers/open-created";
 import { E2E_PRODUCTION_STOCK_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -47,7 +48,7 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await page.goto("/accessories/new");
   await page.locator("#accessory-name").fill(accessoryName);
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/accessories\/[0-9a-f-]+$/);
+  await openCreated(page, "/accessories");
   const accessoryId = page.url().split("/accessories/")[1]!;
 
   await page.goto(`/products/${productId}`);
@@ -68,7 +69,7 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await page.locator("#purchase-qty").fill("10");
   await page.locator("#purchase-amount").fill("1.000.000");
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/purchases\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/purchases$/);
 
   await page.goto("/purchases/new");
   await page.locator("#purchase-type").selectOption({ label: "Aksesoris" });
@@ -76,7 +77,7 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await page.locator("#purchase-qty").fill("10");
   await page.locator("#purchase-amount").fill("20.000");
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/purchases\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/purchases$/);
 
   // 4. Create a cost component (variable, per pcs) on the management page — picked by the batch
   // form below.
@@ -104,7 +105,7 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   // quantity field to fill (it's computed from the batch's total pcs below).
   await page.getByLabel("M", { exact: true }).fill("5");
   await page.getByRole("button", { name: "Simpan draf" }).click();
-  await expect(page).toHaveURL(/\/production\/[0-9a-f-]+$/);
+  await openCreated(page, "/production");
 
   // 6. "Kebutuhan aksesoris" shows the resolved recipe need (1/pcs x 5 pcs = 5) against current
   // stock (10) — no shortage yet.
@@ -154,8 +155,9 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   // AND after it succeeds (isDirty becomes false) — so checking for it right after click can
   // pass WHILE the mutation is still pending, racing the next navigation. Wait for the in-flight
   // state (aria-busy) to clear first, THEN check the post-success disabled state.
-  await expect(saveCountButton).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
-  await expect(saveCountButton).toBeDisabled();
+  // A successful save redirects to /stock and raises the success toast.
+  await expect(page).toHaveURL(/\/stock$/, { timeout: 15_000 });
+  await expect(page.getByRole("status")).toContainText("Hitung stok berhasil disimpan");
 
   await page.goto(`/stock/${sku}`);
   await expect(page.getByText("10 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });

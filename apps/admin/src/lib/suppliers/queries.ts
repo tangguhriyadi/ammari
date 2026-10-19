@@ -12,7 +12,7 @@ import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 const SUPPLIER_CONSTRAINT_FIELDS = {
   suppliers_name_unique: {
     field: "name",
-    message: "Nama pemasok ini sudah terdaftar.",
+    message: "Nama supplier ini sudah terdaftar.",
   },
 };
 
@@ -102,7 +102,7 @@ export async function createSupplier(input: SupplierInput, actorStaffUserId: str
 export async function updateSupplier(id: string, input: SupplierInput, actorStaffUserId: string | null, db: Database = defaultDb) {
   return db.transaction(async (tx) => {
     const before = await getSupplierById(id, tx);
-    if (!before) throw new ActionError("Pemasok tidak ditemukan.");
+    if (!before) throw new ActionError("Supplier tidak ditemukan.");
     try {
       const [after] = await tx.update(suppliers).set(input).where(eq(suppliers.id, id)).returning();
       if (!after) throw new Error("failed to update supplier");
@@ -121,7 +121,7 @@ export async function updateSupplier(id: string, input: SupplierInput, actorStaf
 export async function setSupplierActive(id: string, isActive: boolean, actorStaffUserId: string | null, db: Database = defaultDb) {
   return db.transaction(async (tx) => {
     const before = await getSupplierById(id, tx);
-    if (!before) throw new ActionError("Pemasok tidak ditemukan.");
+    if (!before) throw new ActionError("Supplier tidak ditemukan.");
     const [after] = await tx.update(suppliers).set({ isActive }).where(eq(suppliers.id, id)).returning();
     if (!after) throw new Error("failed to update supplier");
     await writeAuditLog(tx, {

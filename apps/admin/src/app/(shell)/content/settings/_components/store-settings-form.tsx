@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Button, Input, Label, Textarea } from "@ammari/ui";
+import { Button, Input, Label, Textarea, useToast } from "@ammari/ui";
 import { saveStoreSettingsAction } from "../actions";
 
 export interface StoreSettingsFormValues {
@@ -17,7 +17,7 @@ export interface StoreSettingsFormValues {
 export function StoreSettingsForm({ initialValues }: { initialValues: StoreSettingsFormValues }) {
   const [values, setValues] = useState(initialValues);
   const [error, setError] = useState<string | null>(null);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const toast = useToast();
   const [pending, startTransition] = useTransition();
 
   function set<K extends keyof StoreSettingsFormValues>(key: K, value: StoreSettingsFormValues[K]) {
@@ -26,14 +26,13 @@ export function StoreSettingsForm({ initialValues }: { initialValues: StoreSetti
 
   function handleSave() {
     setError(null);
-    setSavedAt(null);
     startTransition(async () => {
       const result = await saveStoreSettingsAction(values);
       if (!result.ok) {
         setError(result.error);
         return;
       }
-      setSavedAt(Date.now());
+      toast.success("Perubahan berhasil disimpan");
     });
   }
 
@@ -85,8 +84,6 @@ export function StoreSettingsForm({ initialValues }: { initialValues: StoreSetti
           {error}
         </p>
       )}
-
-      {savedAt && !error && <p className="text-sm text-success-700">Tersimpan.</p>}
 
       <div className="flex justify-end">
         <Button type="button" onClick={handleSave} loading={pending}>

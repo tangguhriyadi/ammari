@@ -40,7 +40,7 @@ export function FabricList({ fabrics }: { fabrics: Fabric[] }) {
       <TableContainer>
         <TableHead>
           <Th>Nama</Th>
-          <Th>Pemasok</Th>
+          <Th>Supplier</Th>
           <Th>Komposisi</Th>
           <Th>Harga</Th>
           <Th>Dipakai</Th>

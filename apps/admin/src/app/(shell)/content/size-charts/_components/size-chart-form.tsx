@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Button, Input, Label } from "@ammari/ui";
+import { Button, Input, Label, useToast } from "@ammari/ui";
 import { CUTTING_SIZES, type CuttingSize } from "@ammari/db/schema";
 import { createSizeChartAction, deleteSizeChartAction, updateSizeChartAction } from "../actions";
 
@@ -45,6 +45,7 @@ export function SizeChartForm({
   productCount?: number;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const isCreate = !chartId;
   const [values, setValues] = useState<SizeChartFormValues>(initialValues ?? { name: "", rows: emptyRows() });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -77,7 +78,8 @@ export function SizeChartForm({
         setFieldErrors(result.fieldErrors ?? {});
         return;
       }
-      router.push(`/content/size-charts/${result.data.id}`);
+      toast.success(isCreate ? "Size chart berhasil ditambahkan" : "Perubahan berhasil disimpan");
+      router.push("/content/size-charts");
       router.refresh();
     });
   }

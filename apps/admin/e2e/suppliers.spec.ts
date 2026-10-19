@@ -34,14 +34,14 @@ function hiddenRowFor(page: Page, layout: Layout, name: string) {
  * database is shared across runs and both viewport passes, so an unscoped list would also hold
  * rows from earlier ones. */
 async function searchSuppliers(page: Page, marker: string): Promise<void> {
-  await page.getByLabel("Cari pemasok").fill(marker);
-  await page.getByLabel("Cari pemasok").press("Enter");
+  await page.getByLabel("Cari supplier").fill(marker);
+  await page.getByLabel("Cari supplier").press("Enter");
   await page.waitForLoadState("networkidle");
 }
 
 async function runSupplierFlow(page: Page, layout: Layout): Promise<void> {
   const marker = `${layout.label}-${Date.now()}`;
-  const name = `E2E Pemasok ${marker}`;
+  const name = `E2E Supplier ${marker}`;
 
   // 1. "Batal" on the create form goes back to the list without creating anything.
   await page.goto("/suppliers/new");
@@ -50,8 +50,15 @@ async function runSupplierFlow(page: Page, layout: Layout): Promise<void> {
 
   // 2. A NAME ALONE is enough (plan D13) — every other field is left blank on purpose.
   await page.goto("/suppliers/new");
-  await page.getByLabel("Nama pemasok").fill(name);
+  await page.getByLabel("Nama supplier").fill(name);
   await page.getByRole("button", { name: "Simpan", exact: true }).click();
+  // Create redirects to the LIST and raises a success toast (role=status), exactly once.
+  await expect(page).toHaveURL(/\/suppliers$/);
+  await expect(page.getByRole("status")).toContainText("Supplier berhasil ditambahkan");
+  await page.reload();
+  await expect(page.getByRole("status")).toBeEmpty();
+  await searchSuppliers(page, marker);
+  await rowFor(page, layout, name).getByRole("link", { name }).click();
   await expect(page).toHaveURL(/\/suppliers\/[0-9a-f-]+$/);
   const supplierUrl = page.url();
   await expect(page.getByRole("heading", { name })).toBeVisible();
@@ -71,7 +78,10 @@ async function runSupplierFlow(page: Page, layout: Layout): Promise<void> {
   await page.getByLabel("Nomor rekening").fill("1234567890");
   await page.getByLabel("Nama pemilik rekening").fill(`Pemilik ${marker}`);
   await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await page.waitForLoadState("networkidle");
+  // Edit also lands on the list, with the generic "saved" toast; the unsaved-changes guard
+  // never prompts on the redirect after a successful save (a dialog would hang this test).
+  await expect(page).toHaveURL(/\/suppliers$/);
+  await expect(page.getByRole("status")).toContainText("Perubahan berhasil disimpan");
 
   await page.goto(supplierUrl);
   await expect(page.getByLabel("Nama bank")).toHaveValue("BCA");
@@ -110,7 +120,7 @@ async function runSupplierFlow(page: Page, layout: Layout): Promise<void> {
   await expect(rowFor(page, layout, name).getByText("Nonaktif")).toHaveCount(0, { timeout: 15_000 });
 }
 
-test.describe("Data Master: Pemasok", () => {
+test.describe("Data Master: Supplier", () => {
   test("create with only a name, edit to add bank details, deactivate and filter — at 390px and 1280px", async ({ page }) => {
     await loginAs(page, E2E_SUPPLIERS_EMAIL);
 
@@ -123,16 +133,16 @@ test.describe("Data Master: Pemasok", () => {
 
   test("a duplicate name is refused, case-insensitively, with the message on the form", async ({ page }) => {
     await loginAs(page, E2E_SUPPLIERS_EMAIL);
-    const name = `E2E Pemasok Duplikat ${Date.now()}`;
+    const name = `E2E Supplier Duplikat ${Date.now()}`;
 
     await page.goto("/suppliers/new");
-    await page.getByLabel("Nama pemasok").fill(name);
+    await page.getByLabel("Nama supplier").fill(name);
     await page.getByRole("button", { name: "Simpan", exact: true }).click();
-    await expect(page).toHaveURL(/\/suppliers\/[0-9a-f-]+$/);
+    await expect(page).toHaveURL(/\/suppliers$/);
 
     // Same name in a different case — `suppliers.name` is citext, so this must collide.
     await page.goto("/suppliers/new");
-    await page.getByLabel("Nama pemasok").fill(name.toUpperCase());
+    await page.getByLabel("Nama supplier").fill(name.toUpperCase());
     await page.getByRole("button", { name: "Simpan", exact: true }).click();
     // Scoped to the form's own alert paragraph — a bare getByRole("alert") also matches Next's
     // always-present route announcer (`#__next-route-announcer__`), which is empty.
@@ -140,13 +150,13 @@ test.describe("Data Master: Pemasok", () => {
     await expect(page).toHaveURL(/\/suppliers\/new$/);
   });
 
-  test("Pemasok sits in the Data Master nav group", async ({ page }) => {
+  test("Supplier sits in the Data Master nav group", async ({ page }) => {
     await loginAs(page, E2E_SUPPLIERS_EMAIL);
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/suppliers");
 
     const nav = page.getByRole("navigation", { name: "Navigasi utama" });
-    await expect(nav.getByRole("link", { name: "Pemasok" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Supplier" })).toBeVisible();
     await expect(nav.getByText("Data Master")).toBeVisible();
   });
 });

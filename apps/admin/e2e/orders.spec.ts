@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { loginAs } from "./helpers/login";
+import { openCreated } from "./helpers/open-created";
 import { E2E_ORDERS_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -42,7 +43,7 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
   await page.locator("#purchase-qty").fill("10");
   await page.locator("#purchase-amount").fill("1.000.000");
   await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/purchases\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/purchases$/);
 
   await page.goto("/production/new");
   await page.locator("#batch-fabric").selectOption({ label: fabricName });
@@ -50,7 +51,7 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
   await expect(page.getByText("Rp 1.000.000")).toBeVisible(); // the live fabric-cost estimate
   await page.getByLabel("M", { exact: true }).fill("5");
   await page.getByRole("button", { name: "Simpan draf" }).click();
-  await expect(page).toHaveURL(/\/production\/[0-9a-f-]+$/);
+  await openCreated(page, "/production");
 
   await page.getByRole("button", { name: "Posting ke stok" }).click();
   await page.getByRole("button", { name: "Posting", exact: true }).click();
@@ -70,7 +71,7 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
   // unambiguous.
   await page.locator(`#qty-${sku}`).fill("2");
   await page.getByRole("button", { name: "Simpan pesanan" }).click();
-  await expect(page).toHaveURL(/\/orders\/[0-9a-f-]+$/, { timeout: 15_000 });
+  await openCreated(page, "/orders");
   const orderUrl = page.url();
 
   // 4. The order detail shows "Siap Kirim" and the snapshotted HPP (Rp 200.000/pcs, from the

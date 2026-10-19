@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Button, Input, Label, Select, Switch } from "@ammari/ui";
+import { Button, Input, Label, Select, Switch, useToast } from "@ammari/ui";
 import { COST_COMPONENT_TYPES, COST_COMPONENT_UNITS, type CostComponentType, type CostComponentUnit } from "@ammari/db/schema";
 import { createCostComponentAction, updateCostComponentAction } from "../actions";
 
@@ -39,6 +39,7 @@ export type CostComponentFormProps =
 export function CostComponentForm(props: CostComponentFormProps) {
   const { initialValues } = props;
   const router = useRouter();
+  const toast = useToast();
   const [name, setName] = useState(initialValues.name);
   const [unit, setUnit] = useState<CostComponentUnit>(initialValues.unit);
   const [costType, setCostType] = useState<CostComponentType>(initialValues.costType);
@@ -60,6 +61,7 @@ export function CostComponentForm(props: CostComponentFormProps) {
         setError(result.error);
         return;
       }
+      toast.success(props.mode === "create" ? "Komponen biaya berhasil ditambahkan" : "Perubahan berhasil disimpan");
       router.push("/production/cost-components");
     });
   }

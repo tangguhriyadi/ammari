@@ -7,8 +7,8 @@ export default async function NewSupplierPage() {
   await requirePermission("inventory.manage");
   return (
     <>
-      <Breadcrumb items={[...rootCrumbs("/suppliers"), { label: "Tambah pemasok" }]} />
-      <PageHeader title="Tambah Pemasok" />
+      <Breadcrumb items={[...rootCrumbs("/suppliers"), { label: "Tambah supplier" }]} />
+      <PageHeader title="Tambah Supplier" />
       <SupplierForm
         mode="create"
         initialValues={{

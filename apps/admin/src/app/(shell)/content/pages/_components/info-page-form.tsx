@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Button, Card, Input, Label } from "@ammari/ui";
+import { Button, Card, Input, Label, useToast } from "@ammari/ui";
 import type { InfoPageSlug } from "@ammari/db/schema";
 import { RichTextEditor } from "@/app/(shell)/products/_components/rich-text-editor";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
@@ -29,6 +29,7 @@ export function InfoPageForm({
   initialHasUnpublishedChanges: boolean;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [values, setValues] = useState(initialValues);
   const [publishedState, setPublishedState] = useState(isPublished);
   const [savedValues, setSavedValues] = useState(initialValues);
@@ -57,6 +58,9 @@ export function InfoPageForm({
       }
       setSavedValues(values);
       if (publishedState) setHasUnpublishedChanges(true);
+      // Stays on the editor (no redirect to /content/pages): save draft -> Terbitkan and the
+      // unpublished-changes banner all live on this page, so leaving it would break that flow.
+      toast.success("Perubahan berhasil disimpan");
       router.refresh();
     });
   }

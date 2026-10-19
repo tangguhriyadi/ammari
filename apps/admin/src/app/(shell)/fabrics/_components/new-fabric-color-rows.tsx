@@ -86,7 +86,7 @@ export function NewFabricColorRows({
                   />
                 </div>
                 <div className="flex flex-1 flex-col gap-1.5 sm:min-w-32">
-                  <Label htmlFor={`new-color-supplier-${row.key}`}>Kode pemasok (opsional)</Label>
+                  <Label htmlFor={`new-color-supplier-${row.key}`}>Kode supplier (opsional)</Label>
                   <Input
                     id={`new-color-supplier-${row.key}`}
                     value={row.supplierColorCode}

@@ -26,4 +26,5 @@ export {
   Td,
   CardList,
 } from "./Table";
+export { ToastProvider, useToast, type ToastApi, type ToastVariant } from "./Toast";
 export { cn } from "../lib/cn";

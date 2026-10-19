@@ -42,7 +42,7 @@ export default async function PurchaseDetailPage({ params }: { params: Promise<{
         <Row label="Jumlah" value={`${qtyLabel} ${unitLabel}`} />
         {purchase.totalAmountPaid !== null && <Row label="Total dibayar" value={formatRupiah(purchase.totalAmountPaid)} />}
         {unitPrice !== null && <Row label="Harga satuan" value={`≈ ${formatRupiah(unitPrice)}/${unitLabel} (otomatis)`} />}
-        <Row label="Pemasok" value={purchase.supplier ?? "—"} />
+        <Row label="Supplier" value={purchase.supplier ?? "—"} />
         {purchase.note && <Row label="Catatan" value={purchase.note} />}
         <Row
           label="Dicatat"

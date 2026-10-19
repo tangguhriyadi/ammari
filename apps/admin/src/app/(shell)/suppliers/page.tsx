@@ -27,12 +27,12 @@ export default async function SuppliersPage({
     <>
       <Breadcrumb items={rootCrumbs("/suppliers")} />
       <PageHeader
-        title="Pemasok"
-        description="Daftar pemasok kain, aksesoris, dan penjahit beserta kontak dan rekeningnya."
+        title="Supplier"
+        description="Daftar supplier kain, aksesoris, dan penjahit beserta kontak dan rekeningnya."
         actions={
           canManage ? (
             <Link href="/suppliers/new">
-              <Button>Tambah pemasok</Button>
+              <Button>Tambah supplier</Button>
             </Link>
           ) : undefined
         }
@@ -43,11 +43,11 @@ export default async function SuppliersPage({
           paramName="status"
           options={ACTIVE_FILTER_OPTIONS}
           activeValue={activeFilter}
-          aria-label="Filter status pemasok"
+          aria-label="Filter status supplier"
         />
         <form method="GET">
           {rawStatus && <input type="hidden" name="status" value={rawStatus} />}
-          <Input name="q" defaultValue={q ?? ""} placeholder="Cari nama pemasok..." aria-label="Cari pemasok" />
+          <Input name="q" defaultValue={q ?? ""} placeholder="Cari nama supplier..." aria-label="Cari supplier" />
         </form>
         <SupplierList
           // Projected explicitly, not spread: the list needs four fields, and address/bank
@@ -61,7 +61,7 @@ export default async function SuppliersPage({
         pagination={pagination}
         basePath="/suppliers"
         searchParams={{ q, status: rawStatus, perPage }}
-        itemLabel="pemasok"
+        itemLabel="supplier"
       />
     </>
   );

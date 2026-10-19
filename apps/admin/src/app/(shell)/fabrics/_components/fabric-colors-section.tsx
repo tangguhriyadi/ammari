@@ -92,8 +92,8 @@ function ColorRow({ color, usageCount }: { color: FabricColorRow; usageCount: nu
         <Input
           value={supplierColorCode}
           onChange={(event) => setSupplierColorCode(event.target.value)}
-          aria-label="Kode warna pemasok"
-          placeholder="Kode pemasok"
+          aria-label="Kode warna supplier"
+          placeholder="Kode supplier"
           className="w-32"
           disabled={pending}
         />
@@ -185,7 +185,7 @@ function AddColorForm({ fabricId }: { fabricId: string }) {
           <Input id="new-fabric-color-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="mis. Sage" disabled={pending} />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="new-fabric-color-supplier-code">Kode pemasok (opsional)</Label>
+          <Label htmlFor="new-fabric-color-supplier-code">Kode supplier (opsional)</Label>
           <Input
             id="new-fabric-color-supplier-code"
             value={supplierColorCode}

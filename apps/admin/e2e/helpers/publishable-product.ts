@@ -69,7 +69,7 @@ export async function createSizeChart(page: Page, name: string): Promise<void> {
     await page.getByLabel(`Tinggi badan maksimum untuk ukuran ${size}`).fill("165");
   }
   await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await expect(page).toHaveURL(/\/content\/size-charts\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/content\/size-charts$/);
 }
 
 /** Full round trip: a photo-ready product (see above), a size chart assigned, and the

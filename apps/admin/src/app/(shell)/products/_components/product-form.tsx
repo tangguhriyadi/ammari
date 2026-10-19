@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Button, Input, Label, Select, Switch, Textarea } from "@ammari/ui";
+import { Button, Input, Label, Select, Switch, Textarea, useToast } from "@ammari/ui";
 import type { ProductClosure, SizeMode } from "@ammari/db/schema";
 import type { ProductHighlightKey } from "@ammari/db/highlights";
 import { generateProductCode, generateSlug } from "@ammari/db/catalog";
@@ -56,6 +56,7 @@ export function ProductForm({
   hasVariants?: boolean;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const isCreate = !productId;
   const [values, setValues] = useState<ProductFormValues>(initialValues ?? EMPTY_VALUES);
   const [codeTouched, setCodeTouched] = useState(false);
@@ -115,8 +116,17 @@ export function ProductForm({
       }
       // Only updateProductAction's result carries `revalidationOk` — createProductAction has
       // nothing to revalidate yet (a brand-new product is never published on the storefront).
-      if ("revalidationOk" in result.data) setRevalidationWarning(!result.data.revalidationOk);
-      router.push(`/products/${result.data.id}`);
+      if ("revalidationOk" in result.data && !result.data.revalidationOk) {
+        // Saved, but the storefront is stale: stay on the form so this warning (and its retry
+        // button) stays visible instead of being lost to a redirect.
+        setRevalidationWarning(true);
+        router.refresh();
+        return;
+      }
+      toast.success(productId ? "Perubahan berhasil disimpan" : "Produk berhasil ditambahkan");
+      // Create is the one exception to "redirect to the list": land on the new product's detail
+      // page so variants and photos can be added right away. Edit goes back to the list.
+      router.push(productId ? "/products" : `/products/${result.data.id}`);
       router.refresh();
     });
   }

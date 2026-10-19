@@ -51,7 +51,7 @@ export function PurchaseList({ rows }: { rows: PurchaseListRow[] }) {
         <TableHead>
           <Th>Item</Th>
           <Th>Tanggal</Th>
-          <Th>Pemasok</Th>
+          <Th>Supplier</Th>
           <Th>Jumlah</Th>
           <Th>Total dibayar</Th>
           <Th>Status</Th>

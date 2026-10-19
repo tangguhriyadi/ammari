@@ -144,7 +144,7 @@ test.describe("Konten: Pengaturan Toko", () => {
     await page.getByLabel("Alamat").fill("Jl. Contoh Admin E2E No. 1");
     await page.getByLabel("Ringkasan kebijakan tukar/retur").fill("Tukar ukuran dalam 3 hari (admin e2e)");
     await page.getByRole("button", { name: "Simpan" }).click();
-    await expect(page.getByText("Tersimpan.")).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("Perubahan berhasil disimpan");
 
     // Reload and confirm it persisted, normalized to wa.me format (62..., no leading 0).
     await page.setViewportSize({ width: 1280, height: 800 });
@@ -159,7 +159,7 @@ test.describe("Konten: Pengaturan Toko", () => {
     await page.getByLabel("Nomor WhatsApp").fill("12345");
     await page.getByRole("button", { name: "Simpan" }).click();
     await expect(page.getByRole("alert")).toBeVisible();
-    await expect(page.getByText("Tersimpan.")).toHaveCount(0);
+    await expect(page.getByRole("status")).toBeEmpty();
   });
 
   test("a staff user without content.manage is denied /content/settings and never sees the Pengaturan Toko nav item", async ({ page }) => {

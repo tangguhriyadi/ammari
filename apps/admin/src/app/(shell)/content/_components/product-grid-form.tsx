@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
-import { Button, ColorSwatch, Input, Label, Switch } from "@ammari/ui";
+import { Button, ColorSwatch, Input, Label, Switch, useToast } from "@ammari/ui";
 import type { PublishableProductOption } from "@/lib/content/homepage";
 import { HOMEPAGE_SECTION_LABELS, unpublishedSectionsBannerText } from "@/lib/content/homepage-types";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
@@ -36,6 +36,7 @@ export function ProductGridForm({
   initialUnpublishedSectionLabels: string[];
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [values, setValues] = useState(initialValues);
   const [savedValues, setSavedValues] = useState(initialValues);
   const [unpublishedSectionLabels, setUnpublishedSectionLabels] = useState(initialUnpublishedSectionLabels);
@@ -81,6 +82,7 @@ export function ProductGridForm({
       }
       setSavedValues(values);
       setUnpublishedSectionLabels((prev) => (prev.includes(SECTION_LABEL) ? prev : [...prev, SECTION_LABEL]));
+      toast.success("Perubahan berhasil disimpan");
       router.refresh();
     });
   }
@@ -94,6 +96,7 @@ export function ProductGridForm({
         return;
       }
       setUnpublishedSectionLabels([]);
+      toast.success("Beranda berhasil diterbitkan");
     });
   }
 

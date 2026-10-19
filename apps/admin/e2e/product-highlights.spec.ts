@@ -56,13 +56,14 @@ test.describe("product highlights (Keunggulan)", () => {
     // same page for an owner session (owner holds content.manage too).
     await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
     await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
+    const mobileUrl = page.url();
     // Lets the click's OWN client-side router.push/refresh fully settle before the next line's
     // hard navigation — firing `page.goto` immediately after races that in-flight navigation
     // and can intermittently land on a stale pre-save snapshot (docs/plans/product-highlights.md
     // records the earlier debugging session that tracked this down to a test-timing issue, not
     // an actual persistence bug — confirmed by querying the database directly at the time).
     await page.waitForLoadState("networkidle");
-    await page.goto(page.url());
+    await page.goto(mobileUrl);
 
     expect(await checkedHighlightLabels(page)).toEqual([BREATHABLE, FALLS_PERFECTLY]);
     await expect(page.getByTestId("highlights-counter")).toHaveText("2/5");
@@ -75,9 +76,9 @@ test.describe("product highlights (Keunggulan)", () => {
     // page.goto(page.url()) above), where the Storefront section's own "Simpan" button also
     // renders for this owner session (see the scoping note earlier in this test).
     await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
-    await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
     await page.waitForLoadState("networkidle");
-    await page.goto(page.url());
+    await page.waitForLoadState("networkidle");
+    await page.goto(mobileUrl);
     expect(await checkedHighlightLabels(page)).toEqual([FLOWY, FALLS_PERFECTLY]);
 
     // Read-only on the list page too (mobile CardList), in canonical order ("Flowy" before
@@ -100,8 +101,9 @@ test.describe("product highlights (Keunggulan)", () => {
     await expect(page.getByTestId("highlights-counter")).toHaveText("5/5");
     await page.getByRole("button", { name: "Simpan", exact: true }).click();
     await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
+    const desktopUrl = page.url();
     await page.waitForLoadState("networkidle");
-    await page.goto(page.url());
+    await page.goto(desktopUrl);
     expect(await checkedHighlightLabels(page)).toEqual([BREATHABLE, FLOWY, FALLS_PERFECTLY, "Bahan sejuk", "Tidak menerawang"]);
 
     // Uncheck down to 2.
@@ -111,9 +113,9 @@ test.describe("product highlights (Keunggulan)", () => {
     await expect(page.getByTestId("highlights-counter")).toHaveText("2/5");
     // Scoped to the form — same reasoning as the earlier edit-page click above.
     await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
-    await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
     await page.waitForLoadState("networkidle");
-    await page.goto(page.url());
+    await page.waitForLoadState("networkidle");
+    await page.goto(desktopUrl);
     expect(await checkedHighlightLabels(page)).toEqual([BREATHABLE, FLOWY]);
 
     // Read-only on the list page too (desktop TableContainer).

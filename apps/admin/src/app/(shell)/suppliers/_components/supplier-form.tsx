@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Button, Checkbox, Input, Label, Switch, Textarea } from "@ammari/ui";
+import { Button, Checkbox, Input, Label, Switch, Textarea, useToast } from "@ammari/ui";
 import { SUPPLIER_KIND_OPTIONS, SUPPLIER_KINDS, type SupplierKind } from "@/lib/suppliers/kinds";
 import { createSupplierAction, updateSupplierAction } from "../actions";
 
@@ -29,6 +29,7 @@ export type SupplierFormProps =
 export function SupplierForm(props: SupplierFormProps) {
   const { initialValues } = props;
   const router = useRouter();
+  const toast = useToast();
   const [name, setName] = useState(initialValues.name);
   const [kinds, setKinds] = useState<SupplierKind[]>(initialValues.kinds);
   const [phone, setPhone] = useState(initialValues.phone);
@@ -57,12 +58,11 @@ export function SupplierForm(props: SupplierFormProps) {
         setError(result.error);
         return;
       }
-      router.push(`/suppliers/${result.data.id}`);
-      // In "edit" mode that push targets the page the user is ALREADY on (detail and edit are
-      // one route here, unlike /accessories' separate /edit page), so the router can satisfy it
-      // from its own cache and leave the header above this form showing the pre-save name and
-      // phone. refresh() re-renders the Server Component for real.
-      if (props.mode === "edit") router.refresh();
+      toast.success(props.mode === "create" ? "Supplier berhasil ditambahkan" : "Perubahan berhasil disimpan");
+      router.push("/suppliers");
+      // refresh() so the list (and the detail page behind it) re-render with the saved data
+      // instead of the router's cached copy.
+      router.refresh();
     });
   }
 
@@ -76,7 +76,7 @@ export function SupplierForm(props: SupplierFormProps) {
     >
       <div>
         <Label htmlFor="supplier-name" required>
-          Nama pemasok
+          Nama supplier
         </Label>
         <Input id="supplier-name" value={name} onChange={(event) => setName(event.target.value)} />
       </div>

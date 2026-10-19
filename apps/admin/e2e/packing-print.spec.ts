@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
+import { openCreated } from "./helpers/open-created";
 import { E2E_PACKING_PRINT_EMAIL, E2E_PACKING_PRINT_WEBKIT_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -76,6 +77,7 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
     const code = await page.getByLabel("Kode produk").inputValue();
     await page.getByRole("switch", { name: "Aktif" }).click();
     await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan" }), /\/products\/[0-9a-f-]+$/);
+    await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
 
     await page.getByRole("checkbox", { name: /Print/ }).check();
     await page.getByRole("checkbox", { name: "M", exact: true }).check();
@@ -88,13 +90,14 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
     await page.locator("#purchase-item").selectOption({ label: fabricName });
     await page.locator("#purchase-qty").fill("10");
     await page.locator("#purchase-amount").fill("1.000.000");
-    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan" }), /\/purchases\/[0-9a-f-]+$/);
+    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan" }), /\/purchases$/);
 
     await page.goto("/production/new");
     await page.locator("#batch-fabric").selectOption({ label: fabricName });
     await page.locator("#batch-fabric-yards").fill("10");
     await page.locator(`#qty-${sku}`).fill("2");
-    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan draf" }), /\/production\/[0-9a-f-]+$/);
+    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan draf" }), /\/production$/);
+    await openCreated(page, "/production");
     await page.getByRole("button", { name: "Posting ke stok" }).click();
     await page.getByRole("button", { name: "Posting", exact: true }).click();
     await expect(page.getByRole("button", { name: "Posting ke stok" })).toHaveCount(0, { timeout: 15_000 });
@@ -103,7 +106,8 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
       await page.goto("/orders/new");
       await page.locator("#order-channel").selectOption({ label: "WhatsApp" });
       await page.locator(`#qty-${sku}`).fill("1");
-      await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan pesanan" }), /\/orders\/[0-9a-f-]+$/);
+      await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan pesanan" }), /\/orders$/);
+      await openCreated(page, "/orders");
       return (await page.locator("h1").textContent())!.trim();
     }
     const orderANo = await createOrder();

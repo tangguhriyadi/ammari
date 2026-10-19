@@ -46,7 +46,7 @@ describe("supplier actions require inventory.manage", () => {
 describe("supplier input validation", () => {
   test("a blank name is refused with an Indonesian message, before any database write", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
-    await expect(createSupplierAction({ name: "   " })).resolves.toEqual({ ok: false, error: "Nama pemasok wajib diisi." });
+    await expect(createSupplierAction({ name: "   " })).resolves.toEqual({ ok: false, error: "Nama supplier wajib diisi." });
   });
 
   test("a kind outside SUPPLIER_KINDS is refused, not stored", async () => {
@@ -60,7 +60,7 @@ describe("supplier input validation", () => {
   test("a duplicated kind is refused", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
     const result = await createSupplierAction({ name: "Toko Laksmi", kinds: ["fabric", "fabric"] });
-    expect(result).toEqual({ ok: false, error: "Jenis pemasok tidak boleh duplikat." });
+    expect(result).toEqual({ ok: false, error: "Jenis supplier tidak boleh duplikat." });
   });
 
   test("setSupplierActiveAction refuses a non-uuid id", async () => {

@@ -98,7 +98,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     href: "/products",
     icon: Package,
     // Renamed from "Katalog" (docs/plans/suppliers-goods-receipt.md D12): the group now holds
-    // Pemasok too, which is master data rather than anything in the product catalog. Group
+    // Supplier too, which is master data rather than anything in the product catalog. Group
     // labels are derived from this file only — nothing asserts the string, and rootCrumbs()
     // reads it straight back out for the breadcrumb.
     group: "Data Master",
@@ -125,7 +125,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     // The supplier master (docs/plans/suppliers-goods-receipt.md, session 1). Same
     // inventory.view/inventory.manage split as Aksesoris — reading the list needs
     // `inventory.view`, every write needs `inventory.manage`; no new permission key.
-    label: "Pemasok",
+    label: "Supplier",
     href: "/suppliers",
     icon: Truck,
     group: "Data Master",

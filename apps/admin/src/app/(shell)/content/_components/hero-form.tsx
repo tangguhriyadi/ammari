@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Button, Input, Label, Switch, Textarea } from "@ammari/ui";
+import { Button, Input, Label, Switch, Textarea, useToast } from "@ammari/ui";
 import type { PublishableProductOption } from "@/lib/content/homepage";
 import { HOMEPAGE_SECTION_LABELS, unpublishedSectionsBannerText } from "@/lib/content/homepage-types";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
@@ -49,6 +49,7 @@ export function HeroForm({
   initialUnpublishedSectionLabels: string[];
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [values, setValues] = useState(initialValues);
   const [savedValues, setSavedValues] = useState(initialValues);
   const [unpublishedSectionLabels, setUnpublishedSectionLabels] = useState(initialUnpublishedSectionLabels);
@@ -85,6 +86,7 @@ export function HeroForm({
       }
       setSavedValues(values);
       setUnpublishedSectionLabels((prev) => (prev.includes(SECTION_LABEL) ? prev : [...prev, SECTION_LABEL]));
+      toast.success("Perubahan berhasil disimpan");
       router.refresh();
     });
   }
@@ -99,6 +101,7 @@ export function HeroForm({
       }
       // Atomic publish — ALL sections are now in sync with their draft, not just this one.
       setUnpublishedSectionLabels([]);
+      toast.success("Beranda berhasil diterbitkan");
     });
   }
 
