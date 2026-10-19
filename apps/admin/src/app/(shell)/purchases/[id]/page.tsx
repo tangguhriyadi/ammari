@@ -1,22 +1,205 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { notFound } from "next/navigation";
-import { PageHeader, Badge, Breadcrumb } from "@ammari/ui";
+import { notFound, redirect } from "next/navigation";
+import { PageHeader, Badge, Breadcrumb, Button, Card, CardList, TableContainer, TableHead, Th, Tr, Td } from "@ammari/ui";
 import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
+import type { StaffSessionData } from "@ammari/auth/staff";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { getPurchaseById, stripPurchaseAmount } from "@/lib/inventory/purchases";
+import { getPurchaseById, stripPurchaseAmount, type PurchaseDetail } from "@/lib/inventory/purchases";
+import { formatPurchaseQty, getPurchaseDocument, isUuid, stripPurchaseDocumentAmounts, type PurchaseDocument } from "@/lib/purchases/queries";
+import { isOpenPurchaseStatus } from "@/lib/purchases/status";
+import { findPurchaseIdForReceiptMovement, listReceiptsForPurchase, type PurchaseReceiptRow } from "@/lib/receipts/queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { ClosePurchaseButton } from "../_components/close-purchase-button";
+import { PurchaseStatusBadge } from "../_components/purchase-status-badge";
+import { ReverseReceiptButton } from "../_components/reverse-receipt-button";
 import { VoidPurchaseButton } from "../_components/void-purchase-button";
+
+/** One route, three kinds of id: a purchase DOCUMENT (the normal case); a LEGACY single-row
+ * purchase movement (D11, linked from /purchases/legacy and the stock ledgers); or a ledger row a
+ * goods receipt wrote (the stock ledgers link every 'purchase' row here), which redirects to its
+ * document. */
+export default async function PurchaseDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const session = await requirePermission("inventory.view");
+  const { id } = await params;
+  if (!isUuid(id)) notFound();
+
+  const document = await getPurchaseDocument(id);
+  if (document) return <PurchaseDocumentView document={document} session={session} />;
+
+  const legacy = await getPurchaseById(id);
+  if (legacy) return <LegacyPurchaseView purchaseRaw={legacy} session={session} />;
+
+  const documentId = await findPurchaseIdForReceiptMovement(id);
+  if (documentId) redirect(`/purchases/${documentId}`);
+  notFound();
+}
+
+async function PurchaseDocumentView({ document: documentRaw, session }: { document: PurchaseDocument; session: StaffSessionData }) {
+  const canViewProfit = session.permissionKeys.includes("finance.view_profit");
+  const canManage = session.permissionKeys.includes("inventory.manage");
+  const canReceive = session.permissionKeys.includes("inventory.receive");
+  const document = stripPurchaseDocumentAmounts(documentRaw, canViewProfit);
+  const receipts = await listReceiptsForPurchase(document.id);
+
+  const isOpen = isOpenPurchaseStatus(document.status);
+  const canEdit = canManage && canViewProfit && document.status === "ordered" && !document.hasReceipts;
+  const nothingArrived = document.lines.every((line) => line.accepted === 0);
+  const total = canViewProfit ? document.lines.reduce((sum, line) => sum + (line.totalAmountPaid ?? 0), 0) : null;
+
+  return (
+    <>
+      <Breadcrumb items={[...rootCrumbs("/purchases"), { label: document.purchaseNo }]} />
+      <div className="flex items-center justify-between gap-2">
+        <PageHeader title={document.purchaseNo} description={`Pesanan pembelian · ${formatDate(new Date(document.orderedAt))}`} />
+        <PurchaseStatusBadge status={document.status} />
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
+        <Row
+          label="Supplier"
+          value={
+            <Link href={`/suppliers/${document.supplierId}`} className="font-medium text-brand hover:underline">
+              {document.supplierName}
+            </Link>
+          }
+        />
+        {total !== null && <Row label="Total pesanan" value={formatRupiah(total)} />}
+        {document.notes && <Row label="Catatan" value={document.notes} />}
+        <Row label="Dibuat" value={`${formatDateTime(document.createdAt)}${document.createdByName ? ` · ${document.createdByName}` : ""}`} />
+        {document.closedAt && (
+          <>
+            <Row
+              label={document.status === "cancelled" ? "Dibatalkan" : "Ditutup"}
+              value={`${formatDateTime(document.closedAt)}${document.closedByName ? ` · ${document.closedByName}` : ""}`}
+            />
+            {document.closeReason && <Row label="Alasan" value={document.closeReason} />}
+          </>
+        )}
+      </div>
+
+      {(isOpen && (canReceive || canManage)) || canEdit ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {isOpen && canReceive && (
+            <Link href={`/purchases/${document.id}/receive`}>
+              <Button>Terima barang</Button>
+            </Link>
+          )}
+          {canEdit && (
+            <Link href={`/purchases/${document.id}/edit`}>
+              <Button variant="secondary">Ubah pesanan</Button>
+            </Link>
+          )}
+          {isOpen && canManage && <ClosePurchaseButton purchaseId={document.id} nothingArrived={nothingArrived} />}
+        </div>
+      ) : null}
+
+      <h2 className="mt-6 mb-3 text-lg font-semibold text-neutral-900">Barang</h2>
+      <PurchaseLines document={document} />
+
+      <h2 className="mt-6 mb-3 text-lg font-semibold text-neutral-900">Riwayat penerimaan</h2>
+      <ReceiptHistory receipts={receipts} canReverse={canManage} />
+    </>
+  );
+}
+
+function PurchaseLines({ document }: { document: PurchaseDocument }) {
+  const showTotals = document.lines.some((line) => line.totalAmountPaid !== null);
+  return (
+    <>
+      <CardList>
+        {document.lines.map((line) => (
+          <li key={line.id}>
+            <Card className="flex flex-col gap-2">
+              <p className="text-base font-medium text-neutral-900">{line.itemName}</p>
+              <dl className="grid grid-cols-3 gap-2 text-sm">
+                <QtyCell label="Dipesan" value={formatPurchaseQty(line.itemType, line.qtyOrdered)} />
+                <QtyCell label="Diterima" value={formatPurchaseQty(line.itemType, line.accepted)} />
+                <QtyCell label="Sisa" value={formatPurchaseQty(line.itemType, line.outstanding)} />
+              </dl>
+              {line.totalAmountPaid !== null && <p className="text-sm text-neutral-600">Total dibayar {formatRupiah(line.totalAmountPaid)}</p>}
+            </Card>
+          </li>
+        ))}
+      </CardList>
+      <TableContainer>
+        <TableHead>
+          <Th>Barang</Th>
+          <Th>Dipesan</Th>
+          <Th>Diterima</Th>
+          <Th>Sisa</Th>
+          {showTotals && <Th>Total dibayar</Th>}
+        </TableHead>
+        <tbody>
+          {document.lines.map((line) => (
+            <Tr key={line.id}>
+              <Td className="font-medium text-neutral-900">{line.itemName}</Td>
+              <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.qtyOrdered)}</Td>
+              <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.accepted)}</Td>
+              <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.outstanding)}</Td>
+              {showTotals && <Td className="tabular-nums text-neutral-700">{line.totalAmountPaid !== null ? formatRupiah(line.totalAmountPaid) : "-"}</Td>}
+            </Tr>
+          ))}
+        </tbody>
+      </TableContainer>
+    </>
+  );
+}
+
+function QtyCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-neutral-600">{label}</dt>
+      <dd className="tabular-nums text-neutral-900">{value}</dd>
+    </div>
+  );
+}
+
+function ReceiptHistory({ receipts, canReverse }: { receipts: PurchaseReceiptRow[]; canReverse: boolean }) {
+  if (receipts.length === 0) return <p className="text-base text-neutral-600">Belum ada barang yang diterima.</p>;
+  return (
+    <ul className="flex flex-col gap-3">
+      {receipts.map((receipt) => (
+        <li key={receipt.id} data-testid="receipt-row">
+          <Card className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-base font-medium text-neutral-900">
+                {receipt.receiptNo}
+                {receipt.kind === "reversal" && <span className="ml-2 text-sm font-normal text-neutral-600">Pembatalan {receipt.reversesReceiptNo}</span>}
+              </p>
+              {receipt.reversedAt !== null && <Badge variant="neutral">Dibatalkan</Badge>}
+            </div>
+            <p className="text-sm text-neutral-600">
+              Diterima {formatDate(new Date(receipt.receivedAt))}
+              {receipt.receivedByName ? ` oleh ${receipt.receivedByName}` : ""}
+              {" · "}dicatat {formatDateTime(receipt.createdAt)}
+              {receipt.createdByName ? ` oleh ${receipt.createdByName}` : ""}
+            </p>
+            <ul className="text-sm text-neutral-800">
+              {receipt.items.map((item) => (
+                <li key={item.purchaseItemId}>
+                  {item.itemName}: {formatPurchaseQty(item.itemType, item.qtyAccepted)}
+                </li>
+              ))}
+            </ul>
+            {receipt.note && receipt.kind === "receipt" && <p className="text-sm text-neutral-600">{receipt.note}</p>}
+            {canReverse && receipt.kind === "receipt" && receipt.reversedAt === null && (
+              <div>
+                <ReverseReceiptButton receiptId={receipt.id} receiptNo={receipt.receiptNo} />
+              </div>
+            )}
+          </Card>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 const ITEM_TYPE_LABELS = { fabric: "Kain", accessory: "Aksesoris" } as const;
 const ITEM_MASTER_PATH = { fabric: "/fabrics", accessory: "/accessories" } as const;
 
-export default async function PurchaseDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const session = await requirePermission("inventory.view");
-  const { id } = await params;
-
-  const purchaseRaw = await getPurchaseById(id);
-  if (!purchaseRaw) notFound();
-
+/** A legacy single-row purchase (D11), displayed exactly as before purchase documents existed. */
+function LegacyPurchaseView({ purchaseRaw, session }: { purchaseRaw: PurchaseDetail; session: StaffSessionData }) {
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
   const canManage = session.permissionKeys.includes("inventory.manage");
   const purchase = stripPurchaseAmount(purchaseRaw, canViewProfit);
@@ -33,21 +216,18 @@ export default async function PurchaseDetailPage({ params }: { params: Promise<{
 
   return (
     <>
-      <Breadcrumb items={[...rootCrumbs("/purchases"), { label: purchase.itemName }]} />
+      <Breadcrumb items={[...rootCrumbs("/purchases"), { label: "Pembelian lama", href: "/purchases/legacy" }, { label: purchase.itemName }]} />
       <div className="flex items-center justify-between gap-2">
-        <PageHeader title={purchase.itemName} description={`Pembelian ${ITEM_TYPE_LABELS[purchase.itemType]} · ${formatDate(new Date(purchase.purchasedAt))}`} />
+        <PageHeader title={purchase.itemName} description={`Pembelian lama ${ITEM_TYPE_LABELS[purchase.itemType]} · ${formatDate(new Date(purchase.purchasedAt))}`} />
         {purchase.voidedAt !== null && <Badge variant="neutral">Dibatalkan</Badge>}
       </div>
       <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
         <Row label="Jumlah" value={`${qtyLabel} ${unitLabel}`} />
         {purchase.totalAmountPaid !== null && <Row label="Total dibayar" value={formatRupiah(purchase.totalAmountPaid)} />}
         {unitPrice !== null && <Row label="Harga satuan" value={`≈ ${formatRupiah(unitPrice)}/${unitLabel} (otomatis)`} />}
-        <Row label="Supplier" value={purchase.supplier ?? "—"} />
+        <Row label="Supplier" value={purchase.supplier ?? "-"} />
         {purchase.note && <Row label="Catatan" value={purchase.note} />}
-        <Row
-          label="Dicatat"
-          value={`${formatDateTime(purchase.createdAt)}${purchase.createdByName ? ` · ${purchase.createdByName}` : ""}`}
-        />
+        <Row label="Dicatat" value={`${formatDateTime(purchase.createdAt)}${purchase.createdByName ? ` · ${purchase.createdByName}` : ""}`} />
       </div>
       {canViewMaster && (
         <p className="mt-3">
@@ -65,11 +245,11 @@ export default async function PurchaseDetailPage({ params }: { params: Promise<{
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-sm text-neutral-600">{label}</span>
-      <span className="text-base text-neutral-900">{value}</span>
+      <span className="text-right text-base text-neutral-900">{value}</span>
     </div>
   );
 }

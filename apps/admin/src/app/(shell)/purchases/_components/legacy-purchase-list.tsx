@@ -9,9 +9,9 @@ function qtyLabel(row: PurchaseListRow): string {
   return row.itemType === "fabric" ? `${row.qty.toFixed(2)} yard` : `${row.qty} pcs`;
 }
 
-export function PurchaseList({ rows }: { rows: PurchaseListRow[] }) {
+export function LegacyPurchaseList({ rows }: { rows: PurchaseListRow[] }) {
   if (rows.length === 0) {
-    return <EmptyState title="Belum ada pembelian" description="Catat pembelian bahan atau aksesoris pertama." />;
+    return <EmptyState title="Tidak ada pembelian lama" description="Pembelian yang dicatat sebelum ada pesanan pembelian akan muncul di sini." />;
   }
 
   return (
@@ -66,10 +66,10 @@ export function PurchaseList({ rows }: { rows: PurchaseListRow[] }) {
                 <span className="ml-2 text-neutral-600">{ITEM_TYPE_LABELS[row.itemType]}</span>
               </Td>
               <Td className="text-neutral-700">{formatDate(new Date(row.purchasedAt))}</Td>
-              <Td className="text-neutral-700">{row.supplier ?? "—"}</Td>
+              <Td className="text-neutral-700">{row.supplier ?? "-"}</Td>
               <Td className="text-neutral-700 tabular-nums">{qtyLabel(row)}</Td>
               <Td className="text-neutral-700 tabular-nums">
-                {row.totalAmountPaid !== null ? formatRupiah(row.totalAmountPaid) : "—"}
+                {row.totalAmountPaid !== null ? formatRupiah(row.totalAmountPaid) : "-"}
               </Td>
               <Td>{row.voidedAt !== null ? <Badge variant="neutral">Dibatalkan</Badge> : null}</Td>
             </Tr>

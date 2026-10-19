@@ -1,52 +1,139 @@
 "use server";
 
 import { z } from "zod";
+import { PURCHASE_ITEM_TYPES } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
+import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
 import { moneyString } from "@/lib/products/money-schema";
-import { decimalQuantityString } from "@/lib/production/decimal-quantity";
+import { parseDecimalQuantity } from "@/lib/production/decimal-quantity";
 import { runAction, type ActionResult } from "@/lib/action-result";
-import { recordFabricPurchase, voidFabricPurchase } from "@/lib/inventory/fabric-stock";
-import { recordAccessoryPurchase, voidAccessoryPurchase } from "@/lib/inventory/accessories";
+import { voidFabricPurchase } from "@/lib/inventory/fabric-stock";
+import { voidAccessoryPurchase } from "@/lib/inventory/accessories";
+import { MAX_LINES, MAX_QTY, closePurchase, createPurchase, updatePurchase, type PurchaseInput } from "@/lib/purchases/queries";
+import { postGoodsReceiptForPurchase, reverseGoodsReceipt } from "@/lib/receipts/queries";
 
-const purchaseBaseSchema = {
-  totalAmountPaid: moneyString,
-  purchasedAt: z.string().date("Tanggal tidak valid."),
-  supplier: z.string().trim().optional(),
-  note: z.string().trim().optional(),
-};
+// Purchase documents and their goods receipts (docs/plans/suppliers-goods-receipt.md S3).
+// Permissions (D10): inventory.manage creates/edits/closes documents and reverses receipts;
+// inventory.receive posts a receipt. Every action re-checks on the server.
 
-const recordPurchaseSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("fabric"), itemId: z.string().uuid(), qty: decimalQuantityString, ...purchaseBaseSchema }),
-  z.object({
-    type: z.literal("accessory"),
-    itemId: z.string().uuid(),
-    qty: z.coerce.number().int("Jumlah harus bilangan bulat.").positive("Jumlah harus lebih dari 0."),
-    ...purchaseBaseSchema,
-  }),
-]);
+function firstIssue(error: z.ZodError): string {
+  return error.issues[0]?.message ?? "Input tidak valid.";
+}
 
-/** Dispatches to the existing, unchanged fabric/accessory purchase lib functions — this feature
- * adds no new ledger logic of its own, only a combined entry point and list/detail view over
- * both tables (see lib/inventory/purchases.ts's own doc comments). */
-export async function recordPurchaseAction(
-  input: z.input<typeof recordPurchaseSchema>,
-): Promise<ActionResult<{ id: string; type: "fabric" | "accessory" }>> {
-  const session = await requirePermission("inventory.manage");
-  const parsed = recordPurchaseSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
-  return runAction(async () => {
-    const common = {
-      totalAmountPaid: parsed.data.totalAmountPaid,
-      purchasedAt: parsed.data.purchasedAt,
-      supplier: parsed.data.supplier || null,
-      note: parsed.data.note || null,
-    };
-    if (parsed.data.type === "fabric") {
-      const movement = await recordFabricPurchase({ fabricId: parsed.data.itemId, qty: parsed.data.qty, ...common }, session.staffUser.id);
-      return { id: movement.id, type: "fabric" as const };
+const purchaseLineSchema = z.object({
+  itemType: z.enum(PURCHASE_ITEM_TYPES),
+  itemId: z.string().uuid("Pilih barang terlebih dahulu."),
+  qtyOrdered: z.string().transform((value, ctx) => {
+    const parsed = parseDecimalQuantity(value);
+    if (parsed === null || parsed > MAX_QTY) {
+      ctx.addIssue({ code: "custom", message: "Jumlah dipesan tidak valid." });
+      return z.NEVER;
     }
-    const movement = await recordAccessoryPurchase({ accessoryId: parsed.data.itemId, qty: parsed.data.qty, ...common }, session.staffUser.id);
-    return { id: movement.id, type: "accessory" as const };
+    return parsed;
+  }),
+  totalAmount: moneyString,
+});
+
+const purchaseSchema = z.object({
+  supplierId: z.string().uuid("Pilih supplier terlebih dahulu."),
+  orderedAt: z.string().date("Tanggal tidak valid."),
+  notes: z.string().trim().max(1000, "Catatan terlalu panjang.").optional(),
+  lines: z.array(purchaseLineSchema).min(1, "Tambahkan minimal satu barang.").max(MAX_LINES, `Maksimal ${MAX_LINES} barang dalam satu pesanan.`),
+});
+
+function toPurchaseInput(parsed: z.infer<typeof purchaseSchema>): PurchaseInput {
+  return { supplierId: parsed.supplierId, orderedAt: parsed.orderedAt, notes: parsed.notes || null, lines: parsed.lines };
+}
+
+export async function createPurchaseAction(input: z.input<typeof purchaseSchema>): Promise<ActionResult<{ id: string }>> {
+  const session = await requirePermission("inventory.manage");
+  const parsed = purchaseSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
+  return runAction(async () => {
+    const purchase = await createPurchase(toPurchaseInput(parsed.data), session.staffUser.id);
+    return { id: purchase.id };
+  });
+}
+
+/** Also needs finance.view_profit: the edit form shows and re-saves every line's total, so a
+ * session that cannot see cost figures must not be able to overwrite them blind (the edit page
+ * applies the same rule; this is the server-side enforcement). */
+export async function updatePurchaseAction(id: string, input: z.input<typeof purchaseSchema>): Promise<ActionResult<{ id: string }>> {
+  const session = await requireAllPermissions(["inventory.manage", "finance.view_profit"]);
+  const parsedId = z.string().uuid().safeParse(id);
+  if (!parsedId.success) return { ok: false, error: "Pesanan pembelian tidak ditemukan." };
+  const parsed = purchaseSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
+  return runAction(async () => {
+    const purchase = await updatePurchase(parsedId.data, toPurchaseInput(parsed.data), session.staffUser.id);
+    return { id: purchase.id };
+  });
+}
+
+/** An empty or "0" quantity means "nothing of this line arrived in this delivery" and is dropped;
+ * anything else must be a valid positive quantity with at most two decimals. */
+const receiptQtySchema = z.string().transform((value, ctx) => {
+  const trimmed = value.trim();
+  if (trimmed === "" || /^0+(\.0+)?$/.test(trimmed)) return 0;
+  const parsed = parseDecimalQuantity(trimmed);
+  if (parsed === null || parsed > MAX_QTY) {
+    ctx.addIssue({ code: "custom", message: "Jumlah diterima tidak valid." });
+    return z.NEVER;
+  }
+  return parsed;
+});
+
+const receiveSchema = z.object({
+  purchaseId: z.string().uuid(),
+  receivedAt: z.string().date("Tanggal tidak valid."),
+  receivedByName: z.string().trim().max(200).optional(),
+  note: z.string().trim().max(1000).optional(),
+  lines: z.array(z.object({ purchaseItemId: z.string().uuid(), qtyAccepted: receiptQtySchema })).max(MAX_LINES),
+});
+
+export async function receivePurchaseAction(input: z.input<typeof receiveSchema>): Promise<ActionResult<{ receiptNo: string }>> {
+  const session = await requirePermission("inventory.receive");
+  const parsed = receiveSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
+  return runAction(async () => {
+    const { receipt } = await postGoodsReceiptForPurchase(
+      {
+        purchaseId: parsed.data.purchaseId,
+        receivedAt: parsed.data.receivedAt,
+        receivedByName: parsed.data.receivedByName || null,
+        note: parsed.data.note || null,
+        lines: parsed.data.lines,
+      },
+      session.staffUser.id,
+    );
+    return { receiptNo: receipt.receiptNo };
+  });
+}
+
+const closeSchema = z.object({
+  purchaseId: z.string().uuid(),
+  reason: z.string().trim().min(1, "Alasan wajib diisi.").max(1000),
+});
+
+export async function closePurchaseAction(input: z.input<typeof closeSchema>): Promise<ActionResult<{ status: string }>> {
+  const session = await requirePermission("inventory.manage");
+  const parsed = closeSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
+  return runAction(async () => {
+    const purchase = await closePurchase(parsed.data.purchaseId, parsed.data.reason, session.staffUser.id);
+    return { status: purchase.status };
+  });
+}
+
+const reverseSchema = z.object({ receiptId: z.string().uuid() });
+
+export async function reverseReceiptAction(input: z.input<typeof reverseSchema>): Promise<ActionResult> {
+  const session = await requirePermission("inventory.manage");
+  const parsed = reverseSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
+  return runAction(async () => {
+    await reverseGoodsReceipt(parsed.data.receiptId, session.staffUser.id);
+    return undefined;
   });
 }
 
@@ -55,16 +142,13 @@ const voidPurchaseSchema = z.object({
   movementId: z.string().uuid(),
 });
 
-/** Voiding lives ONLY here (the /purchases/[id] detail page) — the raw-material stock ledgers
- * under /stock no longer carry their own void button, they link here instead. The underlying
- * lib functions already re-check `type = 'purchase'` themselves (see voidFabricPurchase/
- * voidAccessoryPurchase's own "Hanya transaksi pembelian yang bisa dibatalkan." guard) before
- * this dispatcher ever runs, so a non-purchase movement id is rejected regardless of how it got
- * here. */
+/** LEGACY single-row purchases only (D11) — voided from their own /purchases/[id] detail page.
+ * The lib functions refuse a receipt-backed row (that one is reversed through its receipt), and
+ * re-check `type = 'purchase'` themselves. */
 export async function voidPurchaseAction(input: z.input<typeof voidPurchaseSchema>): Promise<ActionResult> {
   const session = await requirePermission("inventory.manage");
   const parsed = voidPurchaseSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
   return runAction(async () => {
     if (parsed.data.type === "fabric") {
       await voidFabricPurchase(parsed.data.movementId, session.staffUser.id);

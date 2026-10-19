@@ -169,6 +169,13 @@
       "when": 1792398709128,
       "tag": "0023_faulty_loki",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792400407176,
+      "tag": "0024_watery_aaron_stack",
+      "breakpoints": true
     }
   ]
 }

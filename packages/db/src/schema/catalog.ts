@@ -22,6 +22,10 @@ import {
   COST_COMPONENT_TYPES,
   COST_COMPONENT_UNITS,
   FABRIC_PRICE_UNITS,
+  GOODS_RECEIPT_KINDS,
+  GOODS_RECEIPT_SOURCE_TYPES,
+  PURCHASE_ITEM_TYPES,
+  PURCHASE_STATUSES,
   PRODUCT_CLOSURES,
   PRODUCT_HIGHLIGHT_KEYS,
   PRODUCTION_BATCH_STATUSES,
@@ -36,6 +40,10 @@ import {
   type CostComponentType,
   type CostComponentUnit,
   type FabricPriceUnit,
+  type GoodsReceiptKind,
+  type GoodsReceiptSourceType,
+  type PurchaseItemType,
+  type PurchaseStatus,
   type ProductClosure,
   type ProductionBatchStatus,
   type RawMaterialMovementRefType,
@@ -819,11 +827,23 @@ export const accessoryMovements = pgTable(
     // own remark, or why an adjustment/void was made), not purchase-only like supplier/
     // purchasedAt above.
     note: text("note"),
+    // Migration 0024 (docs/plans/suppliers-goods-receipt.md §3.4). Set on the 'purchase' row a
+    // goods receipt writes (and on its reversal's 'purchase_void' row), naming the purchase
+    // document's supplier; the free-text `supplier` above is written alongside it with the
+    // supplier's NAME AT RECEIPT TIME, a snapshot a later rename never rewrites. Nullable: legacy
+    // single-row purchases, adjustments and consumptions have none.
+    supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }),
     ...createdAtOnly(),
   },
   (table) => [
     index("accessory_movements_accessory_id_created_at_idx").on(table.accessoryId, table.createdAt),
     index("accessory_movements_ref_idx").on(table.refType, table.refId),
+    index("accessory_movements_supplier_id_idx").on(table.supplierId),
+    // At most one ledger row per (type, receipt line) — a double-posted receipt is impossible at
+    // the DB level, mirroring stock_movements_type_ref_unique_idx (migration 0024).
+    uniqueIndex("accessory_movements_goods_receipt_ref_unique_idx")
+      .on(table.type, table.refType, table.refId)
+      .where(sql`${table.refType} = 'goods_receipt'`),
     // Both are NOT NULL-able RESTRICT FKs to staff_users on an append-only, only-grows table —
     // same reasoning stock_movements_created_by_staff_user_id_idx already gives for its own
     // sibling column (database-reviewer finding).
@@ -879,11 +899,18 @@ export const fabricStockMovements = pgTable(
     voidedByStaffUserId: uuid("voided_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     createdByStaffUserId: uuid("created_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     note: text("note"),
+    // Migration 0024 — see accessory_movements.supplierId.
+    supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }),
     ...createdAtOnly(),
   },
   (table) => [
     index("fabric_stock_movements_fabric_id_created_at_idx").on(table.fabricId, table.createdAt),
     index("fabric_stock_movements_ref_idx").on(table.refType, table.refId),
+    index("fabric_stock_movements_supplier_id_idx").on(table.supplierId),
+    // See accessory_movements_goods_receipt_ref_unique_idx.
+    uniqueIndex("fabric_stock_movements_goods_receipt_ref_unique_idx")
+      .on(table.type, table.refType, table.refId)
+      .where(sql`${table.refType} = 'goods_receipt'`),
     index("fabric_stock_movements_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
     index("fabric_stock_movements_voided_by_staff_user_id_idx").on(table.voidedByStaffUserId),
     unique("fabric_stock_movements_voids_movement_id_key").on(table.voidsMovementId),
@@ -979,5 +1006,230 @@ export const productionBatchAccessoryOverrides = pgTable(
     // check's leftmost-prefix need).
     index("production_batch_accessory_overrides_accessory_id_idx").on(table.accessoryId),
     check("production_batch_accessory_overrides_override_qty_check", sql`${table.overrideQty} >= 0`),
+  ],
+);
+
+// ---------- Purchase documents + goods receipts — migration 0024 ----------
+// docs/plans/suppliers-goods-receipt.md §3.2/§3.3, session S3.
+
+// A purchase is a real document (D1): a header naming the supplier, and lines naming what was
+// ordered. Recording one moves NO stock — stock moves only when goods are received against it
+// (goods_receipts below, D3). Legacy single-row purchases (a type='purchase' ledger row with no
+// ref_type='goods_receipt') stay exactly as they are and are never backfilled into documents
+// (D11).
+export const purchases = pgTable(
+  "purchases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // PO-YYYYMM-NNN, generated under a per-month advisory lock (lib/documents/document-number.ts);
+    // the unique constraint is the backstop.
+    purchaseNo: text("purchase_no").notNull().unique(),
+    // NOT NULL: every purchase document names a supplier from the master. Legacy free-text
+    // supplier names are not mapped onto it (D11).
+    supplierId: uuid("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "restrict" }),
+    // The day she placed the order (Asia/Jakarta calendar date, a display/reporting label).
+    orderedAt: date("ordered_at", { mode: "string" }).notNull(),
+    notes: text("notes"),
+    // Recomputed from the receipts after every receipt/reversal (ordered/partially_received/
+    // received); closed/cancelled only by the close action (D19).
+    status: text("status").$type<PurchaseStatus>().notNull().default("ordered"),
+    closedAt: timestamp("closed_at", { withTimezone: true, mode: "date" }),
+    closedByStaffUserId: uuid("closed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    closeReason: text("close_reason"),
+    createdByStaffUserId: uuid("created_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    ...timestamps(),
+  },
+  (table) => [
+    index("purchases_supplier_id_idx").on(table.supplierId),
+    index("purchases_status_idx").on(table.status),
+    index("purchases_ordered_at_idx").on(table.orderedAt.desc()),
+    index("purchases_closed_by_staff_user_id_idx").on(table.closedByStaffUserId),
+    index("purchases_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
+    check("purchases_status_check", checkIn(table.status, PURCHASE_STATUSES)),
+    // One-directional on purpose (§3.2): a terminal status always carries its close stamp, but a
+    // document re-opened later (D18, S6) keeps the record of its last close.
+    check(
+      "purchases_closed_status_check",
+      sql`${table.status} not in ('closed', 'cancelled') or ${table.closedAt} is not null`,
+    ),
+    check(
+      "purchases_closed_pair_check",
+      sql`(${table.closedAt} is not null) = (${table.closedByStaffUserId} is not null)`,
+    ),
+  ],
+);
+
+// One line of a purchase document. `qty_ordered` + `total_amount` are exactly what the owner
+// typed (D6, ongkir INCLUDED) — never a unit price. Each receipt is valued as a cumulative-rounding
+// slice of `total_amount` (lib/receipts/valuation.ts), so partial receipts sum to exactly what was
+// paid. No qty_received column: received quantities are always SUMs over goods_receipt_items,
+// never a mutable counter. Frozen once it has a non-reversed receipt item
+// (prevent_received_purchase_item_change, migration 0024, D7).
+export const purchaseItems = pgTable(
+  "purchase_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    purchaseId: uuid("purchase_id")
+      .notNull()
+      .references(() => purchases.id, { onDelete: "cascade" }),
+    itemType: text("item_type").$type<PurchaseItemType>().notNull(),
+    fabricId: uuid("fabric_id").references(() => fabrics.id, { onDelete: "restrict" }),
+    accessoryId: uuid("accessory_id").references(() => accessories.id, { onDelete: "restrict" }),
+    // Yards (2 decimals, matching fabric_stock_movements.qty) or whole pcs (CHECK below).
+    qtyOrdered: numeric("qty_ordered", { precision: 10, scale: 2, mode: "number" }).notNull(),
+    totalAmount: bigint("total_amount", { mode: "number" }).notNull(),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    index("purchase_items_purchase_id_idx").on(table.purchaseId),
+    index("purchase_items_fabric_id_idx").on(table.fabricId),
+    index("purchase_items_accessory_id_idx").on(table.accessoryId),
+    check("purchase_items_item_type_check", checkIn(table.itemType, PURCHASE_ITEM_TYPES)),
+    // Exactly one target, agreeing with item_type — same idiom as product_accessory_recipes.
+    check(
+      "purchase_items_exactly_one_target_check",
+      sql`(${table.fabricId} is null) <> (${table.accessoryId} is null) and (${table.itemType} = 'fabric') = (${table.fabricId} is not null)`,
+    ),
+    check("purchase_items_qty_ordered_check", sql`${table.qtyOrdered} > 0`),
+    check(
+      "purchase_items_accessory_whole_qty_check",
+      sql`${table.itemType} <> 'accessory' or ${table.qtyOrdered} = round(${table.qtyOrdered})`,
+    ),
+    check("purchase_items_total_amount_check", sql`${table.totalAmount} >= 0`),
+    // The same item cannot appear twice in one purchase.
+    uniqueIndex("purchase_items_purchase_id_fabric_id_key")
+      .on(table.purchaseId, table.fabricId)
+      .where(sql`${table.fabricId} is not null`),
+    uniqueIndex("purchase_items_purchase_id_accessory_id_key")
+      .on(table.purchaseId, table.accessoryId)
+      .where(sql`${table.accessoryId} is not null`),
+  ],
+);
+
+// One receipt (or one reversal of a receipt) against a purchase or, from S4, a production batch
+// (D2). Append-only by design: a wrong receipt is corrected by a `kind='reversal'` receipt that
+// negates it exactly (D8), never edited; the original only gains `reversed_at`/
+// `reversed_by_staff_user_id`, once.
+export const goodsReceipts = pgTable(
+  "goods_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // GR-YYYYMM-NNN, same generator as purchase_no.
+    receiptNo: text("receipt_no").notNull().unique(),
+    sourceType: text("source_type").$type<GoodsReceiptSourceType>().notNull(),
+    purchaseId: uuid("purchase_id").references(() => purchases.id, { onDelete: "restrict" }),
+    productionBatchId: uuid("production_batch_id").references(() => productionBatches.id, { onDelete: "restrict" }),
+    kind: text("kind").$type<GoodsReceiptKind>().notNull(),
+    // The day the goods physically arrived (Asia/Jakarta). Defaults to today in the form,
+    // backdatable (D21) — a display/reporting label only; the ledger's own order stays insertion
+    // order.
+    receivedAt: date("received_at", { mode: "string" }).notNull(),
+    // Only for "someone else physically took delivery"; the real actor is always
+    // created_by_staff_user_id (D21).
+    receivedByName: text("received_by_name"),
+    reversesReceiptId: uuid("reverses_receipt_id").references((): AnyPgColumn => goodsReceipts.id, {
+      onDelete: "restrict",
+    }),
+    reversedAt: timestamp("reversed_at", { withTimezone: true, mode: "date" }),
+    reversedByStaffUserId: uuid("reversed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    note: text("note"),
+    createdByStaffUserId: uuid("created_by_staff_user_id")
+      .notNull()
+      .references(() => staffUsers.id, { onDelete: "restrict" }),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    index("goods_receipts_purchase_id_created_at_idx").on(table.purchaseId, table.createdAt),
+    index("goods_receipts_production_batch_id_created_at_idx").on(table.productionBatchId, table.createdAt),
+    index("goods_receipts_received_at_idx").on(table.receivedAt.desc()),
+    index("goods_receipts_reversed_by_staff_user_id_idx").on(table.reversedByStaffUserId),
+    index("goods_receipts_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
+    // Doubles as the index behind the self-FK's RESTRICT check, and as the "one reversal per
+    // receipt" guarantee.
+    unique("goods_receipts_reverses_receipt_id_key").on(table.reversesReceiptId),
+    // Composite-FK target for goods_receipt_items (an item can never disagree with its header).
+    unique("goods_receipts_id_source_type_kind_key").on(table.id, table.sourceType, table.kind),
+    check("goods_receipts_source_type_check", checkIn(table.sourceType, GOODS_RECEIPT_SOURCE_TYPES)),
+    check("goods_receipts_kind_check", checkIn(table.kind, GOODS_RECEIPT_KINDS)),
+    check(
+      "goods_receipts_exactly_one_source_check",
+      sql`(${table.purchaseId} is null) <> (${table.productionBatchId} is null) and (${table.sourceType} = 'purchase') = (${table.purchaseId} is not null)`,
+    ),
+    // Mirror accessory_movements' void columns exactly.
+    check(
+      "goods_receipts_reverses_receipt_id_pair_check",
+      sql`(${table.kind} = 'reversal') = (${table.reversesReceiptId} is not null)`,
+    ),
+    check(
+      "goods_receipts_reversed_pair_check",
+      sql`(${table.reversedAt} is not null) = (${table.reversedByStaffUserId} is not null)`,
+    ),
+    check("goods_receipts_reversed_at_kind_check", sql`${table.reversedAt} is null or ${table.kind} = 'receipt'`),
+  ],
+);
+
+// One line of a receipt. `qty_accepted` is deliberately NOT named qty_received: "received" is
+// accepted + rejected (rejects arrive with migration 0026, S5). Signed: a reversal item is the
+// exact negation of the original's, so every per-line balance stays a plain SUM.
+export const goodsReceiptItems = pgTable(
+  "goods_receipt_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // No single-column FK — superseded by the composite goods_receipt_items_receipt_fk below.
+    goodsReceiptId: uuid("goods_receipt_id").notNull(),
+    // Denormalized copies of the header's source_type/kind, existing ONLY so the composite FK
+    // guarantees this item agrees with its own header (same technique as
+    // production_batch_items.fabric_id).
+    sourceType: text("source_type").$type<GoodsReceiptSourceType>().notNull(),
+    kind: text("kind").$type<GoodsReceiptKind>().notNull(),
+    purchaseItemId: uuid("purchase_item_id").references(() => purchaseItems.id, { onDelete: "restrict" }),
+    productionBatchItemId: uuid("production_batch_item_id").references(() => productionBatchItems.id, {
+      onDelete: "restrict",
+    }),
+    qtyAccepted: numeric("qty_accepted", { precision: 10, scale: 2, mode: "number" }).notNull(),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    index("goods_receipt_items_goods_receipt_id_idx").on(table.goodsReceiptId),
+    // Back the per-line SUM and the RESTRICT checks.
+    index("goods_receipt_items_purchase_item_id_idx").on(table.purchaseItemId),
+    index("goods_receipt_items_production_batch_item_id_idx").on(table.productionBatchItemId),
+    foreignKey({
+      columns: [table.goodsReceiptId, table.sourceType, table.kind],
+      foreignColumns: [goodsReceipts.id, goodsReceipts.sourceType, goodsReceipts.kind],
+      name: "goods_receipt_items_receipt_fk",
+    })
+      .onDelete("cascade")
+      .onUpdate("restrict"),
+    check("goods_receipt_items_source_type_check", checkIn(table.sourceType, GOODS_RECEIPT_SOURCE_TYPES)),
+    check("goods_receipt_items_kind_check", checkIn(table.kind, GOODS_RECEIPT_KINDS)),
+    check(
+      "goods_receipt_items_exactly_one_source_check",
+      sql`(${table.purchaseItemId} is null) <> (${table.productionBatchItemId} is null) and (${table.sourceType} = 'purchase') = (${table.purchaseItemId} is not null)`,
+    ),
+    // A receipt adds, a reversal removes (§3.3). Written as >= 0 / <= 0 plus a separate "must do
+    // something" check, because from 0026 a line may legitimately accept 0 and reject 2 — that
+    // migration widens only the nonzero check to `qty_accepted + qty_rejected <> 0`.
+    check(
+      "goods_receipt_items_qty_accepted_sign_check",
+      sql`(${table.kind} = 'receipt' and ${table.qtyAccepted} >= 0) or (${table.kind} = 'reversal' and ${table.qtyAccepted} <= 0)`,
+    ),
+    check("goods_receipt_items_qty_nonzero_check", sql`${table.qtyAccepted} <> 0`),
+    // Production output is whole pcs. Accessory purchase lines are whole pcs too, enforced in the
+    // receipt code (this row doesn't know its purchase line's item_type) and by
+    // purchase_items_accessory_whole_qty_check on the ordered side.
+    check(
+      "goods_receipt_items_production_whole_qty_check",
+      sql`${table.sourceType} <> 'production_batch' or ${table.qtyAccepted} = round(${table.qtyAccepted})`,
+    ),
+    // One line per source line per receipt.
+    uniqueIndex("goods_receipt_items_receipt_purchase_item_key")
+      .on(table.goodsReceiptId, table.purchaseItemId)
+      .where(sql`${table.purchaseItemId} is not null`),
+    uniqueIndex("goods_receipt_items_receipt_batch_item_key")
+      .on(table.goodsReceiptId, table.productionBatchItemId)
+      .where(sql`${table.productionBatchItemId} is not null`),
   ],
 );

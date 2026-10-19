@@ -1,39 +1,48 @@
 import Link from "next/link";
 import { PageHeader, Button, Input, FilterTabs, Pagination, Breadcrumb } from "@ammari/ui";
+import { PURCHASE_STATUSES, type PurchaseStatus } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { listPurchases, stripPurchaseAmounts, type PurchaseTypeFilter } from "@/lib/inventory/purchases";
+import { hasLegacyPurchases, stripPurchaseAmounts } from "@/lib/inventory/purchases";
+import { listPurchaseDocuments } from "@/lib/purchases/queries";
+import { PURCHASE_STATUS_LABELS } from "@/lib/purchases/status";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
-import { PurchaseList } from "./_components/purchase-list";
+import { PurchaseDocumentList } from "./_components/purchase-document-list";
 
-const TYPE_FILTER_OPTIONS = [
+const STATUS_FILTER_OPTIONS = [
   { label: "Semua", value: undefined },
-  { label: "Kain", value: "fabric" },
-  { label: "Aksesoris", value: "accessory" },
-] as const;
+  ...PURCHASE_STATUSES.map((status) => ({ label: PURCHASE_STATUS_LABELS[status], value: status })),
+];
+
+function parseStatus(raw: string | undefined): PurchaseStatus | undefined {
+  return PURCHASE_STATUSES.find((status) => status === raw);
+}
 
 export default async function PurchasesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; type?: string; page?: string; perPage?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; page?: string; perPage?: string }>;
 }) {
   const session = await requirePermission("inventory.view");
-  const { q, type: rawType, page, perPage } = await searchParams;
-  const typeFilter: PurchaseTypeFilter = rawType === "fabric" || rawType === "accessory" ? rawType : undefined;
+  const { q, status: rawStatus, page, perPage } = await searchParams;
+  const status = parseStatus(rawStatus);
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
   const canManage = session.permissionKeys.includes("inventory.manage");
 
-  const { rows, pagination } = await listPurchases({ type: typeFilter, q }, page, perPage);
+  const [{ rows, pagination }, showLegacyLink] = await Promise.all([
+    listPurchaseDocuments({ status, q }, page, perPage),
+    hasLegacyPurchases(),
+  ]);
 
   return (
     <>
       <Breadcrumb items={rootCrumbs("/purchases")} />
       <PageHeader
         title="Pembelian"
-        description="Riwayat pembelian bahan dan aksesoris."
+        description="Pesanan pembelian bahan dan aksesoris. Stok bertambah saat barang diterima."
         actions={
           canManage ? (
             <Link href="/purchases/new">
-              <Button>Catat pembelian</Button>
+              <Button>Buat pesanan</Button>
             </Link>
           ) : undefined
         }
@@ -41,23 +50,30 @@ export default async function PurchasesPage({
       <div className="flex flex-col gap-3">
         <FilterTabs
           basePath="/purchases"
-          paramName="type"
-          options={TYPE_FILTER_OPTIONS}
-          activeValue={typeFilter}
-          aria-label="Filter jenis pembelian"
+          paramName="status"
+          options={STATUS_FILTER_OPTIONS}
+          activeValue={status}
+          aria-label="Filter status pesanan"
         />
         <form method="GET">
-          {rawType && <input type="hidden" name="type" value={rawType} />}
-          <Input name="q" defaultValue={q ?? ""} placeholder="Cari nama bahan atau aksesoris..." aria-label="Cari pembelian" />
+          {status && <input type="hidden" name="status" value={status} />}
+          <Input name="q" defaultValue={q ?? ""} placeholder="Cari nomor pesanan atau supplier..." aria-label="Cari pesanan pembelian" />
         </form>
-        <PurchaseList rows={stripPurchaseAmounts(rows, canViewProfit)} />
+        <PurchaseDocumentList rows={stripPurchaseAmounts(rows, canViewProfit)} />
       </div>
       <Pagination
         pagination={pagination}
         basePath="/purchases"
-        searchParams={{ q, type: rawType, perPage }}
-        itemLabel="pembelian"
+        searchParams={{ q, status, perPage }}
+        itemLabel="pesanan"
       />
+      {showLegacyLink && (
+        <p className="mt-4">
+          <Link href="/purchases/legacy" className="text-base font-medium text-brand hover:underline">
+            Lihat pembelian lama (sebelum ada pesanan pembelian)
+          </Link>
+        </p>
+      )}
     </>
   );
 }

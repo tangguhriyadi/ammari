@@ -78,10 +78,32 @@ export type WhyAmmariIconKey = (typeof WHY_AMMARI_ICON_KEYS)[number];
 export const SUPPLIER_KINDS = ["fabric", "accessory", "service", "other"] as const;
 export type SupplierKind = (typeof SUPPLIER_KINDS)[number];
 
+/** A purchase document's lifecycle (docs/plans/suppliers-goods-receipt.md §3.2). No `draft`: the
+ * owner records purchases she has already placed. `ordered` → `partially_received` → `received`
+ * is recomputed from the receipts after every receipt and reversal; `closed`/`cancelled` are set
+ * only by the close action (D19: `cancelled` when nothing arrived, `closed` otherwise). */
+export const PURCHASE_STATUSES = ["ordered", "partially_received", "received", "closed", "cancelled"] as const;
+export type PurchaseStatus = (typeof PURCHASE_STATUSES)[number];
+
+/** What a purchase line buys — exactly one of fabric_id/accessory_id is set, agreeing with this. */
+export const PURCHASE_ITEM_TYPES = ["fabric", "accessory"] as const;
+export type PurchaseItemType = (typeof PURCHASE_ITEM_TYPES)[number];
+
+/** One receipt table pair serves both purchases and production output (D2). */
+export const GOODS_RECEIPT_SOURCE_TYPES = ["purchase", "production_batch"] as const;
+export type GoodsReceiptSourceType = (typeof GOODS_RECEIPT_SOURCE_TYPES)[number];
+
+/** A receipt is corrected only by a `reversal` receipt that negates it exactly (D8). */
+export const GOODS_RECEIPT_KINDS = ["receipt", "reversal"] as const;
+export type GoodsReceiptKind = (typeof GOODS_RECEIPT_KINDS)[number];
+
 export const STOCK_MOVEMENT_TYPES = ["production", "sale", "return", "adjustment"] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 
-export const STOCK_MOVEMENT_REF_TYPES = ["production_batch_item", "order_item", "manual"] as const;
+// "goods_receipt_item" (migration 0024, docs/plans/suppliers-goods-receipt.md §3.4): a
+// 'production' movement that originates from a goods receipt of a production batch line. Allowed
+// by the CHECK from 0024; nothing writes it until the production-receipt session (S4).
+export const STOCK_MOVEMENT_REF_TYPES = ["production_batch_item", "order_item", "manual", "goods_receipt_item"] as const;
 export type StockMovementRefType = (typeof STOCK_MOVEMENT_REF_TYPES)[number];
 
 /** Only ever set when `type = 'adjustment'` — see stock_movements_reason_adjustment_pair_check
@@ -114,8 +136,13 @@ export type RawMaterialMovementType = (typeof RAW_MATERIAL_MOVEMENT_TYPES)[numbe
 
 /** Mirrors stock_movements' own ref_type idiom, scoped to what can actually consume/reference a
  * raw-material item: a production batch (aggregated consumption, not per line — see queries) or
- * a manual purchase/adjustment/void with no single natural source row. */
-export const RAW_MATERIAL_MOVEMENT_REF_TYPES = ["production_batch", "manual"] as const;
+ * a manual purchase/adjustment/void with no single natural source row.
+ *
+ * "goods_receipt" (migration 0024): the 'purchase' row a goods receipt writes for one accepted
+ * purchase line, and the 'purchase_void' row its reversal writes. `ref_id` is the
+ * goods_receipt_items.id of THAT line (the receipt's own item for the purchase row, the
+ * reversal's item for the void row), so a per-line SUM of value_amount nets with no self-join. */
+export const RAW_MATERIAL_MOVEMENT_REF_TYPES = ["production_batch", "manual", "goods_receipt"] as const;
 export type RawMaterialMovementRefType = (typeof RAW_MATERIAL_MOVEMENT_REF_TYPES)[number];
 
 /** "shopee"/"tiktok" are the two marketplace channels a future importer reconciles against —

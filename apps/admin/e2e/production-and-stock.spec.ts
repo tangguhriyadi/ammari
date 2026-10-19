@@ -1,15 +1,9 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
+import { createSupplier, purchaseAndReceiveAll } from "./helpers/purchase";
 import { E2E_PRODUCTION_STOCK_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
-
-async function createSupplier(page: Page, name: string): Promise<void> {
-  await page.goto("/suppliers/new");
-  await page.getByLabel("Nama supplier").fill(name);
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await expect(page).toHaveURL(/\/suppliers$/);
-}
 
 test("a staffer purchases fabric and an accessory, sets a recipe, creates a draft batch with an extra-cost line, posts it, sees stock and HPP, adjusts it down, then runs a stock count", async ({
   page,
@@ -68,23 +62,12 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await expect(page.getByRole("button", { name: "Simpan resep" })).not.toHaveAttribute("aria-busy", "true", { timeout: 15_000 });
 
   // 3. Purchase fabric stock (10 yards for Rp 1.000.000 -> avg Rp 100.000/yard) and accessory
-  // stock (10 pcs for Rp 20.000 -> avg Rp 2.000/pcs) via /purchases — the batch below consumes
+  // stock (10 pcs for Rp 20.000 -> avg Rp 2.000/pcs) via one purchase document, received in full — the batch below consumes
   // exactly 10 yards and (1/pcs recipe x 5 pcs line) exactly 5 accessory pcs.
-  await page.goto("/purchases/new");
-  await page.locator("#purchase-type").selectOption({ label: "Kain" });
-  await page.locator("#purchase-item").selectOption({ label: fabricName });
-  await page.locator("#purchase-qty").fill("10");
-  await page.locator("#purchase-amount").fill("1.000.000");
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/purchases$/);
-
-  await page.goto("/purchases/new");
-  await page.locator("#purchase-type").selectOption({ label: "Aksesoris" });
-  await page.locator("#purchase-item").selectOption({ label: accessoryName });
-  await page.locator("#purchase-qty").fill("10");
-  await page.locator("#purchase-amount").fill("20.000");
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/purchases$/);
+  await purchaseAndReceiveAll(page, [
+    { type: "Kain", itemName: fabricName, qty: "10", amount: "1.000.000" },
+    { type: "Aksesoris", itemName: accessoryName, qty: "10", amount: "20.000" },
+  ]);
 
   // 4. Two suppliers (plan S2, D9): the tailor who is the cost component's default, and a second
   // one the batch line below overrides it with.

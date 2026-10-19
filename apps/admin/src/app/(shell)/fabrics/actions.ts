@@ -3,8 +3,7 @@
 import { z } from "zod";
 import { FABRIC_PRICE_UNITS, STOCK_ADJUSTMENT_REASONS } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
-import { decimalQuantityString } from "@/lib/production/decimal-quantity";
+import { optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/products/action-result";
 import * as fabricQueries from "@/lib/products/fabric-queries";
 import * as fabricStockQueries from "@/lib/inventory/fabric-stock";
@@ -160,38 +159,9 @@ export async function deleteFabricColorAction(id: string): Promise<ActionResult>
   });
 }
 
-// ---------- Fabric stock: purchase / void / adjustment ----------
+// ---------- Fabric stock: void / adjustment ----------
 
-const recordFabricPurchaseSchema = z.object({
-  fabricId: z.string().uuid(),
-  qty: decimalQuantityString,
-  totalAmountPaid: moneyString,
-  purchasedAt: z.string().date("Tanggal tidak valid."),
-  supplier: z.string().trim().optional(),
-  note: z.string().trim().optional(),
-});
-
-export async function recordFabricPurchaseAction(
-  input: z.input<typeof recordFabricPurchaseSchema>,
-): Promise<ActionResult<{ id: string }>> {
-  const session = await requirePermission("inventory.manage");
-  const parsed = recordFabricPurchaseSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
-  return runAction(async () => {
-    const movement = await fabricStockQueries.recordFabricPurchase(
-      {
-        fabricId: parsed.data.fabricId,
-        qty: parsed.data.qty,
-        totalAmountPaid: parsed.data.totalAmountPaid,
-        purchasedAt: parsed.data.purchasedAt,
-        supplier: parsed.data.supplier || null,
-        note: parsed.data.note || null,
-      },
-      session.staffUser.id,
-    );
-    return { id: movement.id };
-  });
-}
+// No "record purchase" action here any more — see accessories/actions.ts for why.
 
 const voidFabricPurchaseSchema = z.object({ movementId: z.string().uuid() });
 

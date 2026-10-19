@@ -1,5 +1,5 @@
 import "server-only";
-import { and, count, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, ne, sql } from "drizzle-orm";
 import { accessories, accessoryMovements, fabricStockMovements, fabrics, staffUsers } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
@@ -46,12 +46,24 @@ export function stripPurchaseAmounts<T extends { totalAmountPaid: number | null 
   return canViewProfit ? rows : rows.map((row) => stripPurchaseAmount(row, canViewProfit));
 }
 
+// LEGACY single-row purchases only (docs/plans/suppliers-goods-receipt.md D11): a 'purchase' ledger
+// row written directly, before purchase documents existed. A row with ref_type 'goods_receipt' is
+// a receipt against a purchase DOCUMENT (lib/purchases, lib/receipts) and is listed there instead —
+// excluding it here is what keeps one purchase from being listed, or counted, twice.
 function fabricPurchaseConditions(q: string | undefined) {
-  return [eq(fabricStockMovements.type, "purchase"), q ? ilike(fabrics.name, `%${q}%`) : undefined].filter((c) => c !== undefined);
+  return [
+    eq(fabricStockMovements.type, "purchase"),
+    ne(fabricStockMovements.refType, "goods_receipt"),
+    q ? ilike(fabrics.name, `%${q}%`) : undefined,
+  ].filter((c) => c !== undefined);
 }
 
 function accessoryPurchaseConditions(q: string | undefined) {
-  return [eq(accessoryMovements.type, "purchase"), q ? ilike(accessories.name, `%${q}%`) : undefined].filter((c) => c !== undefined);
+  return [
+    eq(accessoryMovements.type, "purchase"),
+    ne(accessoryMovements.refType, "goods_receipt"),
+    q ? ilike(accessories.name, `%${q}%`) : undefined,
+  ].filter((c) => c !== undefined);
 }
 
 async function listFabricPurchasesOnly(
@@ -196,7 +208,7 @@ async function listAllPurchases(
              ${fabricStockMovements.createdAt} as "createdAt"
       from ${fabricStockMovements}
       inner join ${fabrics} on ${fabrics.id} = ${fabricStockMovements.fabricId}
-      where ${fabricStockMovements.type} = 'purchase'
+      where ${fabricStockMovements.type} = 'purchase' and ${fabricStockMovements.refType} <> 'goods_receipt'
       ${qPattern ? sql`and ${fabrics.name} ilike ${qPattern}` : sql``}
     )
     union all
@@ -208,7 +220,7 @@ async function listAllPurchases(
              ${accessoryMovements.createdAt} as "createdAt"
       from ${accessoryMovements}
       inner join ${accessories} on ${accessories.id} = ${accessoryMovements.accessoryId}
-      where ${accessoryMovements.type} = 'purchase'
+      where ${accessoryMovements.type} = 'purchase' and ${accessoryMovements.refType} <> 'goods_receipt'
       ${qPattern ? sql`and ${accessories.name} ilike ${qPattern}` : sql``}
     )
   `;
@@ -250,7 +262,8 @@ export async function listPurchases(
  * collision is not a realistic concern. Filters on `type = 'purchase'` in the WHERE clause
  * itself (not just at the call site): a production/adjustment/purchase_void movement id returns
  * `null` here, same as an id that doesn't exist at all, so the page 404s instead of rendering a
- * movement that was never a purchase. */
+ * movement that was never a purchase. A receipt-backed row (ref_type 'goods_receipt') also returns
+ * `null`: it belongs to a purchase document, which the detail page resolves separately. */
 export async function getPurchaseById(id: string, db: Database = defaultDb): Promise<PurchaseDetail | null> {
   const [fabricRow] = await db
     .select({
@@ -269,7 +282,7 @@ export async function getPurchaseById(id: string, db: Database = defaultDb): Pro
     .from(fabricStockMovements)
     .innerJoin(fabrics, eq(fabrics.id, fabricStockMovements.fabricId))
     .leftJoin(staffUsers, eq(staffUsers.id, fabricStockMovements.createdByStaffUserId))
-    .where(and(eq(fabricStockMovements.id, id), eq(fabricStockMovements.type, "purchase")))
+    .where(and(eq(fabricStockMovements.id, id), ...fabricPurchaseConditions(undefined)))
     .limit(1);
   if (fabricRow)
     return {
@@ -297,7 +310,7 @@ export async function getPurchaseById(id: string, db: Database = defaultDb): Pro
     .from(accessoryMovements)
     .innerJoin(accessories, eq(accessories.id, accessoryMovements.accessoryId))
     .leftJoin(staffUsers, eq(staffUsers.id, accessoryMovements.createdByStaffUserId))
-    .where(and(eq(accessoryMovements.id, id), eq(accessoryMovements.type, "purchase")))
+    .where(and(eq(accessoryMovements.id, id), ...accessoryPurchaseConditions(undefined)))
     .limit(1);
   if (accessoryRow)
     return {
@@ -309,4 +322,13 @@ export async function getPurchaseById(id: string, db: Database = defaultDb): Pro
     };
 
   return null;
+}
+
+/** Whether any legacy single-row purchase exists at all — the purchases page only links to the
+ * legacy list when there is something on it. */
+export async function hasLegacyPurchases(db: Database = defaultDb): Promise<boolean> {
+  const [fabricRow] = await db.select({ id: fabricStockMovements.id }).from(fabricStockMovements).where(and(...fabricPurchaseConditions(undefined))).limit(1);
+  if (fabricRow) return true;
+  const [accessoryRow] = await db.select({ id: accessoryMovements.id }).from(accessoryMovements).where(and(...accessoryPurchaseConditions(undefined))).limit(1);
+  return accessoryRow !== undefined;
 }

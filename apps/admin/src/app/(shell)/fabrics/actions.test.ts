@@ -13,7 +13,6 @@ const {
   deleteFabricAction,
   createFabricColorAction,
   deleteFabricColorAction,
-  recordFabricPurchaseAction,
   voidFabricPurchaseAction,
   recordFabricAdjustmentAction,
 } = await import("./actions");
@@ -62,13 +61,6 @@ describe("every fabric server action requires products.manage", () => {
 const NIL_ID = "00000000-0000-0000-0000-000000000000";
 
 describe("fabric stock actions require inventory.manage (not products.manage)", () => {
-  test("recordFabricPurchaseAction rejects a session with products.manage but WITHOUT inventory.manage", async () => {
-    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["products.manage"]));
-    await expect(
-      recordFabricPurchaseAction({ fabricId: NIL_ID, qty: "10", totalAmountPaid: "500.000", purchasedAt: "2026-01-01" }),
-    ).rejects.toThrow();
-  });
-
   test("voidFabricPurchaseAction rejects a session without inventory.manage", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions([]));
     await expect(voidFabricPurchaseAction({ movementId: NIL_ID })).rejects.toThrow();

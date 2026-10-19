@@ -61,6 +61,12 @@ export const E2E_STOREFRONT_EMAIL = "storefront@e2e.ammari.test";
 // the whole supplier master must work on those two keys alone, with no new permission (D10/§7).
 export const E2E_SUPPLIERS_EMAIL = "suppliers@e2e.ammari.test";
 const E2E_SUPPLIERS_ROLE_KEY = "e2e_suppliers";
+// A dedicated email/role for purchases-receipt.spec.ts (docs/plans/suppliers-goods-receipt.md
+// session S3) — same "fresh email, clean OTP throttle" reasoning as every fixture above. Needs
+// products.manage only to create its own fabric fixture; finance.view_profit so the line totals
+// are visible; inventory.receive to post receipts.
+export const E2E_PURCHASES_EMAIL = "purchases@e2e.ammari.test";
+const E2E_PURCHASES_ROLE_KEY = "e2e_purchases";
 // Dedicated emails for login-otp.spec.ts — it drives the REAL `/login` OTP form (not the
 // instant-sign-in backdoor every other spec uses), which legitimately sends real OTPs and is the
 // one spec that actually exercises the per-email 60s resend cooldown. TWO emails, not one: the
@@ -202,6 +208,9 @@ export default async function globalSetup(): Promise<void> {
     "finance.view_profit",
     "inventory.view",
     "inventory.manage",
+    // Since purchase documents (docs/plans/suppliers-goods-receipt.md S3) raw-material stock only
+    // arrives through a goods receipt, which needs its own key (D10).
+    "inventory.receive",
   ]);
   await ensureStaffFixture(E2E_PRODUCTION_STOCK_EMAIL, "E2E Production & Stock", E2E_PRODUCTION_STOCK_ROLE_KEY);
 
@@ -213,6 +222,9 @@ export default async function globalSetup(): Promise<void> {
     "finance.view_profit",
     "inventory.view",
     "inventory.manage",
+    // Since purchase documents (docs/plans/suppliers-goods-receipt.md S3) raw-material stock only
+    // arrives through a goods receipt, which needs its own key (D10).
+    "inventory.receive",
     "orders.view",
     "orders.manage",
   ]);
@@ -226,6 +238,9 @@ export default async function globalSetup(): Promise<void> {
     "finance.view_profit",
     "inventory.view",
     "inventory.manage",
+    // Since purchase documents (docs/plans/suppliers-goods-receipt.md S3) raw-material stock only
+    // arrives through a goods receipt, which needs its own key (D10).
+    "inventory.receive",
     "orders.view",
     "orders.manage",
     "packing.print_cards",
@@ -239,6 +254,15 @@ export default async function globalSetup(): Promise<void> {
 
   await ensureLimitedRole(E2E_SUPPLIERS_ROLE_KEY, ["inventory.view", "inventory.manage"]);
   await ensureStaffFixture(E2E_SUPPLIERS_EMAIL, "E2E Suppliers", E2E_SUPPLIERS_ROLE_KEY);
+
+  await ensureLimitedRole(E2E_PURCHASES_ROLE_KEY, [
+    "products.manage",
+    "finance.view_profit",
+    "inventory.view",
+    "inventory.manage",
+    "inventory.receive",
+  ]);
+  await ensureStaffFixture(E2E_PURCHASES_EMAIL, "E2E Purchases", E2E_PURCHASES_ROLE_KEY);
 
   await ensureStaffFixture(E2E_LOGIN_OTP_EMAIL, "E2E Login OTP", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_LOGIN_OTP_MOBILE_EMAIL, "E2E Login OTP Mobile", OWNER_ROLE_KEY);
@@ -286,6 +310,7 @@ export default async function globalSetup(): Promise<void> {
         E2E_PACKING_EMAIL,
         E2E_PACKING_PRINT_EMAIL,
         E2E_PACKING_PRINT_WEBKIT_EMAIL,
+        E2E_PURCHASES_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);

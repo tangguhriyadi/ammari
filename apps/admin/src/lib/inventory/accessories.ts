@@ -394,6 +394,12 @@ export async function voidAccessoryPurchase(movementId: string, actorStaffUserId
     const [original] = await tx.select().from(accessoryMovements).where(eq(accessoryMovements.id, movementId)).limit(1);
     if (!original) throw new ActionError("Transaksi pembelian tidak ditemukan.");
     if (original.type !== "purchase") throw new ActionError("Hanya transaksi pembelian yang bisa dibatalkan.");
+    // A receipt against a purchase document is reversed through its receipt ("Batalkan
+    // penerimaan", lib/receipts/queries.ts), never here — otherwise there would be two ways to
+    // reverse the same thing, one bypassing the receipt document (plan §6, "Legacy purchases").
+    if (original.refType === "goods_receipt") {
+      throw new ActionError('Pembelian ini berasal dari penerimaan barang. Gunakan "Batalkan penerimaan" di halaman pesanan pembelian.');
+    }
 
     // Lock the accessory row BEFORE re-checking voidedAt or the later-movement rule — serializes
     // against a concurrent void/purchase/consumption on the same item.

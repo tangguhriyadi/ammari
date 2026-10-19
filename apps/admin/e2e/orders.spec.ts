@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
+import { purchaseAndReceiveAll } from "./helpers/purchase";
 import { E2E_ORDERS_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -37,13 +38,7 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
   // 2. Seed finished-goods stock: purchase 10 yards of fabric for Rp 1.000.000 (avg Rp 100.000/
   // yard), then a production batch producing 5 pcs — HPP/pcs = 1.000.000 / 5 = Rp 200.000 (no
   // accessories/extra costs on this product, so fabric cost is the whole HPP).
-  await page.goto("/purchases/new");
-  await page.locator("#purchase-type").selectOption({ label: "Kain" });
-  await page.locator("#purchase-item").selectOption({ label: fabricName });
-  await page.locator("#purchase-qty").fill("10");
-  await page.locator("#purchase-amount").fill("1.000.000");
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/purchases$/);
+  await purchaseAndReceiveAll(page, [{ type: "Kain", itemName: fabricName, qty: "10", amount: "1.000.000" }]);
 
   await page.goto("/production/new");
   await page.locator("#batch-fabric").selectOption({ label: fabricName });

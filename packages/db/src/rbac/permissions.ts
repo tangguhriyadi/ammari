@@ -39,6 +39,10 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
     group: "inventory",
     description: "Manage accessories, record purchases, void purchases, and adjust raw-material stock",
   },
+  // docs/plans/suppliers-goods-receipt.md D10 — posting a goods receipt, separate from
+  // inventory.manage so the person standing next to the box can receive without being able to
+  // edit, close or reverse documents. Shipped to existing databases by migration 0024.
+  { key: "inventory.receive", group: "inventory", description: "Receive goods against purchase documents" },
   {
     key: "ads_expenses.manage",
     group: "ads_expenses",

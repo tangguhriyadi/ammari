@@ -7,7 +7,6 @@ const {
   createAccessoryAction,
   updateAccessoryAction,
   setAccessoryActiveAction,
-  recordAccessoryPurchaseAction,
   voidAccessoryPurchaseAction,
   recordAccessoryAdjustmentAction,
 } = await import("./actions");
@@ -36,13 +35,6 @@ describe("accessory actions require inventory.manage", () => {
   test("setAccessoryActiveAction rejects a session without inventory.manage", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions([]));
     await expect(setAccessoryActiveAction({ id: NIL_ID, isActive: false })).rejects.toThrow();
-  });
-
-  test("recordAccessoryPurchaseAction rejects a session without inventory.manage", async () => {
-    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.view"]));
-    await expect(
-      recordAccessoryPurchaseAction({ accessoryId: NIL_ID, qty: 10, totalAmountPaid: "10.000", purchasedAt: "2026-01-01" }),
-    ).rejects.toThrow();
   });
 
   test("voidAccessoryPurchaseAction rejects a session without inventory.manage", async () => {

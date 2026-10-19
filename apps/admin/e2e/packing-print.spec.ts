@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
+import { purchaseAndReceiveAll } from "./helpers/purchase";
 import { E2E_PACKING_PRINT_EMAIL, E2E_PACKING_PRINT_WEBKIT_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 
@@ -85,12 +86,7 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
     const sku = generateSku({ code, closure: "front_zip", color: "Print", size: "M" });
     await expect(page.locator(`:text-is("${sku}"):visible`)).toBeVisible();
 
-    await page.goto("/purchases/new");
-    await page.locator("#purchase-type").selectOption({ label: "Kain" });
-    await page.locator("#purchase-item").selectOption({ label: fabricName });
-    await page.locator("#purchase-qty").fill("10");
-    await page.locator("#purchase-amount").fill("1.000.000");
-    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan" }), /\/purchases$/);
+    await purchaseAndReceiveAll(page, [{ type: "Kain", itemName: fabricName, qty: "10", amount: "1.000.000" }]);
 
     await page.goto("/production/new");
     await page.locator("#batch-fabric").selectOption({ label: fabricName });
