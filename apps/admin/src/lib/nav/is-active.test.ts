@@ -34,4 +34,59 @@ describe("isNavItemActive", () => {
     expect(isNavItemActive("/fabrics/new", "/fabrics")).toBe(true);
     expect(isNavItemActive("/products", "/fabrics")).toBe(false);
   });
+
+  describe("longest match wins among sibling items (real NAV_ITEMS)", () => {
+    // Regression for the Konten group: "/content" (Beranda) is a prefix of every other
+    // /content/* item, so a plain prefix check kept Beranda highlighted everywhere in the
+    // group. Only the most specific (longest) matching item should ever be active.
+    test("a /content sub-page activates only its own item, not Beranda", () => {
+      expect(isNavItemActive("/content/size-charts", "/content/size-charts")).toBe(true);
+      expect(isNavItemActive("/content/size-charts", "/content")).toBe(false);
+
+      expect(isNavItemActive("/content/pages", "/content/pages")).toBe(true);
+      expect(isNavItemActive("/content/pages", "/content")).toBe(false);
+
+      expect(isNavItemActive("/content/settings", "/content/settings")).toBe(true);
+      expect(isNavItemActive("/content/settings", "/content")).toBe(false);
+    });
+
+    test("Beranda is active only on the exact /content page", () => {
+      expect(isNavItemActive("/content", "/content")).toBe(true);
+    });
+
+    test("a nested create page keeps its section active, not Beranda", () => {
+      expect(isNavItemActive("/content/size-charts/new", "/content/size-charts")).toBe(true);
+      expect(isNavItemActive("/content/size-charts/new", "/content")).toBe(false);
+    });
+
+    test("a nested dynamic detail page keeps its section's parent active, not Beranda", () => {
+      // /content/pages/[slug] — the dynamic info-page editor route.
+      expect(isNavItemActive("/content/pages/pengembalian", "/content/pages")).toBe(true);
+      expect(isNavItemActive("/content/pages/pengembalian", "/content")).toBe(false);
+    });
+
+    test("other groups' nested pages still activate their own top-level item", () => {
+      expect(isNavItemActive("/products/new", "/products")).toBe(true);
+      expect(isNavItemActive("/products/123e4567-e89b-12d3-a456-426614174000", "/products")).toBe(true);
+    });
+  });
+
+  describe("longest match wins among sibling items (custom item sets)", () => {
+    // A synthetic set isolates the "longest wins" rule itself from whatever NAV_ITEMS happens
+    // to contain, so this keeps covering the rule even if the real nav config changes shape.
+    const items = [{ href: "/a" }, { href: "/a/b" }, { href: "/a/b/c" }];
+
+    test("the deepest matching item wins, and shallower siblings lose", () => {
+      expect(isNavItemActive("/a/b/c/d", "/a/b/c", items)).toBe(true);
+      expect(isNavItemActive("/a/b/c/d", "/a/b", items)).toBe(false);
+      expect(isNavItemActive("/a/b/c/d", "/a", items)).toBe(false);
+    });
+
+    test("exactly one item is active at each nesting depth", () => {
+      expect(isNavItemActive("/a/b", "/a/b", items)).toBe(true);
+      expect(isNavItemActive("/a/b", "/a", items)).toBe(false);
+
+      expect(isNavItemActive("/a", "/a", items)).toBe(true);
+    });
+  });
 });

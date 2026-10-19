@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Input, Label, Select, Switch, Textarea } from "@ammari/ui";
@@ -296,9 +297,18 @@ export function ProductForm({
         </p>
       )}
 
-      <Button type="submit" loading={pending}>
-        Simpan
-      </Button>
+      <div className="flex justify-end gap-2">
+        {isCreate && (
+          <Link href="/products">
+            <Button type="button" variant="secondary">
+              Batal
+            </Button>
+          </Link>
+        )}
+        <Button type="submit" loading={pending}>
+          Simpan
+        </Button>
+      </div>
     </form>
   );
 }

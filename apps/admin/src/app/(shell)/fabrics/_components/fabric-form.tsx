@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Input, Label, Textarea, Dialog } from "@ammari/ui";
@@ -274,6 +275,13 @@ export function FabricForm({
       )}
 
       <div className="flex items-center gap-2">
+        {!fabricId && (
+          <Link href="/fabrics">
+            <Button type="button" variant="secondary">
+              Batal
+            </Button>
+          </Link>
+        )}
         <Button type="submit" loading={pending}>
           Simpan
         </Button>

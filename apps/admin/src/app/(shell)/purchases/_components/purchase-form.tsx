@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { Button, Input, Label, Select, Textarea } from "@ammari/ui";
@@ -146,9 +147,16 @@ export function PurchaseForm({ fabrics, accessories }: { fabrics: PurchaseItemOp
           {error}
         </p>
       )}
-      <Button type="submit" loading={pending}>
-        Simpan
-      </Button>
+      <div className="flex justify-end gap-2">
+        <Link href="/purchases">
+          <Button type="button" variant="secondary">
+            Batal
+          </Button>
+        </Link>
+        <Button type="submit" loading={pending}>
+          Simpan
+        </Button>
+      </div>
     </form>
   );
 }

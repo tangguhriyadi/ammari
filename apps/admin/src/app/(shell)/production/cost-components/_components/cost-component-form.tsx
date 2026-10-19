@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Input, Label, Select, Switch } from "@ammari/ui";
@@ -134,6 +135,13 @@ export function CostComponentForm(props: CostComponentFormProps) {
       )}
 
       <div className="flex justify-end gap-2">
+        {props.mode === "create" && (
+          <Link href="/production/cost-components">
+            <Button type="button" variant="secondary">
+              Batal
+            </Button>
+          </Link>
+        )}
         <Button type="submit" loading={saving}>
           Simpan
         </Button>

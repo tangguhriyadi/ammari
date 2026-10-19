@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, ColorSwatch, Input, Label } from "@ammari/ui";
@@ -98,6 +99,11 @@ export function StockCountForm({ productId, skus }: { productId: string; skus: S
       )}
 
       <div className="flex justify-end gap-2">
+        <Link href="/stock">
+          <Button type="button" variant="secondary">
+            Batal
+          </Button>
+        </Link>
         <Button type="submit" loading={saving} disabled={!isDirty}>
           Simpan hasil hitung
         </Button>

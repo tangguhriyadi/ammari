@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { Button, Input, Label, Select, Textarea } from "@ammari/ui";
@@ -262,6 +263,13 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
       )}
 
       <div className="flex justify-end gap-2">
+        {mode === "create" && (
+          <Link href="/production">
+            <Button type="button" variant="secondary">
+              Batal
+            </Button>
+          </Link>
+        )}
         <Button type="submit" loading={saving}>
           Simpan draf
         </Button>

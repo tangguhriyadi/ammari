@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Input, Label } from "@ammari/ui";
@@ -215,9 +216,18 @@ export function SizeChartForm({
             </Button>
           </>
         )}
-        <Button type="submit" loading={pending} className="ml-auto">
-          Simpan
-        </Button>
+        <div className="ml-auto flex gap-2">
+          {isCreate && (
+            <Link href="/content/size-charts">
+              <Button type="button" variant="secondary">
+                Batal
+              </Button>
+            </Link>
+          )}
+          <Button type="submit" loading={pending}>
+            Simpan
+          </Button>
+        </div>
       </div>
     </form>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, Input, Label, Select, Textarea } from "@ammari/ui";
 import { MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
@@ -266,9 +267,16 @@ export function OrderForm({ channels, variants }: { channels: ChannelOption[]; v
           {error}
         </p>
       )}
-      <Button type="submit" loading={pending}>
-        Simpan pesanan
-      </Button>
+      <div className="flex justify-end gap-2">
+        <Link href="/orders">
+          <Button type="button" variant="secondary">
+            Batal
+          </Button>
+        </Link>
+        <Button type="submit" loading={pending}>
+          Simpan pesanan
+        </Button>
+      </div>
     </form>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { Button, Input, Label, Select, Switch, Textarea } from "@ammari/ui";
@@ -120,6 +121,13 @@ export function AccessoryForm(props: AccessoryFormProps) {
       )}
 
       <div className="flex justify-end gap-2">
+        {props.mode === "create" && (
+          <Link href="/accessories">
+            <Button type="button" variant="secondary">
+              Batal
+            </Button>
+          </Link>
+        )}
         <Button type="submit" loading={saving}>
           Simpan
         </Button>
