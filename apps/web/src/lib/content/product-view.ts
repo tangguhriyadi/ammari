@@ -129,14 +129,33 @@ export function buildProductView(product: StorefrontProduct): ProductView {
   };
 }
 
-/** A colour's own images first (sortOrder), then the product's general images — so a colour with
- * no colour-specific photos yet still shows the product's general shots instead of an empty
- * gallery. Falls back to EVERY general image for an unknown/null `colorId` (e.g. a tile that
- * doesn't pin a colour). */
+/** The first colour (canonical order, then any other tagged colour) that has photos of its own. */
+function firstColorWithImages(view: ProductView): ProductGalleryImage[] {
+  for (const color of view.colors) {
+    const images = view.imagesByColor[color.id];
+    if (images && images.length > 0) return images;
+  }
+  return Object.values(view.imagesByColor).find((images) => images.length > 0) ?? [];
+}
+
+/** The gallery for the selected colour, with a fallback chain so it's never empty while the
+ * product has ANY photo (a colour's variants can be active before its own photo exists):
+ *   1. the colour's own images (sortOrder), then the product's general images;
+ *   2. neither exists: the first other colour's images (canonical colour order);
+ *   3. the product has no photo at all: `[]`, and the caller renders the static placeholder.
+ * An unknown/null `colorId` (e.g. a tile that doesn't pin a colour) starts from step 1 with just
+ * the general images. */
 export function getGalleryForColor(view: ProductView, colorId: string | null): ProductGalleryImage[] {
   const colorImages = colorId ? (view.imagesByColor[colorId] ?? []) : [];
   const gallery = [...colorImages, ...view.generalImages];
-  return gallery.length > 0 ? gallery : view.generalImages;
+  return gallery.length > 0 ? gallery : firstColorWithImages(view);
+}
+
+/** The product's one representative photo (OG image, JSON-LD): the first general image, else the
+ * first colour's first image. `null` when the product has no photo at all, so the caller uses the
+ * static placeholder instead. */
+export function getPrimaryImage(view: ProductView): ProductGalleryImage | null {
+  return view.generalImages[0] ?? firstColorWithImages(view)[0] ?? null;
 }
 
 /** Resolves the `?color=` query param against the product's actual colours — an unknown/stale

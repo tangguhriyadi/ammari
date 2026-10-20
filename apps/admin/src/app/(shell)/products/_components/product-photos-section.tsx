@@ -9,6 +9,7 @@ import { PhotoTile } from "./photo-tile";
 import { PendingPhotoTile } from "./pending-photo-tile";
 import { usePhotoStaging } from "./use-photo-staging";
 import type { PendingPhoto, PhotoColorGroup, PhotoImage } from "./photo-types";
+import { PHOTO_SECTION_ID } from "@/lib/products/photo-messages";
 
 export type { PhotoColorGroup, PhotoImage } from "./photo-types";
 
@@ -214,7 +215,11 @@ export function ProductPhotosSection({
 
   return (
     <div className="flex flex-col gap-8 pb-36 sm:pb-0">
-      <h2 className="text-lg font-semibold text-neutral-900">Foto</h2>
+      {/* Focus target for the Toko online card's "Buka bagian Foto" (tabIndex -1: focusable by
+          script only, never an extra tab stop); scroll-mt clears the sticky header. */}
+      <h2 id={PHOTO_SECTION_ID} tabIndex={-1} className="scroll-mt-20 text-lg font-semibold text-neutral-900 focus:outline-none">
+        Foto
+      </h2>
       {processing && (
         <p className="text-sm text-neutral-600" data-testid="photo-processing-status">
           Memproses foto...{devResizeInfo ? ` (${devResizeInfo})` : ""}
@@ -245,7 +250,7 @@ export function ProductPhotosSection({
           key={group.fabricColorId}
           title={group.name}
           hex={group.hex}
-          warn={group.hasActiveVariant && group.imageCount === 0}
+          warn={group.imageCount === 0}
           productId={productId}
           fabricColorId={group.fabricColorId}
           images={images.filter((image) => image.fabricColorId === group.fabricColorId)}

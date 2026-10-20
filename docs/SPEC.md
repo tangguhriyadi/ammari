@@ -247,7 +247,22 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
   afterward. Creating variants for several colors at once is one atomic transaction
   (all-or-nothing), with a single `audit_log` entry for the whole batch.
 - `product_images` — `fabric_color_id` (optional FK to `fabric_colors`; null = applies to all
-  colors).
+  colors). **Photo rules:**
+  - Photos never gate activation. New variants are created **active**, and activating a variant
+    or a product never requires a photo: production batches, stock and orders need active SKUs
+    before photos exist. A color with active variants but no photo of its own only gets a
+    non-blocking "Belum ada foto" badge in admin (product page and product list).
+  - The one hard rule is publishing: a product needs **at least one photo** (general or any
+    color) to be published on the storefront, and the last photo of a published product cannot
+    be deleted. Every photo also needs alt text to publish.
+  - Alt text defaults to `<product name> warna <color name>` for a color photo and to
+    `<product name>` for a general photo, set on upload when left empty and restored when cleared
+    (still editable). A product or color rename updates alt texts that still equal the old
+    default, never hand-written ones. Migration 0028 backfilled the default into existing empty
+    alt texts.
+  - Storefront fallback: a color's own photos plus the general ones; if neither exists, the first
+    other color's photos; if the product has no photo at all, a static placeholder (the Ammari
+    mark on the image background, 2:3, `apps/web/public/images/`). Never a broken image.
 - `production_batches` — `status` is `draft` → `posted`, one-way, and a posted batch is frozen by
   DB triggers. **Posting** consumes the batch's fabric and accessories from raw-material stock at
   their moving-average cost and freezes HPP/pcs (`ceil(total batch cost / planned pcs)`, written

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { MessageCircle } from "lucide-react";
 import { cn } from "@ammari/ui";
@@ -10,6 +9,7 @@ import { buildImageUrl } from "@/lib/storage/public-url";
 import { formatPriceIdr } from "@/lib/format";
 import { buildProductWhatsappMessage, buildWhatsappUrl } from "@/lib/whatsapp";
 import { PrimaryButton, PrimaryLink, OutlineLink } from "@/components/buttons";
+import { ProductImage } from "@/components/product-image";
 
 export interface ProductPurchasePanelProps {
   view: ProductView;
@@ -48,7 +48,13 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
   const [galleryIndex, setGalleryIndex] = useState(0);
 
   const selectedColor = view.colors.find((color) => color.id === colorId) ?? null;
+  // Never empty while the product has any photo (see getGalleryForColor's fallback chain); a
+  // product with none renders one placeholder slide instead (`null` src), never a blank column.
   const gallery = getGalleryForColor(view, colorId);
+  const slides: { key: string; src: string | null; alt: string }[] =
+    gallery.length > 0
+      ? gallery.map((image) => ({ key: image.id, src: buildImageUrl(storageBaseUrl, image.storageKey, 1600), alt: image.altText }))
+      : [{ key: "placeholder", src: null, alt: view.name }];
 
   // Scrolls the gallery back to its first image whenever the selected colour changes (a new
   // image array) — updating the DOM (an external system) and the matching counter state
@@ -93,9 +99,9 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
         {/* Mobile: horizontal swipe gallery */}
         <div className="relative md:hidden">
           <div ref={scrollRef} onScroll={handleGalleryScroll} className="flex snap-x snap-mandatory overflow-x-auto">
-            {gallery.map((image, index) => (
-              <div key={image.id} className="relative aspect-[2/3] w-full shrink-0 snap-center bg-image-bg">
-                <Image src={buildImageUrl(storageBaseUrl, image.storageKey, 1600)} alt={image.altText} fill priority={index === 0} sizes="100vw" className="object-cover" />
+            {slides.map((slide, index) => (
+              <div key={slide.key} className="relative aspect-[2/3] w-full shrink-0 snap-center bg-image-bg">
+                <ProductImage src={slide.src} alt={slide.alt} placeholderAlt={`Foto ${view.name} belum tersedia`} placeholderSize={1600} priority={index === 0} sizes="100vw" className="object-cover" />
               </div>
             ))}
           </div>
@@ -108,9 +114,9 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
 
         {/* Desktop: vertical stack, sticky */}
         <div className="hidden md:sticky md:top-20 md:flex md:flex-col md:gap-2">
-          {gallery.map((image, index) => (
-            <div key={image.id} className="relative aspect-[2/3] w-full bg-image-bg">
-              <Image src={buildImageUrl(storageBaseUrl, image.storageKey, 1600)} alt={image.altText} fill priority={index === 0} sizes="50vw" className="object-cover" />
+          {slides.map((slide, index) => (
+            <div key={slide.key} className="relative aspect-[2/3] w-full bg-image-bg">
+              <ProductImage src={slide.src} alt={slide.alt} placeholderAlt={`Foto ${view.name} belum tersedia`} placeholderSize={1600} priority={index === 0} sizes="50vw" className="object-cover" />
             </div>
           ))}
         </div>

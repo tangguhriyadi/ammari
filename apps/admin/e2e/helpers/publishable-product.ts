@@ -6,8 +6,8 @@ export async function jpegFixture(): Promise<Buffer> {
 }
 
 /** Creates a fabric+color, an ACTIVE product with one M variant on that color, and uploads one
- * photo WITH alt text to that color — everything the required-photo invariant AND the
- * storefront publish-time alt-text check both need satisfied, so the product's publish toggle
+ * photo WITH alt text to that color — everything the storefront publish guards (at least one
+ * photo, every photo with alt text) need satisfied, so the product's publish toggle
  * (product-storefront-section) can actually succeed afterward. Returns the product's id/name. */
 export async function createPublishablePhotoReadyProduct(page: Page, label: string): Promise<{ productId: string; productName: string }> {
   const unique = `${label}-${Date.now()}`;

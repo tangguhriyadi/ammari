@@ -109,6 +109,7 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
             availableColors={availableColors.map((color) => ({ id: color.id, name: color.name, hex: color.hex }))}
             variants={variants.map((variant) => ({
               sku: variant.sku,
+              fabricColorId: variant.fabricColorId,
               colorName: variant.colorName,
               colorHex: variant.colorHex,
               size: variant.size,
@@ -116,6 +117,7 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
               minStockQty: variant.minStockQty,
               isActive: variant.isActive,
             }))}
+            colorIdsMissingPhotos={colorGroups.filter((group) => group.imageCount === 0).map((group) => group.fabricColorId)}
           />
 
           <div className="mt-8">
@@ -135,6 +137,8 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
             productId={product.id}
             sizeMode={product.sizeMode}
             isActive={product.isActive}
+            photoCount={images.length}
+            canOpenPhotos={canManageProducts}
             initialValues={{
               isPublishedOnStorefront: product.isPublishedOnStorefront,
               storefrontDescriptionHtml: product.storefrontDescription ?? "",

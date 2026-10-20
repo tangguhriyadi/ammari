@@ -342,6 +342,7 @@ export function PhotoTile({
         open={altDialogOpen}
         onOpenChange={setAltDialogOpen}
         title="Ubah teks alternatif"
+        description="Kosongkan untuk memakai teks bawaan: nama produk dan warna foto."
         confirmLabel="Simpan"
         onConfirm={saveAltText}
         loading={pending}
@@ -349,7 +350,7 @@ export function PhotoTile({
         <Input
           value={altDraft}
           onChange={(event) => setAltDraft(event.target.value)}
-          placeholder="Teks alternatif (opsional)"
+          placeholder="Teks alternatif"
           aria-label="Teks alternatif"
           autoFocus
         />

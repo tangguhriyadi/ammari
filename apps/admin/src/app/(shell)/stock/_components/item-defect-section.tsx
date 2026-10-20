@@ -39,7 +39,7 @@ export function ItemDefectSection({
           {balance.valueAmount !== null && <span className="text-sm text-neutral-600"> · {formatRupiah(balance.valueAmount)}</span>}
         </p>
       </div>
-      <p className="text-sm text-neutral-600">Tidak bisa dijual atau dipakai, dan tidak termasuk stok di atas.</p>
+      <p className="text-sm text-neutral-600">Tidak bisa dijual atau dipakai, dan tidak termasuk stok yang bisa dijual atau dipakai.</p>
       {rows.length === 0 ? (
         <p className="text-base text-neutral-600">Belum pernah ada barang cacat.</p>
       ) : (

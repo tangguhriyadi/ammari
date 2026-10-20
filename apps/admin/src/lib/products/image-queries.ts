@@ -1,7 +1,10 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, asc, count, eq, isNull, ne } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { fabricColors, productImages, productVariants, products } from "@ammari/db/schema";
+import { qualifiedColumn } from "@ammari/db/sql-helpers";
+import { defaultImageAltText } from "./alt-text";
+import { PUBLISHED_LAST_PHOTO_MESSAGE } from "./photo-messages";
 import { getStorageClient, getStorageKeyPrefix } from "@/lib/storage";
 import { buildImageObjectKey, buildImageStorageKey } from "./image-keys";
 import { IMAGE_SIZES, logUploadTiming, processUploadedImage, type ImageSize } from "./image-processing";
@@ -25,36 +28,89 @@ async function deleteObjectsLogged(storageKey: string, imageId: string, sizes: r
   );
 }
 
-// ---------- Required-photo invariant ----------
+// ---------- Photo rules ----------
 //
-// Shared by every enforcement point: updateProduct's activation check (queries.ts),
-// deleteProductImage's last-photo check, addVariants' create-inactive check (queries.ts),
-// setVariantActive's check (queries.ts), and the UI's per-color warning badges. Keeping the
-// query in ONE place is what keeps those four call sites from drifting apart.
+// Photos never gate a variant or a product being ACTIVE: production batches, stock counts and
+// orders need active SKUs long before a photo exists. A color without its own photo only gets a
+// non-blocking "Belum ada foto" reminder badge in admin (listProductIdsMissingPhotos below for
+// the product list, listProductColorGroups' imageCount for the product page), and the storefront falls back to the product's other
+// photos, then to a static placeholder. The ONE hard photo rule is publishing: a product needs at
+// least one photo to be published on the storefront (storefront.ts's updateProductStorefront),
+// and the last photo of a published product can't be deleted (deleteProductImage below).
 
-export interface MissingPhotoColor {
-  id: string;
-  name: string;
-}
-
-/** Colors with >=1 ACTIVE variant of this product and ZERO images — general images (null
- * fabric_color_id) don't count; the invariant is per-color. */
-export async function getColorsMissingPhotos(productId: string, db: Database = defaultDb): Promise<MissingPhotoColor[]> {
+/** The subset of `productIds` with at least one color that has an ACTIVE variant but ZERO
+ * color-specific images (general images don't count: the reminder is per color) — the product
+ * list's "Belum ada foto" badge, in ONE query for a whole page of rows. Reminder only, never a
+ * blocking check. */
+export async function listProductIdsMissingPhotos(productIds: readonly string[], db: Database = defaultDb): Promise<Set<string>> {
+  if (productIds.length === 0) return new Set();
+  // Correlated subquery on a join-less outer query: qualifiedColumn() on BOTH sides of every
+  // correlation, never bare `${table.column}` (see that helper's doc comment for the drizzle bug).
   const rows = await db
-    .select({ id: fabricColors.id, name: fabricColors.name, imageCount: count(productImages.id) })
+    .selectDistinct({ productId: productVariants.productId })
     .from(productVariants)
-    .innerJoin(fabricColors, eq(fabricColors.id, productVariants.fabricColorId))
-    .leftJoin(
-      productImages,
-      and(eq(productImages.fabricColorId, fabricColors.id), eq(productImages.productId, productId)),
-    )
-    .where(and(eq(productVariants.productId, productId), eq(productVariants.isActive, true)))
-    .groupBy(fabricColors.id, fabricColors.name);
-  return rows.filter((row) => row.imageCount === 0).map((row) => ({ id: row.id, name: row.name }));
+    .where(
+      and(
+        inArray(productVariants.productId, [...productIds]),
+        eq(productVariants.isActive, true),
+        sql`not exists (select 1 from ${productImages} where ${qualifiedColumn(productImages, productImages.productId)} = ${qualifiedColumn(productVariants, productVariants.productId)} and ${qualifiedColumn(productImages, productImages.fabricColorId)} = ${qualifiedColumn(productVariants, productVariants.fabricColorId)})`,
+      ),
+    );
+  return new Set(rows.map((row) => row.productId));
 }
 
-/** Required-alt-text invariant, checked at storefront-publish time only (never blocks a normal
- * photo upload/save) — docs/plans/storefront-cms.md's "the per-color ordered images with
+// ---------- Default alt text (see alt-text.ts) ----------
+//
+// The SQL below rebuilds defaultImageAltText() in Postgres: `<product>` for a general photo,
+// `<product> warna <color>` for a color photo. Keep the three in sync with each other and with
+// migration 0028's backfill. Hand-written SQL with literal table/column names (no interpolated
+// Column objects), so there is no correlation-qualification risk (see qualifiedColumn()).
+
+/** Fills every empty (null or whitespace-only) alt text of one product with its default.
+ * Idempotent. Covers photos uploaded before default alt text existed, and any row a previous
+ * release wrote empty after migration 0028 already ran (the expand/contract deploy window). */
+export async function fillMissingAltTexts(productId: string, db: Database = defaultDb): Promise<void> {
+  await db.execute(sql`
+    update product_images
+    set alt_text = (select p.name from products p where p.id = product_images.product_id)
+      || coalesce((select ' warna ' || fc.name from fabric_colors fc where fc.id = product_images.fabric_color_id), '')
+    where product_images.product_id = ${productId}
+      and (product_images.alt_text is null or product_images.alt_text ~ '^[[:space:]]*$')
+  `);
+}
+
+/** After a product rename: rewrites only the alt texts that still equal the OLD default, so
+ * anything the owner typed by hand is left alone. */
+export async function syncAltTextsForProductRename(productId: string, oldName: string, newName: string, db: Database = defaultDb): Promise<void> {
+  if (oldName === newName) return;
+  await db.execute(sql`
+    update product_images
+    set alt_text = ${newName} || coalesce((select ' warna ' || fc.name from fabric_colors fc where fc.id = product_images.fabric_color_id), '')
+    where product_images.product_id = ${productId}
+      and product_images.alt_text = ${oldName} || coalesce((select ' warna ' || fc.name from fabric_colors fc where fc.id = product_images.fabric_color_id), '')
+  `);
+}
+
+/** After a color rename: same rule, across every product with photos of that color. */
+export async function syncAltTextsForColorRename(fabricColorId: string, oldName: string, newName: string, db: Database = defaultDb): Promise<void> {
+  if (oldName === newName) return;
+  await db.execute(sql`
+    update product_images
+    set alt_text = (select p.name from products p where p.id = product_images.product_id) || ' warna ' || ${newName}
+    where product_images.fabric_color_id = ${fabricColorId}
+      and product_images.alt_text = (select p.name from products p where p.id = product_images.product_id) || ' warna ' || ${oldName}
+  `);
+}
+
+/** Total images (general + every color) of a product — the storefront-publish guard's input. */
+export async function countProductImages(productId: string, db: Database = defaultDb): Promise<number> {
+  const [row] = await db.select({ total: count() }).from(productImages).where(eq(productImages.productId, productId));
+  return row?.total ?? 0;
+}
+
+/** Required-alt-text invariant, checked at storefront-publish time (never blocks a normal photo
+ * upload/save; uploads and clears now store the default alt text, so in practice only a blank
+ * left by an older release can trip it, and fillMissingAltTexts runs first) — docs/plans/storefront-cms.md's "the per-color ordered images with
  * required alt text requirement is covered by making alt text required AT PUBLISH TIME
  * (app-level), not a schema change" — `product_images.alt_text` stays nullable (plenty of
  * pre-existing rows have none) so this is deliberately NOT a DB CHECK. Returns true if ANY image
@@ -62,19 +118,9 @@ export async function getColorsMissingPhotos(productId: string, db: Database = d
 export async function hasImagesMissingAltText(productId: string, db: Database = defaultDb): Promise<boolean> {
   const rows = await db.select({ altText: productImages.altText }).from(productImages).where(eq(productImages.productId, productId));
   if (rows.length === 0) return false;
-  return rows.some((row) => !row.altText || row.altText.trim().length === 0);
-}
-
-export async function getImageCountForColor(
-  productId: string,
-  fabricColorId: string,
-  db: Database = defaultDb,
-): Promise<number> {
-  const [row] = await db
-    .select({ total: count() })
-    .from(productImages)
-    .where(and(eq(productImages.productId, productId), eq(productImages.fabricColorId, fabricColorId)));
-  return row?.total ?? 0;
+  // Same whitespace class as fillMissingAltTexts' / migration 0028's `[[:space:]]`, so whatever
+  // the fill treats as blank this check does too (JS `trim()` also strips Unicode spaces).
+  return rows.some((row) => !row.altText || /^[ \t\n\r\f\v]*$/.test(row.altText));
 }
 
 async function countImagesInGroup(tx: Database, productId: string, fabricColorId: string | null): Promise<number> {
@@ -90,33 +136,18 @@ async function countImagesInGroup(tx: Database, productId: string, fabricColorId
   return row?.total ?? 0;
 }
 
-async function colorHasActiveVariant(tx: Database, productId: string, fabricColorId: string): Promise<boolean> {
-  const [row] = await tx
-    .select({ total: count() })
-    .from(productVariants)
-    .where(
-      and(
-        eq(productVariants.productId, productId),
-        eq(productVariants.fabricColorId, fabricColorId),
-        eq(productVariants.isActive, true),
-      ),
-    );
-  return (row?.total ?? 0) > 0;
-}
-
 // ---------- Read queries (product detail page) ----------
 
 export interface ProductColorGroup {
   fabricColorId: string;
   name: string;
   hex: string | null;
-  hasActiveVariant: boolean;
   imageCount: number;
 }
 
 /** One entry per fabric color the product has ANY variant for (active or not), ordered by name
- * — the "Foto" section's color groups, each with enough to render its warning badge
- * (`hasActiveVariant && imageCount === 0`). */
+ * — the "Foto" section's color groups; `imageCount === 0` drives the "Belum ada foto" reminder
+ * on both the Foto and Varian sections. */
 export async function listProductColorGroups(productId: string, db: Database = defaultDb): Promise<ProductColorGroup[]> {
   const colorRows = await db
     .selectDistinct({ id: fabricColors.id, name: fabricColors.name, hex: fabricColors.hex })
@@ -124,15 +155,6 @@ export async function listProductColorGroups(productId: string, db: Database = d
     .innerJoin(fabricColors, eq(fabricColors.id, productVariants.fabricColorId))
     .where(eq(productVariants.productId, productId))
     .orderBy(fabricColors.name);
-
-  const activeFlagRows = await db
-    .select({ fabricColorId: productVariants.fabricColorId, isActive: productVariants.isActive })
-    .from(productVariants)
-    .where(eq(productVariants.productId, productId));
-  const hasActiveVariantByColor = new Map<string, boolean>();
-  for (const row of activeFlagRows) {
-    if (row.isActive) hasActiveVariantByColor.set(row.fabricColorId, true);
-  }
 
   const imageCountRows = await db
     .select({ fabricColorId: productImages.fabricColorId, total: count() })
@@ -145,7 +167,6 @@ export async function listProductColorGroups(productId: string, db: Database = d
     fabricColorId: color.id,
     name: color.name,
     hex: color.hex,
-    hasActiveVariant: hasActiveVariantByColor.get(color.id) ?? false,
     imageCount: imageCountByColor.get(color.id) ?? 0,
   }));
 }
@@ -245,12 +266,16 @@ export async function uploadProductImage(
       const product = await lockProductForUpdate(tx, input.productId);
       if (!product) throw new ActionError("Produk tidak ditemukan.");
 
+      let colorName: string | null = null;
       if (input.fabricColorId) {
-        const [color] = await tx.select().from(fabricColors).where(eq(fabricColors.id, input.fabricColorId)).limit(1);
+        // FOR SHARE: a concurrent color rename (updateFabricColor) waits for this upload to
+        // commit, so its alt-text sync sees this row instead of leaving a stale default behind.
+        const [color] = await tx.select().from(fabricColors).where(eq(fabricColors.id, input.fabricColorId)).limit(1).for("share");
         if (!color) throw new FieldError("fabricColorId", "Warna tidak ditemukan.");
         if (color.fabricId !== product.fabricId) {
           throw new FieldError("fabricColorId", `Warna "${color.name}" bukan milik bahan produk ini.`);
         }
+        colorName = color.name;
       }
 
       const sortOrder = await countImagesInGroup(tx, product.id, input.fabricColorId);
@@ -263,7 +288,8 @@ export async function uploadProductImage(
           fabricId: product.fabricId,
           fabricColorId: input.fabricColorId,
           storageKey,
-          altText: input.altText || null,
+          // Never stored empty: an untyped alt text gets the default, which stays editable.
+          altText: input.altText?.trim() || defaultImageAltText(product.name, colorName),
           width: processed.width,
           height: processed.height,
           sortOrder,
@@ -320,7 +346,8 @@ async function findThumbnailFallback(tx: Tx, productId: string, excludeImageId: 
 
 /** Deletes the row, then its storage objects (log-and-continue on object-deletion failure, per
  * spec — a future orphan-sweep script can reconcile any leftovers; not built here). Before the
- * row delete: refuses the "last photo of an active color" case, and, if this image IS the
+ * row delete: refuses deleting the LAST photo of a product published on the storefront (the
+ * publish guard's own invariant, see updateProductStorefront), and, if this image IS the
  * current thumbnail, computes and writes the fallback — required either way, since
  * products.thumbnail_image_id's FK is ON DELETE RESTRICT (see that column's doc comment in
  * packages/db/src/schema/catalog.ts for why), so the reference must be cleared before the image
@@ -337,15 +364,9 @@ export async function deleteProductImage(
     const product = await lockProductForUpdate(tx, image.productId);
     if (!product) throw new ActionError("Produk tidak ditemukan.");
 
-    if (image.fabricColorId) {
-      const currentCount = await countImagesInGroup(tx, image.productId, image.fabricColorId);
-      const remainingAfterDelete = currentCount - 1;
-      if (remainingAfterDelete === 0 && product.isActive && (await colorHasActiveVariant(tx, image.productId, image.fabricColorId))) {
-        const [color] = await tx.select({ name: fabricColors.name }).from(fabricColors).where(eq(fabricColors.id, image.fabricColorId)).limit(1);
-        throw new ActionError(
-          `Tidak bisa menghapus foto terakhir warna "${color?.name ?? ""}" selagi produk aktif dan warna ini punya varian aktif.`,
-        );
-      }
+    // Safe against a concurrent delete/publish: both take the same product FOR UPDATE lock above.
+    if (product.isPublishedOnStorefront && (await countProductImages(image.productId, tx)) <= 1) {
+      throw new ActionError(PUBLISHED_LAST_PHOTO_MESSAGE);
     }
 
     if (product.thumbnailImageId === image.id) {
@@ -442,7 +463,19 @@ export async function updateImageAltText(
   return db.transaction(async (tx) => {
     const [before] = await tx.select().from(productImages).where(eq(productImages.id, imageId)).limit(1);
     if (!before) throw new ActionError("Foto tidak ditemukan.");
-    const [after] = await tx.update(productImages).set({ altText }).where(eq(productImages.id, imageId)).returning();
+    // Clearing the field restores the default rather than storing an empty alt text.
+    let nextAltText = altText?.trim() || null;
+    if (!nextAltText) {
+      // Locked like uploadProductImage (product FOR UPDATE, color FOR SHARE): a concurrent
+      // product/color rename can't slip a stale default in between this read and the write.
+      const product = await lockProductForUpdate(tx, before.productId);
+      if (!product) throw new ActionError("Produk tidak ditemukan.");
+      const [color] = before.fabricColorId
+        ? await tx.select({ name: fabricColors.name }).from(fabricColors).where(eq(fabricColors.id, before.fabricColorId)).limit(1).for("share")
+        : [];
+      nextAltText = defaultImageAltText(product.name, color?.name ?? null);
+    }
+    const [after] = await tx.update(productImages).set({ altText: nextAltText }).where(eq(productImages.id, imageId)).returning();
     if (!after) throw new Error("failed to update product image");
     await writeAuditLog(tx, { actorStaffUserId, action: "update", entityType: "product_image", entityId: imageId, before, after });
     return { productId: after.productId };

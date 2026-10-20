@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { StorefrontProduct } from "@ammari/db/storefront";
-import { buildProductView, getGalleryForColor, resolveSelectedColorId } from "./product-view";
+import { buildProductView, getGalleryForColor, getPrimaryImage, resolveSelectedColorId } from "./product-view";
 
 function baseProduct(overrides: Partial<StorefrontProduct> = {}): StorefrontProduct {
   return {
@@ -46,10 +46,44 @@ describe("buildProductView", () => {
     expect(getGalleryForColor(view, "navy").map((i) => i.id)).toEqual(["img-general"]);
   });
 
-  test("a colour with zero images of any kind gets an empty gallery, never throws", () => {
+  test("a product with zero images of any kind gets an empty gallery (placeholder), never throws", () => {
     const product = baseProduct({ colors: [{ id: "beige", name: "Beige", hex: null }], images: [] });
     const view = buildProductView(product);
     expect(getGalleryForColor(view, "beige")).toEqual([]);
+    expect(getPrimaryImage(view)).toBeNull();
+  });
+
+  test("a colour with no photo and no general photo falls back to the first other colour's photos", () => {
+    const product = baseProduct({
+      colors: [
+        { id: "taupe", name: "Taupe", hex: null },
+        { id: "beige", name: "Beige", hex: null },
+        { id: "navy", name: "Navy", hex: null },
+      ],
+      images: [
+        { id: "img-navy", storageKey: "navy/1", fabricColorId: "navy", altText: "Navy 1", sortOrder: 0, width: 800, height: 1200 },
+        { id: "img-beige-2", storageKey: "beige/2", fabricColorId: "beige", altText: "Beige 2", sortOrder: 1, width: 800, height: 1200 },
+        { id: "img-beige-1", storageKey: "beige/1", fabricColorId: "beige", altText: "Beige 1", sortOrder: 0, width: 800, height: 1200 },
+      ],
+    });
+    const view = buildProductView(product);
+
+    // Taupe has nothing: Beige comes first in canonical colour order, so its photos are used.
+    expect(getGalleryForColor(view, "taupe").map((i) => i.id)).toEqual(["img-beige-1", "img-beige-2"]);
+    // A colour WITH its own photos still only shows its own.
+    expect(getGalleryForColor(view, "navy").map((i) => i.id)).toEqual(["img-navy"]);
+    expect(getPrimaryImage(view)?.id).toBe("img-beige-1");
+  });
+
+  test("the primary image prefers a general photo over any colour's photo", () => {
+    const product = baseProduct({
+      colors: [{ id: "beige", name: "Beige", hex: null }],
+      images: [
+        { id: "img-beige", storageKey: "beige/1", fabricColorId: "beige", altText: null, sortOrder: 0, width: 800, height: 1200 },
+        { id: "img-general", storageKey: "general/1", fabricColorId: null, altText: null, sortOrder: 0, width: 800, height: 1200 },
+      ],
+    });
+    expect(getPrimaryImage(buildProductView(product))?.id).toBe("img-general");
   });
 
   test("sized product: availability per colour, in CUTTING_SIZES order, missing sizes read as unavailable", () => {

@@ -268,56 +268,41 @@ describe("addVariants", () => {
   });
 });
 
-describe("addVariants — required-photo invariant", () => {
-  test("creates new variants INACTIVE for a photo-less color on an active product, and reports it in inactiveColorNames", async () => {
+describe("addVariants — photos never gate activation", () => {
+  test("creates new variants ACTIVE on an active product even when the color has no photo", async () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
       const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
       const product = await createProductFixture(tx, fabric.id, { isActive: true });
 
-      const { created, inactiveColorNames } = await addVariants(
-        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
+      const { created } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["S", "M", "L"] }] },
         ACTOR_ID,
         tx,
       );
 
-      expect(created.every((variant) => variant.isActive === false)).toBe(true);
-      expect(inactiveColorNames).toEqual(["Mocca"]);
+      expect(created).toHaveLength(3);
+      expect(created.every((variant) => variant.isActive === true)).toBe(true);
     });
   });
 
-  test("creates new variants ACTIVE when the color already has a photo", async () => {
+  test("adds another size to a color after its photo is uploaded, still active", async () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
-      const color = await createFabricColorFixture(tx, fabric.id, { name: "Sage" });
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Taupe" });
       const product = await createProductFixture(tx, fabric.id, { isActive: true });
+      await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["S", "M", "L"] }] }, ACTOR_ID, tx);
       await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
 
-      const { created, inactiveColorNames } = await addVariants(
-        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
+      const { created } = await addVariants(
+        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["XL"] }] },
         ACTOR_ID,
         tx,
       );
 
-      expect(created.every((variant) => variant.isActive === true)).toBe(true);
-      expect(inactiveColorNames).toEqual([]);
-    });
-  });
-
-  test("creates new variants ACTIVE normally when the product itself is inactive", async () => {
-    await withRollback(async (tx) => {
-      const fabric = await createFabricFixture(tx);
-      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
-      const product = await createProductFixture(tx, fabric.id, { isActive: false });
-
-      const { created, inactiveColorNames } = await addVariants(
-        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
-        ACTOR_ID,
-        tx,
-      );
-
-      expect(created.every((variant) => variant.isActive === true)).toBe(true);
-      expect(inactiveColorNames).toEqual([]);
+      expect(created.map((variant) => [variant.size, variant.isActive])).toEqual([["XL", true]]);
+      const detail = await getProductDetail(product.id, tx);
+      expect(detail?.variants.filter((variant) => variant.isActive).map((variant) => variant.size).sort()).toEqual(["L", "M", "S", "XL"]);
     });
   });
 });
@@ -481,94 +466,38 @@ describe("updateProduct", () => {
     });
   });
 
-  describe("required-photo invariant", () => {
-    test("refuses to activate when a color with an active variant has no photo, naming the color", async () => {
-      await withRollback(async (tx) => {
-        const fabric = await createFabricFixture(tx);
-        const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
-        // Inactive first so addVariants' own rule doesn't ALSO deactivate the variant — this
-        // test is specifically about updateProduct's check, isolated from addVariants'.
-        const product = await createProductFixture(tx, fabric.id, { isActive: false });
-        await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
+  test("activates a product whose active color has no photo (photos never gate activation)", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
+      const product = await createProductFixture(tx, fabric.id, { isActive: false });
+      await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
 
-        await expect(
-          updateProduct(
-            product.id,
-            {
-              name: product.name,
-              slug: product.slug,
-              fabricId: product.fabricId,
-              closure: product.closure,
-              basePrice: product.basePrice,
-              isActive: true,
-              highlights: [],
-            },
-            ACTOR_ID,
-            tx,
-          ),
-        ).rejects.toThrow(/Mocca/);
-      });
-    });
-
-    test("allows activating once every color with an active variant has a photo", async () => {
-      await withRollback(async (tx) => {
-        const fabric = await createFabricFixture(tx);
-        const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
-        const product = await createProductFixture(tx, fabric.id, { isActive: false });
-        await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
-        await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
-
-        const updated = await updateProduct(
-          product.id,
-          {
-            name: product.name,
-            slug: product.slug,
-            fabricId: product.fabricId,
-            closure: product.closure,
-            basePrice: product.basePrice,
-            isActive: true,
-            highlights: [],
-          },
-          ACTOR_ID,
-          tx,
-        );
-        expect(updated.isActive).toBe(true);
-      });
-    });
-
-    test("allows activating when the color with no photo only has INACTIVE variants", async () => {
-      await withRollback(async (tx) => {
-        const fabric = await createFabricFixture(tx);
-        const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
-        const product = await createProductFixture(tx, fabric.id, { isActive: true }); // auto-inactive variant
-        await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
-
-        const updated = await updateProduct(
-          product.id,
-          {
-            name: product.name,
-            slug: product.slug,
-            fabricId: product.fabricId,
-            closure: product.closure,
-            basePrice: product.basePrice,
-            isActive: true,
-            highlights: [],
-          },
-          ACTOR_ID,
-          tx,
-        );
-        expect(updated.isActive).toBe(true);
-      });
+      const updated = await updateProduct(
+        product.id,
+        {
+          name: product.name,
+          slug: product.slug,
+          fabricId: product.fabricId,
+          closure: product.closure,
+          basePrice: product.basePrice,
+          isActive: true,
+          highlights: [],
+        },
+        ACTOR_ID,
+        tx,
+      );
+      expect(updated.isActive).toBe(true);
     });
   });
 });
 
-describe("setVariantActive — required-photo invariant", () => {
-  test("refuses to activate a variant whose color has no photo", async () => {
+describe("setVariantActive", () => {
+  test("re-activates a variant whose color has no photo", async () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
       const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
-      const product = await createProductFixture(tx, fabric.id, { isActive: false });
+      const product = await createProductFixture(tx, fabric.id, { isActive: true });
       const { created: [variant] } = await addVariants(
         { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
         ACTOR_ID,
@@ -576,31 +505,13 @@ describe("setVariantActive — required-photo invariant", () => {
       );
       if (!variant) throw new Error("expected a variant to be created");
       await setVariantActive(variant.sku, false, ACTOR_ID, tx);
-
-      await expect(setVariantActive(variant.sku, true, ACTOR_ID, tx)).rejects.toThrow(/Mocca/);
-    });
-  });
-
-  test("allows activating a variant once its color has a photo", async () => {
-    await withRollback(async (tx) => {
-      const fabric = await createFabricFixture(tx);
-      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
-      const product = await createProductFixture(tx, fabric.id, { isActive: false });
-      const { created: [variant] } = await addVariants(
-        { productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] },
-        ACTOR_ID,
-        tx,
-      );
-      if (!variant) throw new Error("expected a variant to be created");
-      await setVariantActive(variant.sku, false, ACTOR_ID, tx);
-      await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
 
       const after = await setVariantActive(variant.sku, true, ACTOR_ID, tx);
       expect(after.isActive).toBe(true);
     });
   });
 
-  test("allows deactivating regardless of photos (the rule only guards activation)", async () => {
+  test("deactivates a variant", async () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
       const color = await createFabricColorFixture(tx, fabric.id);
@@ -623,9 +534,6 @@ describe("updateVariantsBulk", () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
       const sage = await createFabricColorFixture(tx, fabric.id, { name: "Sage" });
-      // Inactive — this test is about updateVariantsBulk itself, not the required-photo rule
-      // (addVariants would otherwise create these variants inactive on an active product whose
-      // color has no photo yet).
       const product = await createProductFixture(tx, fabric.id, { isActive: false });
       const { created } = await addVariants(
         { productId: product.id, selections: [{ fabricColorId: sage.id, sizes: ["S", "M", "L"] }] },

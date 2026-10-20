@@ -16,7 +16,7 @@ const LEAVE_WARNING = "Ada foto yang belum disimpan. Tinggalkan halaman ini?";
 /** Staged, section-wide photo uploads (owner feedback: selecting files must not save them
  * immediately). Files are validated and client-side downscaled as soon as they're picked — same
  * as the old immediate-upload flow — but only actually uploaded (and so only subject to the
- * required-photo/thumbnail business rules, which run server-side in uploadProductImageAction)
+ * photo/thumbnail business rules, which run server-side in uploadProductImageAction)
  * once the caller invokes `saveAll`. One staging list spans every color group in the photo
  * section, since "Simpan foto" is a single section-wide action, not per-group. */
 export function usePhotoStaging({ productId, onSaved }: { productId: string; onSaved: () => void }) {

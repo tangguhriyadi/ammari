@@ -12,7 +12,6 @@ export interface PhotoColorGroup {
   fabricColorId: string;
   name: string;
   hex: string | null;
-  hasActiveVariant: boolean;
   imageCount: number;
 }
 

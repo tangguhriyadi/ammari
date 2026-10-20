@@ -3,7 +3,8 @@ import { eq } from "drizzle-orm";
 import { products } from "@ammari/db/schema";
 import { ContentTooLargeError, sanitizeStorefrontDescriptionHtml } from "@ammari/content-sanitize";
 import { ActionError, FieldError, isPostgresErrorCode } from "@/lib/errors";
-import { hasImagesMissingAltText } from "./image-queries";
+import { countProductImages, fillMissingAltTexts, hasImagesMissingAltText } from "./image-queries";
+import { PUBLISH_ALT_TEXT_MESSAGE, PUBLISH_REQUIRES_PHOTO_MESSAGE } from "./photo-messages";
 import { defaultDb, lockProductForUpdate, writeAuditLog, type Database } from "./db";
 
 // ---------- Product storefront fields (docs/plans/storefront-cms.md) ----------
@@ -45,8 +46,8 @@ export async function updateProductStorefront(
     if (!before) throw new ActionError("Produk tidak ditemukan.");
 
     // Every one of these is ALSO a real DB guarantee or a pre-existing invariant somewhere else
-    // (the is_active CHECK, the size_chart_id FK, the required-photo invariant's own alt-text
-    // gap) — these checks exist purely to turn "publish rejected" into a friendly Indonesian
+    // (the is_active CHECK, the size_chart_id FK, the at-least-one-photo rule that
+    // deleteProductImage also upholds, the alt-text gap) — these checks exist purely to turn "publish rejected" into a friendly Indonesian
     // message pointing at the right field, the same "pre-check + friendly catch on the race"
     // pattern updateProduct already uses for fabric/closure immutability.
     if (input.isPublishedOnStorefront) {
@@ -56,10 +57,18 @@ export async function updateProductStorefront(
       if (before.sizeMode === "sized" && !input.sizeChartId) {
         throw new FieldError("sizeChartId", "Pilih tabel ukuran sebelum menayangkan produk ukuran XS-XL ini di toko online.");
       }
+      // The one hard photo rule (see image-queries.ts's "Photo rules"): photos never gate
+      // activation, only publishing. deleteProductImage keeps it holding afterward by refusing
+      // to delete a published product's last photo; both run under the same product lock.
+      if ((await countProductImages(id, tx)) === 0) {
+        throw new FieldError("isPublishedOnStorefront", PUBLISH_REQUIRES_PHOTO_MESSAGE);
+      }
+      // Every photo normally already has an alt text (the default is set on upload, migration
+      // 0028 backfilled older rows); this fill catches any blank a previous release wrote during
+      // the deploy window, so the guard below is a backstop, not a manual chore.
+      await fillMissingAltTexts(id, tx);
       if (await hasImagesMissingAltText(id, tx)) {
-        throw new ActionError(
-          "Semua foto produk harus memiliki teks alternatif sebelum bisa ditayangkan di toko online. Lengkapi di bagian Foto di bawah.",
-        );
+        throw new ActionError(PUBLISH_ALT_TEXT_MESSAGE);
       }
     }
 

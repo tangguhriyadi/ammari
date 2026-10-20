@@ -27,7 +27,7 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
   await page.locator("#product-fabric").selectOption({ label: fabricName });
   await page.getByLabel("Harga dasar").fill("269.000");
   const code = await page.getByLabel("Kode produk").inputValue();
-  await page.getByRole("switch", { name: "Aktif" }).click(); // keep inactive so the variant below comes in active
+  await page.getByRole("switch", { name: "Aktif" }).click(); // product left inactive; variants are created active either way
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
   await page.getByRole("checkbox", { name: /Sage/ }).check();

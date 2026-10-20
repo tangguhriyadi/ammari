@@ -12,6 +12,17 @@
 export const E2E_PRODUCT_SLUG = "gamis-flowy-straight-e2e";
 export const E2E_RELATED_PRODUCT_SLUG = "outer-dress-tali-depan-e2e";
 export const E2E_UNPUBLISHED_PRODUCT_SLUG = "gamis-belum-terbit-e2e";
+// Image fallback fixtures (product-image-fallback.spec.ts). Both are published straight through
+// the DB, bypassing admin's publish-needs-a-photo guard on purpose: the storefront must still
+// render cleanly for legacy/edge data, never a broken image.
+//   - NO_PHOTO: published with no photo at all, so every image slot shows the placeholder.
+//   - OTHER_COLOR_PHOTO: its first (default) colour, Sage, has no photo and there is no general
+//     photo; only Mocca has one, so Sage's gallery falls back to Mocca's photo.
+// On their own fabric and colours, so they never become product A's same-fabric "related
+// products" or repeat product A's colour names on its page.
+export const E2E_NO_PHOTO_PRODUCT_SLUG = "gamis-tanpa-foto-e2e";
+export const E2E_NO_PHOTO_PRODUCT_NAME = "Gamis Tanpa Foto E2E";
+export const E2E_OTHER_COLOR_PHOTO_PRODUCT_SLUG = "gamis-foto-warna-lain-e2e";
 export const E2E_PRODUCT_NAME = "Gamis Flowy Straight E2E";
 export const E2E_HOMEPAGE_TITLE = "Koleksi perdana E2E";
 export const E2E_WHY_AMMARI_HEADING = "Nyaman dipakai seharian, tetap syar'i E2E";
@@ -163,6 +174,63 @@ export async function seedStorefrontFixtures(): Promise<void> {
     .returning();
   if (!variantB) throw new Error("failed to seed e2e variant B");
   await db.insert(stockMovements).values({ sku: variantB.sku, qty: 4, valueAmount: 192_000, type: "production", refType: "manual" });
+
+  const [fallbackFabric] = await db.insert(fabrics).values({ name: "Katun Polos E2E" }).returning();
+  if (!fallbackFabric) throw new Error("failed to seed e2e fallback fabric");
+  const [sage] = await db.insert(fabricColors).values({ fabricId: fallbackFabric.id, name: "Sage E2E", hex: "#9CAF88" }).returning();
+  const [mocca] = await db.insert(fabricColors).values({ fabricId: fallbackFabric.id, name: "Mocca E2E", hex: "#8B6F5A" }).returning();
+  if (!sage || !mocca) throw new Error("failed to seed e2e fallback colours");
+
+  const [noPhotoProduct] = await db
+    .insert(products)
+    .values({
+      name: E2E_NO_PHOTO_PRODUCT_NAME,
+      code: "E2ENOFOTO",
+      slug: E2E_NO_PHOTO_PRODUCT_SLUG,
+      fabricId: fallbackFabric.id,
+      closure: "front_zip",
+      sizeMode: "sized",
+      basePrice: 249_000,
+      isActive: true,
+      isPublishedOnStorefront: true,
+      sizeChartId: sizeChart.id,
+    })
+    .returning();
+  if (!noPhotoProduct) throw new Error("failed to seed e2e no-photo product");
+  await db
+    .insert(productVariants)
+    .values({ sku: "E2E-NOFOTO-SAGE-M", productId: noPhotoProduct.id, fabricId: fallbackFabric.id, fabricColorId: sage.id, closure: "front_zip", size: "M", isActive: true });
+
+  const [otherColorPhotoProduct] = await db
+    .insert(products)
+    .values({
+      name: "Gamis Foto Warna Lain E2E",
+      code: "E2EWARNA",
+      slug: E2E_OTHER_COLOR_PHOTO_PRODUCT_SLUG,
+      fabricId: fallbackFabric.id,
+      closure: "front_zip",
+      sizeMode: "sized",
+      basePrice: 259_000,
+      isActive: true,
+      isPublishedOnStorefront: true,
+      sizeChartId: sizeChart.id,
+    })
+    .returning();
+  if (!otherColorPhotoProduct) throw new Error("failed to seed e2e other-colour-photo product");
+  await db.insert(productVariants).values([
+    { sku: "E2E-WARNA-SAGE-M", productId: otherColorPhotoProduct.id, fabricId: fallbackFabric.id, fabricColorId: sage.id, closure: "front_zip", size: "M", isActive: true },
+    { sku: "E2E-WARNA-MOCCA-M", productId: otherColorPhotoProduct.id, fabricId: fallbackFabric.id, fabricColorId: mocca.id, closure: "front_zip", size: "M", isActive: true },
+  ]);
+  await db.insert(productImages).values({
+    productId: otherColorPhotoProduct.id,
+    fabricId: fallbackFabric.id,
+    fabricColorId: mocca.id,
+    storageKey: "api/test/fixtures/taupe",
+    altText: "Gamis Foto Warna Lain warna Mocca",
+    width: 800,
+    height: 1200,
+    sortOrder: 0,
+  });
 
   // An active-but-UNPUBLISHED product — getStorefrontProductBySlug (and so the page itself) must
   // treat its slug exactly like one that doesn't exist at all: a 404.

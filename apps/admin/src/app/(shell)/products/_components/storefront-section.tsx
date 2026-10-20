@@ -6,7 +6,29 @@ import { useState, useTransition } from "react";
 import { Button, Label, Select, Switch, Textarea } from "@ammari/ui";
 import type { SizeMode } from "@ammari/db/schema";
 import { revalidateProductAction, updateProductStorefrontAction } from "../actions";
+import { PHOTO_SECTION_ID, PHOTO_SECTION_MESSAGES } from "@/lib/products/photo-messages";
 import { RichTextEditor } from "./rich-text-editor";
+
+/** Scrolls to the product page's Foto section and moves focus onto its heading, so keyboard and
+ * screen reader users land there too. Replaces "lihat di bawah"-style copy: the section's position
+ * relative to this card isn't something the messages should promise. */
+function PhotoSectionLink() {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        const target = document.getElementById(PHOTO_SECTION_ID);
+        if (!target) return;
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+        target.focus({ preventScroll: true });
+      }}
+      className="font-medium text-brand underline hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+    >
+      Buka bagian Foto
+    </button>
+  );
+}
 
 export interface SizeChartOption {
   id: string;
@@ -24,6 +46,8 @@ export function StorefrontSection({
   productId,
   sizeMode,
   isActive,
+  photoCount,
+  canOpenPhotos,
   initialValues,
   sizeCharts,
 }: {
@@ -32,6 +56,12 @@ export function StorefrontSection({
   /** The product's CURRENT `is_active` value — used only to show the right guidance up front;
    * the real guard is server-side (updateProductStorefrontAction -> updateProductStorefront). */
   isActive: boolean;
+  /** The product's CURRENT total photo count, for the same up-front guidance; the server
+   * refuses publishing a product with no photo regardless (updateProductStorefront). */
+  photoCount: number;
+  /** Whether the Foto section is on this page for this session (it renders only with
+   * products.manage) — the "Buka bagian Foto" jump is hidden when there is nothing to jump to. */
+  canOpenPhotos: boolean;
   initialValues: StorefrontSectionValues;
   sizeCharts: SizeChartOption[];
 }) {
@@ -92,6 +122,12 @@ export function StorefrontSection({
       {!isActive && !values.isPublishedOnStorefront && (
         <p className="text-sm text-neutral-600">Produk harus aktif terlebih dahulu sebelum bisa ditayangkan di toko online.</p>
       )}
+      {photoCount === 0 && (
+        <p className="flex flex-wrap items-center gap-x-2 text-sm text-neutral-600" data-testid="storefront-needs-photo">
+          Unggah minimal satu foto di bagian Foto sebelum menayangkan produk ini di toko online.
+          {canOpenPhotos && <PhotoSectionLink />}
+        </p>
+      )}
 
       <RichTextEditor
         label="Deskripsi untuk toko"
@@ -142,8 +178,9 @@ export function StorefrontSection({
       )}
 
       {formError && (
-        <p role="alert" className="text-sm text-danger-700">
+        <p role="alert" className="flex flex-wrap items-center gap-x-2 text-sm text-danger-700">
           {formError}
+          {canOpenPhotos && PHOTO_SECTION_MESSAGES.includes(formError) && <PhotoSectionLink />}
         </p>
       )}
 

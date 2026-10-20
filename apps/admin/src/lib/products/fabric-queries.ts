@@ -6,6 +6,7 @@ import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { normalizeColorHex } from "./color-hex";
 import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from "./errors";
 import { defaultDb, writeAuditLog, type Database } from "./db";
+import { syncAltTextsForColorRename } from "./image-queries";
 
 const FABRIC_CONSTRAINT_FIELDS = {} as const;
 
@@ -365,6 +366,9 @@ export async function updateFabricColor(
     try {
       const [after] = await tx.update(fabricColors).set(values).where(eq(fabricColors.id, id)).returning();
       if (!after) throw new Error("failed to update fabric color");
+      // Photos of this color still carrying the default alt text follow the rename; hand-written
+      // ones don't.
+      await syncAltTextsForColorRename(id, before.name, after.name, tx);
       await writeAuditLog(tx, {
         actorStaffUserId,
         action: "update",

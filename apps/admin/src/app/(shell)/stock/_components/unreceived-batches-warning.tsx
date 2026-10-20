@@ -16,7 +16,7 @@ export function UnreceivedBatchesWarning({ batches, canOpenBatches }: { batches:
         Ada hasil produksi yang belum diterima
       </p>
       <p className="mt-1 text-base text-neutral-800">
-        Barang dari batch di bawah ini mungkin sudah ada di rumah tapi belum masuk stok. Terima dulu hasilnya di halaman batch, jangan
+        Barang dari batch berikut mungkin sudah ada di rumah tapi belum masuk stok. Terima dulu hasilnya di halaman batch, jangan
         dimasukkan lewat hitung stok.
       </p>
       <ul className="mt-2 flex flex-col gap-1 text-base text-neutral-800">

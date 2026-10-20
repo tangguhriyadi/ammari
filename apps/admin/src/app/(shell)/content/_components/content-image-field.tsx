@@ -250,7 +250,7 @@ export function ContentImageField({
         <div className="flex flex-col gap-2 border-t border-neutral-200 pt-3">
           <span className="text-sm font-medium text-neutral-700">Crop khusus mobile (opsional)</span>
           <p className="text-sm text-neutral-600">
-            Dipakai sebagai gambar hero di layar sempit (ponsel) jika diisi. Jika tidak, gambar utama di atas dipakai untuk semua ukuran layar.
+            Dipakai sebagai gambar hero di layar sempit (ponsel) jika diisi. Jika tidak, gambar utama dipakai untuk semua ukuran layar.
           </p>
 
           <input

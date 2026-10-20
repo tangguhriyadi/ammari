@@ -9,7 +9,7 @@ async function jpegFixture(color: { r: number; g: number; b: number }): Promise<
   return sharp({ create: { width: 40, height: 40, channels: 3, background: color } }).jpeg().toBuffer();
 }
 
-test("upload photos, reorder, set thumbnail, and block activation until every active color has a photo", async ({ page }) => {
+test("upload photos, reorder, set thumbnail; a photo-less color only gets a reminder badge and never blocks activation", async ({ page }) => {
   // super_admin, not owner — the OTP send throttle is 5 per 5 minutes per email
   // (packages/auth/src/staff/create-staff-auth.ts), and products.spec.ts's own tests already
   // use E2E_OWNER_EMAIL close to that limit; a 6th login in the same run tips it over.
@@ -27,10 +27,8 @@ test("upload photos, reorder, set thumbnail, and block activation until every ac
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
-  // 2. Create a product on that fabric, created INACTIVE — so the variants added below come in
-  // ACTIVE normally (addVariants only auto-deactivates new variants for a photo-less color on
-  // an ALREADY-active product), making the later activation attempt meaningfully test the
-  // required-photo check itself rather than a variant that's inactive for an unrelated reason.
+  // 2. Create a product on that fabric, created INACTIVE — so step 7 can check that activating
+  // it is allowed even though Mocca never gets a photo.
   const productName = `Contoh Gamis Foto E2E ${unique}`;
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
@@ -106,14 +104,28 @@ test("upload photos, reorder, set thumbnail, and block activation until every ac
   await page.getByRole("menuitem", { name: "Jadikan thumbnail" }).click();
   await expect(generalTile.locator('[aria-label="Thumbnail produk"]')).toBeVisible();
 
-  // 7. Mocca still has no photo — activating the product must be refused, naming Mocca.
+  // 7. Mocca still has no photo: its photo group shows the "Belum ada foto" reminder (Sage's
+  // doesn't), and activating the product is NOT refused for it (photos never gate activation).
+  const moccaGroup = page
+    .locator('[data-testid^="photo-group-"]')
+    .filter({ has: page.getByRole("heading", { name: "Mocca", exact: true }) });
+  await expect(moccaGroup.getByText("Belum ada foto")).toBeVisible();
+  await expect(sageGroup.getByText("Belum ada foto")).toHaveCount(0);
   // Scoped to <form> — ProductForm's own "Aktif" switch is the only one inside a <form>; each
   // variant row's own "Aktif" switch (same accessible name) sits outside any <form>.
   const productActiveSwitch = page.locator("form").getByRole("switch", { name: "Aktif" });
   await productActiveSwitch.click();
-  await page.getByRole("button", { name: "Simpan" }).first().click();
-  await expect(page.getByText(/Warna berikut belum punya foto.*Mocca/)).toBeVisible();
-  await expect(productActiveSwitch).toHaveAttribute("aria-checked", "false");
+  const productUrl = page.url();
+  const saveButton = page.locator("form").getByRole("button", { name: "Simpan", exact: true });
+  await saveButton.click();
+  // Saved either way: a redirect to the list, or (when apps/web isn't running to revalidate) the
+  // form staying put with its "toko online belum diperbarui" warning. Never a photo error.
+  await expect(
+    page.getByText("Perubahan berhasil disimpan").or(page.locator("form").getByTestId("revalidation-warning")),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/belum punya foto/)).toHaveCount(0);
+  await page.goto(productUrl);
+  await expect(page.locator("form").getByRole("switch", { name: "Aktif" })).toHaveAttribute("aria-checked", "true");
 });
 
 test("staged photos can be removed individually, and Batal discards the rest after confirmation", async ({ page }) => {

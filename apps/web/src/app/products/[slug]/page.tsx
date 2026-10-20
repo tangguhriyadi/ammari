@@ -3,7 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getRelatedStorefrontProducts, getStorefrontProductBySlug } from "@ammari/db/storefront";
 import { sanitizeStorefrontDescriptionHtml } from "@ammari/content-sanitize";
-import { buildProductView, resolveSelectedColorId } from "@/lib/content/product-view";
+import { buildProductView, getPrimaryImage, resolveSelectedColorId } from "@/lib/content/product-view";
+import { PRODUCT_PLACEHOLDER_OG_PATH } from "@/lib/content/product-placeholder";
 import { getStoragePublicBaseUrl, storageImageUrl } from "@/lib/storage/public-url";
 import { isCartEnabled } from "@/lib/cart-flag";
 import { getStoreContact, getWhatsappNumber } from "@/lib/store-settings";
@@ -26,6 +27,13 @@ function siteOrigin(): string {
   return (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 }
 
+/** The product's representative photo as an absolute URL (OG image, JSON-LD), or the static
+ * placeholder when the product has no photo at all, so shares never show a blank preview. */
+function primaryImageUrl(view: ReturnType<typeof buildProductView>): string {
+  const image = getPrimaryImage(view);
+  return image ? storageImageUrl(image.storageKey, 1600) : `${siteOrigin()}${PRODUCT_PLACEHOLDER_OG_PATH}`;
+}
+
 async function loadProduct(slug: string) {
   const product = await getStorefrontProductBySlug(slug);
   if (!product) notFound();
@@ -38,7 +46,6 @@ export async function generateMetadata({ params }: PageProps<"/products/[slug]">
   if (!product) return {};
 
   const view = buildProductView(product);
-  const firstImage = view.generalImages[0] ?? Object.values(view.imagesByColor)[0]?.[0];
   const description = product.storefrontDescription
     ? sanitizeStorefrontDescriptionHtml(product.storefrontDescription).replace(/<[^>]+>/g, " ").trim().slice(0, 160)
     : `${product.name}, Ammari syar'i gamis.`;
@@ -51,7 +58,7 @@ export async function generateMetadata({ params }: PageProps<"/products/[slug]">
     openGraph: {
       title: product.name,
       description,
-      images: firstImage ? [{ url: storageImageUrl(firstImage.storageKey, 1600) }] : [],
+      images: [{ url: primaryImageUrl(view) }],
     },
   };
 }
@@ -139,7 +146,7 @@ export default async function ProductPage({
     "@type": "Product",
     name: product.name,
     description: plainTextDescription,
-    image: view.generalImages[0] ? storageImageUrl(view.generalImages[0].storageKey, 1600) : undefined,
+    image: primaryImageUrl(view),
     offers: {
       "@type": "Offer",
       priceCurrency: "IDR",

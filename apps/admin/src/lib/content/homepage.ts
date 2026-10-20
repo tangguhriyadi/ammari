@@ -102,7 +102,7 @@ export interface PublishableProductOption {
  * storefront (the real gate), each with whatever active colors it currently has. LEFT JOINed
  * (not INNER), on purpose: `is_published_on_storefront` is a PRODUCT-level flag, independent of
  * whether any one variant happens to be active right now (a variant can be deactivated for
- * reasons unrelated to publishing, e.g. a photo-less color — see product-photos.spec.ts) — an
+ * reasons unrelated to publishing, e.g. a discontinued color) — an
  * INNER JOIN would silently drop a published product with zero currently-active variants from
  * the picker entirely, instead of just offering it with no specific color to pin (only "Semua
  * warna", which ProductColorPicker already handles when `colors` is empty). Colors come from

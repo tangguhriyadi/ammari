@@ -119,7 +119,7 @@ export function ReturnDefectsButton({ sourceType, lineId, itemLabel, maxQty, isF
         title={`Kembalikan ${itemLabel}`}
         description={
           documentClosed
-            ? `Barang cacat keluar dari stok cacat untuk ditukar. ${isPurchase ? "Pesanan" : "Batch"} ini sudah ditutup dan akan dibuka kembali agar barang pengganti bisa diterima. Alasan di bawah dicatat sebagai alasan pembukaan kembali.`
+            ? `Barang cacat keluar dari stok cacat untuk ditukar. ${isPurchase ? "Pesanan" : "Batch"} ini sudah ditutup dan akan dibuka kembali agar barang pengganti bisa diterima. Alasan yang diisi dicatat sebagai alasan pembukaan kembali.`
             : `Barang cacat keluar dari stok cacat untuk ditukar. Sisa ${documentNoun} bertambah sebanyak jumlah ini, lalu barang pengganti diterima seperti biasa.`
         }
         confirmLabel="Kembalikan"

@@ -9,13 +9,15 @@ import { InMemoryStorageClient } from "@ammari/storage";
 import { __setStorageClientForTests } from "@/lib/storage";
 import type { Database } from "./db";
 import { FieldError } from "./errors";
-import { createFabricColor } from "./fabric-queries";
-import { createProduct, addVariants } from "./queries";
+import { createFabricColor, updateFabricColor } from "./fabric-queries";
+import { createProduct, addVariants, updateProduct } from "./queries";
 import {
   deleteProductImage,
-  getColorsMissingPhotos,
+  fillMissingAltTexts,
+  listProductIdsMissingPhotos,
   reorderProductImages,
   setProductThumbnail,
+  updateImageAltText,
   uploadProductImage,
 } from "./image-queries";
 
@@ -217,41 +219,42 @@ describe("deleteProductImage", () => {
     });
   });
 
-  test("refuses to delete the last photo of a color while the product is active and the color has an active variant", async () => {
-    await withRollback(async (tx) => {
-      const fabric = await createFabricFixture(tx);
-      const color = await createFabricColorFixture(tx, fabric.id);
-      const product = await createProductFixture(tx, fabric.id, { isActive: false }); // image first, then activate below
-      const image = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
-      await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
-      await tx.update(products).set({ isActive: true }).where(eq(products.id, product.id));
-
-      await expect(deleteProductImage(image.id, ACTOR_ID, tx)).rejects.toThrow(/foto terakhir/);
-    });
-  });
-
-  test("allows deleting the last photo of a color when the product is INACTIVE", async () => {
-    await withRollback(async (tx) => {
-      const fabric = await createFabricFixture(tx);
-      const color = await createFabricColorFixture(tx, fabric.id);
-      const product = await createProductFixture(tx, fabric.id, { isActive: false });
-      const image = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
-      await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
-
-      await expect(deleteProductImage(image.id, ACTOR_ID, tx)).resolves.toEqual({ productId: product.id });
-    });
-  });
-
-  test("allows deleting the last photo of a color with no active variant, even on an active product", async () => {
+  test("refuses to delete the LAST photo of a product published on the storefront", async () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
       const color = await createFabricColorFixture(tx, fabric.id);
       const product = await createProductFixture(tx, fabric.id, { isActive: true });
       const image = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
-      // No variants at all for this color — the required-photo rule only bites colors that
-      // actually have an active variant.
+      await tx.update(products).set({ isPublishedOnStorefront: true }).where(eq(products.id, product.id));
+
+      await expect(deleteProductImage(image.id, ACTOR_ID, tx)).rejects.toThrow(/foto terakhir/);
+    });
+  });
+
+  test("allows deleting a published product's photo while another photo remains", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id);
+      const product = await createProductFixture(tx, fabric.id, { isActive: true });
+      const colorImage = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      await uploadProductImage({ productId: product.id, fabricColorId: null, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      await tx.update(products).set({ isPublishedOnStorefront: true }).where(eq(products.id, product.id));
+
+      await expect(deleteProductImage(colorImage.id, ACTOR_ID, tx)).resolves.toEqual({ productId: product.id });
+    });
+  });
+
+  test("allows deleting the last photo of a color with ACTIVE variants on an active, unpublished product (photos never gate activation)", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id);
+      const product = await createProductFixture(tx, fabric.id, { isActive: true });
+      const image = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
 
       await expect(deleteProductImage(image.id, ACTOR_ID, tx)).resolves.toEqual({ productId: product.id });
+      const variants = await tx.select().from(productVariants).where(eq(productVariants.productId, product.id));
+      expect(variants.every((variant) => variant.isActive)).toBe(true);
     });
   });
 });
@@ -313,66 +316,166 @@ describe("setProductThumbnail", () => {
   });
 });
 
-describe("getColorsMissingPhotos", () => {
-  test("returns a color with an active variant and zero images", async () => {
+describe("default alt text", () => {
+  test("a new upload with no alt text gets '<product> warna <color>', or just '<product>' for a general photo", async () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
-      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
-      // Created INACTIVE so addVariants below creates an ACTIVE variant (its own auto-inactive
-      // rule only kicks in for an active product) — then flipped to active directly (bypassing
-      // updateProduct's own photo check) to reach exactly the state this test is about: an
-      // active product, an active variant, and no photo for that variant's color.
-      const product = await createProductFixture(tx, fabric.id, { isActive: false });
-      await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
-      await tx.update(products).set({ isActive: true }).where(eq(products.id, product.id));
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Taupe" });
+      const product = await createProductFixture(tx, fabric.id, { name: "Haura Dress" });
 
-      const missing = await getColorsMissingPhotos(product.id, tx);
-      expect(missing.map((c) => c.name)).toContain("Mocca");
+      const colorImage = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      const generalImage = await uploadProductImage({ productId: product.id, fabricColorId: null, altText: "  ", fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      const typedImage = await uploadProductImage(
+        { productId: product.id, fabricColorId: color.id, altText: "Tampak samping", fileBuffer: await jpegBuffer() },
+        ACTOR_ID,
+        tx,
+      );
+
+      expect(colorImage.altText).toBe("Haura Dress warna Taupe");
+      expect(generalImage.altText).toBe("Haura Dress");
+      expect(typedImage.altText).toBe("Tampak samping");
     });
   });
 
-  test("excludes a color that already has an image", async () => {
+  test("clearing an alt text restores the default instead of storing it empty", async () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
-      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
-      const product = await createProductFixture(tx, fabric.id);
-      // Image uploaded BEFORE addVariants — so the color already has a photo at the moment the
-      // variant is created, and the variant comes in active normally (not auto-deactivated).
-      await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
-      await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Taupe" });
+      const product = await createProductFixture(tx, fabric.id, { name: "Haura Dress" });
+      const image = await uploadProductImage({ productId: product.id, fabricColorId: color.id, altText: "Lama", fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
 
-      const missing = await getColorsMissingPhotos(product.id, tx);
-      expect(missing.map((c) => c.name)).not.toContain("Mocca");
+      await updateImageAltText(image.id, null, ACTOR_ID, tx);
+
+      const [after] = await tx.select().from(productImages).where(eq(productImages.id, image.id));
+      expect(after?.altText).toBe("Haura Dress warna Taupe");
     });
   });
 
-  test("excludes a color whose only variant is inactive", async () => {
+  test("fillMissingAltTexts fills existing empty alt texts only, and is idempotent", async () => {
     await withRollback(async (tx) => {
       const fabric = await createFabricFixture(tx);
-      const color = await createFabricColorFixture(tx, fabric.id, { name: "Mocca" });
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Taupe" });
+      const product = await createProductFixture(tx, fabric.id, { name: "Haura Dress" });
+      const blank = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      const typed = await uploadProductImage({ productId: product.id, fabricColorId: null, altText: "Detail kancing", fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      await tx.update(productImages).set({ altText: null }).where(eq(productImages.id, blank.id));
+
+      await fillMissingAltTexts(product.id, tx);
+      await fillMissingAltTexts(product.id, tx);
+
+      const rows = await tx.select().from(productImages).where(eq(productImages.productId, product.id));
+      expect(rows.find((row) => row.id === blank.id)?.altText).toBe("Haura Dress warna Taupe");
+      expect(rows.find((row) => row.id === typed.id)?.altText).toBe("Detail kancing");
+    });
+  });
+
+  test("renaming the product updates alt texts still equal to the old default, never hand-written ones", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Taupe" });
+      const product = await createProductFixture(tx, fabric.id, { name: "Haura Dress" });
+      const colorDefault = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      const generalDefault = await uploadProductImage({ productId: product.id, fabricColorId: null, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      const handWritten = await uploadProductImage(
+        { productId: product.id, fabricColorId: color.id, altText: "Haura Dress tampak belakang", fileBuffer: await jpegBuffer() },
+        ACTOR_ID,
+        tx,
+      );
+
+      await updateProduct(
+        product.id,
+        {
+          name: "Haura Dress Premium",
+          slug: product.slug,
+          fabricId: product.fabricId,
+          closure: product.closure,
+          basePrice: product.basePrice,
+          isActive: product.isActive,
+          highlights: [],
+        },
+        ACTOR_ID,
+        tx,
+      );
+
+      const rows = await tx.select().from(productImages).where(eq(productImages.productId, product.id));
+      const altOf = (id: string) => rows.find((row) => row.id === id)?.altText;
+      expect(altOf(colorDefault.id)).toBe("Haura Dress Premium warna Taupe");
+      expect(altOf(generalDefault.id)).toBe("Haura Dress Premium");
+      expect(altOf(handWritten.id)).toBe("Haura Dress tampak belakang");
+    });
+  });
+
+  test("renaming a color updates its photos' default alt texts across products, never hand-written ones", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id, { name: "Taupe" });
+      const productA = await createProductFixture(tx, fabric.id, { name: "Haura Dress" });
+      const productB = await createProductFixture(tx, fabric.id, { name: "Nadia Gamis" });
+      const defaultA = await uploadProductImage({ productId: productA.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      const defaultB = await uploadProductImage({ productId: productB.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      const handWritten = await uploadProductImage(
+        { productId: productA.id, fabricColorId: color.id, altText: "Warna Taupe di bawah sinar matahari", fileBuffer: await jpegBuffer() },
+        ACTOR_ID,
+        tx,
+      );
+
+      await updateFabricColor(color.id, { name: "Mocca" }, ACTOR_ID, tx);
+
+      const rows = await tx.select().from(productImages).where(eq(productImages.fabricColorId, color.id));
+      const altOf = (id: string) => rows.find((row) => row.id === id)?.altText;
+      expect(altOf(defaultA.id)).toBe("Haura Dress warna Mocca");
+      expect(altOf(defaultB.id)).toBe("Nadia Gamis warna Mocca");
+      expect(altOf(handWritten.id)).toBe("Warna Taupe di bawah sinar matahari");
+    });
+  });
+});
+
+describe("listProductIdsMissingPhotos", () => {
+  test("flags only products with an active color that has no photo of its own", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id);
+      const withoutPhoto = await createProductFixture(tx, fabric.id);
+      const withPhoto = await createProductFixture(tx, fabric.id);
+      const generalOnly = await createProductFixture(tx, fabric.id);
+      for (const product of [withoutPhoto, withPhoto, generalOnly]) {
+        await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
+      }
+      await uploadProductImage({ productId: withPhoto.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      await uploadProductImage({ productId: generalOnly.id, fabricColorId: null, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+
+      const missing = await listProductIdsMissingPhotos([withoutPhoto.id, withPhoto.id, generalOnly.id], tx);
+      expect([...missing].sort()).toEqual([withoutPhoto.id, generalOnly.id].sort());
+    });
+  });
+
+  test("ignores a photo-less color whose only variant is inactive", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id);
       const product = await createProductFixture(tx, fabric.id);
       const { created: [variant] } = await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, tx);
       if (!variant) throw new Error("expected a variant to be created");
       await tx.update(productVariants).set({ isActive: false }).where(eq(productVariants.sku, variant.sku));
 
-      const missing = await getColorsMissingPhotos(product.id, tx);
-      expect(missing.map((c) => c.name)).not.toContain("Mocca");
+      expect((await listProductIdsMissingPhotos([product.id], tx)).size).toBe(0);
     });
+  });
+
+  test("returns an empty set for no ids without querying", async () => {
+    expect((await listProductIdsMissingPhotos([])).size).toBe(0);
   });
 });
 
-describe("concurrent deletes of the same color's last two photos are serialized", () => {
-  test("exactly one of two concurrent deletes succeeds, and the required-photo rule still holds afterward", async () => {
+describe("concurrent deletes of a published product's last two photos are serialized", () => {
+  test("exactly one of two concurrent deletes succeeds, and the published product keeps one photo", async () => {
     const fabric = await createFabricFixture(testDb);
     const color = await createFabricColorFixture(testDb, fabric.id);
     const product = await createProductFixture(testDb, fabric.id, { isActive: true });
-    // Images uploaded BEFORE addVariants — so the color already has photos when the variant is
-    // created, and it comes in active normally (addVariants would otherwise auto-deactivate a
-    // new variant for a photo-less color on an active product, which would defeat this test:
-    // the "last photo" refusal only fires for a color with an ACTIVE variant).
     const imageA = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, testDb);
     const imageB = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, testDb);
     await addVariants({ productId: product.id, selections: [{ fabricColorId: color.id, sizes: ["M"] }] }, ACTOR_ID, testDb);
+    await testDb.update(products).set({ isPublishedOnStorefront: true }).where(eq(products.id, product.id));
 
     try {
       const outcomes = await Promise.allSettled([
@@ -394,7 +497,7 @@ describe("concurrent deletes of the same color's last two photos are serialized"
       // here is manual rather than an automatic rollback. The surviving image is very likely
       // still the product's thumbnail (deleteProductImage's own fallback logic points it there)
       // — null it out first, since products_thumbnail_image_id_fk is ON DELETE RESTRICT.
-      await testDb.update(products).set({ thumbnailImageId: null }).where(eq(products.id, product.id));
+      await testDb.update(products).set({ thumbnailImageId: null, isPublishedOnStorefront: false }).where(eq(products.id, product.id));
       await testDb.delete(productImages).where(eq(productImages.productId, product.id));
       await testDb.delete(productVariants).where(eq(productVariants.productId, product.id));
       await testDb.delete(products).where(eq(products.id, product.id));

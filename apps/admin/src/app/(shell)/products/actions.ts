@@ -209,16 +209,16 @@ const addVariantsSchema = z.object({
 
 export async function addVariantsAction(
   input: z.input<typeof addVariantsSchema>,
-): Promise<ActionResult<{ skus: string[]; inactiveColorNames: string[] }>> {
+): Promise<ActionResult<{ skus: string[] }>> {
   const session = await requirePermission("products.manage");
   const parsed = addVariantsSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
-    const { created, inactiveColorNames } = await productQueries.addVariants(
+    const { created } = await productQueries.addVariants(
       { productId: parsed.data.productId, selections: parsed.data.selections },
       session.staffUser.id,
     );
-    return { skus: created.map((variant) => variant.sku), inactiveColorNames };
+    return { skus: created.map((variant) => variant.sku) };
   });
 }
 

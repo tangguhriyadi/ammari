@@ -4,14 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Check, Copy } from "lucide-react";
-import { Button, Checkbox, ColorSwatch, Input, Label, Switch } from "@ammari/ui";
+import { Badge, Button, Checkbox, ColorSwatch, Input, Label, Switch } from "@ammari/ui";
 import { formatNumber, formatRupiah } from "@ammari/ui/lib";
 import type { Size, SizeMode } from "@ammari/db/schema";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import { addVariantsAction, bulkUpdateVariantsAction, setVariantActiveAction } from "../actions";
+import { buildNewVariantSelections } from "./variant-selection";
 
 export interface VariantRow {
   sku: string;
+  fabricColorId: string;
   colorName: string;
   colorHex: string | null;
   size: string;
@@ -138,12 +140,15 @@ function VariantColorGroup({
   colorHex,
   rows,
   basePrice,
+  missingPhoto,
 }: {
   productId: string;
   colorName: string;
   colorHex: string | null;
   rows: VariantRow[];
   basePrice: number;
+  /** Reminder only: this color has no photo of its own yet. Never blocks anything here. */
+  missingPhoto: boolean;
 }) {
   const router = useRouter();
   const [edits, setEdits] = useState<Record<string, EditedFields>>({});
@@ -283,6 +288,7 @@ function VariantColorGroup({
         <div className="flex items-center gap-2">
           <ColorSwatch hex={colorHex} className="size-4" />
           <h3 className="text-base font-semibold text-neutral-900">{colorName}</h3>
+          {missingPhoto && <Badge variant="warning">Belum ada foto</Badge>}
         </div>
         <BulkFillMinStock onFill={fillMinStock} disabled={saving} />
       </div>
@@ -447,47 +453,49 @@ function AddVariantForm({
   fabricId,
   sizeMode,
   availableColors,
+  existingSizesByColor,
 }: {
   productId: string;
   fabricId: string;
   sizeMode: SizeMode;
   availableColors: AvailableColor[];
+  existingSizesByColor: ReadonlyMap<string, ReadonlySet<string>>;
 }) {
   const router = useRouter();
   const [selectedColorIds, setSelectedColorIds] = useState<string[]>([]);
-  const [sizes, setSizes] = useState<string[]>([]);
+  const [sizes, setSizes] = useState<Size[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // Derived from props on every render (never held in state), so a router.refresh() after a
+  // photo upload, an "Aktif" toggle, or a previous submit always reflects the server's current
+  // variant list. Photos play no part here: new variants are always created active.
+  const sizesToUse: Size[] = sizeMode === "all_size" ? ["ALLSIZE"] : sizes;
+  const selections = buildNewVariantSelections(selectedColorIds, sizesToUse, existingSizesByColor);
+  const canSubmit = selections.length > 0;
+  const nothingNew = selectedColorIds.length > 0 && sizesToUse.length > 0 && !canSubmit;
 
   function toggleColor(id: string) {
     setSelectedColorIds((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
   }
 
-  function toggleSize(size: string) {
+  function toggleSize(size: Size) {
     setSizes((prev) => (prev.includes(size) ? prev.filter((s) => s !== size) : [...prev, size]));
   }
 
   function submit() {
+    if (!canSubmit) return;
     setError(null);
-    setNotice(null);
     startTransition(async () => {
-      const sizesToUse = (sizeMode === "all_size" ? ["ALLSIZE"] : sizes) as Size[];
-      // A single atomic call creates every selected color x size in one transaction (all or
-      // nothing) — see productQueries.addVariants' doc comment. On failure nothing was created,
-      // so the selection is simply left as-is for the user to retry after addressing the error.
-      const result = await addVariantsAction({
-        productId,
-        selections: selectedColorIds.map((fabricColorId) => ({ fabricColorId, sizes: sizesToUse })),
-      });
+      // A single atomic call creates every NEW selected color x size in one transaction (all or
+      // nothing) — see productQueries.addVariants' doc comment. Sizes a color already has are
+      // left out (buildNewVariantSelections), so re-ticking an existing size alongside a new
+      // one just adds the new one. On failure nothing was created, so the selection is left
+      // as-is for the user to retry after addressing the error.
+      const result = await addVariantsAction({ productId, selections });
       if (!result.ok) {
         setError(result.error);
         return;
-      }
-      if (result.data.inactiveColorNames.length > 0) {
-        setNotice(
-          `Varian warna ${result.data.inactiveColorNames.join(", ")} belum aktif. Unggah foto warna ini lalu aktifkan.`,
-        );
       }
       setSelectedColorIds([]);
       setSizes([]);
@@ -505,8 +513,6 @@ function AddVariantForm({
       </div>
     );
   }
-
-  const canSubmit = selectedColorIds.length > 0 && (sizeMode === "all_size" || sizes.length > 0);
 
   return (
     <form
@@ -553,14 +559,12 @@ function AddVariantForm({
         <p className="text-sm text-neutral-600">Produk ini menggunakan All Size: satu varian per warna.</p>
       )}
 
+      {nothingNew && (
+        <p className="text-sm text-neutral-600">Ukuran yang dipilih sudah ada untuk warna ini. Pilih ukuran lain.</p>
+      )}
       {error && (
         <p role="alert" className="text-sm text-danger-700">
           {error}
-        </p>
-      )}
-      {notice && (
-        <p role="status" className="text-sm text-warning-700">
-          {notice}
         </p>
       )}
 
@@ -578,6 +582,7 @@ export function VariantBuilder({
   basePrice,
   variants,
   availableColors,
+  colorIdsMissingPhotos,
 }: {
   productId: string;
   fabricId: string;
@@ -585,9 +590,20 @@ export function VariantBuilder({
   basePrice: number;
   variants: VariantRow[];
   availableColors: AvailableColor[];
+  /** Colors with no photo of their own yet, from the same server query the "Foto" section's
+   * badges use, so both sections always agree after a refresh. */
+  colorIdsMissingPhotos: readonly string[];
 }) {
   const active = variants.filter((v) => v.isActive);
   const inactive = variants.filter((v) => !v.isActive);
+  const missingPhotoIds = new Set(colorIdsMissingPhotos);
+
+  const existingSizesByColor = new Map<string, Set<string>>();
+  for (const variant of variants) {
+    const set = existingSizesByColor.get(variant.fabricColorId) ?? new Set<string>();
+    set.add(variant.size);
+    existingSizesByColor.set(variant.fabricColorId, set);
+  }
 
   const colorsOf = (list: VariantRow[]) => {
     const groups = new Map<string, VariantRow[]>();
@@ -610,12 +626,19 @@ export function VariantBuilder({
             colorHex={rows[0]?.colorHex ?? null}
             rows={rows}
             basePrice={basePrice}
+            missingPhoto={missingPhotoIds.has(rows[0]?.fabricColorId ?? "")}
           />
         ))}
         {active.length === 0 && <p className="text-base text-neutral-600">Belum ada varian aktif.</p>}
       </div>
 
-      <AddVariantForm productId={productId} fabricId={fabricId} sizeMode={sizeMode} availableColors={availableColors} />
+      <AddVariantForm
+        productId={productId}
+        fabricId={fabricId}
+        sizeMode={sizeMode}
+        availableColors={availableColors}
+        existingSizesByColor={existingSizesByColor}
+      />
 
       {inactive.length > 0 && (
         <details className="rounded-lg border border-neutral-200 p-4">
@@ -631,6 +654,7 @@ export function VariantBuilder({
                 colorHex={rows[0]?.colorHex ?? null}
                 rows={rows}
                 basePrice={basePrice}
+                missingPhoto={missingPhotoIds.has(rows[0]?.fabricColorId ?? "")}
               />
             ))}
           </div>

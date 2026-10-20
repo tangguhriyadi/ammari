@@ -45,10 +45,8 @@ test("owner creates a fabric, adds colors, creates a product with variants, and 
   await page.locator("#product-fabric").selectOption({ label: fabricName });
   await page.getByLabel("Harga dasar").fill("269.000");
   const code = await page.getByLabel("Kode produk").inputValue();
-  // Created INACTIVE — Sage has no photo yet, and an active product's new variants for a
-  // photo-less color are created inactive (collapsed into "Nonaktif" below) by design (product
-  // images feature); this test is about SKU generation and Batas HPP visibility, not that rule,
-  // so the product stays inactive and the variants come in active normally.
+  // Created inactive (this test is about SKU generation and Batas HPP visibility); variants are
+  // created active regardless of the product flag or photos (see variant-photos.spec.ts).
   // Switch, not a checkbox — role="switch" has no check()/uncheck(), click to toggle it off.
   await page.getByRole("switch", { name: "Aktif" }).click();
   await page.getByRole("button", { name: "Simpan" }).click();
@@ -148,8 +146,7 @@ test("editing two variant rows saves both in one atomic call; a validation error
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
-  // Created INACTIVE so the variants added below come in ACTIVE (addVariants only
-  // auto-deactivates new variants for a photo-less color on an ALREADY-active product).
+  // Created inactive; the variants added below are created active regardless.
   const productName = `Contoh Gamis Varian E2E ${unique}`;
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
@@ -233,7 +230,7 @@ test("toggling a row's Aktif switch while it has an unsaved price/stock edit doe
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
   await page.getByLabel("Harga dasar").fill("269.000");
-  await page.getByRole("switch", { name: "Aktif" }).click(); // inactive product → new variants come in active
+  await page.getByRole("switch", { name: "Aktif" }).click(); // product left inactive; variants are created active either way
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
 

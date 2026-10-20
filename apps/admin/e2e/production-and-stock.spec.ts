@@ -18,8 +18,8 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await loginAs(page, E2E_PRODUCTION_STOCK_EMAIL);
   const unique = Date.now();
 
-  // 1. Fixtures: a fabric, a product (created inactive so its variant comes in active — same
-  // reasoning as products.spec.ts), and one M-size variant.
+  // 1. Fixtures: a fabric, a product (left inactive; its variant is created active regardless),
+  // and one M-size variant.
   const fabricName = `E2E Bahan Produksi ${unique}`;
   await page.goto("/fabrics/new");
   await page.getByLabel("Nama bahan").fill(fabricName);
@@ -33,7 +33,7 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await page.locator("#product-fabric").selectOption({ label: fabricName });
   await page.getByLabel("Harga dasar").fill("269.000");
   const code = await page.getByLabel("Kode produk").inputValue();
-  await page.getByRole("switch", { name: "Aktif" }).click(); // keep inactive so the variant below comes in active
+  await page.getByRole("switch", { name: "Aktif" }).click(); // product left inactive; variants are created active either way
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
   const productId = page.url().split("/products/")[1]!;

@@ -44,6 +44,11 @@ export function ProductList({ products }: { products: Product[] }) {
                   <span className="text-sm text-neutral-600">
                     {formatRupiah(product.basePrice)} · {product.activeVariantCount} varian aktif
                   </span>
+                  {product.missingPhotos && (
+                    <div>
+                      <Badge variant="warning">Belum ada foto</Badge>
+                    </div>
+                  )}
                   {product.highlights.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">
                       {highlightLabels(product.highlights).map((label) => (
@@ -78,9 +83,12 @@ export function ProductList({ products }: { products: Product[] }) {
                 <ProductThumbnail url={product.thumbnailUrl} className="size-10" />
               </Td>
               <Td>
-                <Link href={`/products/${product.id}`} className="font-medium text-brand hover:underline">
-                  {product.name}
-                </Link>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link href={`/products/${product.id}`} className="font-medium text-brand hover:underline">
+                    {product.name}
+                  </Link>
+                  {product.missingPhotos && <Badge variant="warning">Belum ada foto</Badge>}
+                </div>
               </Td>
               <Td className="text-neutral-700">{product.fabricName}</Td>
               <Td className="text-neutral-700">{CLOSURE_LABELS[product.closure] ?? product.closure}</Td>

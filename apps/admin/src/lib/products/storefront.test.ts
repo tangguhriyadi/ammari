@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import sharp from "sharp";
 import { withRollback } from "@ammari/db/test-utils";
 import { insertProductVariant, insertVariantForProduct } from "@ammari/db/test-fixtures";
-import { products } from "@ammari/db/schema";
+import { productImages, products } from "@ammari/db/schema";
 import { MAX_STOREFRONT_DESCRIPTION_HTML_LENGTH } from "@ammari/content-sanitize";
 import { InMemoryStorageClient } from "@ammari/storage";
 import { __setStorageClientForTests } from "@/lib/storage";
@@ -11,6 +11,7 @@ import { ActionError } from "@/lib/errors";
 import { createSizeChart, type SizeChartRowInput } from "@/lib/content/size-charts";
 import { CUTTING_SIZES, type CuttingSize } from "@ammari/db/schema";
 import { uploadProductImage } from "./image-queries";
+import { PUBLISH_ALT_TEXT_MESSAGE, PUBLISH_REQUIRES_PHOTO_MESSAGE } from "./photo-messages";
 import { updateProductStorefront } from "./storefront";
 
 const ACTOR_ID = null;
@@ -69,11 +70,10 @@ describe("updateProductStorefront — publish-time guards", () => {
     });
   });
 
-  test("rejects publishing when a product image is missing alt text", async () => {
+  test("rejects publishing a product with no photo at all, with a field error on the toggle", async () => {
     await withRollback(async (tx) => {
-      const { product, color } = await insertProductVariant(tx);
+      const { product } = await insertProductVariant(tx);
       const chart = await createSizeChart({ name: "Chart", rows: fullSizeChartRows() }, ACTOR_ID, tx);
-      await uploadProductImage({ productId: product.id, fabricColorId: color.id, altText: null, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
 
       await expect(
         updateProductStorefront(
@@ -82,8 +82,50 @@ describe("updateProductStorefront — publish-time guards", () => {
           ACTOR_ID,
           tx,
         ),
-      ).rejects.toThrow(ActionError);
+      ).rejects.toMatchObject({ field: "isPublishedOnStorefront", message: PUBLISH_REQUIRES_PHOTO_MESSAGE });
     });
+  });
+
+  test("one general photo is enough to publish, even when a color has no photo of its own", async () => {
+    await withRollback(async (tx) => {
+      const { product } = await insertProductVariant(tx);
+      const chart = await createSizeChart({ name: "Chart", rows: fullSizeChartRows() }, ACTOR_ID, tx);
+      await uploadProductImage({ productId: product.id, fabricColorId: null, altText: "Gamis tampak depan", fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+
+      const after = await updateProductStorefront(
+        product.id,
+        { isPublishedOnStorefront: true, storefrontDescriptionHtml: null, allsizeFitNote: null, sizeChartId: chart.id },
+        ACTOR_ID,
+        tx,
+      );
+      expect(after.isPublishedOnStorefront).toBe(true);
+    });
+  });
+
+  test("a photo whose alt text is empty (e.g. written by the previous release) gets the default at publish instead of blocking it", async () => {
+    await withRollback(async (tx) => {
+      const { product, color } = await insertProductVariant(tx);
+      const chart = await createSizeChart({ name: "Chart", rows: fullSizeChartRows() }, ACTOR_ID, tx);
+      const image = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
+      await tx.update(productImages).set({ altText: null }).where(eq(productImages.id, image.id));
+
+      const after = await updateProductStorefront(
+        product.id,
+        { isPublishedOnStorefront: true, storefrontDescriptionHtml: null, allsizeFitNote: null, sizeChartId: chart.id },
+        ACTOR_ID,
+        tx,
+      );
+      expect(after.isPublishedOnStorefront).toBe(true);
+      const [filled] = await tx.select().from(productImages).where(eq(productImages.id, image.id));
+      expect(filled?.altText).toBe(`${product.name} warna ${color.name}`);
+    });
+  });
+
+  test("the photo-related publish messages name the Foto section, never a position on the page", () => {
+    for (const message of [PUBLISH_REQUIRES_PHOTO_MESSAGE, PUBLISH_ALT_TEXT_MESSAGE]) {
+      expect(message).toContain("bagian Foto");
+      expect(message).not.toMatch(/di (bawah|atas)/i);
+    }
   });
 
   test("publishes successfully once active, size-charted, and every image has alt text", async () => {
