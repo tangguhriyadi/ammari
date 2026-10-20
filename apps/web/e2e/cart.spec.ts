@@ -78,7 +78,10 @@ test.describe("cart flag on", () => {
       await expect(flowy).toContainText("Beige E2E · S");
       await expect(flowy).toContainText("Rp269.000");
       await expect(page.getByText("1 barang", { exact: true })).toBeVisible();
-      await expect(page.getByText("Gratis", { exact: true })).toBeVisible();
+      // Shipping is a subsidy, not free (owner decision 2026-10-21): the buyer's share is shown at checkout.
+      const summary = page.getByRole("region", { name: "Ringkasan keranjang" });
+      await expect(summary.getByText("Dihitung saat checkout", { exact: true })).toBeVisible();
+      await expect(summary.getByText(/gratis/i)).toHaveCount(0);
       await expect(page.getByRole("link", { name: "Lanjut ke checkout" })).toHaveAttribute("href", "/checkout");
       await expect(page.getByRole("link", { name: "Lanjut belanja" })).toHaveAttribute("href", "/#koleksi");
 

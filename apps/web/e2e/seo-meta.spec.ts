@@ -76,7 +76,7 @@ test.describe("homepage meta title and description", () => {
     await expect(page).toHaveTitle("Ammari | Graceful in every thread");
     const description = await meta(page, "name", "description");
     expect(description).toBe(
-      "Gamis syar'i Ammari. Desain syar'i yang anggun, bahan premium, dan nyaman dipakai seharian. Gratis ongkir ke seluruh Indonesia.",
+      "Gamis syar'i Ammari. Desain syar'i yang anggun, bahan premium, dan nyaman dipakai seharian. Subsidi ongkir hingga Rp20.000.",
     );
     expect(await meta(page, "property", "og:title")).toBe("Ammari | Graceful in every thread");
     expect(await meta(page, "property", "og:description")).toBe(description);

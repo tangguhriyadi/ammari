@@ -1,12 +1,13 @@
 import { CreditCard, Truck, Zap } from "lucide-react";
 
 // docs/design/storefront.md §6 item 7 — exactly 3 small items, fixed copy (owner decision, Oct
-// 2026). The store's return policy summary is NOT here any more: it is the first paragraph of the
+// 2026; the shipping item changed from free shipping to the Rp20.000 subsidy, owner decision
+// 2026-10-21, docs/plans/cart-checkout.md D11). The store's return policy summary is NOT here any more: it is the first paragraph of the
 // "Pengiriman & Pengembalian" accordion (products/[slug]/page.tsx). Never names the payment
 // gateway or shipping origin city (CLAUDE.md / design spec §2).
 export const TRUST_ITEMS = [
   { icon: CreditCard, label: "Pembayaran Aman" },
-  { icon: Truck, label: "Gratis Ongkir Ke Seluruh Indonesia" },
+  { icon: Truck, label: "Subsidi Ongkir hingga Rp20.000" },
   { icon: Zap, label: "Proses Cepat" },
 ];
 

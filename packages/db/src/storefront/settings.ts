@@ -18,7 +18,7 @@ export const HOMEPAGE_META_TITLE_DEFAULT = "Ammari | Graceful in every thread";
 // is the homepage's search snippet and social preview. The only place a city may appear on the
 // storefront is the owner's own business address (contact/legal blocks, from store settings).
 export const HOMEPAGE_META_DESCRIPTION_DEFAULT =
-  "Gamis syar'i Ammari. Desain syar'i yang anggun, bahan premium, dan nyaman dipakai seharian. Gratis ongkir ke seluruh Indonesia.";
+  "Gamis syar'i Ammari. Desain syar'i yang anggun, bahan premium, dan nyaman dipakai seharian. Subsidi ongkir hingga Rp20.000.";
 
 /** Search-result guidance shown next to the admin counters (Google truncates around here). */
 export const HOMEPAGE_META_TITLE_RECOMMENDED_LENGTH = 60;

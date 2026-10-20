@@ -46,7 +46,10 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
   §8, §10.2 and §10.3. Built so far (plan sessions 1 to 6): the shared `@ammari/commerce`
   package, the checkout schema, plain-field addresses, stock holds, and the cart (backend, PDP
   "Tambah ke keranjang", header count, `/cart`); checkout, payment and the rest are not built yet.
-  Everything ships dark behind `STOREFRONT_CART_ENABLED` until 1 Dec 2026.
+  Everything ships dark behind `STOREFRONT_CART_ENABLED` until 1 Dec 2026. **Revised 2026-10-21:**
+  free shipping is replaced by a shipping subsidy of at most Rp20.000 per order (§3.4), so Komerce
+  shipping rates and destination search are now part of the checkout launch (plan sessions 7 and
+  8); booking and tracking stay in Phase K.
 
 ## 1. Goals
 
@@ -164,7 +167,9 @@ pnpm workspaces + Turborepo:
   not sticky: it scrolls away while the header stays sticky. Text and an on/off switch live in
   admin Konten > Pengaturan Toko (`store_settings.announcement_bar_enabled` /
   `announcement_bar_text`, migration 0029). Default on, default text "Gratis Ongkir Ke Seluruh
-  Indonesia", max 40 characters (fits one line on a 360px phone; backed by a CHECK). Off or empty
+  Indonesia" (the column default from migration 0029; since the 2026-10-21 shipping subsidy the
+  owner re-words the live text in admin, the default is left as is), max 40 characters (fits one
+  line on a 360px phone; backed by a CHECK). Off or empty
   renders no bar and no gap. Saving revalidates the whole storefront (root layout path plus the
   homepage cache tag), so the ISR-cached product pages pick it up too.
 - **Open Graph image.** Product pages use the product's main photo (unchanged). The homepage and
@@ -191,15 +196,29 @@ and `/checkout/*` return not-found and the WhatsApp CTA stays primary).
 
 - Cart — `/cart`. Stored in the database (guest: httpOnly cookie holding a random token, only its
   hash is stored; logged in: keyed by customer, merged after any login). Limits: 1 to 10 per line,
-  at most 20 pieces per cart and per order. No prices are stored on cart lines. "Ongkir: Gratis".
+  at most 20 pieces per cart and per order. No prices are stored on cart lines. "Ongkir: Dihitung
+  saat checkout".
 - Checkout — `/checkout`, one page: Kontak, Alamat pengiriman, Pengiriman, Ringkasan. Guest
   checkout is allowed (email and WhatsApp number). **Checkout never signs anyone in**: a guest's
   `customers` row is linked or created by email, but the email is unverified at that point, so no
   session is created (account-takeover risk).
-- **Shipping is free to all of Indonesia. There is no shipping-cost calculation and no courier
-  choice for the customer.** `orders.shipping_amount` is always 0. The checkout shows one fixed
-  row ("Gratis ongkir ke seluruh Indonesia") and no delivery estimate. The courier cost Ammari
-  pays is recorded only on the shipment (Phase K), never shown to customers.
+- **Shipping subsidy (owner decision 2026-10-21, replaces free shipping).** Ammari covers at most
+  **Rp20.000** of the courier cost per order; the buyer pays `max(0, cost - 20.000)` as a separate
+  "Ongkir" line. Product prices are the same for every location. Details: plan §4.5.
+  - Address: the buyer picks a Komerce destination (search by kelurahan, kecamatan or kode pos);
+    it is cached in `shipping_areas`. Free-typed kecamatan/kode pos are gone.
+  - Courier: the server picks the cheapest service from a code allowlist of regular services;
+    one fixed row, no buyer choice, no delivery estimate.
+  - Weight: `products.shipping_weight_grams` (one packed piece, required to publish) times qty,
+    plus a packaging allowance per order.
+  - The quote is computed only on the server (Komerce Shipping Cost, cached up to 6 hours),
+    recomputed in order creation and **locked into the order** (`shipping_amount` = buyer's
+    share, plus the quoted cost, subsidy, courier/service, weight, destination id and quote
+    time). A later tariff change or a different booking price is Ammari's, never the buyer's.
+  - Komerce down, or no service to the destination: checkout refuses with a retry or a WhatsApp
+    link; there is no fallback rate.
+  - Vouchers apply to goods only (never to ongkir). A paid order cancelled before shipping is
+    refunded in full, ongkir included.
 - Payment — Midtrans Snap in redirect mode, with exactly these methods: QRIS, GoPay, ShopeePay,
   and virtual accounts / bill payment for BCA, BNI, BRI, Mandiri and Permata. **No card
   payments**, not enabled and not planned. Ammari absorbs gateway fees (no fee line). Payment
@@ -224,8 +243,10 @@ and `/checkout/*` return not-found and the WhatsApp CTA stays primary).
   Requires the **Komerce Enterprise** plan (Rp249.000/month, cheaper annually), subscribed when
   Phase K starts: Pro (Rp149.000/month) does not include the Shipping Delivery API (create
   AWB/order, pickup request, tracking, print label); Shipping Cost (live rates) is on every plan.
-  Komerce Payment / QRISLY are not used. Until it ships, staff enter courier and resi by hand ("Tandai dikirim") and mark orders
-  "Selesai" by hand; checkout, totals and payment never depend on Komerce. Once live, web orders
+  Komerce Payment / QRISLY are not used. Until it ships, staff book the order's quoted service by
+  hand, enter courier and resi ("Tandai dikirim") and mark orders "Selesai" by hand. Checkout
+  **does** depend on Komerce Shipping Cost from launch (every plan has it; a subscription and key
+  are a launch prerequisite), but never on the delivery API. Once live, web orders
   move `to_ship -> shipped -> completed` automatically from tracking (a returned-to-sender
   status only raises a flag, staff confirm the return), with the manual actions kept as a
   fallback, and customers see the tracking timeline in "Pesanan saya".
@@ -308,7 +329,8 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
   variant — guaranteed at the DB level (not just the UI) via a composite FK from
   `product_variants(product_id, fabric_id, closure)` to `products(id, fabric_id, closure)` with
   `ON UPDATE RESTRICT` (closure is locked for the same reason fabric is: it's baked into every
-  SKU).
+  SKU). `shipping_weight_grams` (planned, migration 0031): the weight of one packed piece in
+  grams, used for shipping quotes; required to publish (plan §4.5.3).
 - `product_variants` — `sku` is the primary key; unique on `(product, fabric_color_id, size)`;
   sizes XS–XL, plus `ALLSIZE` for `size_mode = 'all_size'` products (a `sized` product may only
   have XS–XL variants, an `all_size` product only an `ALLSIZE` variant — enforced in a DB trigger
@@ -329,7 +351,8 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
     non-blocking "Belum ada foto" badge in admin (product page and product list).
   - The one hard rule is publishing: a product needs **at least one photo** (general or any
     color) to be published on the storefront, and the last photo of a published product cannot
-    be deleted. Every photo also needs alt text to publish.
+    be deleted. Every photo also needs alt text to publish. From plan session 7 a product also
+    needs its shipping weight to be published.
   - Alt text defaults to `<product name> warna <color name>` for a color photo and to
     `<product name>` for a general photo, set on upload when left empty and restored when cleared
     (still editable). A product or color rename updates alt texts that still equal the old
@@ -510,11 +533,16 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   cancelling it unpaid releases them. Admin and marketplace-import paths keep checking physical stock only
   (a marketplace sale already happened and is never refused).
 - `carts`, `cart_items` — database-backed cart (no price column on items).
-- `shipping_areas` — province / city / kecamatan / postal-code lookup with a nullable
-  `komerce_destination_id`. **Empty:** no kecamatan + kode pos dataset had a clean licence
-  (checked 2026-10-20), so checkout uses plain-text address fields (province from a fixed list of
-  38, typed city, kecamatan and postal code; `@ammari/commerce/address`) and every
-  `shipping_area_id` stays NULL. Phase K may fill it from the courier API's destination search.
+- `shipping_areas` — province / city / kecamatan / kelurahan / postal-code rows keyed by
+  `komerce_destination_id` (unique). No licensed dataset exists (checked 2026-10-20), so since
+  the 2026-10-21 revision the table is **filled on demand from Komerce Search Destination** at
+  checkout (each search upserts what it returns); checkout orders and saved addresses point at a
+  row through `shipping_area_id`, and the browser only ever sends that id. Migration 0031 adds
+  `subdistrict`, `label`, `last_synced_at`, makes `postal_code` nullable and swaps the
+  `(province, city, district, postal_code)` UNIQUE for the Komerce id. `@ammari/commerce/address`
+  stays the validator and snapshot builder.
+- `shipping_rate_cache` — Komerce quotes per (origin, destination, weight, service allowlist),
+  reused for up to 6 hours, pruned after 7 days (migration 0031).
 - `order_access_tokens` — "Lihat pesanan" view-only links; only the sha256 of the token is
   stored, one row per email sent, expiring 120 days after issuance.
 - `order_notifications` — unique `(order_id, kind)`, the idempotency guard for transactional
@@ -528,10 +556,16 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   (unique, makes double submit idempotent), consent evidence, `cancel_reason`,
   `needs_attention` (a set of flags, `text[]`: e.g. stock short at payment, paid after cancel,
   amount mismatch, refund due, payment anomaly; several can hold at once and each is cleared on
-  its own), and `placed_with_session`. A checkout order is one with `payment_status` set (staff
+  its own), and `placed_with_session`. Migration 0031 adds the locked shipping quote:
+  `shipping_cost_amount`, `shipping_subsidy_amount`, `shipping_courier_code`,
+  `shipping_service_code`, `shipping_courier_label`, `shipping_weight_grams`,
+  `shipping_destination_id`, `shipping_quoted_at` (all set or all null; when set,
+  `shipping_amount = shipping_cost_amount - shipping_subsidy_amount`, so `shipping_amount` is
+  the buyer's share; every checkout order has them). A checkout order is one with `payment_status` set (staff
   can also enter manual orders on the `web` channel, which leave it NULL). It is
   `awaiting_payment` until paid, then enters the normal `to_ship` queue; the 18%
-  marketplace-fee assumption does not apply to `web`.
+  marketplace-fee assumption does not apply to `web`. Ongkir paid by the buyer is pass-through,
+  not sales revenue; the subsidy is a shipping expense.
 - `ad_spend_daily` — unique on `(date, channel)`.
 - `expenses`
 - `targets` — one row per month.
@@ -545,12 +579,14 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - `customers` — `phone` nullable (optional at account creation; see §10.3) but unique when
   present; unique `email` (stored as `citext` for case-insensitive matching); verification
   timestamps; `pdp_consent_at`; `promo_consent_at`; `type` (`retail` / `reseller`).
-- `customer_addresses` — saved addresses (recipient, phone, address, area, optional coordinates,
-  one default per customer); orders always store an address **snapshot**. Schema only so far,
+- `customer_addresses` — saved addresses (recipient, phone, address, area via `shipping_area_id`
+  plus denormalized names incl. kelurahan from migration 0031, optional coordinates, one default
+  per customer); orders always store an address **snapshot**. Schema only so far,
   see the `payments` note in §5.2.
 - `customer_login_links` — the "Masuk ke akun" one-time login links (§10.3): hashed token, bound
   to a customer id and email, 24-hour expiry, `consumed_at` / `superseded_at`; a partial unique
-  index allows at most one live link per customer. Not yet implemented (expected migration 0031; the planned area-data migration was skipped).
+  index allows at most one live link per customer. Not yet implemented (expected migration 0032;
+  0031 is the shipping-quote migration since the 2026-10-21 revision).
 - `otp_codes` — stores a hash of the code, `expires_at`, `attempts`, `consumed_at`.
 - `thank_you_cards` — unique `order_id`; unique `token_hash`; `claim_deadline`; `status`.
 - `vouchers` — unique `card_id`; unique `used_order_id`; `status`
@@ -601,8 +637,10 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   and BCA / BNI / BRI / Mandiri / Permata virtual accounts. **No card payments.** Ammari absorbs
   gateway fees.
 - Courier: **Komerce** for booking, label and tracking (Phase K), on the **Enterprise** plan
-  (the only plan with the Shipping Delivery API; see §3.4). **Shipping is free to the
-  customer**, so there is no shipping-rate provider and no shipping cost is calculated or shown.
+  (the only plan with the Shipping Delivery API; see §3.4), and **Komerce Shipping Cost** for
+  rates and destination search at checkout from launch. **Shipping subsidy of at most Rp20.000
+  per order** (2026-10-21; free shipping ended); the buyer pays the rest as "Ongkir". The
+  cheapest allowlisted regular service is chosen by the server.
 - Order number stays `ORD-YYYYMM-NNNN`, shared across channels.
 - Maximum 10 per line and 20 pieces per order. The payment window is 60 minutes and stock is held
   for 75 minutes.
@@ -866,14 +904,18 @@ separate links:
 ## 11. Pre-deploy checklist
 
 Added for the Dec 2026 checkout (details in docs/plans/cart-checkout.md §12, §14 and §15
-session 15; runbook in `docs/runbooks/` when written): Midtrans production approval for exactly
+session 17; runbook in `docs/runbooks/` when written): Midtrans production approval for exactly
 the §3.4 methods and production keys in the prod env; the payment notification URL set, and the
 dev site's Cloudflare Access bypass for exactly that one path; the internal cron service (expiry
 sweeper every 5 minutes, retention job daily, Komerce polling in Phase K) with
 `INTERNAL_CRON_SECRET`, on the internal network only (Caddy does not route `/api/internal/*`);
 owner-edited privacy policy and terms in admin Konten before launch; footer payment chips
-changed to QRIS, Virtual Account, GoPay, ShopeePay. Before Phase K goes live: a Komerce
-**Enterprise** subscription (not Pro, §3.4) and its production key in the env.
+changed to QRIS, Virtual Account, GoPay, ShopeePay. Before checkout launch (added 2026-10-21):
+a Komerce subscription with Shipping Cost and its production key, `KOMERCE_ORIGIN_ID`, a daily
+call budget below the plan's quota, every published product with a shipping weight, and the
+announcement bar, Pengiriman page, privacy policy and terms re-worded for the subsidy. Before
+Phase K goes live: a Komerce **Enterprise** subscription (not Pro, §3.4) and its delivery key in
+the env.
 
 The dev deploy pipeline (`.github/workflows/deploy-dev.yml`, `docs/deploy.md`) is built. Items
 below marked **(automated)** are enforced by that pipeline/image and need no per-deploy action;

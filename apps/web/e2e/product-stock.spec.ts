@@ -83,7 +83,7 @@ test.describe("PDP trust row and accordion", () => {
     test(`trust row has exactly the three items; the return summary is the accordion's first paragraph (${viewport.name})`, async ({ page }) => {
       await openPdp(page, E2E_PRODUCT_SLUG, viewport);
       const trust = page.getByRole("list").filter({ hasText: "Proses Cepat" });
-      await expect(trust.getByRole("listitem")).toHaveText(["Pembayaran Aman", "Gratis Ongkir Ke Seluruh Indonesia", "Proses Cepat"]);
+      await expect(trust.getByRole("listitem")).toHaveText(["Pembayaran Aman", "Subsidi Ongkir hingga Rp20.000", "Proses Cepat"]);
       await expect(page.getByText(E2E_RETURN_POLICY_SUMMARY)).toHaveCount(0);
 
       await page.getByRole("button", { name: "Pengiriman & Pengembalian" }).click();
@@ -93,8 +93,10 @@ test.describe("PDP trust row and accordion", () => {
       const panel = summary.locator("xpath=ancestor::div[@role='region']");
       await expect(panel.locator("p").first()).toHaveText(E2E_RETURN_POLICY_SUMMARY);
       await expect(panel.getByRole("link", { name: "Lihat kebijakan pengiriman" })).toBeVisible();
-      // Free shipping nationwide: no copy implying the customer pays for or calculates shipping.
-      await expect(panel.getByText("Gratis ongkir ke seluruh Indonesia.")).toBeVisible();
+      // Shipping subsidy (owner decision 2026-10-21), not free shipping: the PDP never promises
+      // free shipping and never computes a cost (that happens at checkout).
+      await expect(panel.getByText(/^Subsidi ongkir hingga Rp20\.000 per pesanan\./)).toBeVisible();
+      await expect(panel.getByText(/gratis ongkir/i)).toHaveCount(0);
       await expect(page.getByText(/Ongkos kirim dihitung/)).toHaveCount(0);
     });
 

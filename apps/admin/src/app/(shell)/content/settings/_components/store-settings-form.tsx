@@ -145,7 +145,7 @@ export function StoreSettingsForm({ initialValues }: { initialValues: StoreSetti
             onChange={(event) => set("announcementBarText", event.target.value)}
             maxLength={ANNOUNCEMENT_BAR_TEXT_MAX_LENGTH}
             aria-describedby="settings-announcement-count"
-            placeholder="mis. Gratis Ongkir Ke Seluruh Indonesia"
+            placeholder="mis. Subsidi Ongkir hingga Rp20.000"
           />
           <CharacterCounter
             id="settings-announcement-count"

@@ -132,7 +132,7 @@ export default async function ProductPage({
             </p>
           )}
           <p>
-            Gratis ongkir ke seluruh Indonesia.{" "}
+            Subsidi ongkir hingga Rp20.000 per pesanan.{" "}
             <Link href="/shipping" className="underline">
               Lihat kebijakan pengiriman
             </Link>

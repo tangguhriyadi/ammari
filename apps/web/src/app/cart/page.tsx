@@ -13,8 +13,9 @@ import { CartLiveRegion } from "@/components/cart/cart-live-region";
 import { CART_HEADING_ID } from "@/lib/cart/count-event";
 
 // The cart page (docs/plans/cart-checkout.md §4.2, docs/design/storefront.md §7,
-// mockup-cart.png; the mockup's "Dihitung saat checkout" shipping row is superseded by free
-// shipping). force-dynamic is required, not just tidy: with the flag off this page calls
+// mockup-cart.png). The shipping row says "Dihitung saat checkout", as in the mockup: since the
+// owner's 2026-10-21 decision shipping is a Rp20.000 subsidy, not free, and the buyer's share is
+// only known once checkout has the destination (plan D11). force-dynamic is required, not just tidy: with the flag off this page calls
 // notFound() before touching cookies, so without it `next build` (which runs with the flag off)
 // would prerender a static not-found that a runtime flag flip could never replace. With the flag
 // on every request re-reads the cart, prices and availability uncached.
@@ -77,7 +78,7 @@ export default async function CartPage() {
               </div>
               <div className="flex items-center justify-between gap-4">
                 <dt>Ongkir</dt>
-                <dd>Gratis</dd>
+                <dd>Dihitung saat checkout</dd>
               </div>
             </dl>
 

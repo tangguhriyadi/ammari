@@ -9,16 +9,21 @@ address fields, no data migration; see §3). **Session 4 done 2026-10-20** (stoc
 storefront availability, admin "Dipesan"; see the session table). **Session 5 done 2026-10-20**
 (cart backend: `@ammari/commerce/cart`, server actions, cookie, merge, caps, `cart_write` rate
 limit; see the session table). **Session 6 done 2026-10-21** (cart UI: PDP add, header count,
-`/cart`, flag 404; see the session table). Next: session 7.
+`/cart`, flag 404; see the session table). **Revised 2026-10-21 for the shipping subsidy**
+(owner decision: free shipping is replaced by a subsidy of at most Rp20.000 per order, see §4.5;
+Komerce Shipping Cost and destination search moved from Phase K into Phase C as new sessions 7
+and 8; the old sessions 7 to 15 are now 9 to 17, mapping in §15). Next: session 7.
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
 
-**Courier integration (Komerce) is required** but is a separate phase (Phase K, §15) because the
-sandbox key is not available yet. It needs the **Komerce Enterprise plan** (Rp249.000/month,
-cheaper annually), the only plan with the Shipping Delivery API; Ammari subscribes when Phase K
-starts (§15). Checkout, totals and payment never depend on it. Until Phase K ships, staff enter
-courier and resi by hand (existing "Tandai dikirim") and mark orders "Selesai" by hand.
+**Shipping cost (Komerce Shipping Cost API) is a launch requirement** since 2026-10-21: checkout
+cannot price an order without it (§4.5). Shipping Cost (Search Destination, Calculate) is on
+every Komerce plan, so Ammari needs a Komerce subscription and key before launch (§14).
+**Courier booking and tracking (Komerce Shipping Delivery API) stays in Phase K** (§15): it needs
+the **Komerce Enterprise plan** (Rp249.000/month, cheaper annually). Until Phase K ships, staff
+book the order's quoted courier service by hand, enter the resi with the existing "Tandai
+dikirim", and mark orders "Selesai" by hand.
 
 ## 1. Grounding: what already exists
 
@@ -65,8 +70,11 @@ courier and resi by hand (existing "Tandai dikirim") and mark orders "Selesai" b
   breaker).
 - **No scheduler** exists anywhere (no cron in `deploy/` or workflows).
 - **Design:** `docs/design/storefront.md` §7 and `mockup-cart.png` / `mockup-checkout.png`.
-  The mockup's courier list is superseded by free shipping (see §4.3). The footer's payment chips
-  (design §4) list "Kartu kredit", which must go (D16).
+  The mockup's courier list is superseded by one automatically chosen service (§4.5); its cart row
+  "Dihitung saat checkout" is back (it was "Gratis" under the old free-shipping rule). The
+  footer's payment chips (design §4) list "Kartu kredit", which must go (D16).
+- **No weight anywhere (checked 2026-10-21):** neither `products` nor `product_variants` has a
+  weight column, so the parcel weight a shipping quote needs is new (§4.5.3).
 - **Komerce (public docs, checked 2026-10-20):** one API host
   (`api.collaborator.komerce.id`, sandbox `api-sandbox.collaborator.komerce.id`, header
   `x-api-key`) with Search Destination, Calculate, Store Order, Cancel Order, Detail Order,
@@ -90,12 +98,13 @@ courier and resi by hand (existing "Tandai dikirim") and mark orders "Selesai" b
 | D8 | Per-transaction notification URL via `X-Override-Notification`. | One Sandbox account serves dev and local. |
 | D9 | Guest checkout links or creates a `customers` row by email but **never signs the guest in at checkout**. | The email is unverified at that point; account takeover risk. |
 | D10 | Vouchers only with a session; redeem atomically in the order transaction; restore on cancel or payment expiry only. | SPEC §4.5, §8; decision 8. |
-| D11 | Free shipping: `orders.shipping_amount = 0` always; the courier cost Ammari pays is stored on `shipments` in Phase K. | Owner decision. |
-| D12 | **Plain-text fields chosen in session 3 (licence not clean, §3).** Originally: address area lookup from our own **`shipping_areas`** table (province, city, kecamatan, postal code) loaded by migration, nullable `komerce_destination_id` filled in Phase K. Plain-text fields as the fallback if the dataset licence is not clean. | Works now without Komerce; decision 13. |
+| D11 | **Shipping subsidy (2026-10-21, replaces free shipping):** Ammari pays at most Rp20.000 of the courier cost per order; the buyer pays `max(0, cost - 20.000)` as a separate "Ongkir" line. `orders.shipping_amount` is the buyer's share; the quoted courier cost and the subsidy are stored on the order too (§4.5.6). Product prices are the same everywhere. The cost actually paid at booking goes on `shipments` in Phase K. | Owner decision: free shipping to e.g. Papua (Rp90.000 to Rp200.000+ per kg) is too expensive. |
+| D12 | **Address area from Komerce Search Destination (2026-10-21).** The buyer picks a Komerce destination (kelurahan, kecamatan, city, province, kode pos) from a search box; the chosen row is cached in **`shipping_areas`** (keyed by `komerce_destination_id`) and the order and saved address point at it. Session 3's plain-text fields (no licensed dataset) are superseded for checkout; `@ammari/commerce/address` stays for validation, formatting and the snapshot. | A quote needs a Komerce destination id; the area list is licensed through the Komerce subscription. |
 | D13 | Unpaid expiry finalized by Midtrans `expire` notifications plus a **sweeper** route called every 5 minutes by a cron container on the VPS internal network. The same cron drives Komerce tracking polls in Phase K. | No scheduler exists. |
 | D14 | Transactional emails sent after commit with an `order_notifications (order_id, kind)` UNIQUE row as the idempotency guard. | Retries must not double-send; email failure never fails a webhook. |
 | D15 | **Two separate links in guest order emails.** "Lihat pesanan": view-only access to that one order (§9.2). "Masuk ke akun": a magic login link (§9.3), implemented as a **small custom Better Auth plugin** on the customer instance (our own endpoint, Better Auth's session creation, cookie, rate limiter and CSRF middleware), not the stock `magic-link` plugin. | The stock plugin logs in on GET (email scanners prefetch links), does not invalidate older links, does not bind to a customer id, and exposes public issuance. A plugin keeps the login inside Better Auth's own HTTP router, so its rate limiter and origin checks apply (SPEC §10.1's reason for not calling `.api` from server actions). |
 | D16 | **No card payments**, not enabled in Snap and not planned. | Decision 2. |
+| D17 | **Shipping quotes are server-side only**, behind a `ShippingRateProvider` interface (`@ammari/commerce/shipping`; Komerce in production, a fake in tests and e2e). The browser never sends a price, a courier or a Komerce id; the quote is recomputed in `placeOrder` and locked into the order. No quote, no order (§4.5.5). | Money rule; Ammari must never ship at an unknown cost. |
 
 ## 3. Data model (all expand-only, backward compatible)
 
@@ -148,7 +157,7 @@ courier and resi by hand (existing "Tandai dikirim") and mark orders "Selesai" b
 - `stock_reservations` references its order line through one composite FK
   `(order_item_id, order_id, sku) -> order_items (id, order_id, sku)` (new UNIQUE on
   `order_items`), ON DELETE RESTRICT, so the admin's delete-and-reinsert item edit fails loudly
-  on a line that still holds stock (session 14 blocks item edits on checkout orders anyway).
+  on a line that still holds stock (session 16, was 14, blocks item edits on checkout orders anyway).
 - **`order_access_tokens`** (the "Lihat pesanan" links): `id`, `order_id`, `token_hash UNIQUE`,
   `expires_at`, `created_at`, `last_used_at`. One row per email sent, so every email has its own
   working link (raw tokens are never stored, so a later email cannot reuse an earlier one).
@@ -158,7 +167,7 @@ courier and resi by hand (existing "Tandai dikirim") and mark orders "Selesai" b
   `checkout_submit`, `area_search`, `order_view`, `login_link_view`.
 - No permission keys or other reference rows.
 
-### ~~Migration 0031 `shipping_areas_data`~~ (skipped, session 3)
+### ~~Migration `shipping_areas_data`~~ (skipped, session 3; it would have been 0031)
 
 **Licence check 2026-10-20: not clean, so no data migration (D12 fallback).** The kecamatan
 hierarchy (Kepmendagri 2025, e.g. via `cahyadsn/wilayah`) is arguably public domain under UU
@@ -182,13 +191,49 @@ a saved-address row passed in never leaks its ids into the order). For later ses
 contact_phone` is the buyer's WhatsApp, the recipient's phone lives in the snapshot; the same
 recipient data sits in `shipping_address`, `recipient_name` and the snapshot, so the §11
 anonymization must clear all three; "set as default" on `customer_addresses` must unset and set
-in one statement or transaction (partial UNIQUE), never check-then-write. `shipping_areas` stays empty
-and every `shipping_area_id` stays NULL until Phase K K1 decides whether to fill it from Komerce
-Search Destination (licensed through the subscription). The `area_search` rate-limit key is unused
-until then. Later migration numbers shift down by one; numbers are assigned by
-`drizzle-kit generate` at the time, the order below is what matters.
+in one statement or transaction (partial UNIQUE), never check-then-write. ~~`shipping_areas` stays
+empty and every `shipping_area_id` stays NULL until Phase K K1.~~ **Superseded 2026-10-21 (D12):**
+`shipping_areas` is filled on demand from Komerce Search Destination in Phase C (session 8,
+§4.5.1) and every checkout order and saved address gets a `shipping_area_id`; the `area_search`
+rate-limit key is used from session 8. Numbers are assigned by `drizzle-kit generate` at the time;
+the order below is what matters.
 
-### Migration 0031 `customer_login_links` (session 12)
+### Migration 0031 `shipping_quote` (session 7, added 2026-10-21)
+
+All additive and backward compatible with the session 6 release (which never writes a checkout
+order, never reads `shipping_areas`, and does not know the new columns):
+
+- **`products.shipping_weight_grams int NULL`**, CHECK `BETWEEN 50 AND 30000`: one packed piece
+  (folded, in its own plastic). Nullable in the migration; required to publish from session 7 on
+  (§4.5.3).
+- **`orders`** new nullable columns, written only by `placeOrder`:
+  `shipping_cost_amount bigint` (the courier cost as quoted), `shipping_subsidy_amount bigint`
+  (what Ammari covers on this order), `shipping_courier_code text` / `shipping_service_code text`
+  (e.g. `jne` / `REG`, as Komerce names them), `shipping_courier_label text` (display, e.g.
+  "JNE Reguler"), `shipping_weight_grams int`, `shipping_destination_id text` (the Komerce id,
+  snapshotted because `shipping_areas` rows can be re-synced), `shipping_quoted_at timestamptz`.
+  CHECKs: the eight are all NULL or all set; when set, `shipping_subsidy_amount BETWEEN 0 AND
+  shipping_cost_amount` and **`shipping_amount = shipping_cost_amount - shipping_subsidy_amount`**
+  (so the existing `total = subtotal + shipping - discount` CHECK still balances); `payment_status
+  IS NULL OR shipping_cost_amount IS NOT NULL` (every checkout order carries a quote; safe because
+  no checkout order exists before session 9). The Rp20.000 cap itself is a code constant, not a
+  CHECK, so changing it never conflicts with old orders.
+- **`shipping_areas`**: add `subdistrict text NULL` (kelurahan), `label text` (Komerce's display
+  label), `last_synced_at timestamptz`; make `postal_code` nullable (a few Komerce destinations
+  carry no kode pos; the buyer then types it, §4.5.1); replace the UNIQUE `(province, city,
+  district, postal_code)` (two kelurahan can share all four) with a partial UNIQUE on
+  `komerce_destination_id` WHERE NOT NULL. Dropping the old UNIQUE is safe: the table is empty and
+  no released code reads it.
+- **`customer_addresses`**: add `subdistrict text NULL`. The snapshot moves to `version: 2`
+  (adds `subdistrict`, `shippingAreaId`, `komerceDestinationId`); v1 never reached an order.
+- **`shipping_rate_cache`**: `origin_id text`, `destination_id text`, `weight_grams int`,
+  `services_key text` (hash of the allowlist), `result jsonb` (allowlisted services and prices
+  only), `fetched_at`; UNIQUE `(origin_id, destination_id, weight_grams, services_key)`, written
+  with `INSERT ... ON CONFLICT DO UPDATE` (§4.5.4).
+- No permission keys or other reference rows (the courier allowlist and the subsidy cap are code
+  constants).
+
+### Migration 0032 `customer_login_links` (session 14; was 0031 before 2026-10-21)
 
 - **`customer_login_links`**: `id`, `customer_id` (FK restrict), `email citext` (the address it
   was sent to), `token_hash text UNIQUE`, `order_id NULL` (which order email issued it),
@@ -196,11 +241,12 @@ until then. Later migration numbers shift down by one; numbers are assigned by
   Partial UNIQUE on `(customer_id)` WHERE `consumed_at IS NULL AND superseded_at IS NULL`, so at
   most one live link per customer exists, enforced by the database.
 
-### Phase K migrations (numbers assigned at the time, expected 0032 and 0033)
+### Phase K migrations (numbers assigned at the time, expected 0033 and 0034)
 
 - **`shipments`** (K2): `order_id UNIQUE` (one shipment per order in v1), `provider`
   (`komerce`), `provider_order_no UNIQUE`, `courier`, `service`, `awb UNIQUE NULL`, `cost_amount`
-  (what Ammari pays), `label_url`, `status` (normalized: `created` / `pickup_requested` /
+  (what Ammari actually pays at booking; compare with the order's quoted `shipping_cost_amount`),
+  `label_url`, `status` (normalized: `created` / `pickup_requested` /
   `picked_up` / `in_transit` / `delivered` / `cancelled` / `returning` / `returned` /
   `problem`), `provider_status text` (raw), `delivered_at`, `last_polled_at`, `last_event_at`,
   timestamps.
@@ -231,7 +277,8 @@ renamed or dropped. No contract migration is needed.
   inline box "Masuk keranjang: Beige, M · Lihat" and the header count updates.
 - Header: cart icon with count, only when the flag is on.
 - `/cart` per `mockup-cart.png`: image, name, "Warna · Ukuran", line price, stepper, remove ×,
-  "N barang", Subtotal, "Ongkir: Gratis", primary "Lanjut ke checkout", text link "Lanjut
+  "N barang", Subtotal, "Ongkir: Dihitung saat checkout" (was "Gratis" before 2026-10-21; the
+  cart has no destination, so it never quotes), primary "Lanjut ke checkout", text link "Lanjut
   belanja". Empty state with a primary button back to the collection. Reaching 20 pieces shows
   "Maksimal 20 barang per pesanan."
 - Stock checks: every render re-reads availability uncached. Unavailable line: "Habis" muted with
@@ -244,14 +291,20 @@ renamed or dropped. No contract migration is needed.
 
 1. **Kontak.** Guest: email + nomor WhatsApp (normalized to `+62...`). Logged in: locked card,
    "Bukan kamu? Keluar". A logged-in customer without a phone types it here.
-2. **Alamat pengiriman.** Nama penerima, nomor HP penerima, Provinsi (select), Kota/Kabupaten,
-   Kecamatan, Kode pos (plain fields per D12; the area dataset licence was not clean, session 3),
-   alamat lengkap, catatan untuk kurir (optional). Logged in with saved address: summary card with
-   "Ubah" / "Ganti alamat" and "Perbarui alamat tersimpan". No map pin.
-3. **Pengiriman.** One fixed row, no choice and no delivery estimate (decision 12):
-   "Gratis ongkir ke seluruh Indonesia. Nomor resi dikirim lewat email setelah pesanan dikirim."
-4. **Ringkasan.** Lines, voucher field, Subtotal, Ongkir "Gratis", "Voucher -Rp20.000" (no
-   "Hemat" badge, decision 5), Total.
+2. **Alamat pengiriman.** Nama penerima, nomor HP penerima, **"Kecamatan / kelurahan / kode
+   pos"** search (one combobox, §4.5.1; the chosen area shows as a read-only line "Kelurahan,
+   Kecamatan, Kota, Provinsi 12345" with "Ganti"), Kode pos input only when the chosen area has
+   none, alamat lengkap (jalan, nomor rumah, RT/RW), catatan untuk kurir (optional). Logged in
+   with saved address: summary card with "Ubah" / "Ganti alamat" and "Perbarui alamat tersimpan".
+   No map pin. Province select and free-typed city/kecamatan/kode pos (session 3) are gone.
+3. **Pengiriman.** One fixed row, no choice and no delivery estimate (decisions 12, 18): before an
+   area is chosen "Pilih alamat dulu untuk menghitung ongkir."; after, the chosen service
+   ("JNE Reguler") with the buyer's share, and a muted line "Ongkir Rp35.000, subsidi Ammari
+   -Rp20.000." (when the cost is at most Rp20.000: "Ongkir Rp18.000, ditanggung penuh subsidi
+   Ammari." and the share shows "Rp0"), then "Nomor resi dikirim lewat email setelah pesanan
+   dikirim." Failure states per §4.5.5.
+4. **Ringkasan.** Lines, voucher field, Subtotal, **Ongkir** (the buyer's share, "Rp0" allowed,
+   "-" until quoted), "Voucher -Rp20.000" (no "Hemat" badge, decision 5), Total.
    - Logged in: dropdown of usable vouchers, best auto-selected (largest amount, then soonest
      expiry), × clears it.
    - Guest: "Masuk untuk pakai voucher" goes to `/login?next=/checkout`; the cart merges on
@@ -277,6 +330,137 @@ renamed or dropped. No contract migration is needed.
 4. The cart is emptied when the order is created. After expiry, "Pesan lagi" refills the cart
    from the order lines.
 
+### 4.5 Shipping subsidy and rates (added 2026-10-21, D11, D12, D17)
+
+The rule: the buyer pays `buyerShipping = max(0, cost - SHIPPING_SUBSIDY_MAX_AMOUNT)` with
+`SHIPPING_SUBSIDY_MAX_AMOUNT = 20_000` (code constant in `@ammari/commerce/shipping`), and
+`subsidy = cost - buyerShipping`. Product prices never depend on location. All of it is computed
+on the server; the browser only ever sees the result.
+
+#### 4.5.1 Address: Komerce destination search
+
+- The combobox calls a flag-gated server endpoint (`GET /api/shipping/destinations?q=`, or a
+  server action; session 8 picks after reading the installed Next docs) after 3 characters and a
+  300 ms debounce. It accepts a kelurahan, kecamatan, city or kode pos fragment.
+- The server calls Komerce Search Destination, **upserts every returned row into `shipping_areas`**
+  (`ON CONFLICT (komerce_destination_id) DO UPDATE`, refreshing names, label, kode pos and
+  `last_synced_at`), and returns at most 10 rows as **our `shipping_areas.id`** plus the display
+  label. The browser never sends a Komerce id: the form posts `shippingAreaId`, and the server
+  reads the area fields from that row. An id not in `shipping_areas` is a validation error.
+- `shipping_areas.search_text` (lowercased, accent-free label) stays for a later local-first
+  search; v1 always asks Komerce, so names and ids stay current.
+- Rate limits on `claim_rate_limits`: **`area_search` 60 per 10 minutes per IP** (CF-Connecting-IP,
+  same rules as `cart_write`), plus the global Komerce budget (§4.5.4). Over the limit: "Terlalu
+  banyak pencarian. Coba lagi sebentar lagi."
+- `@ammari/commerce/address` stays the one validator: `parseShippingAddress` takes the free fields
+  (recipient, phone, address line, notes, and a kode pos only when the area has none) plus the
+  loaded area row, keeps its cleaning, caps and all-errors-at-once messages, and refuses a missing
+  area ("Pilih kecamatan atau kelurahan dari daftar."). `formatShippingAddress` adds the kelurahan.
+  `toShippingAddressSnapshot` writes `version: 2` (adds `subdistrict`, `shippingAreaId`,
+  `komerceDestinationId`). `INDONESIAN_PROVINCES` is no longer used by the form (kept for admin
+  manual orders if wanted).
+- A saved address without `shipping_area_id` (none exist yet; possible only from a future
+  import) shows "Pilih ulang kecamatan" and cannot be used until re-picked.
+
+#### 4.5.2 Courier and service (decision 18)
+
+Options considered: one fixed courier (simplest, often not cheapest outside Java, fails where it
+has no service); buyer chooses from a list (more UI and more quotes to validate, and Java buyers
+see several "Rp0" rows); **cheapest among an allowlist (chosen)**.
+
+- `SHIPPING_SERVICE_ALLOWLIST` (code constant): regular, non-COD, non-instant, non-cargo services
+  only. Starting proposal, confirmed against the sandbox service codes in session 8: JNE REG,
+  J&T EZ, SiCepat REG, ID Express Standard, AnterAja Reguler, POS Reguler (POS keeps remote
+  destinations covered).
+- One Calculate call per quote returns every courier's services; the server filters to the
+  allowlist and takes the **lowest price, ties broken by allowlist order** (deterministic, so the
+  same inputs always give the same service).
+- The chosen courier and service are stored on the order. Before Phase K staff book exactly that
+  service by hand; Phase K's Store Order uses it.
+- No ETA is shown (decision 12), even though Komerce returns one.
+
+#### 4.5.3 Weight (decision 19)
+
+- `products.shipping_weight_grams` (migration 0031): one packed piece. Admin product form field
+  "Berat kirim (gram)" with the hint "Berat 1 pcs yang sudah dilipat dan dibungkus plastik".
+- **Required to publish** from session 7 (a new publish rule beside "at least one photo"). Products
+  already published without it stay published but show a "Berat kirim belum diisi" badge in the
+  admin product list; checkout refuses an order containing one (§4.5.5) and logs the SKUs. The
+  launch checklist (§14) requires zero published products without a weight.
+- Order weight = `sum(qty x shipping_weight_grams) + SHIPPING_PACKAGING_GRAMS` (one outer mailer
+  per order, code constant, starting at 100 g; the owner confirms by weighing one packed order).
+  Sent to Komerce in grams; the courier applies its own kg rounding. Volume weight is ignored
+  (folded gamis are small); revisit if a courier starts charging it.
+- 20 pieces x ~800 g stays well inside regular-service limits.
+
+#### 4.5.4 Quotes: server-side, cached, locked
+
+- `quoteShipping({ areaId, lines })` in `@ammari/commerce/shipping` (no transaction): loads weights,
+  computes the parcel weight, reads `shipping_rate_cache` for `(KOMERCE_ORIGIN_ID, destination,
+  weight, allowlist hash)`; a hit younger than `SHIPPING_QUOTE_CACHE_MINUTES` (default 360) is
+  used, otherwise one Calculate call refreshes the row. Returns `{ courierCode, serviceCode,
+  label, costAmount, subsidyAmount, buyerAmount, weightGrams, destinationId, quotedAt }` or a
+  typed refusal.
+- **Checkout page:** quotes when the area or the cart changes (server action, never a client
+  computed figure); shows the result in sections 3 and 4.
+- **`placeOrder`:** calls `quoteShipping` again **before** opening the order transaction (no
+  external call inside a DB transaction), from the cart lines it is about to lock. Inside the
+  transaction it re-checks that the locked lines give the same weight (else rolls back with "Isi
+  keranjang berubah. Cek ringkasan lagi.") and writes all eight `shipping_*` columns plus
+  `shipping_amount = buyerAmount`. A different total than `expectedTotal` (price, voucher or
+  ongkir changed) rolls back with "Harga, ongkir atau voucher berubah. Cek ringkasan lagi."
+- **Locked:** once the order exists its shipping figures never change. A later tariff change, or a
+  different actual cost at booking (Phase K `shipments.cost_amount`), is Ammari's gain or loss,
+  never charged to the buyer.
+- **Rate limits:** `shipping_quote` 30 per 10 minutes per IP; and a **global Komerce budget**:
+  every outgoing Komerce call first inserts into `claim_rate_limits` with ip `*` and action
+  `komerce_call`, refused above `KOMERCE_DAILY_CALL_BUDGET` per Jakarta day (set below the plan's
+  daily quota so a bot cannot exhaust it). Refusal is treated as "Komerce down" (§4.5.5).
+- Komerce calls: 5 s timeout, one retry after 300 ms on network errors and 5xx only, zod-parsed
+  responses, typed errors (`unavailable`, `no_service`, `bad_response`, `budget_exhausted`,
+  `missing_weight`); keys never logged; only the destination id and weight go to Komerce at this
+  stage (no name, phone or street).
+
+#### 4.5.5 Failure handling (decision 20)
+
+No quote, no order; never a fallback rate.
+
+| Case | Section 3 shows | "Bayar sekarang" |
+|---|---|---|
+| Komerce down, timeout, bad response, budget exhausted | "Ongkir belum bisa dihitung. Coba lagi sebentar lagi." + "Coba lagi" button | refuses with the same message |
+| No allowlisted service to the destination | "Pengiriman ke alamat ini belum tersedia lewat website. Hubungi kami lewat WhatsApp." + WhatsApp link (prefilled with the area label, no city named in our own copy) | refuses |
+| A product without a weight | "Ongkir belum bisa dihitung untuk pesanan ini. Hubungi kami lewat WhatsApp." + error log naming the SKUs | refuses |
+| `placeOrder` quote differs from the shown one | n/a | rolls back with the drift message, page re-quotes |
+
+Every failure is logged with the typed reason (no key, no address); repeated `unavailable`
+within an hour is worth an owner alert later (not v1).
+
+#### 4.5.6 Money
+
+- Order fields: §3 migration 0031. `shipping_amount` = buyer's share (same meaning as the admin
+  manual-order field "Ongkos kirim (ditanggung pembeli)").
+- `total = subtotal + shipping_amount - discount`, the existing CHECK.
+- **Voucher:** applies to goods only, `discount = min(voucher, subtotal)`; it never reduces ongkir
+  and the subsidy never stacks into the voucher.
+- **Midtrans `item_details`:** product lines, then `{ id: "SHIPPING", name: "Ongkir", price:
+  buyerAmount, quantity: 1 }` **only when `buyerAmount > 0`**, then the negative "Voucher" line;
+  their sum equals `gross_amount` (Midtrans rejects a mismatch). No subsidy line (it is not money
+  the buyer pays).
+- **Cancel / expiry (unpaid):** nothing was paid, nothing to refund; the quote stays on the
+  cancelled order for metrics.
+- **Paid, cancelled before shipping (§6.5):** `refund_due` covers the full `total_amount`,
+  ongkir included.
+- **Returns after delivery:** whether the buyer's ongkir is refunded follows the "Pengembalian &
+  penukaran" page (owner wording); staff refund by hand as today.
+- **Admin order detail** (session 16) "Pengiriman": layanan ("JNE Reguler"), berat ("1,4 kg"),
+  tujuan (area label), "Ongkir kurir Rp35.000", "Subsidi Ammari Rp20.000", "Dibayar pembeli
+  Rp15.000", quote time; Phase K adds the actual booked cost. `/packing` shows the service so
+  staff book the right one before Phase K.
+- **Overview:** a web order's goods revenue is `subtotal - discount`; ongkir is pass-through, and
+  Ammari's shipping expense is `shipping_cost_amount - shipping_amount` (= the subsidy) until Phase
+  K records the actual cost. Whoever builds web-order metrics must not count `shipping_amount` as
+  sales.
+
 ## 5. Order creation (`placeOrder`, in `@ammari/commerce`)
 
 All in one transaction, trusting the client only for cart identity, form fields, chosen voucher
@@ -284,35 +468,44 @@ id, consent booleans, a `checkoutAttemptId`, and an `expectedTotal` used only to
 
 1. Rate limits: `checkout_submit` per IP (10 per 10 min) and at most 3 unpaid web orders per
    contact email in 2 hours.
-2. Zod validation (email, `+62` phone, area id or plain fields, lengths, consent true).
+2. Zod validation (email, `+62` phone, `shippingAreaId` that exists in `shipping_areas`, free
+   address fields via `parseShippingAddress`, lengths, consent true).
+2a. **Shipping quote, before the transaction** (§4.5.4): `quoteShipping` from the current cart
+   lines and the area. A refusal returns the §4.5.5 message and creates nothing.
 3. Re-read cart lines, products/variants (active, published) and current `products.base_price`;
-   compute subtotal; enforce 10 per line and 20 per order.
+   compute subtotal; enforce 10 per line and 20 per order; recompute the parcel weight from the
+   locked lines and refuse if it differs from the quote's.
 4. Customer: session customer, or link-or-create by email (insert-first idiom). New customer:
    stamp `pdp_consent_at`, `promo_consent_at` if ticked, phone only if free. Existing customer
    matched by an unverified email: never changes its name, phone or consent; the order carries its
    own contact snapshot and consent evidence.
 5. `generateOrderNumber(tx)` (`ORD-YYYYMM-NNNN`, decision 6).
 6. Insert `orders` (`channel_id = 'web'`, `awaiting_payment`, `payment_status = 'pending'`,
-   `shipping_amount = 0`, snapshots, `placed_with_session`, `payment_expires_at = now + 60 min`)
+   `shipping_amount` = the quote's buyer share plus the other seven `shipping_*` columns,
+   `shipping_area_id`, snapshots (address `version: 2`), `placed_with_session`, `payment_expires_at = now + 60 min`)
    and `order_items` (`unit_cost = 0` until paid).
 7. Reserve stock per SKU (sorted, `lockVariantForUpdate`, `physical - active reservations >=
    qty`), `expires_at = now + 75 min` (decision 1). Error names product, colour and size.
 8. Voucher (session only): `UPDATE vouchers SET status='used', used_order_id, used_at WHERE id
    AND customer_id AND status='active' AND expires_at > now() RETURNING amount`; zero rows rolls
    back with "Voucher tidak bisa dipakai". Discount = `min(amount, subtotal)`.
-9. `total = subtotal - discount`; drift from `expectedTotal` rolls back with "Harga atau voucher
-   berubah. Cek ringkasan lagi."
+9. `total = subtotal + shipping_amount - discount`; drift from `expectedTotal` rolls back with
+   "Harga, ongkir atau voucher berubah. Cek ringkasan lagi."
 10. Insert `payments` attempt 1, insert one `order_access_tokens` row for the checkout cookie,
     delete cart items, audit log (`action = 'web_checkout'`, no staff actor).
 11. After commit: Snap `POST /snap/v1/transactions` with `transaction_details`, `item_details`
-    (plus a negative "Voucher" line), `customer_details`, `enabled_payments = ["other_qris",
+    (product lines, an "Ongkir" line when the buyer's share is above 0, and a negative "Voucher"
+    line; §4.5.6), `customer_details`, `enabled_payments = ["other_qris",
     "gopay", "shopeepay", "bca_va", "bni_va", "bri_va", "echannel", "permata_va"]` (decision 2;
     `echannel` is Mandiri Bill), `expiry` 60 minutes, `callbacks.finish`,
     `X-Override-Notification`. Snap failure keeps the order pending with a retry button; the
     sweeper expires it if never paid. Ammari absorbs the fee (decision 3): no fee line.
 
 Concurrency tests: last unit with two buyers, the same voucher in two tabs, double submit
-(`checkout_attempt_id` UNIQUE returns the same order).
+(`checkout_attempt_id` UNIQUE returns the same order), a cart change between the quote and the
+transaction (weight mismatch rolls back). Shipping tests: subsidy split at cost 0, 19.999,
+20.000, 20.001 and 200.000; a voucher with a non-zero buyer share; a quote refusal creates no
+order and holds no stock.
 
 ## 6. Payments: Midtrans Snap
 
@@ -370,29 +563,34 @@ used_order_id = NULL, used_at = NULL WHERE used_order_id = $order AND status = '
 
 - `awaiting_payment`: calls Midtrans cancel first; refuses if Midtrans reports it paid.
 - `to_ship`: allowed as today, plus "Kembalikan dana pembeli lewat dashboard pembayaran" and flag
-  `refund_due` until a refund notification arrives or staff clears it.
+  `refund_due` until a refund notification arrives or staff clears it. The amount to refund is the
+  full `total_amount`, ongkir included (§4.5.6).
 
 ## 7. How web orders fit the existing admin flow
 
 - **Statuses:** unchanged `ORDER_STATUSES`. `payment_status` separate, web only.
 - **`/orders`:** payment badge, "Perlu dicek" filter (`needs_attention`), detail "Pembayaran"
   section (method, paid time, attempts, transaction id, refunds), contact and structured
-  address, actions per §6.5, item edit blocked for web orders. Phase K adds a "Pengiriman"
-  section (§15).
-- **`/packing`:** paid web orders enter the `to_ship` queue. Thank-you cards stay marketplace only
-  (verify and enforce server-side). Before Phase K: manual "Tandai dikirim" with courier + resi
-  sends the "Pesanan dikirim" email. After Phase K: "Buat pengiriman" books Komerce and prints
+  address, actions per §6.5, item edit blocked for web orders, and a "Pengiriman" section with the
+  locked quote (§4.5.6); Phase K adds the booking and tracking to it (§15).
+- **`/packing`:** paid web orders enter the `to_ship` queue showing the quoted service ("JNE
+  Reguler"). Thank-you cards stay marketplace only (verify and enforce server-side). Before Phase
+  K: staff book that service by hand, then manual "Tandai dikirim" (courier prefilled from the
+  order) with the resi sends the "Pesanan dikirim" email. After Phase K: "Buat pengiriman" books Komerce and prints
   the label; the manual path stays as fallback.
 - **`/stock`:** read-only "Dipesan" figure from active reservations, reservation rows on
   `/stock/[sku]`, and a note on the count page that reserved pieces are still counted.
 - **Revalidation** of affected product paths after reserve, release and sale.
-- **Overview:** the 18% marketplace fee assumption must not apply to `web`.
+- **Overview:** the 18% marketplace fee assumption must not apply to `web`; ongkir is not sales
+  revenue and the subsidy is a shipping expense (§4.5.6).
+- **Products:** "Berat kirim (gram)" on the product form, required to publish, badge on the list
+  when missing (§4.5.3, session 7).
 
 ## 8. Emails (Resend, Indonesian, plain text first)
 
 | Kind | Trigger | Content |
 |---|---|---|
-| `created` | order created | order no, lines, total, "Lanjutkan pembayaran" link, deadline in WIB, **"Lihat pesanan"** link; guest orders (`placed_with_session = false`) also **"Masuk ke akun"** |
+| `created` | order created | order no, lines, subtotal, ongkir (buyer's share, with "subsidi ongkir Rp20.000" when it applied), voucher, total, "Lanjutkan pembayaran" link, deadline in WIB, **"Lihat pesanan"** link; guest orders (`placed_with_session = false`) also **"Masuk ke akun"** |
 | `paid` | to `to_ship` | "Pembayaran diterima", lines, address, next steps, "Lihat pesanan"; guest orders also a fresh "Masuk ke akun" (supersedes the earlier one) |
 | `shipped` | manual "Tandai dikirim" or Komerce picked-up/in-transit | courier, resi, "Lihat pesanan" (tracking shows there) |
 | `delivered` | Komerce delivered (Phase K) | "Pesanan sudah sampai", returns/exchange info link |
@@ -411,7 +609,7 @@ skipped silently when the limit is hit (§9.3). Idempotent via `order_notificati
   labels: "Menunggu pembayaran", "Diproses", "Dikirim", "Selesai", "Dibatalkan", "Dikembalikan".
   Marketplace orders show as today.
 - `/orders`: paginated list for the logged-in customer.
-- `/orders/[orderNo]`: lines, totals, address, status timeline, "Lanjutkan pembayaran" while
+- `/orders/[orderNo]`: lines, totals (subtotal, ongkir as paid, voucher, total), address, status timeline, "Lanjutkan pembayaran" while
   pending, "Pesan lagi" when cancelled, and a **"Lacak pengiriman"** block: courier and resi from
   the order (before Phase K), then the `shipment_events` timeline with the latest status on top
   (Phase K). Unknown or unauthorized: the same not-found page.
@@ -467,8 +665,9 @@ Custom Better Auth plugin `orderLoginLink` in `packages/auth/src/customer/` (D15
 
 ## 10. Security checklist
 
-- Server recomputes prices, discount, totals and stock everywhere; `expectedTotal` only detects
-  drift.
+- Server recomputes prices, discount, shipping quote, totals and stock everywhere;
+  `expectedTotal` only detects drift. The browser never sends a price, courier, weight or Komerce
+  id; areas are referenced by our own `shipping_areas.id` (§4.5).
 - Atomic patterns only: SKU locks + reservations; conditional voucher UPDATE;
   `checkout_attempt_id` UNIQUE; webhook conditional updates; cart merge upsert; magic link
   consume UPDATE ... RETURNING; one live login link per customer by partial UNIQUE index.
@@ -476,15 +675,18 @@ Custom Better Auth plugin `orderLoginLink` in `packages/auth/src/customer/` (D15
   CSRF middleware; webhooks and the sweep are authenticated by signature, secret path token or
   bearer secret.
 - No silent login anywhere: checkout never creates a session; the magic link needs a POST.
-- Rate limits: cart writes, checkout submit, area search, order view, login link view/consume,
-  magic link issuance.
+- Rate limits: cart writes, checkout submit, area search, shipping quote, the global daily Komerce
+  call budget, order view, login link view/consume, magic link issuance.
+- Outbound Komerce calls go only to the configured base URL (no user-controlled URL, so no SSRF),
+  with a timeout; responses are zod-parsed and only allowlisted fields are cached.
 - Inventory hoarding: 75-minute hold, 3 unpaid orders per email, 20-piece cap.
 - Customer sessions never reach admin (unchanged).
 - Secrets only in env; Midtrans server key and Komerce key never reach the browser.
 - No cost data in storefront queries.
 - Logs never include keys, signatures, raw tokens or full addresses.
-- Reviewers: `security-reviewer` on sessions 5, 7, 8, 9, 12 and K3; `silent-failure-hunter` on
-  the payment webhook, sweeper, emails and the Komerce webhook/poller.
+- Reviewers: `security-reviewer` on sessions 5, 8, 9, 10, 11, 14 and K3; `silent-failure-hunter`
+  on the Komerce rate client (session 8), the payment webhook, sweeper, emails and the Komerce
+  webhook/poller.
 
 ## 11. Data retention
 
@@ -497,7 +699,9 @@ Custom Better Auth plugin `orderLoginLink` in `packages/auth/src/customer/` (D15
 | `customer_login_links` | deleted 30 days after expiry/consume (audit rows stay in `audit_log`) |
 | Guest carts / customer carts | 30 days / 180 days after last activity |
 | `customer_addresses` | until the customer deletes them or the account is deleted |
-| Rate limit rows | 1 day |
+| Rate limit rows (incl. `komerce_call`) | 1 day |
+| `shipping_rate_cache` | rows older than 7 days deleted (only fresh rows are ever used) |
+| `shipping_areas` | kept (public reference data, no personal data; re-synced on every search hit) |
 
 Run daily from the same internal sweep route.
 
@@ -510,9 +714,11 @@ Run daily from the same internal sweep route.
 2. Purposes: processing and delivering orders, payment confirmation, sending order and shipping
    emails, customer service, legal bookkeeping obligations, and promotions only with separate
    consent.
-3. Shared with: a licensed payment processor (to process payment), shipping/courier partners
-   (name, phone and address to deliver the package and provide tracking), and the email delivery
-   provider. No sale of data.
+3. Shared with: a licensed payment processor (to process payment), **the shipping service
+   provider and the courier** (updated 2026-10-21): at checkout only the chosen area (kelurahan,
+   kecamatan, kode pos) and the parcel weight are sent to calculate ongkir; once the order is
+   paid, the recipient's name, phone and full address go to the shipping provider and courier to
+   deliver the package and provide tracking. And the email delivery provider. No sale of data.
 4. Accounts: a checkout creates or links an account by email; login is passwordless (email code,
    Google, or a one-time login link sent by email that expires in 24 hours); no password is
    stored.
@@ -527,17 +733,27 @@ Run daily from the same internal sweep route.
    payment is received.
 2. Payment: within 60 minutes, by QRIS, e-wallet (GoPay, ShopeePay) or virtual account (BCA, BNI,
    BRI, Mandiri, Permata); unpaid orders are cancelled automatically and stock is released.
-3. Prices in rupiah, free shipping to all of Indonesia, no extra fees at checkout.
+3. Prices in rupiah and the same for every location. **Ongkir (updated 2026-10-21):** Ammari
+   covers up to Rp20.000 of the shipping cost per order; the buyer pays the rest, shown as
+   "Ongkir" before payment and included in the total. No other fees at checkout. Vouchers do not
+   apply to ongkir.
 4. Limits: maximum 10 per item and 20 pieces per order.
 5. Vouchers: Rp20.000, one per order, no minimum, cannot be cashed out or exceed the subtotal;
    returned when an order is cancelled or its payment expires (if still valid), not after a
    return.
 6. Stock: if an item turns out to be unavailable after payment, Ammari contacts the buyer and
    refunds in full.
-7. Shipping: Ammari chooses the courier; tracking is available in "Pesanan saya"; an order is
-   marked complete when the courier reports it delivered.
-8. Cancellation by the buyer of a paid order and refunds go through customer service; returns and
-   exchanges follow the "Pengembalian & penukaran" page.
+7. Shipping: Ammari chooses the courier and regular service (the cheapest available to the
+   address); delivery time depends on the courier and is not guaranteed; some areas may not be
+   reachable through the website (order via WhatsApp instead); tracking is available in "Pesanan
+   saya"; an order is marked complete when the courier reports it delivered.
+8. Cancellation by the buyer of a paid order and refunds go through customer service; a paid
+   order cancelled before shipping is refunded in full, ongkir included; returns and exchanges
+   (including whether ongkir is refunded) follow the "Pengembalian & penukaran" page.
+
+Also update the **Pengiriman** info page and the announcement bar text (both owner-edited in
+admin) to the subsidy wording; the code defaults were changed 2026-10-21 except the announcement
+bar's column default (owner changes the live text).
 
 The checker for the payment processor's merchant review may also want the processor named on the
 policy page; if so, that is the one allowed exception to the "never name the gateway" rule,
@@ -549,32 +765,52 @@ apps/web: `MIDTRANS_SERVER_KEY`, `MIDTRANS_IS_PRODUCTION`, `MIDTRANS_ORDER_ID_PR
 `MIDTRANS_NOTIFICATION_URL`, `CHECKOUT_PAYMENT_EXPIRY_MINUTES` (60),
 `CHECKOUT_STOCK_HOLD_MINUTES` (75), `INTERNAL_CRON_SECRET`, existing `STOREFRONT_CART_ENABLED`,
 `RESEND_API_KEY`, `EMAIL_FROM`, `BETTER_AUTH_URL`, `CUSTOMER_BETTER_AUTH_SECRET`.
+apps/web Phase C shipping (session 8): `KOMERCE_COST_API_KEY`, `KOMERCE_COST_BASE_URL` (Shipping
+Cost: Search Destination, Calculate), `KOMERCE_ORIGIN_ID` (Ammari's own destination id, never
+shown), `KOMERCE_DAILY_CALL_BUDGET`, `SHIPPING_QUOTE_CACHE_MINUTES` (360),
+`SHIPPING_RATE_PROVIDER` (`komerce`, or `fake` only behind the e2e fixtures gate; production
+refuses `fake`).
 apps/admin: `MIDTRANS_SERVER_KEY`, `MIDTRANS_IS_PRODUCTION`, `MIDTRANS_ORDER_ID_PREFIX`,
-existing `MAIN_SITE_URL`; Phase K adds `KOMERCE_API_KEY`, `KOMERCE_BASE_URL`,
-`KOMERCE_ORIGIN_ID` (pickup origin), `KOMERCE_SHIPPER_*` (name, phone, address as Komerce needs).
-apps/web Phase K: `KOMERCE_API_KEY`, `KOMERCE_BASE_URL`, `KOMERCE_WEBHOOK_PATH_TOKEN`.
+existing `MAIN_SITE_URL`; Phase K adds `KOMERCE_DELIVERY_API_KEY`, `KOMERCE_DELIVERY_BASE_URL`,
+`KOMERCE_ORIGIN_ID`, `KOMERCE_SHIPPER_*` (name, phone, address as Komerce needs). The cost and
+delivery key pairs are separate names because Komerce may issue separate keys or hosts per
+product; they can hold the same values.
+apps/web Phase K: `KOMERCE_DELIVERY_API_KEY`, `KOMERCE_DELIVERY_BASE_URL`,
+`KOMERCE_WEBHOOK_PATH_TOKEN`.
 cron service: `INTERNAL_CRON_SECRET`.
 Added to `deploy/env/*.env.example` and `.env.example`; payment and Komerce code paths fail
 closed when their variables are missing.
 
 ## 13. Testing strategy
 
-- **Unit (TDD for vouchers, payments, stock, login links):** pricing, best voucher, signature,
-  every row of §6.2, provider order id, phone normalization, area search parsing, Komerce status
-  normalization, retention cut-offs.
+- **Unit (TDD for vouchers, payments, stock, login links, shipping money):** pricing, best
+  voucher, signature, every row of §6.2, provider order id, phone normalization, area search
+  parsing, subsidy split (0, 19.999, 20.000, 20.001, 200.000), cheapest-service pick with ties
+  and non-allowlisted services, parcel weight with packaging, Midtrans item_details sum with and
+  without an Ongkir line, Komerce response parsing against **hand-written fixtures copied from the
+  documented examples** (never recorded from a real call), Komerce status normalization,
+  retention cut-offs.
 - **DB integration:** reservations, last-unit race, voucher double redeem, double submit, webhook
   replay and out-of-order, expiry release + voucher restore, expired voucher not restored,
   paid-after-cancel, stock-short-at-payment, cart merge caps, admin cancel, login link single use
   and supersede, shipment event dedupe and auto-complete.
-- **Fakes:** `FakePaymentProvider` (with a gated local "Snap" page under `/api/test/...`) and
-  `FakeShippingProvider` for Phase K, both behind the existing e2e fixtures gate.
+- **Fakes:** `FakePaymentProvider` (with a gated local "Snap" page under `/api/test/...`),
+  `FakeShippingRateProvider` (session 8: a handful of fictional destinations, e.g. "Kelurahan
+  E2E Murah" quoting Rp12.000 (buyer Rp0), "Kelurahan E2E Jauh" quoting Rp95.000 (buyer
+  Rp75.000), one with no allowlisted service, one that times out, one without kode pos) and
+  `FakeShippingProvider` for Phase K, all behind the existing e2e fixtures gate. Unit tests inject
+  a stub `fetch` into the Komerce client; nothing in CI or e2e reaches Komerce or Midtrans.
 - **e2e (Chromium + WebKit, 390 px and 1280 px):** add to cart, cart edits and sold-out line,
   guest checkout alert, guest checkout to fake payment to finish page, finish page OTP link,
   magic link (GET page, POST login, cart merged, "Pesanan saya"), "Lihat pesanan" token page,
   logged-in checkout with voucher, expiry and "Pesan lagi", order list/detail, admin sees the order
   in `/orders` and `/packing`, flag off 404. On `ammari_e2e` only.
-- **Sandbox contract tests (opt-in with sandbox keys):** Midtrans create/status/cancel; Komerce
-  destination search, store order, detail, history AWB, cancel.
+- **e2e shipping (session 10):** area search and pick, Rp0 and Rp75.000 buyer shares in sections 3
+  and 4, no-service and timeout states block "Bayar sekarang", the Ongkir line reaches the fake
+  payment page, at 390 px and 1280 px.
+- **Sandbox contract tests (opt-in with sandbox keys, skipped by default, run by hand):** Midtrans
+  create/status/cancel; Komerce destination search and calculate (session 8), store order,
+  detail, history AWB, cancel (Phase K).
 - **Manual sandbox checklist:** BCA VA and QRIS via the Midtrans simulator, GoPay and ShopeePay
   simulators, Mandiri bill, expiry after 60 minutes on dev, webhook received on `ammari.my.id`,
   emails and both links received and working. Phase K: a sandbox shipment through to
@@ -588,6 +824,12 @@ closed when their variables are missing.
   2, production keys in prod env, notification URL set, one real low-value QRIS payment refunded,
   privacy policy and terms updated (§11.1), footer payment chips changed to QRIS, Virtual
   Account, GoPay, ShopeePay (remove "Kartu kredit").
+- Before launch, shipping (added 2026-10-21): a Komerce subscription with Shipping Cost access and
+  its production key in the prod env (§15 "Komerce plan"), `KOMERCE_ORIGIN_ID` set to Ammari's
+  own destination, `KOMERCE_DAILY_CALL_BUDGET` below the plan's daily quota, **zero published
+  products without "Berat kirim"**, the packaging allowance confirmed by weighing one packed order,
+  a spot check of 3 quotes on dev (one in Java, one in Sumatra or Sulawesi, one in Papua) against
+  Komerce's own calculator, and the announcement bar and Pengiriman page re-worded by the owner.
 - Launch: flag `true` in the prod env file, restart the web container (no rebuild), trigger the
   full-storefront revalidation, smoke test one order.
 - Rollback: flag `false`, restart, revalidate. Webhooks, sweeper and `/orders/*` stay on.
@@ -607,31 +849,38 @@ Next.js and Better Auth docs/source before route, action or plugin work.
 | 0 | **DONE 2026-10-20.** Approve plan; update SPEC.md (§3.4 no shipping-cost calculation, tracking via Komerce; §5.2/§5.3 new tables; §8 gateway = Midtrans without cards, courier = Komerce; §10.3 order login link) and design spec (§4 footer chips without card, §7 fixed shipping row) | none | none | none |
 | 1 | **DONE 2026-10-20.** Extract `@ammari/commerce` (no behavior change). Moved: `db` (`Tx`, `Database`, `writeAuditLog`), `errors` (`FieldError`, `ActionError`, `mapUniqueViolation`), `jakarta-month`, `moving-average`, `order-status`, `orders` (`createOrder`, `updateOrderItems`, `transitionOrderStatus`, `generateOrderNumber`), `stock` (`lockVariantForUpdate`, `currentBalanceForSkuLocked`, `adjustStock`, `saveStockCount`), `thank-you-cards` (`voidActiveCardForOrder`). Admin's `@/lib/db` and `@/lib/errors` re-export them (one error class for `instanceof`). Admin-only read queries (order list/detail with cost, SKU picker, stock overview/ledger/count sheet) stay in apps/admin, so cost-bearing reads never sit in a package web imports. No voucher redeem/restore code existed to move (§1); it is new in session 7, in this package. apps/web does not use the package yet. Its test task is chained after `@ammari/auth#test` (`packages/commerce/turbo.json`) | none | existing admin tests moved and green | typescript, database |
 | 2 | **DONE 2026-10-20.** Schema `checkout_core` + constants + constraint tests. `packages/db/src/schema/checkout.ts` (new tables), checkout columns on `orders`, constants `STOCK_RESERVATION_STATUSES`, `PAYMENT_PROVIDERS`, `PAYMENT_STATUSES`, `ORDER_PAYMENT_STATUSES`, `ORDER_CANCEL_REASONS`, `ORDER_ATTENTION_FLAGS`, `ORDER_NOTIFICATION_KINDS`. Migration hand edits: `SET LOCAL lock_timeout = '5s'`, `set_updated_at` triggers on the 5 new tables with `updated_at`, and the `order_items` UNIQUE moved before the composite FK that needs it (drizzle-kit emitted it after). Tests: `test/checkout-schema.test.ts`, `test/migration-0030.test.ts` (upgrade from 0029 with data, previous release's writes, idempotent re-run) | 0030 | db tests | database |
-| 3 | **DONE 2026-10-20.** Shipping areas: licence check **not clean** (§3), so the plain-field fallback: `@ammari/commerce/address` (province list, phone normalization, `parseShippingAddress`, `formatShippingAddress`, `toShippingAddressSnapshot`). No dataset script, no data migration, no area search; `shipping_areas` stays empty. Tests: `packages/commerce/src/address.test.ts` (unit, plus DB checks that parsed output satisfies the `customer_addresses` and `orders` constraints). Session 8's form uses a province select and plain city/kecamatan/postal code inputs | none (0031 skipped) | unit + db | database, typescript |
+| 3 | **DONE 2026-10-20.** Shipping areas: licence check **not clean** (§3), so the plain-field fallback: `@ammari/commerce/address` (province list, phone normalization, `parseShippingAddress`, `formatShippingAddress`, `toShippingAddressSnapshot`). No dataset script, no data migration, no area search; `shipping_areas` stays empty. Tests: `packages/commerce/src/address.test.ts` (unit, plus DB checks that parsed output satisfies the `customer_addresses` and `orders` constraints). Session 8's form uses a province select and plain city/kecamatan/postal code inputs (superseded 2026-10-21: Komerce area search, §4.5.1) | none (0031 skipped) | unit + db | database, typescript |
 | 4 | **DONE 2026-10-20.** Reservations + storefront availability + admin "Dipesan". `@ammari/commerce/stock`: `reserveStockForOrder(tx, orderId, lines, holdMinutes)` (runs inside the caller's order transaction; per SKU sorted, variant `FOR UPDATE`, `physical - active unexpired holds >= qty`, `expires_at = now() + holdMinutes`; refusal is a `FieldError` on the SKU naming product, colour and size, never a count), `DEFAULT_STOCK_HOLD_MINUTES = 75`, `consumeReservationsForOrder` / `releaseReservationsForOrder` (conditional `UPDATE ... WHERE status = 'active' RETURNING`, replay-safe). Wired into `transitionOrderStatus`: `awaiting_payment -> to_ship` writes the sale (physical check only, D4) then consumes the order's holds, expired or not; an unpaid cancel releases them; a paid cancel restores via the ledger and leaves consumed holds alone. `updateOrderItems` refuses checkout orders (`payment_status` set). The "which holds count" rule (`active` and `expires_at > now()`) lives once in `@ammari/db/stock-availability` (`physicalStockQtySql`, `activeReservedQtySql`, `sellableQtySql`), used by the storefront (`available`, tile `soldOut`) and admin (`getReservedQtyBySku`, `listActiveReservationsForSku`). Admin: "Dipesan N" on `/stock`, a hold list on `/stock/[sku]` (order link with `orders.view`), "Dipesan: N pcs (tetap dihitung)" plus a note on the count page; all shown only while a hold exists, so nothing changes until checkout writes one. Tests: `packages/commerce/src/stock/reservations.test.ts` (incl. last-piece race), storefront availability tests, admin query tests, `apps/admin/e2e/stock-reservations.spec.ts` (390/1280, hold seeded in e2e global setup) | none | TDD stock + admin e2e 390/1280 | database, typescript, react |
 | 5 | **DONE 2026-10-20.** Cart backend. `@ammari/commerce/cart` (apps/web now depends on `@ammari/commerce`, workspace link only): `resolveCart` (read, never creates; merges when a session and a guest cookie are both present), `addCartItem` / `setCartItemQty` / `removeCartItem` (one transaction each, cart row locked first by the upsert or `FOR UPDATE`, so the 20-piece cap that spans rows is atomic; a refusal throws inside and rolls the write back, so it never leaves an empty cart; a login merge commits in its own transaction first, so a refused write never undoes it), `getCartView` (current `base_price`, line status `ok` / `insufficient` / `sold_out` / `unavailable` from `sellableQtySql`, image of the line's colour then the thumbnail; no stock number or cost column ever leaves the module), `getCartPieceCount`, token helpers (32 random bytes base64url, sha256 hex stored). `@ammari/commerce/cart-limits` (no server-only, for client UI): `CART_MAX_QTY_PER_LINE` 10, `CART_MAX_PIECES` 20, refusal and line-status messages. Merge: guest lines first (current intent), then the customer's; same SKU `LEAST(old + new, 10)`; trimmed to 20 in that order (`mergeTrimmed` reported); lock order guest then customer. Add refuses inactive/unpublished/inactive-variant SKUs, `line_limit`, `cart_limit`, `sold_out`, `insufficient_stock` (line total vs sellable); set-quantity allows lowering always, re-checks stock and cap only when raising, refuses unavailable lines (remove only). apps/web `lib/cart/`: `identity.ts` (`ammari_cart` cookie: httpOnly, SameSite=Lax, Secure on https and always in a production build, 60 days, re-set on every guest write; malformed values ignored; a well-formed token is reused only while it names a live guest cart, otherwise a fresh one is minted, so a planted token never becomes a shared cart), `ip.ts` (`CF-Connecting-IP` validated with `net.isIP`; missing or invalid in production is logged and the write refused, never one shared bucket; locally 127.0.0.1), `actions.ts` (`addToCartAction`, `updateCartItemQtyAction`, `removeCartItemAction`: flag check first, then per IP on `claim_rate_limits` `cart_write` 120 per 10 minutes and, for an add that creates a guest cart, `cart_create` 20 per hour; zod input; Indonesian messages; unexpected errors logged and returned as "Terjadi kesalahan. Coba lagi."; clears the guest cookie after any customer write that carried one), `queries.ts` (`loadCartView`, `loadCartPieceCount` for server components; empty while the flag is off). Tests: `packages/commerce/src/cart/cart.test.ts` (caps, availability, holds, merge and trim, ownership, three committed-transaction races), `apps/web/src/lib/cart/actions.test.ts` (cookie attributes, hash-only storage, planted token, flag off, both rate limits, IP fallback, generic error, merge on login incl. a refused write) | none | TDD integration | security, typescript, database |
-| 6 | **DONE 2026-10-21.** Cart UI. PDP: "Tambah ke keranjang" calls `addToCartAction` (one piece per tap, the selected size's SKU; `ProductView` now carries `sku` per size option and `allsizeSkuByColor`), then unrolls the inline "Masuk keranjang: Beige, M · Lihat" box with the existing `Curtain`; a refusal shows the server's message (`role="alert"`), a trimmed login merge shows "Maksimal 20 barang per pesanan.". Header: `CartLink` (bag icon after the account icon, at the right edge on every width; count as a small superscript, `aria-label` "Keranjang, N barang") rendered only when the flag is on; the count is **never server-rendered**: the browser fetches `GET /api/cart/count` (uncached route handler, `Cache-Control: private, no-store`, 404 with the flag off) on every navigation, and cart writes announce their new count with a window event (`lib/cart/count-event.ts`; a fetch started before an announcement is ignored). `/cart` (`app/cart/page.tsx`): `force-dynamic` (required: with the flag off the page calls `notFound()` before any cookie read, so a flag-off `next build` would otherwise prerender a static 404 that a runtime flip could never replace), `noindex`, lines per mockup (image 96×144, name, "Warna · Ukuran", line total, 1 to 10 stepper, ×; `insufficient` keeps the stepper but only lowers; `sold_out` / `unavailable` show "Habis" / "Tidak tersedia lagi" with only "Hapus"), "N barang", Subtotal, "Ongkir: Gratis", cap note at 20 pieces or after a trimmed merge, "Lanjut ke checkout" a real link to `/checkout` when `canCheckout` (owner decision 2026-10-21: it 404s until session 8), otherwise disabled with "Ubah atau hapus barang yang ditandai untuk lanjut ke checkout.", "Lanjut belanja" and the empty state go to `/#koleksi`. Summary beside the lines from `md`, below them on phones. Every stepper/remove goes through the session 5 actions, then `router.refresh()` inside the same transition (the line stays pending until the refreshed props land, so a double tap never sends a stale quantity). Review fixes: a server action call that rejects (offline, 5xx, deploy skew) is caught on the PDP and in `/cart` and shows "Terjadi kesalahan. Coba lagi." instead of throwing into the error boundary; `app/cart/error.tsx` (Indonesian retry) for a failed cart read; always-mounted screen-reader status regions (PDP add with the new count, `/cart` quantity and removal), focus to the heading after a removal, `aria-disabled` instead of `disabled` for pending and bound states so keyboard focus stays; an add that resolves after the buyer changed variant only updates the count; `CartLink` hides itself on a 404 (flag switched off under a cached page), logs non-abort fetch failures and re-fetches on a back/forward-cache restore. Tests: `product-purchase-panel.test.tsx` (add flow, all-size SKU, refusal, trimmed merge, reset on size change), `cart-link.test.tsx`, `cart/cart-line-item.test.tsx`, `api/cart/count/route.test.ts`, rejected-call tests, `e2e/cart.spec.ts` (390/1280: flag off 404s and no icon; PDP add to `/cart`, stepper, remove; seeded line states; 20-piece cap; empty state; header layout; summary layout). e2e runs both ways: `pnpm test:e2e` (flag off, the default) and `pnpm test:e2e:cart` (`E2E_CART_ENABLED=true`); `e2e/helpers/cart-flag.ts` picks each spec's expectations; `e2e/helpers/cart-db.ts` seeds guest carts in `ammari_e2e` | none | e2e 390/1280 | react, typescript |
-| 7 | `placeOrder` backend with `FakePaymentProvider` | none | TDD vouchers, stock, concurrency | security, database, typescript |
-| 8 | Checkout UI + finish page (incl. "Masuk untuk melihat semua pesanan" OTP link) | none | e2e guest + logged-in | react, security |
-| 9 | Midtrans provider + webhook + mapping + sandbox contract tests | none | TDD payments | security, silent-failure-hunter, typescript |
-| 10 | Sweeper + cron service + retention job | none | integration | silent-failure-hunter, database |
-| 11 | Emails: templates, `order_notifications`, `order_access_tokens` minting, owner paid alert, manual-shipped email hook | none | unit + integration | typescript, silent-failure-hunter |
-| 12 | Magic login link: `customer_login_links`, `orderLoginLink` plugin, `/login/link` page, issuance in emails, audit, rate limits | 0031 | TDD + e2e | security, typescript, database |
-| 13 | "Pesanan saya", `/orders`, `/orders/[orderNo]`, "Lihat pesanan" token access, "Lacak pengiriman" block (courier + resi) | none | e2e list 390/1280 | react, security |
-| 14 | Admin: payment section, "Perlu dicek", web cancel via Midtrans, item edit block, thank-you cards marketplace-only | none | admin e2e 390/1280 | react, security, database |
-| 15 | Launch readiness: env examples, runbook (Cloudflare Access bypass, cron), full sandbox run on dev, footer chips, launch/rollback checklist in `docs/runbooks/` | none | manual checklist | none |
+| 6 | **DONE 2026-10-21.** Cart UI. PDP: "Tambah ke keranjang" calls `addToCartAction` (one piece per tap, the selected size's SKU; `ProductView` now carries `sku` per size option and `allsizeSkuByColor`), then unrolls the inline "Masuk keranjang: Beige, M · Lihat" box with the existing `Curtain`; a refusal shows the server's message (`role="alert"`), a trimmed login merge shows "Maksimal 20 barang per pesanan.". Header: `CartLink` (bag icon after the account icon, at the right edge on every width; count as a small superscript, `aria-label` "Keranjang, N barang") rendered only when the flag is on; the count is **never server-rendered**: the browser fetches `GET /api/cart/count` (uncached route handler, `Cache-Control: private, no-store`, 404 with the flag off) on every navigation, and cart writes announce their new count with a window event (`lib/cart/count-event.ts`; a fetch started before an announcement is ignored). `/cart` (`app/cart/page.tsx`): `force-dynamic` (required: with the flag off the page calls `notFound()` before any cookie read, so a flag-off `next build` would otherwise prerender a static 404 that a runtime flip could never replace), `noindex`, lines per mockup (image 96×144, name, "Warna · Ukuran", line total, 1 to 10 stepper, ×; `insufficient` keeps the stepper but only lowers; `sold_out` / `unavailable` show "Habis" / "Tidak tersedia lagi" with only "Hapus"), "N barang", Subtotal, "Ongkir: Gratis" (changed to "Ongkir: Dihitung saat checkout" on 2026-10-21, subsidy), cap note at 20 pieces or after a trimmed merge, "Lanjut ke checkout" a real link to `/checkout` when `canCheckout` (owner decision 2026-10-21: it 404s until session 8, now 10), otherwise disabled with "Ubah atau hapus barang yang ditandai untuk lanjut ke checkout.", "Lanjut belanja" and the empty state go to `/#koleksi`. Summary beside the lines from `md`, below them on phones. Every stepper/remove goes through the session 5 actions, then `router.refresh()` inside the same transition (the line stays pending until the refreshed props land, so a double tap never sends a stale quantity). Review fixes: a server action call that rejects (offline, 5xx, deploy skew) is caught on the PDP and in `/cart` and shows "Terjadi kesalahan. Coba lagi." instead of throwing into the error boundary; `app/cart/error.tsx` (Indonesian retry) for a failed cart read; always-mounted screen-reader status regions (PDP add with the new count, `/cart` quantity and removal), focus to the heading after a removal, `aria-disabled` instead of `disabled` for pending and bound states so keyboard focus stays; an add that resolves after the buyer changed variant only updates the count; `CartLink` hides itself on a 404 (flag switched off under a cached page), logs non-abort fetch failures and re-fetches on a back/forward-cache restore. Tests: `product-purchase-panel.test.tsx` (add flow, all-size SKU, refusal, trimmed merge, reset on size change), `cart-link.test.tsx`, `cart/cart-line-item.test.tsx`, `api/cart/count/route.test.ts`, rejected-call tests, `e2e/cart.spec.ts` (390/1280: flag off 404s and no icon; PDP add to `/cart`, stepper, remove; seeded line states; 20-piece cap; empty state; header layout; summary layout). e2e runs both ways: `pnpm test:e2e` (flag off, the default) and `pnpm test:e2e:cart` (`E2E_CART_ENABLED=true`); `e2e/helpers/cart-flag.ts` picks each spec's expectations; `e2e/helpers/cart-db.ts` seeds guest carts in `ammari_e2e` | none | e2e 390/1280 | react, typescript |
+| 7 | **New 2026-10-21.** Shipping schema + product weight: migration 0031 `shipping_quote` (§3: `products.shipping_weight_grams`, the eight `orders.shipping_*` columns and CHECKs, `shipping_areas` changes, `customer_addresses.subdistrict`, `shipping_rate_cache`); admin product form "Berat kirim (gram)", publish rule, "Berat kirim belum diisi" badge; constants `SHIPPING_SUBSIDY_MAX_AMOUNT`, `SHIPPING_PACKAGING_GRAMS`. Migration test: upgrade from 0030 with data, session 6 release's writes still pass, idempotent re-run | 0031 | db constraint tests + admin e2e 390/1280 | database, typescript, react |
+| 8 | **New 2026-10-21 (moved from Phase K K1).** Shipping rates: `@ammari/commerce/shipping` (`ShippingRateProvider`, Komerce Shipping Cost client with timeout/retry/zod/typed errors, `FakeShippingRateProvider`, `parcelWeightGrams`, `pickCheapestService`, `splitShippingCost`, `quoteShipping` with `shipping_rate_cache` and the `komerce_call` budget); destination search endpoint (`area_search`, upsert into `shipping_areas`); `@ammari/commerce/address` v2 (area row in, `version: 2` snapshot); allowlist confirmed against sandbox service codes; opt-in sandbox contract test | none | TDD (shipping money) + fixtures | security, silent-failure-hunter, typescript, database |
+| 9 | `placeOrder` backend with `FakePaymentProvider` and `FakeShippingRateProvider`, incl. the quote before the transaction and the locked `shipping_*` fields (was 7) | none | TDD vouchers, stock, shipping, concurrency | security, database, typescript |
+| 10 | Checkout UI + finish page (incl. "Masuk untuk melihat semua pesanan" OTP link), area combobox, section 3 states, Ongkir in the summary (was 8) | none | e2e guest + logged-in + shipping states | react, security |
+| 11 | Midtrans provider + webhook + mapping + sandbox contract tests; Ongkir `item_details` line (was 9) | none | TDD payments | security, silent-failure-hunter, typescript |
+| 12 | Sweeper + cron service + retention job, incl. `shipping_rate_cache` pruning (was 10) | none | integration | silent-failure-hunter, database |
+| 13 | Emails: templates (with ongkir and subsidy lines), `order_notifications`, `order_access_tokens` minting, owner paid alert, manual-shipped email hook (was 11) | none | unit + integration | typescript, silent-failure-hunter |
+| 14 | Magic login link: `customer_login_links`, `orderLoginLink` plugin, `/login/link` page, issuance in emails, audit, rate limits (was 12) | 0032 | TDD + e2e | security, typescript, database |
+| 15 | "Pesanan saya", `/orders`, `/orders/[orderNo]` (ongkir in totals), "Lihat pesanan" token access, "Lacak pengiriman" block (courier + resi) (was 13) | none | e2e list 390/1280 | react, security |
+| 16 | Admin: payment section, "Pengiriman" section with the locked quote, service on `/packing`, "Perlu dicek", web cancel via Midtrans, item edit block, thank-you cards marketplace-only (was 14) | none | admin e2e 390/1280 | react, security, database |
+| 17 | Launch readiness: env examples (incl. Komerce cost keys), runbook (Cloudflare Access bypass, cron), full sandbox run on dev, footer chips, shipping checks from §14, launch/rollback checklist in `docs/runbooks/` (was 15) | none | manual checklist | none |
 
-Sessions 3 and 4 can swap; 6 and 7 can swap after 5; 12 can run any time after 11.
+Sessions 7 and 8 can overlap only in their pure parts (8's DB-touching code needs 0031); 14 can run
+any time after 13. **Renumbering 2026-10-21:** old 7 to 15 are now 9 to 17 (add 2). Code comments
+written before then (e.g. `packages/commerce/src/cart/cart.ts` "placeOrder in session 7",
+`stock/reservations.ts` "session 9" for the payment webhook) use the old numbers; the session
+notes below are already renumbered. Schedule risk: two more sessions inside the ~20 Nov target;
+sessions 7 and 8 are small; if session 10 is not done by ~10 Nov, raise it with the owner then.
 
-Notes from session 6 for later sessions:
-- **8 (checkout):** `/checkout` and `/checkout/*` need `export const dynamic = "force-dynamic"`
+Notes from session 6 for later sessions (renumbered 2026-10-21):
+- **10 (checkout):** `/checkout` and `/checkout/*` need `export const dynamic = "force-dynamic"`
   for the same reason as `/cart` (a flag-off build must not prerender a static 404). `/cart` already
   links to `/checkout` when `canCheckout`. After `placeOrder` empties the cart, the header count
   catches up on the next navigation (`CartLink` re-fetches per pathname); call
   `announceCartCount(0)` if the client stays on the same path.
-- **13 ("Pesan lagi"):** refilling the cart from order lines should announce the new count the same
+- **15 ("Pesan lagi"):** refilling the cart from order lines should announce the new count the same
   way.
-- **15 (launch):** the header bag icon and the PDP cart button live in ISR HTML, so flipping the
+- **17 (launch):** the header bag icon and the PDP cart button live in ISR HTML, so flipping the
   flag needs the full-storefront revalidation already in §14 (until then an ISR page can show the
   old state for up to its `revalidate` window, and the PDP button and header icon can disagree);
   the count itself is always fetched live, and on rollback a stale icon hides itself once the
@@ -639,7 +888,7 @@ Notes from session 6 for later sessions:
   merge (a write) on a GET; it is same-origin, read-only in effect for the visitor, and returns
   only a number.
 
-Notes from session 5 for later sessions:
+Notes from session 5 for later sessions (renumbered 2026-10-21):
 - **6 (cart UI):** call the actions from client components and `router.refresh()` (or the PDP's
   own state) after `ok`; show `message` on `ok: false` and "Maksimal 20 barang per pesanan." when
   `mergeTrimmed`. Render `/cart` from `loadCartView()` with `dynamic` rendering (it reads cookies
@@ -648,28 +897,28 @@ Notes from session 5 for later sessions:
   cannot be part of the ISR-cached layout/PDP HTML:** fetch it per request (a small dynamic route
   handler or a client fetch to one), never bake it into a cached page. Flag off: `/cart` must
   `notFound()` itself; the actions already refuse.
-- **7 (placeOrder):** read the cart through `resolveCart` + the cart lines inside the order
+- **9 (placeOrder):** read the cart through `resolveCart` + the cart lines inside the order
   transaction and lock the cart row (`FOR UPDATE`) so a concurrent cart write cannot change the
   lines being ordered; delete the cart items in the same transaction (§5 step 10). Re-validate
   with the same rules (`getCartView`'s statuses must all be `ok`); `reserveStockForOrder` stays the
   real stock check.
-- **10 (retention):** guest carts 30 days, customer carts 180 days after
+- **12 (retention):** guest carts 30 days, customer carts 180 days after
   `last_activity_at`, which every cart write bumps (the 60-day cookie outlives a purged guest
   cart; the next add then gets a fresh token). Also prune `claim_rate_limits` (1 day).
-- **15 (launch):** with the flag on, the cart refuses writes in production when
+- **17 (launch):** with the flag on, the cart refuses writes in production when
   `CF-Connecting-IP` is missing, so confirm the origin only accepts Cloudflare traffic (SPEC §11)
   and that the proxy forwards Host consistently (Next's server action Origin check).
 
-Notes from session 4 for later sessions:
+Notes from session 4 for later sessions (renumbered 2026-10-21):
 - **5/6 (cart):** the cart's per-line checks need a sellable quantity per SKU; build it from
   `sellableQtySql` (never show the number to buyers). PDP/tiles are ISR, so a new hold or release
-  is only visible after revalidation (§7 "Revalidation"): sessions 7 (reserve), 9 (consume,
-  release) and 10 (sweeper release) must revalidate the affected product paths.
-- **7 (placeOrder):** call `reserveStockForOrder` inside the order transaction with
+  is only visible after revalidation (§7 "Revalidation"): sessions 9 (reserve), 11 (consume,
+  release) and 12 (sweeper release) must revalidate the affected product paths.
+- **9 (placeOrder):** call `reserveStockForOrder` inside the order transaction with
   `CHECKOUT_STOCK_HOLD_MINUTES` (fallback `DEFAULT_STOCK_HOLD_MINUTES`). It does not check
   `is_active`/published or merge duplicate cart lines: placeOrder validates both first (step 3).
   The refusal is a `FieldError` keyed by SKU, for the cart-line alert.
-- **9 (payments):** `transitionOrderStatus(..., "to_ship")` throws a `FieldError` when physical
+- **11 (payments):** `transitionOrderStatus(..., "to_ship")` throws a `FieldError` when physical
   stock is short (an admin adjustment or marketplace sale may have taken held pieces, D4); the
   webhook must catch it and keep `awaiting_payment` + `payment_status = 'paid'` +
   `stock_short_at_payment` (§6.2), never drop the notification. A payment after the hold was
@@ -685,9 +934,9 @@ subscription**, started when Phase K starts (see "Komerce plan" below).
 
 | # | Session | Migration | Notes |
 |---|---|---|---|
-| K1 | Komerce client (`@ammari/commerce/shipping`): destination search, detail order, history AWB, typed errors, sandbox contract tests; script to fill `shipping_areas.komerce_destination_id`, report unmatched rows for manual review | none | read-only APIs first |
-| K2 | `shipments` table; admin "Buat pengiriman" on `/packing` and order detail: Store Order (Ammari as payer, free shipping), Pickup Request, Print Label; AWB written to `orders.tracking_number`/`courier` and `shipments`; courier cost stored as `cost_amount`; cancel shipment | expected 0032 | security, database |
-| K3 | Tracking: webhook endpoint + poller + `shipment_events` + status normalization + automatic `to_ship -> shipped` (on picked up/in transit) and `shipped -> completed` (on delivered), emails `shipped`/`delivered`, `tracking_stale` / `delivery_problem` flags | expected 0033 | security, silent-failure-hunter |
+| K1 | Komerce **delivery** client next to session 8's rate client in `@ammari/commerce/shipping`: detail order, history AWB, typed errors, sandbox contract tests. **First, confirm that the Shipping Cost destination ids stored on orders (`shipping_destination_id`) are accepted by Store Order**; if the Delivery API uses its own ids, add the mapping (search by kode pos + kelurahan, unmatched rows reported for manual review). Destination search and the `shipping_areas` fill moved to session 8 (2026-10-21) | none | read-only APIs first |
+| K2 | `shipments` table; admin "Buat pengiriman" on `/packing` and order detail: Store Order with the order's locked courier, service and destination (Ammari as payer; the buyer's share was already collected), Pickup Request, Print Label; AWB written to `orders.tracking_number`/`courier` and `shipments`; actual cost stored as `cost_amount` and shown next to the quote; cancel shipment | expected 0033 | security, database |
+| K3 | Tracking: webhook endpoint + poller + `shipment_events` + status normalization + automatic `to_ship -> shipped` (on picked up/in transit) and `shipped -> completed` (on delivered), emails `shipped`/`delivered`, `tracking_stale` / `delivery_problem` flags | expected 0034 | security, silent-failure-hunter |
 | K4 | Customer tracking timeline in "Pesanan saya" and admin "Pengiriman" section; manual fallback actions | none | react, e2e 390/1280 |
 
 **Webhook vs polling.** Komerce documents a webhook (register with `PUT /webhook`; payload
@@ -719,18 +968,23 @@ subscription**, started when Phase K starts (see "Komerce plan" below).
   plan.
 - Ammari does **not** use Komerce Payment or QRISLY; online payment stays on Midtrans (D5).
 - **Cost:** Rp249.000/month (less on the annual plan) from the month Phase K starts, plus the
-  courier fees Ammari pays per shipment (free shipping, D11). Nothing is paid to Komerce before
-  Phase K.
-- **When:** the owner subscribes to Enterprise when Phase K starts; K1 to K3 build against the
-  sandbox key.
+  courier fees Ammari pays per shipment (the full courier cost; the buyer's share above the
+  Rp20.000 subsidy is collected at checkout, D11). **Since 2026-10-21 Phase C also needs a plan
+  with Shipping Cost** (every plan has it) from about mid-November: a key for session 8's opt-in
+  contract test and dev checks, and production before 1 Dec (§14).
+- **When:** a plan with Shipping Cost before launch (Phase C); Enterprise when Phase K starts.
+  Subscribing to Enterprise directly in November avoids a plan switch if its quota fits both;
+  owner's call when subscribing (open item below). K1 to K3 build against the sandbox key.
 
 What Phase K needs from that plan (confirm each with Komerce when subscribing):
 1. Shipping Delivery API (Komship) production access: Store Order, Cancel Order, Detail Order,
    Pickup Request, Print Label, History AWB.
 2. Webhook registration for order status updates.
-3. Search Destination (and Calculate, to record the cost Ammari pays).
-4. A daily request quota covering destination search at checkout (if switched to Komerce in K1)
-   plus polling: roughly orders in transit x 8 polls/day. Confirm Enterprise's quota covers it.
+3. Search Destination and Calculate (Phase C, from session 8), and whether their destination ids
+   are the ones Store Order accepts (K1).
+4. A daily request quota covering destination search and quotes at checkout (Phase C: roughly 5
+   searches and 1 to 2 uncached quotes per checkout visit, capped by `KOMERCE_DAILY_CALL_BUDGET`)
+   plus polling: roughly orders in transit x 8 polls/day. Confirm the quota covers it.
 5. Universal waybill tracking (RajaOngkir track waybill) only if some web orders will ship
    outside Komship; recommendation: ship every web order through Komship so one tracking source
    covers all.
@@ -740,8 +994,13 @@ What Phase K needs from that plan (confirm each with Komerce when subscribing):
 **Risks:**
 - Subscribing to Pro (or no plan) would block K2 and K3 entirely: no booking, labels or
   tracking. Check the subscription is Enterprise before K2 starts.
-- If Enterprise is not subscribed in time, the manual path (staff "Tandai dikirim" with courier
-  + resi, manual "Selesai") stays the only path; nothing in Phase C depends on Komerce.
+- If Enterprise is not subscribed in time, the manual path (staff book the quoted service,
+  "Tandai dikirim" with courier + resi, manual "Selesai") stays the only path. **Phase C now
+  depends on Komerce Shipping Cost** (2026-10-21): without a working key checkout refuses every
+  order (§4.5.5), so the key is a hard launch prerequisite and its outage stops web sales (the
+  WhatsApp path stays open).
+- The Shipping Cost quote and the actual booking price can differ (tariff updates, Komship
+  discounts); Ammari carries the difference, visible per order from K2.
 - Enterprise's daily request quota is not in the public docs; if it is too low for polling,
   lengthen the poll interval (the webhook is a hint anyway) before raising the plan question.
 
@@ -760,9 +1019,11 @@ What Phase K needs from that plan (confirm each with Komerce when subscribing):
    flagged at payment for refund or restock.
 10. No customer self-cancel of unpaid orders in v1; they expire.
 11. Email the owner on every paid order (to the support email in store settings).
-12. No delivery estimate at checkout until Komerce.
+12. No delivery estimate at checkout until Komerce. **Kept in v1 (2026-10-21)** even though
+    Komerce rates (which carry an estimate) are now used at checkout.
 13. Area dataset licence checked in session 3; plain-text fields if not clean. **Result
-    (2026-10-20): not clean; plain-text fields** (§3).
+    (2026-10-20): not clean; plain-text fields** (§3). **Superseded 2026-10-21:** the area is
+    picked from Komerce Search Destination (D12, §4.5.1).
 14. Privacy policy and terms updated before launch by the owner in admin; exact changes in §11.1.
 15. **Komerce tracking is required.** The owner subscribes to the **Komerce Enterprise** plan
     (Rp249.000/month, cheaper annually; Pro lacks the Shipping Delivery API) when Phase K starts
@@ -776,6 +1037,23 @@ What Phase K needs from that plan (confirm each with Komerce when subscribing):
     melihat semua pesanan" via OTP. Built as a custom Better Auth plugin because the stock
     `magic-link` plugin in 1.7.7 logs in on GET and does not supersede older links (D15).
 
-Remaining small items to confirm with third parties (not owner decisions): Komerce Enterprise's
-daily request quota and the meaning of "Selesai" (the plan itself is settled: Enterprise); whether
-the Midtrans merchant review requires naming the processor on the privacy page.
+Owner decisions 2026-10-21 (shipping subsidy):
+
+17. **Free shipping is replaced by a shipping subsidy of at most Rp20.000 per order.** The buyer
+    pays `max(0, cost - 20.000)` as a separate "Ongkir" line; prices are the same everywhere
+    (D11, §4.5).
+18. **Courier: the cheapest allowlisted regular service, chosen by the server**, shown as one
+    fixed row; no buyer choice in v1 (§4.5.2).
+19. **Weight per product, required to publish** (`products.shipping_weight_grams`), plus a
+    packaging allowance per order (§4.5.3).
+20. **Komerce down or no service: checkout refuses**, with a retry or the WhatsApp link; never a
+    fallback rate (§4.5.5).
+21. **Migration numbering:** the shipping migration takes 0031; the login-link migration becomes
+    0032; Phase K's expected 0033 and 0034.
+
+Remaining small items to confirm with third parties (not owner decisions): Komerce's daily
+request quota per plan and the meaning of "Selesai" (Enterprise is settled for Phase K); whether
+Shipping Cost destination ids work for Store Order (K1); the exact Komerce service codes for the
+allowlist (session 8); whether the Midtrans merchant review requires naming the processor on the
+privacy page. Open owner item: which plan to subscribe in November (a Shipping Cost plan first, or
+Enterprise directly).

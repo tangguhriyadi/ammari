@@ -7,6 +7,6 @@ describe("TrustRow", () => {
   test("shows exactly the three owner-approved items, in order", () => {
     render(<TrustRow />);
     const items = screen.getAllByRole("listitem").map((item) => item.textContent);
-    expect(items).toEqual(["Pembayaran Aman", "Gratis Ongkir Ke Seluruh Indonesia", "Proses Cepat"]);
+    expect(items).toEqual(["Pembayaran Aman", "Subsidi Ongkir hingga Rp20.000", "Proses Cepat"]);
   });
 });
