@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { E2E_PRODUCT_SLUG, E2E_UNPUBLISHED_PRODUCT_SLUG } from "./storefront-fixtures";
+import { CART_E2E } from "./helpers/cart-flag";
 import { animatedBetween, readCurtainLog, recordCurtain } from "./helpers/curtain";
 
 test.describe("/products/[slug]", () => {
@@ -81,6 +82,7 @@ test.describe("/products/[slug]", () => {
   });
 
   test("the WhatsApp CTA is the primary action while the cart flag is off (the shipped default)", async ({ page }) => {
+    test.skip(CART_E2E, "cart flag on: cart.spec.ts covers the cart CTA");
     await page.goto(`/products/${E2E_PRODUCT_SLUG}`);
     await expect(page.getByRole("button", { name: /Tambah ke keranjang|Pilih ukuran/ })).toHaveCount(0);
     await expect(page.getByRole("link", { name: /Tanya via WhatsApp/ })).toBeVisible();

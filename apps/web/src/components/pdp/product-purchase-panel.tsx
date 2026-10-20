@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MessageCircle } from "lucide-react";
 import { cn } from "@ammari/ui";
@@ -8,9 +9,13 @@ import { getGalleryForColor, type ProductView } from "@/lib/content/product-view
 import { buildImageUrl } from "@/lib/storage/public-url";
 import { formatPriceIdr } from "@/lib/format";
 import { buildProductWhatsappMessage, buildWhatsappUrl } from "@/lib/whatsapp";
+import { addToCartAction } from "@/lib/cart/actions";
+import { announceCartCount, CART_CALL_FAILED_MESSAGE, liveRegionText } from "@/lib/cart/count-event";
+import { CART_REFUSAL_MESSAGES } from "@ammari/commerce/cart-limits";
 import { PrimaryButton, PrimaryLink, OutlineLink, SoldOutButton } from "@/components/buttons";
 import { OPEN_ACCORDION_EVENT, SIZE_CHART_HEADING_ID, SIZE_GUIDE_ACCORDION_ID, type OpenAccordionDetail } from "@/components/pdp/size-guide";
 import { ProductImage } from "@/components/product-image";
+import { Curtain } from "@/components/curtain";
 
 export interface ProductPurchasePanelProps {
   view: ProductView;
@@ -45,8 +50,24 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
 
   const [colorId, setColorId] = useState(initialColorId);
   const [size, setSize] = useState<string | null>(null);
-  const [added, setAdded] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  // Cart (flag on only). `addedLabel` outlives `showAdded` so the "Masuk keranjang" box keeps its
+  // text while the curtain rolls it back up.
+  const [showAdded, setShowAdded] = useState(false);
+  const [addedLabel, setAddedLabel] = useState("");
+  const [cartMessage, setCartMessage] = useState<{ text: string; isError: boolean } | null>(null);
+  // Screen-reader confirmation of every successful add (count included), in an always-mounted
+  // status region; the sequence makes a repeat of the same text announce again.
+  const [announcement, setAnnouncement] = useState({ text: "", sequence: 0 });
+  const [isAdding, startAdding] = useTransition();
+  // The colour/size the buyer has selected right now, read when an add resolves: if they moved on
+  // meanwhile, the box must not name a variant other than the one on screen.
+  const selectionRef = useRef("");
+
+  function resetCartFeedback() {
+    setShowAdded(false);
+    setCartMessage(null);
+  }
 
   const selectedColor = view.colors.find((color) => color.id === colorId) ?? null;
   // Never empty while the product has any photo (see getGalleryForColor's fallback chain); a
@@ -70,7 +91,7 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
     if (id === colorId) return;
     setColorId(id);
     setSize(null);
-    setAdded(false);
+    resetCartFeedback();
     const params = new URLSearchParams(window.location.search);
     params.set("color", id);
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
@@ -89,6 +110,54 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
   const colorSoldOut = view.sizeMode === "sized" ? sizeOptions.every((option) => !option.available) : !allsizeAvailable;
   const soldOut = view.soldOut || colorSoldOut;
   const needsSizeChoice = view.sizeMode === "sized" && !size;
+  const selectedSku =
+    view.sizeMode === "sized"
+      ? (sizeOptions.find((option) => option.size === size && option.available)?.sku ?? null)
+      : colorId
+        ? (view.allsizeSkuByColor?.[colorId] ?? null)
+        : null;
+
+  const selectionLabel = `${selectedColor?.name ?? ""}${size ? `, ${size}` : ""}`;
+  useEffect(() => {
+    selectionRef.current = selectionLabel;
+  });
+
+  // One piece per tap. The server decides everything (active/published, stock, the 10 per line
+  // and 20 per cart caps) and answers with a message on refusal; nothing here is trusted. A call
+  // that rejects outright (offline, a 5xx, a deploy) is caught here: thrown inside a transition
+  // it would otherwise replace the whole page with the error screen.
+  function handleAddToCart() {
+    if (!selectedSku || isAdding) return;
+    const label = selectionLabel;
+    startAdding(async () => {
+      let result: Awaited<ReturnType<typeof addToCartAction>>;
+      try {
+        result = await addToCartAction({ sku: selectedSku, qty: 1 });
+      } catch (error) {
+        console.error("[cart] add to cart call failed", error);
+        setShowAdded(false);
+        setCartMessage({ text: CART_CALL_FAILED_MESSAGE, isError: true });
+        return;
+      }
+      if (!result.ok) {
+        setShowAdded(false);
+        setCartMessage({ text: result.message, isError: true });
+        return;
+      }
+      announceCartCount(result.pieceCount);
+      const trimmedNote = result.mergeTrimmed ? CART_REFUSAL_MESSAGES.cart_limit : null;
+      setAnnouncement((previous) => ({
+        text: `Masuk keranjang: ${label}. ${result.pieceCount} barang di keranjang.${trimmedNote ? ` ${trimmedNote}` : ""}`,
+        sequence: previous.sequence + 1,
+      }));
+      // Still the same selection: confirm it on screen. Otherwise only the count changes.
+      if (selectionRef.current === label) {
+        setAddedLabel(label);
+        setShowAdded(true);
+        setCartMessage(trimmedNote ? { text: trimmedNote, isError: false } : null);
+      }
+    });
+  }
 
   const whatsappMessage = buildProductWhatsappMessage({
     productName: view.name,
@@ -187,7 +256,7 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
                   onClick={() => {
                     if (!option.available) return;
                     setSize(option.size);
-                    setAdded(false);
+                    resetCartFeedback();
                   }}
                   aria-label={option.available ? option.size : `Ukuran ${option.size} habis`}
                   aria-pressed={option.size === size}
@@ -211,15 +280,35 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
           {soldOut && <SoldOutButton />}
           {cartEnabled && !soldOut && (
             <>
-              <PrimaryButton disabled={needsSizeChoice} onClick={() => setAdded(true)}>
-                {needsSizeChoice ? "Pilih ukuran" : "Tambah ke keranjang"}
+              {/* While a call is in flight the button stays focusable (aria-disabled, not disabled)
+                  and says so; further taps are ignored by the handler. */}
+              <PrimaryButton
+                disabled={needsSizeChoice}
+                aria-disabled={isAdding || undefined}
+                onClick={handleAddToCart}
+                className={cn(isAdding && "cursor-wait opacity-80")}
+              >
+                {needsSizeChoice ? "Pilih ukuran" : isAdding ? "Menambahkan" : "Tambah ke keranjang"}
               </PrimaryButton>
-              {added && selectedColor && (
-                <p className="bg-surface px-4 py-3 text-xs text-ink">
-                  Masuk keranjang: {selectedColor.name}
-                  {size ? `, ${size}` : ""}
+              <Curtain open={showAdded} contentClassName="flex items-center bg-surface pl-4 text-xs text-ink">
+                <p>
+                  Masuk keranjang: {addedLabel} ·{" "}
+                  <Link href="/cart" className="inline-flex min-h-11 items-center px-1 underline underline-offset-4">
+                    Lihat
+                  </Link>
                 </p>
-              )}
+              </Curtain>
+              <p role="status" className="sr-only">
+                {liveRegionText(announcement.text, announcement.sequence)}
+              </p>
+              {cartMessage &&
+                (cartMessage.isError ? (
+                  <p role="alert" className="text-xs text-error">
+                    {cartMessage.text}
+                  </p>
+                ) : (
+                  <p className="text-xs text-ink">{cartMessage.text}</p>
+                ))}
             </>
           )}
           {/* The WhatsApp link is the main CTA only while the cart is off; sold out, that slot is

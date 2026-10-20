@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { animatedBetween, readCurtainLog, recordCurtain } from "./helpers/curtain";
+import { CART_E2E } from "./helpers/cart-flag";
 
 // docs/design/storefront.md §4 "Header": desktop is wordmark left, account right, nothing in the
 // center (the old center "Koleksi" nav link is gone); mobile is unchanged (menu left, centered
@@ -19,9 +20,12 @@ test.describe("header", () => {
     const account = header.getByRole("link", { name: "Akun saya" });
     const logoBox = (await logo.boundingBox())!;
     const accountBox = (await account.boundingBox())!;
-    // 40px desktop gutter on both sides (Container), so the two ends mirror each other.
+    // 40px desktop gutter on both sides (Container), so the two ends mirror each other. With the
+    // cart on, the bag sits at the right edge and the account icon right before it.
+    const rightmostBox = CART_E2E ? (await header.getByRole("link", { name: /^Keranjang/ }).boundingBox())! : accountBox;
     expect(logoBox.x).toBe(40);
-    expect(1280 - (accountBox.x + accountBox.width)).toBe(40);
+    expect(1280 - (rightmostBox.x + rightmostBox.width)).toBe(40);
+    if (CART_E2E) expect(accountBox.x + accountBox.width).toBeLessThanOrEqual(rightmostBox.x);
     // Both vertically centred in the 56px header.
     const headerBox = (await header.boundingBox())!;
     expect(headerBox.height).toBe(56);

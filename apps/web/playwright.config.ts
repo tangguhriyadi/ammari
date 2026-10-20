@@ -86,9 +86,10 @@ export default defineConfig({
       // `${STORAGE_PUBLIC_BASE_URL}/api/test/fixtures/<name>/<size>.webp` is a real URL — never
       // a mock/placeholder scheme (see storefront-fixtures.ts's own doc comment).
       STORAGE_PUBLIC_BASE_URL: "http://localhost:3100",
-      // Off — the real shipped default (lib/cart-flag.ts). product-page.spec.ts asserts the
-      // WhatsApp-as-primary-action behaviour this produces, not the cart flow (unbuilt).
-      STOREFRONT_CART_ENABLED: "false",
+      // Off by default, the real shipped default (lib/cart-flag.ts): `pnpm test:e2e`.
+      // `pnpm test:e2e:cart` (E2E_CART_ENABLED=true) runs the same suite with the cart on; specs
+      // pick their expectations from e2e/helpers/cart-flag.ts. Run both before shipping cart work.
+      STOREFRONT_CART_ENABLED: process.env.E2E_CART_ENABLED === "true" ? "true" : "false",
       STORE_WHATSAPP_NUMBER: E2E_WHATSAPP_NUMBER,
     },
     timeout: 120_000,

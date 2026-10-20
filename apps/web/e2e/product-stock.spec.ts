@@ -6,6 +6,11 @@ import {
   E2E_SOLD_OUT_PRODUCT_NAME,
   E2E_SOLD_OUT_PRODUCT_SLUG,
 } from "./storefront-fixtures";
+import { CART_E2E } from "./helpers/cart-flag";
+
+// With the cart on, WhatsApp is the outlined secondary action and stays even when sold out; with
+// it off (the shipped default) it is the main CTA, which SOLD OUT replaces.
+const WHATSAPP_WHEN_SOLD_OUT = CART_E2E ? 1 : 0;
 
 const VIEWPORTS = [
   { name: "390px", width: 390, height: 844 },
@@ -47,7 +52,7 @@ test.describe("PDP stock states", () => {
       const soldOut = page.getByRole("button", { name: "SOLD OUT" });
       await expect(soldOut).toBeDisabled();
       await expect(soldOut).toHaveAttribute("aria-disabled", "true");
-      await expect(page.getByRole("link", { name: /Tanya via WhatsApp/ })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: /Tanya via WhatsApp/ })).toHaveCount(WHATSAPP_WHEN_SOLD_OUT);
 
       await page.getByRole("button", { name: "Sage E2E" }).click();
       await expect(page.getByRole("button", { name: "SOLD OUT" })).toHaveCount(0);
@@ -59,7 +64,7 @@ test.describe("PDP stock states", () => {
       const soldOut = page.getByRole("button", { name: "SOLD OUT" });
       await expect(soldOut).toBeVisible();
       await expect(soldOut).toBeDisabled();
-      await expect(page.getByRole("link", { name: /Tanya via WhatsApp/ })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: /Tanya via WhatsApp/ })).toHaveCount(WHATSAPP_WHEN_SOLD_OUT);
       await expect(page.getByRole("button", { name: "Ukuran M habis", exact: true })).toHaveAttribute("aria-disabled", "true");
     });
 

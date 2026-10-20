@@ -11,6 +11,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:cart": "E2E_CART_ENABLED=true playwright test",
     "test:e2e:refresh-screens": "REFRESH_VISUAL_SCREENS=true playwright test visual-screenshots.spec.ts"
   },
   "dependencies": {

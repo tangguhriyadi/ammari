@@ -43,8 +43,10 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
 - Cart, checkout, online payment, web orders, transactional email, order login link, "Pesanan
   saya" and Komerce courier tracking — plan **approved** (docs/plans/cart-checkout.md; Phase C
   target ~20 Nov 2026, Phase K in the first weeks of December). Described in §3.4, §5.2, §5.3,
-  §8, §10.2 and §10.3. Nothing is built yet; everything ships dark behind
-  `STOREFRONT_CART_ENABLED` until 1 Dec 2026.
+  §8, §10.2 and §10.3. Built so far (plan sessions 1 to 6): the shared `@ammari/commerce`
+  package, the checkout schema, plain-field addresses, stock holds, and the cart (backend, PDP
+  "Tambah ke keranjang", header count, `/cart`); checkout, payment and the rest are not built yet.
+  Everything ships dark behind `STOREFRONT_CART_ENABLED` until 1 Dec 2026.
 
 ## 1. Goals
 

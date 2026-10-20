@@ -21,6 +21,8 @@ export interface ProductColorOption {
 
 export interface ProductSizeOption {
   size: CuttingSize;
+  /** What "Tambah ke keranjang" adds. A SKU is a public product code, never stock or cost. */
+  sku: string;
   available: boolean;
 }
 
@@ -56,6 +58,9 @@ export interface ProductView {
   /** `sizeMode: 'all_size'` only — each colour's single ALLSIZE variant availability, keyed by
    * `fabricColorId`. `null` for a `sized` product. */
   allsizeAvailableByColor: Record<string, boolean> | null;
+  /** `sizeMode: 'all_size'` only — each colour's single ALLSIZE variant SKU, keyed by
+   * `fabricColorId`. `null` for a `sized` product. */
+  allsizeSkuByColor: Record<string, string> | null;
   /** `true` when no active variant of any colour has stock. */
   soldOut: boolean;
 }
@@ -80,11 +85,15 @@ export function buildProductView(product: StorefrontProduct): ProductView {
 
   let sizeOptionsByColor: Record<string, ProductSizeOption[]> | null = null;
   let allsizeAvailableByColor: Record<string, boolean> | null = null;
+  let allsizeSkuByColor: Record<string, string> | null = null;
 
   if (product.sizeMode === "all_size") {
     allsizeAvailableByColor = {};
+    allsizeSkuByColor = {};
     for (const variant of product.variants) {
-      if (variant.size === "ALLSIZE") allsizeAvailableByColor[variant.fabricColorId] = variant.available;
+      if (variant.size !== "ALLSIZE") continue;
+      allsizeAvailableByColor[variant.fabricColorId] = variant.available;
+      allsizeSkuByColor[variant.fabricColorId] = variant.sku;
     }
   } else {
     sizeOptionsByColor = {};
@@ -96,7 +105,7 @@ export function buildProductView(product: StorefrontProduct): ProductView {
     }
     for (const color of colors) {
       const variants = variantsByColor.get(color.id) ?? [];
-      const availableBySize = new Map(variants.map((variant) => [variant.size, variant.available]));
+      const variantBySize = new Map(variants.map((variant) => [variant.size, variant]));
       // Only sizes this colour has an ACTIVE variant for (`product.variants` is active-only) are
       // offered at all: a size never cut in this colour is absent, not shown as "habis". Of those,
       // `available` is stock > 0. Order: the size chart's own row order, then any remaining size
@@ -104,8 +113,8 @@ export function buildProductView(product: StorefrontProduct): ProductView {
       const chartSizes = (product.sizeChart ?? []).map((row) => row.size);
       const orderedSizes = [...chartSizes, ...CUTTING_SIZES.filter((size) => !chartSizes.includes(size))];
       sizeOptionsByColor[color.id] = orderedSizes.flatMap((size) => {
-        const available = availableBySize.get(size);
-        return available === undefined ? [] : [{ size: size as CuttingSize, available }];
+        const variant = variantBySize.get(size);
+        return variant ? [{ size: size as CuttingSize, sku: variant.sku, available: variant.available }] : [];
       });
     }
   }
@@ -132,6 +141,7 @@ export function buildProductView(product: StorefrontProduct): ProductView {
     generalImages,
     sizeOptionsByColor,
     allsizeAvailableByColor,
+    allsizeSkuByColor,
     soldOut: !product.variants.some((variant) => variant.available),
   };
 }

@@ -12,6 +12,8 @@
 export const E2E_PRODUCT_SLUG = "gamis-flowy-straight-e2e";
 export const E2E_RELATED_PRODUCT_SLUG = "outer-dress-tali-depan-e2e";
 export const E2E_UNPUBLISHED_PRODUCT_SLUG = "gamis-belum-terbit-e2e";
+export const E2E_UNPUBLISHED_PRODUCT_NAME = "Gamis Belum Terbit E2E";
+export const E2E_UNPUBLISHED_SKU = "E2E-E2EDRAFT-BEI-M";
 // Image fallback fixtures (product-image-fallback.spec.ts). Both are published straight through
 // the DB, bypassing admin's publish-needs-a-photo guard on purpose: the storefront must still
 // render cleanly for legacy/edge data, never a broken image.
@@ -276,9 +278,10 @@ export async function seedStorefrontFixtures(): Promise<void> {
   });
 
   // An active-but-UNPUBLISHED product — getStorefrontProductBySlug (and so the page itself) must
-  // treat its slug exactly like one that doesn't exist at all: a 404.
-  await db.insert(products).values({
-    name: "Gamis Belum Terbit E2E",
+  // treat its slug exactly like one that doesn't exist at all: a 404. Its one variant (in stock)
+  // is the "Tidak tersedia lagi" line cart.spec.ts seeds into a cart.
+  const [unpublishedProduct] = await db.insert(products).values({
+    name: E2E_UNPUBLISHED_PRODUCT_NAME,
     code: "E2EDRAFT",
     slug: E2E_UNPUBLISHED_PRODUCT_SLUG,
     fabricId: fabric.id,
@@ -287,7 +290,10 @@ export async function seedStorefrontFixtures(): Promise<void> {
     basePrice: 199_000,
     isActive: true,
     isPublishedOnStorefront: false,
-  });
+  }).returning();
+  if (!unpublishedProduct) throw new Error("failed to seed e2e unpublished product");
+  await db.insert(productVariants).values({ sku: E2E_UNPUBLISHED_SKU, productId: unpublishedProduct.id, fabricId: fabric.id, fabricColorId: beige.id, closure: "front_zip", size: "M", isActive: true });
+  await db.insert(stockMovements).values({ sku: E2E_UNPUBLISHED_SKU, qty: 2, valueAmount: 96_000, type: "production", refType: "manual" });
 
   // --- Homepage: PUBLISHED content (home.spec.ts) — the draft columns above (global-setup.ts)
   // stay separately seeded for preview-home.spec.ts; this only ever touches published_*. ---

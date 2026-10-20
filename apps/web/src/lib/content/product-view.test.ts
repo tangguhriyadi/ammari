@@ -98,10 +98,11 @@ describe("buildProductView", () => {
     const view = buildProductView(product);
     // XS, L and XL have no active variant for this colour, so they are not offered at all.
     expect(view.sizeOptionsByColor?.beige).toEqual([
-      { size: "S", available: false },
-      { size: "M", available: true },
+      { size: "S", sku: "SKU-S", available: false },
+      { size: "M", sku: "SKU-M", available: true },
     ]);
     expect(view.allsizeAvailableByColor).toBeNull();
+    expect(view.allsizeSkuByColor).toBeNull();
     expect(view.soldOut).toBe(false);
   });
 
@@ -124,7 +125,7 @@ describe("buildProductView", () => {
     });
     const view = buildProductView(product);
     expect(view.sizeOptionsByColor?.beige?.map((o) => o.size)).toEqual(["L", "M", "XS"]);
-    expect(view.sizeOptionsByColor?.navy).toEqual([{ size: "M", available: false }]);
+    expect(view.sizeOptionsByColor?.navy).toEqual([{ size: "M", sku: "N-M", available: false }]);
   });
 
   test("soldOut is true only when no active variant of any colour has stock", () => {
@@ -134,7 +135,7 @@ describe("buildProductView", () => {
     expect(buildProductView(baseProduct({ colors, variants: [{ sku: "A", fabricColorId: "beige", size: "M", available: true }] })).soldOut).toBe(false);
   });
 
-  test("all_size product: no size options, just a per-colour ALLSIZE availability map", () => {
+  test("all_size product: no size options, just a per-colour ALLSIZE availability and SKU map", () => {
     const product = baseProduct({
       sizeMode: "all_size",
       colors: [{ id: "beige", name: "Beige", hex: null }],
@@ -143,6 +144,7 @@ describe("buildProductView", () => {
     const view = buildProductView(product);
     expect(view.sizeOptionsByColor).toBeNull();
     expect(view.allsizeAvailableByColor).toEqual({ beige: true });
+    expect(view.allsizeSkuByColor).toEqual({ beige: "SKU-ALLSIZE" });
   });
 
   test("defaultColorId is the first colour in canonical (already-ordered) order, null if there are none", () => {
