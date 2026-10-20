@@ -5,6 +5,10 @@ import { SUPPLIER_KINDS } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import * as supplierQueries from "@/lib/suppliers/queries";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
+
+// Supplier names also show on purchase documents, the receipts filter, and production cost lines.
+const SUPPLIER_SECTIONS = ["/suppliers", "/purchases", "/receipts", "/production"] as const;
 
 // A FIXED set, not free text — `z.enum` rejects anything outside SUPPLIER_KINDS outright,
 // never trusting the form's checkboxes alone (a Server Action is a public POST endpoint). The
@@ -55,6 +59,7 @@ export async function createSupplierAction(input: z.input<typeof supplierSchema>
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const supplier = await supplierQueries.createSupplier(toSupplierInput(parsed.data), session.staffUser.id);
+    revalidateAdmin(...SUPPLIER_SECTIONS);
     return { id: supplier.id };
   });
 }
@@ -69,6 +74,7 @@ export async function updateSupplierAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const supplier = await supplierQueries.updateSupplier(id, toSupplierInput(parsed.data), session.staffUser.id);
+    revalidateAdmin(...SUPPLIER_SECTIONS);
     return { id: supplier.id };
   });
 }
@@ -81,6 +87,7 @@ export async function setSupplierActiveAction(input: z.input<typeof setActiveSch
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await supplierQueries.setSupplierActive(parsed.data.id, parsed.data.isActive, session.staffUser.id);
+    revalidateAdmin(...SUPPLIER_SECTIONS);
     return undefined;
   });
 }

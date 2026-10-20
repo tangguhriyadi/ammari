@@ -107,7 +107,6 @@ export function PurchaseForm(props: PurchaseFormProps) {
       }
       toast.success(props.mode === "create" ? "Pesanan pembelian berhasil dibuat" : "Perubahan berhasil disimpan");
       router.push("/purchases");
-      router.refresh();
     });
   }
 

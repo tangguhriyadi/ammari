@@ -5,6 +5,10 @@ import { SIZES, STOCK_ADJUSTMENT_REASONS } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import * as accessoryQueries from "@/lib/inventory/accessories";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
+
+// Accessories also show on accessory stock, product recipes, and production accessory needs.
+const ACCESSORY_SECTIONS = ["/accessories", "/stock", "/products", "/production"] as const;
 
 const accessorySchema = z.object({
   name: z.string().trim().min(1, "Nama aksesoris wajib diisi."),
@@ -32,6 +36,7 @@ export async function createAccessoryAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const accessory = await accessoryQueries.createAccessory(toAccessoryInput(parsed.data), session.staffUser.id);
+    revalidateAdmin(...ACCESSORY_SECTIONS);
     return { id: accessory.id };
   });
 }
@@ -45,6 +50,7 @@ export async function updateAccessoryAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const accessory = await accessoryQueries.updateAccessory(id, toAccessoryInput(parsed.data), session.staffUser.id);
+    revalidateAdmin(...ACCESSORY_SECTIONS);
     return { id: accessory.id };
   });
 }
@@ -57,6 +63,7 @@ export async function setAccessoryActiveAction(input: z.input<typeof setActiveSc
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await accessoryQueries.setAccessoryActive(parsed.data.id, parsed.data.isActive, session.staffUser.id);
+    revalidateAdmin(...ACCESSORY_SECTIONS);
     return undefined;
   });
 }
@@ -75,6 +82,7 @@ export async function voidAccessoryPurchaseAction(input: z.input<typeof voidPurc
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await accessoryQueries.voidAccessoryPurchase(parsed.data.movementId, session.staffUser.id);
+    revalidateAdmin(...ACCESSORY_SECTIONS, "/purchases");
     return undefined;
   });
 }
@@ -97,6 +105,7 @@ export async function recordAccessoryAdjustmentAction(
       { accessoryId: parsed.data.accessoryId, deltaQty: parsed.data.deltaQty, reason: parsed.data.reason, note: parsed.data.note || null },
       session.staffUser.id,
     );
+    revalidateAdmin(...ACCESSORY_SECTIONS);
     return { id: movement.id };
   });
 }

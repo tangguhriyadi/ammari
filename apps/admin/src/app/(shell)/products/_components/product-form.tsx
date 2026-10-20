@@ -127,7 +127,6 @@ export function ProductForm({
       // Create is the one exception to "redirect to the list": land on the new product's detail
       // page so variants and photos can be added right away. Edit goes back to the list.
       router.push(productId ? "/products" : `/products/${result.data.id}`);
-      router.refresh();
     });
   }
 

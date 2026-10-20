@@ -5,6 +5,7 @@ import { STOCK_ADJUSTMENT_REASONS } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import * as stockQueries from "@/lib/stock/queries";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
 
 const adjustStockSchema = z.object({
   sku: z.string().trim().min(1),
@@ -24,6 +25,7 @@ export async function adjustStockAction(input: z.input<typeof adjustStockSchema>
       { sku: parsed.data.sku, deltaQty: parsed.data.deltaQty, reason: parsed.data.reason, note: parsed.data.note || null },
       session.staffUser.id,
     );
+    revalidateAdmin("/stock");
     return undefined;
   });
 }
@@ -55,5 +57,10 @@ export async function saveStockCountAction(
   const session = await requirePermission("stock.adjust");
   const parsed = stockCountSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
-  return runAction(() => stockQueries.saveStockCount(parsed.data.productId, parsed.data.lines, session.staffUser.id));
+  return runAction(async () => {
+    const result = await stockQueries.saveStockCount(parsed.data.productId, parsed.data.lines, session.staffUser.id);
+    // The count is started from a product's detail page, so that page is refreshed too.
+    revalidateAdmin("/stock", "/products");
+    return result;
+  });
 }

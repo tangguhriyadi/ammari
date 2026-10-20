@@ -80,7 +80,6 @@ export function SizeChartForm({
       }
       toast.success(isCreate ? "Size chart berhasil ditambahkan" : "Perubahan berhasil disimpan");
       router.push("/content/size-charts");
-      router.refresh();
     });
   }
 
@@ -89,12 +88,9 @@ export function SizeChartForm({
     setFormError(null);
     startDeleteTransition(async () => {
       const result = await deleteSizeChartAction({ id: chartId });
-      if (!result.ok) {
-        setFormError(result.error);
-        return;
-      }
-      router.push("/content/size-charts");
-      router.refresh();
+      // Success redirects to the list from the server (deleteSizeChartAction), so only a
+      // failure returns here.
+      if (!result.ok) setFormError(result.error);
     });
   }
 

@@ -9,6 +9,11 @@ import type { DefectSourceLine } from "@/lib/defects/queries";
 import { parseDecimalQuantity } from "@/lib/production/decimal-quantity";
 import { parseRupiah } from "@/lib/products/money";
 import { MAX_QTY } from "@/lib/purchases/queries";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
+
+// Defect movements show on defect stock and the stock detail pages, and on the purchase or
+// production batch line they came from (a return can also reopen that purchase or batch).
+const DEFECT_SECTIONS = ["/stock", "/purchases", "/production", "/receipts"] as const;
 
 // Defect dispositions (docs/plans/suppliers-goods-receipt.md S6): return to supplier/tailor,
 // release (Lelang / Hibah / Dibuang/Dimusnahkan) and their reversals. Shared by purchase documents
@@ -55,6 +60,7 @@ export async function returnDefectsAction(input: z.input<typeof returnSchema>): 
       { source: toSource(parsed.data.sourceType, parsed.data.lineId), qty: parsed.data.qty, reason: parsed.data.reason, occurredAt: parsed.data.occurredAt },
       session.staffUser.id,
     );
+    revalidateAdmin(...DEFECT_SECTIONS);
     return { reopened };
   });
 }
@@ -98,6 +104,7 @@ export async function disposeDefectsAction(input: z.input<typeof disposeSchema>)
       },
       session.staffUser.id,
     );
+    revalidateAdmin(...DEFECT_SECTIONS);
     return undefined;
   });
 }
@@ -110,6 +117,7 @@ export async function reverseDefectMovementAction(input: z.input<typeof reverseS
   if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
   return runAction(async () => {
     await reverseDefectMovement(parsed.data.movementId, session.staffUser.id);
+    revalidateAdmin(...DEFECT_SECTIONS);
     return undefined;
   });
 }

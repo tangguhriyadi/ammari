@@ -145,7 +145,6 @@ export function FabricForm({
         }
         toast.success("Perubahan berhasil disimpan");
         router.push("/fabrics");
-        router.refresh();
         return;
       }
       const result = await createFabricAction({
@@ -165,7 +164,6 @@ export function FabricForm({
       // Create is the one exception to "redirect to the list": land on the new fabric's detail
       // page so colors can be managed right away.
       router.push(`/fabrics/${result.data.id}`);
-      router.refresh();
     });
   }
 
@@ -174,12 +172,9 @@ export function FabricForm({
     startTransition(async () => {
       const result = await deleteFabricAction(fabricId);
       setConfirmDeleteOpen(false);
-      if (!result.ok) {
-        setFormError(result.error);
-        return;
-      }
-      router.push("/fabrics");
-      router.refresh();
+      // Success redirects to /fabrics from the server (deleteFabricAction), so only a failure
+      // returns here.
+      if (!result.ok) setFormError(result.error);
     });
   }
 

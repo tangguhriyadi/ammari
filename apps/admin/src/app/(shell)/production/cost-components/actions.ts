@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import * as costComponentQueries from "@/lib/production/cost-components";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
 
 const costComponentSchema = z.object({
   name: z.string().trim().min(1, "Nama komponen wajib diisi."),
@@ -40,6 +41,7 @@ export async function createCostComponentAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin("/production");
     return { id: component.id };
   });
 }
@@ -65,6 +67,7 @@ export async function updateCostComponentAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin("/production");
     return { id: component.id };
   });
 }
@@ -77,6 +80,7 @@ export async function setCostComponentActiveAction(input: z.input<typeof setActi
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await costComponentQueries.setCostComponentActive(parsed.data.id, parsed.data.isActive, session.staffUser.id);
+    revalidateAdmin("/production");
     return undefined;
   });
 }

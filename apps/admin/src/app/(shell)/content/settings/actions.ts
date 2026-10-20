@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { saveStoreSettings } from "@/lib/content/store-settings";
 import { saveStoreSettingsSchema } from "@/lib/content/store-settings-schema";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
 
 /** Save = live (docs/plans/storefront-cms.md Phase 2) — one action, no separate publish step.
  * Gated by `content.manage`, same as every other Konten action, not a new "settings" permission
@@ -17,6 +18,7 @@ export async function saveStoreSettingsAction(input: z.input<typeof saveStoreSet
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await saveStoreSettings(parsed.data, session.staffUser.id);
+    revalidateAdmin("/content");
     return undefined;
   });
 }

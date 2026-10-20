@@ -11,6 +11,11 @@ import { voidFabricPurchase } from "@/lib/inventory/fabric-stock";
 import { voidAccessoryPurchase } from "@/lib/inventory/accessories";
 import { MAX_LINES, MAX_QTY, closePurchase, createPurchase, updatePurchase, type PurchaseInput } from "@/lib/purchases/queries";
 import { postGoodsReceiptForPurchase, reverseGoodsReceipt } from "@/lib/receipts/queries";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
+
+// A posted or reversed receipt moves stock: it shows on receipts, every stock view, and the
+// fabric/accessory detail ledgers, not only on the purchase itself.
+const RECEIPT_SECTIONS = ["/purchases", "/receipts", "/stock", "/fabrics", "/accessories"] as const;
 
 // Purchase documents and their goods receipts (docs/plans/suppliers-goods-receipt.md S3).
 // Permissions (D10): inventory.manage creates/edits/closes documents and reverses receipts;
@@ -51,6 +56,7 @@ export async function createPurchaseAction(input: z.input<typeof purchaseSchema>
   if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
   return runAction(async () => {
     const purchase = await createPurchase(toPurchaseInput(parsed.data), session.staffUser.id);
+    revalidateAdmin("/purchases");
     return { id: purchase.id };
   });
 }
@@ -66,6 +72,7 @@ export async function updatePurchaseAction(id: string, input: z.input<typeof pur
   if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
   return runAction(async () => {
     const purchase = await updatePurchase(parsedId.data, toPurchaseInput(parsed.data), session.staffUser.id);
+    revalidateAdmin("/purchases");
     return { id: purchase.id };
   });
 }
@@ -113,6 +120,7 @@ export async function receivePurchaseAction(input: z.input<typeof receiveSchema>
       },
       session.staffUser.id,
     );
+    revalidateAdmin(...RECEIPT_SECTIONS);
     return { receiptNo: receipt.receiptNo };
   });
 }
@@ -128,6 +136,7 @@ export async function closePurchaseAction(input: z.input<typeof closeSchema>): P
   if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
   return runAction(async () => {
     const purchase = await closePurchase(parsed.data.purchaseId, parsed.data.reason, session.staffUser.id);
+    revalidateAdmin("/purchases", "/receipts");
     return { status: purchase.status };
   });
 }
@@ -140,6 +149,8 @@ export async function reverseReceiptAction(input: z.input<typeof reverseSchema>)
   if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
   return runAction(async () => {
     await reverseGoodsReceipt(parsed.data.receiptId, session.staffUser.id);
+    // Production output receipts are reversed through this same action.
+    revalidateAdmin(...RECEIPT_SECTIONS, "/production");
     return undefined;
   });
 }
@@ -162,6 +173,7 @@ export async function voidPurchaseAction(input: z.input<typeof voidPurchaseSchem
     } else {
       await voidAccessoryPurchase(parsed.data.movementId, session.staffUser.id);
     }
+    revalidateAdmin(...RECEIPT_SECTIONS);
     return undefined;
   });
 }

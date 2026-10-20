@@ -10,6 +10,7 @@ import { transitionOrderStatus } from "@/lib/orders/queries";
 import { getCardPrintStatus, mintThankYouCardsForOrders } from "@/lib/packing/queries";
 import { claimUrl, claimUrlHost, formatClaimTokenForDisplay } from "@/lib/packing/token";
 import { buildStickerSheetPdf, stickerPdfFilename, type StickerPdfCard } from "@/lib/packing/sticker-pdf";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
 
 // Upper-bounded, not just non-empty — `printStickerSheetsAction` mints/rotates a card AND builds
 // a PDF for every id in one request, inside one DB transaction holding `orders` row locks for
@@ -46,7 +47,7 @@ export async function printThankYouCardsAction(orderIds: string[]): Promise<Acti
   const session = await requirePermission("packing.print_cards");
   const parsed = orderIdsSchema.safeParse(orderIds);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
-  return runAction(async () =>
+  const result = await runAction(async () =>
     // One transaction for the WHOLE batch, not one per order — if any order later in the batch
     // fails (not found, already cancelled/returned), every mint already committed for earlier
     // orders in this same batch would otherwise stay committed while the thrown error discards
@@ -71,6 +72,10 @@ export async function printThankYouCardsAction(orderIds: string[]): Promise<Acti
       return results;
     }),
   );
+  // After the transaction has committed, not inside it: printing mints (or rotates) each order's
+  // card, which the packing queue and order pages show as card status.
+  if (result.ok) revalidateAdmin("/packing", "/orders");
+  return result;
 }
 
 export interface StickerSheetPdfResult {
@@ -88,6 +93,7 @@ export async function printStickerSheetsAction(orderIds: string[]): Promise<Acti
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const minted = await defaultDb.transaction((tx) => mintThankYouCardsForOrders(parsed.data, session.staffUser.id, tx));
+    revalidateAdmin("/packing", "/orders");
     const cards: StickerPdfCard[] = minted.map((card) => ({
       orderId: card.orderId,
       code: card.stickerCode,
@@ -123,6 +129,7 @@ export async function markShippedAction(input: z.input<typeof markShippedSchema>
       courier: parsed.data.courier || null,
       trackingNumber: parsed.data.trackingNumber || null,
     });
+    revalidateAdmin("/packing", "/orders", "/stock");
     return undefined;
   });
 }
@@ -149,6 +156,7 @@ export async function bulkMarkShippedAction(input: z.input<typeof bulkMarkShippe
     for (const orderId of parsed.data.orderIds) {
       await transitionOrderStatus(orderId, "shipped", session.staffUser.id);
     }
+    revalidateAdmin("/packing", "/orders", "/stock");
     return undefined;
   });
 }

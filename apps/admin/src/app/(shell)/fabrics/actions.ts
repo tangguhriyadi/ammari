@@ -1,5 +1,6 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { FABRIC_PRICE_UNITS, STOCK_ADJUSTMENT_REASONS } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
@@ -7,6 +8,11 @@ import { optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/products/action-result";
 import * as fabricQueries from "@/lib/products/fabric-queries";
 import * as fabricStockQueries from "@/lib/inventory/fabric-stock";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
+
+// Fabrics and their colors also show on products (fabric/color pickers, list column), fabric
+// stock, and production (fabric balance and SKU picker).
+const FABRIC_SECTIONS = ["/fabrics", "/products", "/stock", "/production"] as const;
 
 // ---------- Fabrics ----------
 
@@ -61,6 +67,7 @@ export async function createFabricAction(
       })),
       session.staffUser.id,
     );
+    revalidateAdmin(...FABRIC_SECTIONS);
     return { id: fabric.id };
   });
 }
@@ -74,16 +81,23 @@ export async function updateFabricAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const fabric = await fabricQueries.updateFabric(id, toFabricInput(parsed.data), session.staffUser.id);
+    revalidateAdmin(...FABRIC_SECTIONS);
     return { id: fabric.id };
   });
 }
 
 export async function deleteFabricAction(id: string): Promise<ActionResult> {
   const session = await requirePermission("products.manage");
-  return runAction(async () => {
+  const result = await runAction(async () => {
     await fabricQueries.deleteFabric(id, session.staffUser.id);
+    revalidateAdmin(...FABRIC_SECTIONS);
     return undefined;
   });
+  // Redirect from the server, not router.push() on the client: this delete is started from the
+  // deleted record's own page, and the revalidation above re-renders the CURRENT page in the action
+  // response, which would now hit notFound() and flash a 404 before a client-side push landed.
+  if (result.ok) redirect("/fabrics");
+  return result;
 }
 
 // ---------- Fabric colors ----------
@@ -111,6 +125,7 @@ export async function createFabricColorAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin(...FABRIC_SECTIONS);
     return { id: color.id };
   });
 }
@@ -132,6 +147,7 @@ export async function updateFabricColorAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin(...FABRIC_SECTIONS);
     return { id: color.id };
   });
 }
@@ -147,6 +163,7 @@ export async function setFabricColorActiveAction(input: z.input<typeof setFabric
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await fabricQueries.setFabricColorActive(parsed.data.id, parsed.data.isActive, session.staffUser.id);
+    revalidateAdmin(...FABRIC_SECTIONS);
     return undefined;
   });
 }
@@ -155,6 +172,7 @@ export async function deleteFabricColorAction(id: string): Promise<ActionResult>
   const session = await requirePermission("products.manage");
   return runAction(async () => {
     await fabricQueries.deleteFabricColor(id, session.staffUser.id);
+    revalidateAdmin(...FABRIC_SECTIONS);
     return undefined;
   });
 }
@@ -171,6 +189,7 @@ export async function voidFabricPurchaseAction(input: z.input<typeof voidFabricP
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await fabricStockQueries.voidFabricPurchase(parsed.data.movementId, session.staffUser.id);
+    revalidateAdmin(...FABRIC_SECTIONS, "/purchases");
     return undefined;
   });
 }
@@ -200,6 +219,7 @@ export async function recordFabricAdjustmentAction(
       { fabricId: parsed.data.fabricId, deltaQty: parsed.data.deltaQty, reason: parsed.data.reason, note: parsed.data.note || null },
       session.staffUser.id,
     );
+    revalidateAdmin(...FABRIC_SECTIONS);
     return { id: movement.id };
   });
 }

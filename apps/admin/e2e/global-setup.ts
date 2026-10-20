@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { startStorefrontStub } from "./helpers/storefront-stub";
 
 // Fixed, e2e-only addresses — the sign-in backdoor (app/api/test/login/route.ts) refuses any
 // email outside this suffix, so these fixtures can never double as real staff credentials.
@@ -65,6 +66,10 @@ export const E2E_VARIANT_PHOTOS_EMAIL = "variant-photos@e2e.ammari.test";
 // The role holds EXACTLY inventory.view + inventory.manage, which doubles as a regression guard:
 // the whole supplier master must work on those two keys alone, with no new permission (D10/§7).
 export const E2E_SUPPLIERS_EMAIL = "suppliers@e2e.ammari.test";
+// A dedicated email for fresh-after-save.spec.ts (lists and detail pages show a save without a
+// reload) — same "fresh email, clean OTP throttle" reasoning as every fixture above. Owner role:
+// the flow spans products, fabrics, accessories and suppliers.
+export const E2E_FRESH_AFTER_SAVE_EMAIL = "fresh-after-save@e2e.ammari.test";
 const E2E_SUPPLIERS_ROLE_KEY = "e2e_suppliers";
 // A dedicated email/role for purchases-receipt.spec.ts (docs/plans/suppliers-goods-receipt.md
 // session S3) — same "fresh email, clean OTP throttle" reasoning as every fixture above. Needs
@@ -128,7 +133,7 @@ function assertSafeTarget(): void {
   }
 }
 
-export default async function globalSetup(): Promise<void> {
+export default async function globalSetup(): Promise<() => Promise<void>> {
   // Loaded here, and @ammari/db imported dynamically below (not statically at module top) —
   // @ammari/db/client.ts reads DATABASE_URL at import time, so a static import would evaluate
   // (and throw) before this line ever ran, since ESM import declarations are hoisted ahead of
@@ -271,6 +276,7 @@ export default async function globalSetup(): Promise<void> {
   await ensureStaffFixture(E2E_PRODUCT_HIGHLIGHTS_EMAIL, "E2E Product Highlights", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_STOREFRONT_EMAIL, "E2E Storefront", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_VARIANT_PHOTOS_EMAIL, "E2E Variant Photos", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_FRESH_AFTER_SAVE_EMAIL, "E2E Fresh After Save", OWNER_ROLE_KEY);
 
   await ensureLimitedRole(E2E_SUPPLIERS_ROLE_KEY, ["inventory.view", "inventory.manage"]);
   await ensureStaffFixture(E2E_SUPPLIERS_EMAIL, "E2E Suppliers", E2E_SUPPLIERS_ROLE_KEY);
@@ -349,7 +355,12 @@ export default async function globalSetup(): Promise<void> {
         E2E_DEFECTS_EMAIL,
         E2E_DISPOSITIONS_EMAIL,
         E2E_VARIANT_PHOTOS_EMAIL,
+        E2E_FRESH_AFTER_SAVE_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);
+
+  // Last, so a failed seed above never leaves the port held. Playwright calls the returned
+  // function as the global teardown.
+  return startStorefrontStub(process.env.REVALIDATE_SECRET);
 }

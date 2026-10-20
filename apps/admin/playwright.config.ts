@@ -2,6 +2,9 @@ import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
+// Shared with global-setup.ts (same process), which hands it to the storefront revalidation stub.
+// A placeholder only when .env has none, so the stub and the e2e server always agree on it.
+process.env.REVALIDATE_SECRET ??= "e2e-revalidate-secret";
 
 // The `next dev` server this config spawns below must never write into the owner's real local
 // `ammari` database (see CLAUDE.md's "Local environment safety" rule) — e2e/global-setup.ts
@@ -104,6 +107,12 @@ export default defineConfig({
       // check entirely (see lib/auth/client.ts's own comment) — login-otp.spec.ts is the first
       // to drive the real endpoint, which is exactly what surfaced this.
       BETTER_AUTH_URL: "http://localhost:3101",
+      // e2e/helpers/storefront-stub.ts, started by global-setup.ts: answers the storefront
+      // revalidation call apps/web would normally get, so product saves take their normal
+      // redirect path instead of the "storefront is stale" warning. Keep the port in sync with
+      // STOREFRONT_STUB_PORT there.
+      WEB_INTERNAL_URL: "http://127.0.0.1:3198",
+      REVALIDATE_SECRET: process.env.REVALIDATE_SECRET,
     },
     timeout: 120_000,
   },

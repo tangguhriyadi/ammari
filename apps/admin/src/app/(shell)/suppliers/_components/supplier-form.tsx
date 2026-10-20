@@ -60,9 +60,6 @@ export function SupplierForm(props: SupplierFormProps) {
       }
       toast.success(props.mode === "create" ? "Supplier berhasil ditambahkan" : "Perubahan berhasil disimpan");
       router.push("/suppliers");
-      // refresh() so the list (and the detail page behind it) re-render with the saved data
-      // instead of the router's cached copy.
-      router.refresh();
     });
   }
 

@@ -13,6 +13,7 @@ import * as imageQueries from "@/lib/products/image-queries";
 import * as storefrontQueries from "@/lib/products/storefront";
 import * as recipeQueries from "@/lib/inventory/recipes";
 import { revalidateProductSlug } from "@/lib/revalidate";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
 
 // ---------- Storefront revalidation (docs/plans/storefront-cms.md session 6) ----------
 //
@@ -42,6 +43,10 @@ export async function revalidateProductAction(productId: string): Promise<Action
 }
 
 // ---------- Products ----------
+
+// Admin pages that render product or variant data: the product pages themselves, stock (per-SKU
+// rows), production (SKU picker), orders (item picker), and content (homepage product grid).
+const PRODUCT_SECTIONS = ["/products", "/stock", "/production", "/orders", "/content"] as const;
 
 // A FIXED set, not free text (owner requirement) — `z.enum` rejects any key outside
 // PRODUCT_HIGHLIGHT_KEYS outright, never trusting the client's checkboxes alone. `.max(5)` and
@@ -105,6 +110,7 @@ export async function createProductAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin(...PRODUCT_SECTIONS);
     return { id: product.id };
   });
 }
@@ -131,6 +137,7 @@ export async function updateProductAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin(...PRODUCT_SECTIONS);
     const revalidationOk = (await revalidateProductSlug(product.slug)).ok;
     return { id: product.id, revalidationOk };
   });
@@ -186,6 +193,7 @@ export async function updateProductStorefrontAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin("/products", "/content");
     const revalidationOk = (await revalidateProductSlug(product.slug)).ok;
     return { id: product.id, revalidationOk };
   });
@@ -218,6 +226,7 @@ export async function addVariantsAction(
       { productId: parsed.data.productId, selections: parsed.data.selections },
       session.staffUser.id,
     );
+    revalidateAdmin(...PRODUCT_SECTIONS);
     return { skus: created.map((variant) => variant.sku) };
   });
 }
@@ -278,6 +287,7 @@ export async function bulkUpdateVariantsAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin(...PRODUCT_SECTIONS);
     return { updated: updated.map((variant) => variant.sku) };
   });
 }
@@ -293,6 +303,7 @@ export async function setVariantActiveAction(input: z.input<typeof setVariantAct
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await productQueries.setVariantActive(parsed.data.sku, parsed.data.isActive, session.staffUser.id);
+    revalidateAdmin(...PRODUCT_SECTIONS);
     return undefined;
   });
 }
@@ -344,6 +355,7 @@ export async function uploadProductImageAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin("/products", "/content");
     return { id: image.id };
   });
 }
@@ -358,6 +370,7 @@ export async function deleteProductImageAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const { productId } = await imageQueries.deleteProductImage(parsed.data.imageId, session.staffUser.id);
+    revalidateAdmin("/products", "/content");
     return { revalidationOk: await revalidateByProductId(productId) };
   });
 }
@@ -379,6 +392,7 @@ export async function reorderProductImagesAction(
       { productId: parsed.data.productId, fabricColorId: parsed.data.fabricColorId, orderedImageIds: parsed.data.orderedImageIds },
       session.staffUser.id,
     );
+    revalidateAdmin("/products", "/content");
     return { revalidationOk: await revalidateByProductId(parsed.data.productId) };
   });
 }
@@ -393,6 +407,7 @@ export async function setProductThumbnailAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await imageQueries.setProductThumbnail(parsed.data.productId, parsed.data.imageId, session.staffUser.id);
+    revalidateAdmin("/products", "/content");
     return { revalidationOk: await revalidateByProductId(parsed.data.productId) };
   });
 }
@@ -407,6 +422,7 @@ export async function updateImageAltTextAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const { productId } = await imageQueries.updateImageAltText(parsed.data.imageId, parsed.data.altText || null, session.staffUser.id);
+    revalidateAdmin("/products", "/content");
     return { revalidationOk: await revalidateByProductId(productId) };
   });
 }
@@ -438,6 +454,7 @@ export async function saveRecipeAction(input: z.input<typeof saveRecipeSchema>):
       parsed.data.lines.map((line) => ({ accessoryId: line.accessoryId ?? null, sizeGroup: line.sizeGroup ?? null, qtyPerPcs: line.qtyPerPcs })),
       session.staffUser.id,
     );
+    revalidateAdmin("/products", "/production");
     return undefined;
   });
 }

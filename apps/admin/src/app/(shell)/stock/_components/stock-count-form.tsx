@@ -49,7 +49,6 @@ export function StockCountForm({
       setPhysicalCounts({});
       toast.success("Hitung stok berhasil disimpan");
       router.push("/stock");
-      router.refresh();
     });
   }
 

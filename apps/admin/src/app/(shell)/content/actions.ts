@@ -18,6 +18,7 @@ import { uploadContentImage, type UploadedContentImage } from "@/lib/content/con
 import { revalidateHomepage } from "@/lib/revalidate";
 import { getMainSiteUrl } from "@/lib/main-site-url";
 import { generateHomepagePreviewToken } from "@/lib/content/preview-token";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
 
 // ---------- Homepage section drafts + publish (docs/plans/storefront-cms.md, session 4) ----------
 //
@@ -39,6 +40,7 @@ export async function saveHeroDraftAction(input: z.input<typeof heroInputSchema>
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await homepage.saveHeroDraft(parsed.data, session.staffUser.id);
+    revalidateAdmin("/content");
     return undefined;
   });
 }
@@ -49,6 +51,7 @@ export async function saveProductGridDraftAction(input: z.input<typeof productGr
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await homepage.saveProductGridDraft(parsed.data, session.staffUser.id);
+    revalidateAdmin("/content");
     return undefined;
   });
 }
@@ -59,6 +62,7 @@ export async function saveFeatureBlockDraftAction(input: z.input<typeof featureB
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await homepage.saveFeatureBlockDraft(parsed.data, session.staffUser.id);
+    revalidateAdmin("/content");
     return undefined;
   });
 }
@@ -69,6 +73,7 @@ export async function saveWhyAmmariDraftAction(input: z.input<typeof whyAmmariIn
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await homepage.saveWhyAmmariDraft(parsed.data, session.staffUser.id);
+    revalidateAdmin("/content");
     return undefined;
   });
 }
@@ -81,6 +86,7 @@ export async function setHomepageSectionVisibilityAction(key: string, isVisible:
   if (!parsedKey.success) return { ok: false, error: "Bagian tidak valid." };
   return runAction(async () => {
     await homepage.setHomepageSectionDraftVisibility(parsedKey.data, isVisible, session.staffUser.id);
+    revalidateAdmin("/content");
     return undefined;
   });
 }
@@ -89,6 +95,7 @@ export async function publishHomepageAction(): Promise<ActionResult<{ revalidati
   const session = await requirePermission("content.manage");
   return runAction(async () => {
     await homepage.publishHomepageSections(session.staffUser.id);
+    revalidateAdmin("/content");
     // revalidateHomepage() never throws (lib/revalidate.ts) — a failure here can only ever
     // surface as `revalidationOk: false`, never as a failed publish (CLAUDE.md/the plan: "a
     // failed revalidation must never fail the admin action").
@@ -122,6 +129,7 @@ export async function discardHomepageDraftAction(): Promise<ActionResult> {
   const session = await requirePermission("content.manage");
   return runAction(async () => {
     await homepage.discardHomepageDraft(session.staffUser.id);
+    revalidateAdmin("/content");
     return undefined;
   });
 }
@@ -185,6 +193,7 @@ export async function saveInfoPageDraftAction(slug: string, input: z.input<typeo
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await infoPages.saveInfoPageDraft(parsedSlug, parsed.data, session.staffUser.id);
+    revalidateAdmin("/content");
     return undefined;
   });
 }
@@ -198,6 +207,7 @@ export async function publishInfoPageAction(slug: string): Promise<ActionResult>
   if (!parsedSlug) return { ok: false, error: "Halaman tidak valid." };
   return runAction(async () => {
     await infoPages.publishInfoPage(parsedSlug, session.staffUser.id);
+    revalidateAdmin("/content");
     return undefined;
   });
 }
@@ -206,5 +216,9 @@ export async function discardInfoPageDraftAction(slug: string): Promise<ActionRe
   const session = await requirePermission("content.manage");
   const parsedSlug = parseInfoPageSlug(slug);
   if (!parsedSlug) return { ok: false, error: "Halaman tidak valid." };
-  return runAction(() => infoPages.discardInfoPageDraft(parsedSlug, session.staffUser.id));
+  return runAction(async () => {
+    const reset = await infoPages.discardInfoPageDraft(parsedSlug, session.staffUser.id);
+    revalidateAdmin("/content");
+    return reset;
+  });
 }

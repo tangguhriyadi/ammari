@@ -1,5 +1,6 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
@@ -10,6 +11,11 @@ import * as productionQueries from "@/lib/production/queries";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { saveAccessoryOverride } from "@/lib/production/accessory-needs";
 import { closeBatchShort, postGoodsReceiptForBatch } from "@/lib/receipts/production";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
+
+// Posting consumes fabric and accessories; receiving or closing a batch moves SKU stock and
+// writes a goods receipt. Every one of those shows outside /production too.
+const BATCH_STOCK_SECTIONS = ["/production", "/stock", "/receipts", "/fabrics", "/accessories"] as const;
 
 const lineSchema = z.object({
   sku: z.string().trim().min(1),
@@ -95,6 +101,7 @@ export async function createDraftAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin("/production");
     return { id: batch.id };
   });
 }
@@ -121,6 +128,7 @@ export async function updateDraftAction(
       },
       session.staffUser.id,
     );
+    revalidateAdmin("/production");
     return { id: batch.id };
   });
 }
@@ -131,10 +139,16 @@ export async function deleteDraftAction(input: z.input<typeof idSchema>): Promis
   const session = await requirePermission("production.manage");
   const parsed = idSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
-  return runAction(async () => {
+  const result = await runAction(async () => {
     await productionQueries.deleteDraft(parsed.data.id, session.staffUser.id);
+    revalidateAdmin("/production");
     return undefined;
   });
+  // Redirect from the server, not router.push() on the client: this delete is started from the
+  // deleted record's own page, and the revalidation above re-renders the CURRENT page in the action
+  // response, which would now hit notFound() and flash a 404 before a client-side push landed.
+  if (result.ok) redirect("/production");
+  return result;
 }
 
 /** Posting needs BOTH production.manage AND finance.view_profit (docs/SPEC.md-adjacent plan
@@ -145,7 +159,11 @@ export async function postBatchAction(
   const session = await requireAllPermissions(["production.manage", "finance.view_profit"]);
   const parsed = idSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
-  return runAction(() => productionQueries.postBatch(parsed.data.id, session.staffUser.id));
+  return runAction(async () => {
+    const posted = await productionQueries.postBatch(parsed.data.id, session.staffUser.id);
+    revalidateAdmin(...BATCH_STOCK_SECTIONS);
+    return posted;
+  });
 }
 
 export async function suggestEligibleSkusAction(fabricId: string) {
@@ -185,6 +203,7 @@ export async function setAccessoryOverrideAction(input: z.input<typeof setAccess
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await saveAccessoryOverride(parsed.data.batchId, parsed.data.accessoryId, parsed.data.overrideQty, session.staffUser.id);
+    revalidateAdmin("/production");
     return undefined;
   });
 }
@@ -245,6 +264,7 @@ export async function receiveBatchAction(input: z.input<typeof receiveBatchSchem
       },
       session.staffUser.id,
     );
+    revalidateAdmin(...BATCH_STOCK_SECTIONS);
     return { receiptNo: receipt.receiptNo };
   });
 }
@@ -260,6 +280,7 @@ export async function closeBatchAction(input: z.input<typeof closeBatchSchema>):
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     await closeBatchShort(parsed.data.batchId, parsed.data.reason, session.staffUser.id);
+    revalidateAdmin(...BATCH_STOCK_SECTIONS);
     return undefined;
   });
 }

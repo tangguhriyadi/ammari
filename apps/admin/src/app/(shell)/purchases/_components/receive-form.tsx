@@ -124,7 +124,6 @@ export function ReceiveForm({ source, receiverName, lines }: { source: ReceiveSo
       }
       toast.success(`Penerimaan ${result.data.receiptNo} berhasil dicatat`);
       router.push(backHref);
-      router.refresh();
     });
   }
 

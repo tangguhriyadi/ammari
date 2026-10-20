@@ -1,10 +1,12 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { CUTTING_SIZES } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import * as sizeChartQueries from "@/lib/content/size-charts";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
 
 const sizeChartRowSchema = z.object({
   size: z.enum(CUTTING_SIZES),
@@ -37,6 +39,8 @@ export async function createSizeChartAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const chart = await sizeChartQueries.createSizeChart(parsed.data, session.staffUser.id);
+    // Size charts are also offered on each product's storefront section.
+    revalidateAdmin("/content", "/products");
     return { id: chart.id };
   });
 }
@@ -50,6 +54,7 @@ export async function updateSizeChartAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const chart = await sizeChartQueries.updateSizeChart(id, parsed.data, session.staffUser.id);
+    revalidateAdmin("/content", "/products");
     return { id: chart.id };
   });
 }
@@ -60,8 +65,14 @@ export async function deleteSizeChartAction(input: z.input<typeof deleteSizeChar
   const session = await requirePermission("content.manage");
   const parsed = deleteSizeChartSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
-  return runAction(async () => {
+  const result = await runAction(async () => {
     await sizeChartQueries.deleteSizeChart(parsed.data.id, session.staffUser.id);
+    revalidateAdmin("/content", "/products");
     return undefined;
   });
+  // Redirect from the server, not router.push() on the client: this delete is started from the
+  // deleted record's own page, and the revalidation above re-renders the CURRENT page in the action
+  // response, which would now hit notFound() and flash a 404 before a client-side push landed.
+  if (result.ok) redirect("/content/size-charts");
+  return result;
 }

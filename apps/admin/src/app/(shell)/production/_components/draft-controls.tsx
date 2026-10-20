@@ -29,11 +29,9 @@ export function DraftControls({ batchId, canPost }: { batchId: string; canPost: 
     startTransition(async () => {
       const result = await deleteDraftAction({ id: batchId });
       setConfirmOpen(null);
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      router.push("/production");
+      // Success redirects to /production from the server (deleteDraftAction), so only a failure
+      // returns here.
+      if (!result.ok) setError(result.error);
     });
   }
 

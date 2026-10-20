@@ -8,6 +8,10 @@ import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { createOrder, transitionOrderStatus } from "@/lib/orders/queries";
 import { createCustomer, searchCustomers, type CustomerOption } from "@/lib/customers/queries";
+import { revalidateAdmin } from "@/lib/admin-revalidate";
+
+// An order and its status show on the orders pages, the packing queue, and SKU stock.
+const ORDER_SECTIONS = ["/orders", "/packing", "/stock"] as const;
 
 const orderItemSchema = z.object({
   sku: z.string().min(1),
@@ -50,6 +54,7 @@ export async function createOrderAction(input: z.input<typeof createOrderSchema>
       },
       session.staffUser.id,
     );
+    revalidateAdmin(...ORDER_SECTIONS);
     return { id: order.id };
   });
 }
@@ -65,6 +70,7 @@ export async function transitionOrderStatusAction(input: z.input<typeof transiti
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const order = await transitionOrderStatus(parsed.data.orderId, parsed.data.toStatus, session.staffUser.id);
+    revalidateAdmin(...ORDER_SECTIONS);
     return { status: order.status };
   });
 }
@@ -87,6 +93,7 @@ export async function createCustomerAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const customer = await createCustomer({ name: parsed.data.name, phone: parsed.data.phone || null });
+    revalidateAdmin("/orders");
     return { id: customer.id, name: customer.name, phone: customer.phone };
   });
 }
