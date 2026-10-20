@@ -12,6 +12,7 @@ import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { saveAccessoryOverride } from "@/lib/production/accessory-needs";
 import { closeBatchShort, postGoodsReceiptForBatch } from "@/lib/receipts/production";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
+import { revalidateStorefrontForSkus, skusForBatchLines } from "@/lib/storefront-stock";
 
 // Posting consumes fabric and accessories; receiving or closing a batch moves SKU stock and
 // writes a goods receipt. Every one of those shows outside /production too.
@@ -249,7 +250,7 @@ const receiveBatchSchema = z.object({
     .max(500, "Terlalu banyak baris dalam satu penerimaan."),
 });
 
-export async function receiveBatchAction(input: z.input<typeof receiveBatchSchema>): Promise<ActionResult<{ receiptNo: string }>> {
+export async function receiveBatchAction(input: z.input<typeof receiveBatchSchema>): Promise<ActionResult<{ receiptNo: string; storefrontOk: boolean }>> {
   const session = await requirePermission("inventory.receive");
   const parsed = receiveBatchSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
@@ -265,7 +266,9 @@ export async function receiveBatchAction(input: z.input<typeof receiveBatchSchem
       session.staffUser.id,
     );
     revalidateAdmin(...BATCH_STOCK_SECTIONS);
-    return { receiptNo: receipt.receiptNo };
+    const lineIds = parsed.data.lines.map((line) => line.productionBatchItemId);
+    const storefront = await revalidateStorefrontForSkus(() => skusForBatchLines(lineIds));
+    return { receiptNo: receipt.receiptNo, storefrontOk: storefront.ok };
   });
 }
 

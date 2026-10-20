@@ -8,6 +8,7 @@ import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { parseDecimalQuantity } from "@/lib/production/decimal-quantity";
 import { receivePurchaseAction } from "../actions";
 import { receiveBatchAction } from "../../production/actions";
+import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
 
 /** One shared receipt form for both sources (docs/plans/suppliers-goods-receipt.md §7): purchase
  * lines (fabric in yards, accessories in pcs) and production batch lines (whole pcs per variant).
@@ -123,6 +124,8 @@ export function ReceiveForm({ source, receiverName, lines }: { source: ReceiveSo
         return;
       }
       toast.success(`Penerimaan ${result.data.receiptNo} berhasil dicatat`);
+      // Only the production-batch action reports this (a purchase receipt moves no sellable stock).
+      if ("storefrontOk" in result.data && !result.data.storefrontOk) toast.error(STOREFRONT_STALE_MESSAGE);
       router.push(backHref);
     });
   }

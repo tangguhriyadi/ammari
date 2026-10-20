@@ -1,4 +1,5 @@
 import type { StorefrontSizeChartRow } from "@ammari/db/storefront";
+import { SIZE_CHART_HEADING_ID } from "./size-guide";
 
 function heightLabel(row: StorefrontSizeChartRow): string {
   return row.heightRecommendationMinCm === row.heightRecommendationMaxCm
@@ -10,7 +11,21 @@ function heightLabel(row: StorefrontSizeChartRow): string {
  * lengan / Rekomendasi tinggi badan, horizontal scroll inside the accordion on small screens. */
 export function SizeChartTable({ rows }: { rows: StorefrontSizeChartRow[] }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="flex flex-col gap-3">
+      {/* Landing target of the PDP's "Panduan ukuran" link (accordions.tsx scrolls and focuses here). */}
+      <h3 id={SIZE_CHART_HEADING_ID} tabIndex={-1} className="scroll-mt-20 text-xs font-medium text-ink outline-none">
+        Panduan ukuran
+      </h3>
+      <div className="overflow-x-auto">
+        <SizeChartTableBody rows={rows} />
+      </div>
+    </div>
+  );
+}
+
+function SizeChartTableBody({ rows }: { rows: StorefrontSizeChartRow[] }) {
+  return (
+    <>
       <table className="w-full min-w-[480px] border-collapse text-left text-xs">
         <thead>
           <tr className="border-b border-line-strong text-ink-muted">
@@ -33,6 +48,6 @@ export function SizeChartTable({ rows }: { rows: StorefrontSizeChartRow[] }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </>
   );
 }

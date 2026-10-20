@@ -9,6 +9,7 @@ import { runAction, type ActionResult } from "@/lib/action-result";
 import { createOrder, transitionOrderStatus } from "@/lib/orders/queries";
 import { createCustomer, searchCustomers, type CustomerOption } from "@/lib/customers/queries";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
+import { revalidateStorefrontForSkus, skusForOrder } from "@/lib/storefront-stock";
 
 // An order and its status show on the orders pages, the packing queue, and SKU stock.
 const ORDER_SECTIONS = ["/orders", "/packing", "/stock"] as const;
@@ -33,7 +34,7 @@ const createOrderSchema = z.object({
   status: z.enum(["awaiting_payment", "to_ship"]),
 });
 
-export async function createOrderAction(input: z.input<typeof createOrderSchema>): Promise<ActionResult<{ id: string }>> {
+export async function createOrderAction(input: z.input<typeof createOrderSchema>): Promise<ActionResult<{ id: string; storefrontOk: boolean }>> {
   const session = await requirePermission("orders.manage");
   const parsed = createOrderSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
@@ -55,7 +56,10 @@ export async function createOrderAction(input: z.input<typeof createOrderSchema>
       session.staffUser.id,
     );
     revalidateAdmin(...ORDER_SECTIONS);
-    return { id: order.id };
+    // Only an order created already past awaiting_payment deducts stock.
+    const storefront =
+      parsed.data.status === "awaiting_payment" ? { ok: true } : await revalidateStorefrontForSkus(parsed.data.items.map((item) => item.sku));
+    return { id: order.id, storefrontOk: storefront.ok };
   });
 }
 
@@ -64,14 +68,18 @@ const transitionSchema = z.object({
   toStatus: z.enum(ORDER_STATUSES),
 });
 
-export async function transitionOrderStatusAction(input: z.input<typeof transitionSchema>): Promise<ActionResult<{ status: OrderStatus }>> {
+export async function transitionOrderStatusAction(input: z.input<typeof transitionSchema>): Promise<ActionResult<{ status: OrderStatus; storefrontOk: boolean }>> {
   const session = await requirePermission("orders.manage");
   const parsed = transitionSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const order = await transitionOrderStatus(parsed.data.orderId, parsed.data.toStatus, session.staffUser.id);
     revalidateAdmin(...ORDER_SECTIONS);
-    return { status: order.status };
+    // Payment confirmed (stock deducted), cancelled or returned (stock restored). Shipped and
+    // completed move no stock.
+    const movesStock = parsed.data.toStatus === "to_ship" || parsed.data.toStatus === "cancelled" || parsed.data.toStatus === "returned";
+    const storefront = movesStock ? await revalidateStorefrontForSkus(() => skusForOrder(parsed.data.orderId)) : { ok: true };
+    return { status: order.status, storefrontOk: storefront.ok };
   });
 }
 

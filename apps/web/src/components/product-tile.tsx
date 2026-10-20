@@ -26,6 +26,7 @@ export function ProductTile({ tile, imagePriority = false }: { tile: StorefrontP
           sizes="(max-width: 768px) 50vw, (max-width: 1280px) 33vw, 25vw"
           className="object-cover transition-transform duration-200 group-hover:scale-[1.02]"
         />
+        {tile.soldOut && <span className="absolute top-2 left-2 bg-bg px-2 py-1 text-[11px] text-ink-muted">Sold out</span>}
       </div>
       <p className="text-xs text-ink">{tile.name}</p>
       {colorLabel && <p className="text-xs text-ink-muted">{colorLabel}</p>}

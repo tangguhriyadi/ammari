@@ -2,9 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Dialog, Input, Label, Select, Textarea } from "@ammari/ui";
+import { Dialog, Input, Label, Select, Textarea, useToast } from "@ammari/ui";
 import { STOCK_ADJUSTMENT_REASONS, type StockAdjustmentReason } from "@ammari/db/schema";
 import { adjustStockAction } from "../actions";
+import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
 
 const REASON_LABELS: Record<StockAdjustmentReason, string> = {
   recount: "Hitung ulang",
@@ -15,6 +16,7 @@ const REASON_LABELS: Record<StockAdjustmentReason, string> = {
 
 export function AdjustStockDialog({ sku, open, onOpenChange }: { sku: string; open: boolean; onOpenChange: (open: boolean) => void }) {
   const router = useRouter();
+  const toast = useToast();
   const [deltaQty, setDeltaQty] = useState("");
   const [reason, setReason] = useState<StockAdjustmentReason>("recount");
   const [note, setNote] = useState("");
@@ -37,6 +39,7 @@ export function AdjustStockDialog({ sku, open, onOpenChange }: { sku: string; op
       setDeltaQty("");
       setNote("");
       onOpenChange(false);
+      if (!result.data.storefrontOk) toast.error(STOREFRONT_STALE_MESSAGE);
       router.refresh();
     });
   }

@@ -71,6 +71,24 @@ export function revalidateProductSlug(slug: string): Promise<RevalidateOutcome> 
   return postRevalidate({ paths: [`/products/${slug}`], tags: [HOMEPAGE_CACHE_TAG] });
 }
 
+/** apps/web's /api/revalidate accepts at most 10 paths per request. */
+const MAX_PATHS_PER_REQUEST = 10;
+
+/** After a stock change: every affected product's page plus the homepage tag, deduplicated and
+ * batched (one POST per 10 products, never one per product). An empty list makes no call. Like
+ * every function here it never throws; `ok` is false if ANY batch failed. */
+export async function revalidateProductSlugs(slugs: readonly string[]): Promise<RevalidateOutcome> {
+  const unique = [...new Set(slugs)];
+  const requests: Promise<RevalidateOutcome>[] = [];
+  for (let i = 0; i < unique.length; i += MAX_PATHS_PER_REQUEST) {
+    const batch = unique.slice(i, i + MAX_PATHS_PER_REQUEST);
+    requests.push(postRevalidate({ paths: batch.map((slug) => `/products/${slug}`), tags: [HOMEPAGE_CACHE_TAG] }));
+  }
+  // In parallel: a down storefront costs one timeout, not one per batch.
+  const results = await Promise.all(requests);
+  return { ok: results.every((result) => result.ok) };
+}
+
 // Info pages (session 8) and store settings (session 8) are NOT revalidated here — on purpose.
 // Both read directly from the database on every request on apps/web (no `unstable_cache`, no
 // route-level ISR): info pages are `dynamic = "force-dynamic"` with a plain, uncached

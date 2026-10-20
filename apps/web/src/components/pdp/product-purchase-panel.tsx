@@ -8,7 +8,8 @@ import { getGalleryForColor, type ProductView } from "@/lib/content/product-view
 import { buildImageUrl } from "@/lib/storage/public-url";
 import { formatPriceIdr } from "@/lib/format";
 import { buildProductWhatsappMessage, buildWhatsappUrl } from "@/lib/whatsapp";
-import { PrimaryButton, PrimaryLink, OutlineLink } from "@/components/buttons";
+import { PrimaryButton, PrimaryLink, OutlineLink, SoldOutButton } from "@/components/buttons";
+import { OPEN_ACCORDION_EVENT, SIZE_CHART_HEADING_ID, SIZE_GUIDE_ACCORDION_ID, type OpenAccordionDetail } from "@/components/pdp/size-guide";
 import { ProductImage } from "@/components/product-image";
 
 export interface ProductPurchasePanelProps {
@@ -83,6 +84,10 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
 
   const sizeOptions = colorId ? (view.sizeOptionsByColor?.[colorId] ?? []) : [];
   const allsizeAvailable = colorId ? (view.allsizeAvailableByColor?.[colorId] ?? false) : false;
+  // Nothing buyable: the whole product has no stock, or the selected colour has none (sized:
+  // every offered size is habis or there are none; all_size: its one variant is habis).
+  const colorSoldOut = view.sizeMode === "sized" ? sizeOptions.every((option) => !option.available) : !allsizeAvailable;
+  const soldOut = view.soldOut || colorSoldOut;
   const needsSizeChoice = view.sizeMode === "sized" && !size;
 
   const whatsappMessage = buildProductWhatsappMessage({
@@ -155,25 +160,44 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
           <div id="ukuran-picker" className="flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <p className="text-xs text-ink">Ukuran{size ? `: ${size}` : ""}</p>
-              <a href="#ukuran" className="text-xs text-ink underline underline-offset-4">
-                Panduan ukuran
-              </a>
+              {/* Only when there is a chart to land on (the heading lives in SizeChartTable). */}
+              {view.sizeChart && view.sizeChart.length > 0 && (
+                <a
+                  href={`#${SIZE_GUIDE_ACCORDION_ID}`}
+                  onClick={(event) => {
+                    // Leave new-tab / modified clicks to the browser (plain `#ukuran` link).
+                    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+                    event.preventDefault();
+                    window.dispatchEvent(
+                      new CustomEvent<OpenAccordionDetail>(OPEN_ACCORDION_EVENT, { detail: { accordionId: SIZE_GUIDE_ACCORDION_ID, targetId: SIZE_CHART_HEADING_ID } }),
+                    );
+                  }}
+                  className="text-xs text-ink underline underline-offset-4"
+                >
+                  Panduan ukuran
+                </a>
+              )}
             </div>
             <div className="grid grid-cols-5 gap-2">
               {sizeOptions.map((option) => (
                 <button
                   key={option.size}
                   type="button"
-                  disabled={!option.available}
+                  aria-disabled={!option.available}
                   onClick={() => {
+                    if (!option.available) return;
                     setSize(option.size);
                     setAdded(false);
                   }}
-                  aria-label={option.available ? option.size : `${option.size}, habis`}
+                  aria-label={option.available ? option.size : `Ukuran ${option.size} habis`}
+                  aria-pressed={option.size === size}
                   className={cn(
                     "flex h-[46px] items-center justify-center border text-xs",
-                    option.size === size ? "border-ink bg-ink text-white" : "border-line-strong text-ink",
-                    !option.available && "text-ink-muted line-through disabled:cursor-not-allowed",
+                    option.available
+                      ? option.size === size
+                        ? "border-ink bg-ink text-white"
+                        : "border-line-strong text-ink"
+                      : "cursor-not-allowed border-line bg-surface text-ink-muted line-through",
                   )}
                 >
                   {option.size}
@@ -184,9 +208,10 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
         )}
 
         <div className="flex flex-col gap-3">
-          {cartEnabled && (
+          {soldOut && <SoldOutButton />}
+          {cartEnabled && !soldOut && (
             <>
-              <PrimaryButton disabled={needsSizeChoice || (view.sizeMode === "all_size" && !allsizeAvailable)} onClick={() => setAdded(true)}>
+              <PrimaryButton disabled={needsSizeChoice} onClick={() => setAdded(true)}>
                 {needsSizeChoice ? "Pilih ukuran" : "Tambah ke keranjang"}
               </PrimaryButton>
               {added && selectedColor && (
@@ -197,6 +222,8 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
               )}
             </>
           )}
+          {/* The WhatsApp link is the main CTA only while the cart is off; sold out, that slot is
+              the SOLD OUT button above, and with the cart on it stays as the secondary action. */}
           {whatsappHref &&
             (cartEnabled ? (
               <OutlineLink href={whatsappHref} target="_blank" rel="noopener noreferrer">
@@ -204,10 +231,12 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
                 Tanya via WhatsApp
               </OutlineLink>
             ) : (
-              <PrimaryLink href={whatsappHref} target="_blank" rel="noopener noreferrer">
-                <MessageCircle className="size-4" strokeWidth={1.4} aria-hidden="true" />
-                Tanya via WhatsApp
-              </PrimaryLink>
+              !soldOut && (
+                <PrimaryLink href={whatsappHref} target="_blank" rel="noopener noreferrer">
+                  <MessageCircle className="size-4" strokeWidth={1.4} aria-hidden="true" />
+                  Tanya via WhatsApp
+                </PrimaryLink>
+              )
             ))}
         </div>
 

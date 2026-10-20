@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState, type ReactNode } from "react";
+import { OPEN_ACCORDION_EVENT, type OpenAccordionDetail } from "./size-guide";
 import { Minus, Plus } from "lucide-react";
 
 export interface AccordionItemDef {
@@ -10,10 +11,10 @@ export interface AccordionItemDef {
 }
 
 /** docs/design/storefront.md §6 item 9 — one open at a time, "Deskripsi" open by default, `+`/`−`,
- * `aria-expanded`. The size picker's "Panduan ukuran" link is a plain `<a href="#ukuran">` (see
- * product-purchase-panel.tsx) — the browser's native anchor jump scrolls here, and the effect
- * below opens the Ukuran panel specifically when that's the hash on mount, without any
- * cross-component state coordination. */
+ * `aria-expanded`. The size picker's "Panduan ukuran" link is an `<a href="#ukuran">` (works
+ * without JS; the hash also opens the Ukuran panel on mount, effect below) that, with JS, fires
+ * `OPEN_ACCORDION_EVENT` instead of the native jump: this component opens the panel, waits for
+ * layout, then smooth-scrolls to and focuses the size chart heading. */
 export function Accordions({ items }: { items: AccordionItemDef[] }) {
   const [openId, setOpenId] = useState<string | null>(items[0]?.id ?? null);
   const baseId = useId();
@@ -30,6 +31,39 @@ export function Accordions({ items }: { items: AccordionItemDef[] }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // "Panduan ukuran" (product-purchase-panel.tsx) asks for an accordion to be opened and one of
+  // its elements brought into view. Opening can reflow the page (a different panel closes above
+  // it), so the scroll happens only AFTER the new layout has been committed and painted.
+  const [scrollRequest, setScrollRequest] = useState<{ targetId: string; n: number } | null>(null);
+
+  useEffect(() => {
+    function handleOpen(event: Event) {
+      const { accordionId, targetId } = (event as CustomEvent<OpenAccordionDetail>).detail;
+      if (!items.some((item) => item.id === accordionId)) return;
+      setOpenId(accordionId);
+      setScrollRequest((previous) => ({ targetId, n: (previous?.n ?? 0) + 1 }));
+    }
+    window.addEventListener(OPEN_ACCORDION_EVENT, handleOpen);
+    return () => window.removeEventListener(OPEN_ACCORDION_EVENT, handleOpen);
+  }, [items]);
+
+  useEffect(() => {
+    if (!scrollRequest) return;
+    let frame = requestAnimationFrame(() => {
+      // Second frame: the first runs before the browser has laid out the just-opened panel.
+      frame = requestAnimationFrame(() => {
+        const target = document.getElementById(scrollRequest.targetId);
+        if (!target) return;
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        // The target's `scroll-mt` class keeps it clear of the sticky header.
+        target.scrollIntoView({ behavior: reduceMotion ? "instant" : "smooth", block: "start" });
+        // preventScroll: the scroll above is the only one, no second jump from focus().
+        target.focus({ preventScroll: true });
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [scrollRequest]);
 
   return (
     <div className="flex flex-col">

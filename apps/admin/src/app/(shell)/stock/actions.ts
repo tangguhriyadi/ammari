@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import * as stockQueries from "@/lib/stock/queries";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
+import { revalidateStorefrontForSkus } from "@/lib/storefront-stock";
 
 const adjustStockSchema = z.object({
   sku: z.string().trim().min(1),
@@ -16,7 +17,7 @@ const adjustStockSchema = z.object({
   note: z.string().trim().optional(),
 });
 
-export async function adjustStockAction(input: z.input<typeof adjustStockSchema>): Promise<ActionResult> {
+export async function adjustStockAction(input: z.input<typeof adjustStockSchema>): Promise<ActionResult<{ storefrontOk: boolean }>> {
   const session = await requirePermission("stock.adjust");
   const parsed = adjustStockSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
@@ -26,7 +27,8 @@ export async function adjustStockAction(input: z.input<typeof adjustStockSchema>
       session.staffUser.id,
     );
     revalidateAdmin("/stock");
-    return undefined;
+    const storefront = await revalidateStorefrontForSkus([parsed.data.sku]);
+    return { storefrontOk: storefront.ok };
   });
 }
 
@@ -53,7 +55,7 @@ const stockCountSchema = z.object({
 
 export async function saveStockCountAction(
   input: z.input<typeof stockCountSchema>,
-): Promise<ActionResult<{ changedSkus: string[] }>> {
+): Promise<ActionResult<{ changedSkus: string[]; storefrontOk: boolean }>> {
   const session = await requirePermission("stock.adjust");
   const parsed = stockCountSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
@@ -61,6 +63,7 @@ export async function saveStockCountAction(
     const result = await stockQueries.saveStockCount(parsed.data.productId, parsed.data.lines, session.staffUser.id);
     // The count is started from a product's detail page, so that page is refreshed too.
     revalidateAdmin("/stock", "/products");
-    return result;
+    const storefront = await revalidateStorefrontForSkus(result.changedSkus);
+    return { ...result, storefrontOk: storefront.ok };
   });
 }

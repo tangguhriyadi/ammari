@@ -75,9 +75,9 @@ test.describe("footer contact block (store_settings)", () => {
     await expect(page.getByText(E2E_BUSINESS_ADDRESS)).toBeVisible();
   });
 
-  test("the PDP trust row shows the return-policy summary as its 3rd item", async ({ page }) => {
+  test("the return-policy summary is no longer in the PDP trust row (it moved into the accordion)", async ({ page }) => {
     await page.goto("/products/gamis-flowy-straight-e2e");
-    await expect(page.getByText("Tukar ukuran gratis dalam 3 hari E2E")).toBeVisible();
+    await expect(page.getByRole("list").filter({ hasText: "Proses Cepat" }).getByText("Tukar ukuran gratis dalam 3 hari E2E")).toHaveCount(0);
   });
 
   test("the PDP 'Pengiriman & pengembalian' accordion links out to /shipping and /returns-exchange instead of hard-coding either policy", async ({

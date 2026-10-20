@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Dialog, useToast } from "@ammari/ui";
 import { reverseReceiptAction } from "../actions";
+import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
 
 const DEFAULT_DESCRIPTION =
   "Stok dan nilai yang masuk dari penerimaan ini akan dibalik. Hanya bisa dilakukan jika barangnya belum dipakai atau disesuaikan sesudahnya.";
@@ -36,6 +37,7 @@ export function ReverseReceiptButton({
       }
       setOpen(false);
       toast.success(`Penerimaan ${receiptNo} dibatalkan`);
+      if (!result.data.storefrontOk) toast.error(STOREFRONT_STALE_MESSAGE);
       router.refresh();
     });
   }

@@ -284,6 +284,10 @@ export interface StorefrontProductTile {
    * `fabricColorId` is null; a pinned-colour tile never shows a count. */
   colorCount: number;
   image: StorefrontProductImage | null;
+  /** `true` when NO active variant of the product, in any colour, has stock (`SUM(qty) > 0`, same
+   * boolean-only definition as `StorefrontVariant.available`). Product-level on purpose: a tile
+   * pinned to one colour still reads "sold out" only when the whole product is. */
+  soldOut: boolean;
 }
 
 /** Resolves homepage tile references (hero's `ctaTarget`, product grid tiles, feature block's
@@ -337,6 +341,17 @@ export async function getStorefrontProductTiles(
     .select({ productId: productVariants.productId, fabricColorId: productVariants.fabricColorId })
     .from(productVariants)
     .where(and(inArray(productVariants.productId, resolvedProductIds), eq(productVariants.isActive, true)));
+
+  // Same qty-only SUM and `qualifiedColumn()` correlation as `getStorefrontProductBySlug`'s
+  // `available` (see the long comment there for why the qualification is mandatory).
+  const stockRows = await db
+    .select({
+      productId: productVariants.productId,
+      inStock: sql<boolean>`coalesce((select sum(${qualifiedColumn(stockMovements, stockMovements.qty)}) from ${stockMovements} where ${qualifiedColumn(stockMovements, stockMovements.sku)} = ${qualifiedColumn(productVariants, productVariants.sku)}), 0) > 0`,
+    })
+    .from(productVariants)
+    .where(and(inArray(productVariants.productId, resolvedProductIds), eq(productVariants.isActive, true)));
+  const inStockProductIds = new Set(stockRows.filter((row) => row.inStock).map((row) => row.productId));
 
   const colorIdsByProduct = new Map<string, Set<string>>();
   for (const row of variantColorRows) {
@@ -415,6 +430,7 @@ export async function getStorefrontProductTiles(
       colorName,
       colorCount,
       image,
+      soldOut: !inStockProductIds.has(product.id),
     });
   }
   return tiles;

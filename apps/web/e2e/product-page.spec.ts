@@ -45,11 +45,11 @@ test.describe("/products/[slug]", () => {
     await expect(page).toHaveURL(/\/$/);
   });
 
-  test("size selection: an in-stock size is selectable, an out-of-stock size is disabled and labelled 'habis'", async ({ page }) => {
+  test("size selection: an in-stock size is selectable, an out-of-stock size is aria-disabled and labelled 'habis'", async ({ page }) => {
     await page.goto(`/products/${E2E_PRODUCT_SLUG}`);
 
-    const sizeL = page.getByRole("button", { name: "L, habis", exact: true });
-    await expect(sizeL).toBeDisabled();
+    const sizeL = page.getByRole("button", { name: "Ukuran L habis", exact: true });
+    await expect(sizeL).toHaveAttribute("aria-disabled", "true");
 
     const sizeS = page.getByRole("button", { name: "S", exact: true });
     await sizeS.click();

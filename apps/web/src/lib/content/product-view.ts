@@ -56,6 +56,8 @@ export interface ProductView {
   /** `sizeMode: 'all_size'` only — each colour's single ALLSIZE variant availability, keyed by
    * `fabricColorId`. `null` for a `sized` product. */
   allsizeAvailableByColor: Record<string, boolean> | null;
+  /** `true` when no active variant of any colour has stock. */
+  soldOut: boolean;
 }
 
 function toGalleryImage(image: { id: string; storageKey: string; altText: string | null }, fallbackAlt: string): ProductGalleryImage {
@@ -95,12 +97,16 @@ export function buildProductView(product: StorefrontProduct): ProductView {
     for (const color of colors) {
       const variants = variantsByColor.get(color.id) ?? [];
       const availableBySize = new Map(variants.map((variant) => [variant.size, variant.available]));
-      sizeOptionsByColor[color.id] = CUTTING_SIZES.map((size) => ({
-        size,
-        // A size with no variant row at all for this colour (never cut in this colour) reads the
-        // same as "habis" — unavailable, never a crash, never treated as in-stock by omission.
-        available: availableBySize.get(size) ?? false,
-      }));
+      // Only sizes this colour has an ACTIVE variant for (`product.variants` is active-only) are
+      // offered at all: a size never cut in this colour is absent, not shown as "habis". Of those,
+      // `available` is stock > 0. Order: the size chart's own row order, then any remaining size
+      // in canonical order (a variant whose size has no chart row must still be offered).
+      const chartSizes = (product.sizeChart ?? []).map((row) => row.size);
+      const orderedSizes = [...chartSizes, ...CUTTING_SIZES.filter((size) => !chartSizes.includes(size))];
+      sizeOptionsByColor[color.id] = orderedSizes.flatMap((size) => {
+        const available = availableBySize.get(size);
+        return available === undefined ? [] : [{ size: size as CuttingSize, available }];
+      });
     }
   }
 
@@ -126,6 +132,7 @@ export function buildProductView(product: StorefrontProduct): ProductView {
     generalImages,
     sizeOptionsByColor,
     allsizeAvailableByColor,
+    soldOut: !product.variants.some((variant) => variant.available),
   };
 }
 

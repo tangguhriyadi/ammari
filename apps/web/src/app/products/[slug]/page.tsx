@@ -124,17 +124,25 @@ export default async function ProductPage({
       // non-origin-revealing intro (never names the shipping city, CLAUDE.md / design spec §2)
       // plus two links, needing no new field and no HTML-merging logic.
       content: (
-        <p>
-          Ongkos kirim dihitung otomatis saat checkout berdasarkan alamat tujuan.{" "}
-          <Link href="/shipping" className="underline">
-            Lihat kebijakan pengiriman
-          </Link>
-          . Penukaran ukuran dapat diajukan sesuai syarat yang berlaku,{" "}
-          <Link href="/returns-exchange" className="underline">
-            lihat kebijakan pengembalian &amp; penukaran
-          </Link>
-          .
-        </p>
+        <div className="flex flex-col gap-3">
+          {/* The store's return policy summary (store settings), first, per the owner. */}
+          {storeContact.returnPolicySummary && (
+            <p className="whitespace-pre-line" data-testid="return-policy-summary">
+              {storeContact.returnPolicySummary}
+            </p>
+          )}
+          <p>
+            Gratis ongkir ke seluruh Indonesia.{" "}
+            <Link href="/shipping" className="underline">
+              Lihat kebijakan pengiriman
+            </Link>
+            . Penukaran ukuran dapat diajukan sesuai syarat yang berlaku,{" "}
+            <Link href="/returns-exchange" className="underline">
+              lihat kebijakan pengembalian &amp; penukaran
+            </Link>
+            .
+          </p>
+        </div>
       ),
     },
   ];
@@ -171,7 +179,7 @@ export default async function ProductPage({
           pageUrl={pageUrl}
           afterActions={
             <div className="flex flex-col">
-              <TrustRow returnPolicySummary={storeContact.returnPolicySummary} />
+              <TrustRow />
               <KeunggulanSection highlights={view.highlights} />
               <Accordions items={accordionItems} />
             </div>

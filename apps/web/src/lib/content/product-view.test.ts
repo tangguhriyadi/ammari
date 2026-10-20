@@ -86,7 +86,7 @@ describe("buildProductView", () => {
     expect(getPrimaryImage(buildProductView(product))?.id).toBe("img-general");
   });
 
-  test("sized product: availability per colour, in CUTTING_SIZES order, missing sizes read as unavailable", () => {
+  test("sized product: only sizes with an active variant are offered, with stock decided per size", () => {
     const product = baseProduct({
       sizeMode: "sized",
       colors: [{ id: "beige", name: "Beige", hex: null }],
@@ -96,14 +96,42 @@ describe("buildProductView", () => {
       ],
     });
     const view = buildProductView(product);
+    // XS, L and XL have no active variant for this colour, so they are not offered at all.
     expect(view.sizeOptionsByColor?.beige).toEqual([
-      { size: "XS", available: false },
       { size: "S", available: false },
       { size: "M", available: true },
-      { size: "L", available: false },
-      { size: "XL", available: false },
     ]);
     expect(view.allsizeAvailableByColor).toBeNull();
+    expect(view.soldOut).toBe(false);
+  });
+
+  test("sizes follow the size chart's row order, then any other size canonically; recomputed per colour", () => {
+    const product = baseProduct({
+      colors: [
+        { id: "beige", name: "Beige", hex: null },
+        { id: "navy", name: "Navy", hex: null },
+      ],
+      sizeChart: [
+        { size: "L", bustCm: 1, lengthCm: 1, sleeveLengthCm: 1, heightRecommendationMinCm: 1, heightRecommendationMaxCm: 1 },
+        { size: "M", bustCm: 1, lengthCm: 1, sleeveLengthCm: 1, heightRecommendationMinCm: 1, heightRecommendationMaxCm: 1 },
+      ],
+      variants: [
+        { sku: "B-M", fabricColorId: "beige", size: "M", available: true },
+        { sku: "B-L", fabricColorId: "beige", size: "L", available: true },
+        { sku: "B-XS", fabricColorId: "beige", size: "XS", available: true },
+        { sku: "N-M", fabricColorId: "navy", size: "M", available: false },
+      ],
+    });
+    const view = buildProductView(product);
+    expect(view.sizeOptionsByColor?.beige?.map((o) => o.size)).toEqual(["L", "M", "XS"]);
+    expect(view.sizeOptionsByColor?.navy).toEqual([{ size: "M", available: false }]);
+  });
+
+  test("soldOut is true only when no active variant of any colour has stock", () => {
+    const colors = [{ id: "beige", name: "Beige", hex: null }];
+    expect(buildProductView(baseProduct({ colors, variants: [{ sku: "A", fabricColorId: "beige", size: "M", available: false }] })).soldOut).toBe(true);
+    expect(buildProductView(baseProduct({ colors, variants: [] })).soldOut).toBe(true);
+    expect(buildProductView(baseProduct({ colors, variants: [{ sku: "A", fabricColorId: "beige", size: "M", available: true }] })).soldOut).toBe(false);
   });
 
   test("all_size product: no size options, just a per-colour ALLSIZE availability map", () => {

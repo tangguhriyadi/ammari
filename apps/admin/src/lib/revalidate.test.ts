@@ -73,3 +73,41 @@ describe("revalidateHomepage / revalidateProductSlug", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("revalidateProductSlugs", () => {
+  test("deduplicates, posts every product path plus the homepage tag once, and batches by 10 paths", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { revalidateProductSlugs } = await import("./revalidate");
+
+    const slugs = Array.from({ length: 12 }, (_, i) => `produk-${i}`);
+    const result = await revalidateProductSlugs([...slugs, "produk-0", "produk-1"]);
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body).paths).toHaveLength(10);
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({ paths: ["/products/produk-10", "/products/produk-11"], tags: ["storefront:homepage"] });
+  });
+
+  test("makes no request for an empty list, and reports ok:false (never throws) if a batch fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { revalidateProductSlugs } = await import("./revalidate");
+
+    await expect(revalidateProductSlugs([])).resolves.toEqual({ ok: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(revalidateProductSlugs(["a"])).resolves.toEqual({ ok: false });
+  });
+});
+
+describe("revalidateProductSlugs path cap", () => {
+  test("exactly 10 products fit one request; 11 need two (apps/web accepts at most 10 paths)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { revalidateProductSlugs } = await import("./revalidate");
+    await revalidateProductSlugs(Array.from({ length: 10 }, (_, i) => `p-${i}`));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await revalidateProductSlugs(Array.from({ length: 11 }, (_, i) => `q-${i}`));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});

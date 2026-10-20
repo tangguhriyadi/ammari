@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { eq } from "drizzle-orm";
-import { fabricColors, fabrics, productImages, products, productVariants } from "../src/schema";
+import { fabricColors, fabrics, productImages, products, productVariants, stockMovements } from "../src/schema";
 import { getRelatedStorefrontProducts, getStorefrontProductTiles } from "../src/storefront/queries";
 import { withRollback, type TestTx } from "./helpers";
 
@@ -102,6 +102,22 @@ describe("getStorefrontProductTiles", () => {
       const [tile] = await getStorefrontProductTiles([{ productId: fixture.product.id, fabricColorId: null }], tx);
       expect(tile?.image?.storageKey).toBe("x/general");
       expect(tile?.image?.fabricColorId).toBeNull();
+    });
+  });
+
+  test("soldOut is true until some active variant, in any colour, has stock; a pinned tile reads the whole product", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await seedPublishedProduct(tx);
+      const refs = [
+        { productId: fixture.product.id, fabricColorId: null },
+        { productId: fixture.product.id, fabricColorId: fixture.colors[0]!.id },
+      ];
+      expect((await getStorefrontProductTiles(refs, tx)).map((tile) => tile.soldOut)).toEqual([true, true]);
+
+      // Stock for ONE variant (the second colour's) makes the product, and every tile of it, buyable.
+      const [variant] = await tx.select({ sku: productVariants.sku }).from(productVariants).where(eq(productVariants.fabricColorId, fixture.colors[1]!.id));
+      await tx.insert(stockMovements).values({ sku: variant!.sku, qty: 3, valueAmount: 144_000, type: "production", refType: "manual" });
+      expect((await getStorefrontProductTiles(refs, tx)).map((tile) => tile.soldOut)).toEqual([false, false]);
     });
   });
 

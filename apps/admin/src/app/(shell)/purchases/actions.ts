@@ -12,6 +12,7 @@ import { voidAccessoryPurchase } from "@/lib/inventory/accessories";
 import { MAX_LINES, MAX_QTY, closePurchase, createPurchase, updatePurchase, type PurchaseInput } from "@/lib/purchases/queries";
 import { postGoodsReceiptForPurchase, reverseGoodsReceipt } from "@/lib/receipts/queries";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
+import { revalidateStorefrontForSkus, skusForReceipt } from "@/lib/storefront-stock";
 
 // A posted or reversed receipt moves stock: it shows on receipts, every stock view, and the
 // fabric/accessory detail ledgers, not only on the purchase itself.
@@ -143,7 +144,7 @@ export async function closePurchaseAction(input: z.input<typeof closeSchema>): P
 
 const reverseSchema = z.object({ receiptId: z.string().uuid() });
 
-export async function reverseReceiptAction(input: z.input<typeof reverseSchema>): Promise<ActionResult> {
+export async function reverseReceiptAction(input: z.input<typeof reverseSchema>): Promise<ActionResult<{ storefrontOk: boolean }>> {
   const session = await requirePermission("inventory.manage");
   const parsed = reverseSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
@@ -151,7 +152,9 @@ export async function reverseReceiptAction(input: z.input<typeof reverseSchema>)
     await reverseGoodsReceipt(parsed.data.receiptId, session.staffUser.id);
     // Production output receipts are reversed through this same action.
     revalidateAdmin(...RECEIPT_SECTIONS, "/production");
-    return undefined;
+    // Only a production receipt has SKUs (a purchase receipt reverses fabric/accessories: none).
+    const storefront = await revalidateStorefrontForSkus(() => skusForReceipt(parsed.data.receiptId));
+    return { storefrontOk: storefront.ok };
   });
 }
 

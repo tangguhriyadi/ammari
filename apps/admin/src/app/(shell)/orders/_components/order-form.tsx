@@ -12,6 +12,7 @@ import type { ChannelOption } from "@/lib/orders/queries";
 import type { CustomerOption } from "@/lib/customers/queries";
 import { createCustomerAction, createOrderAction, searchCustomersAction } from "../actions";
 import { OrderItemPicker, type OrderLine } from "./order-item-picker";
+import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
 
 type CustomerMode = "none" | "existing" | "new";
 
@@ -108,6 +109,7 @@ export function OrderForm({ channels, variants }: { channels: ChannelOption[]; v
         return;
       }
       toast.success("Pesanan berhasil ditambahkan");
+      if (!result.data.storefrontOk) toast.error(STOREFRONT_STALE_MESSAGE);
       router.push("/orders");
     });
   }

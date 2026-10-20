@@ -26,6 +26,13 @@ export const E2E_OTHER_COLOR_PHOTO_PRODUCT_SLUG = "gamis-foto-warna-lain-e2e";
 export const E2E_PRODUCT_NAME = "Gamis Flowy Straight E2E";
 export const E2E_HOMEPAGE_TITLE = "Koleksi perdana E2E";
 export const E2E_WHY_AMMARI_HEADING = "Nyaman dipakai seharian, tetap syar'i E2E";
+// Stock fixtures: "Stok Sebagian" has Sage S/L out and only M in stock (Mocca: only M, out of
+// stock); "Habis" has no stock at all and sits in the homepage product grid for the tile label.
+export const E2E_PARTIAL_STOCK_PRODUCT_SLUG = "gamis-stok-sebagian-e2e";
+export const E2E_PARTIAL_STOCK_PRODUCT_NAME = "Gamis Stok Sebagian E2E";
+export const E2E_SOLD_OUT_PRODUCT_SLUG = "gamis-habis-e2e";
+export const E2E_SOLD_OUT_PRODUCT_NAME = "Gamis Habis E2E";
+export const E2E_RETURN_POLICY_SUMMARY = "Tukar ukuran gratis dalam 3 hari E2E";
 export const E2E_FEATURE_BLOCK_TITLE = "Outer Dress Tali Depan E2E";
 
 // Session 8 (info pages + store settings) fixtures — info-pages.spec.ts.
@@ -232,6 +239,38 @@ export async function seedStorefrontFixtures(): Promise<void> {
     sortOrder: 0,
   });
 
+  type StockColor = { id: string; name: string };
+  async function seedStockProduct(def: { name: string; code: string; slug: string; variants: { color: StockColor; size: "S" | "M" | "L"; qty: number }[] }) {
+    const [product] = await db
+      .insert(products)
+      .values({ name: def.name, code: def.code, slug: def.slug, fabricId: fallbackFabric!.id, closure: "front_zip", sizeMode: "sized", basePrice: 239_000, isActive: true, isPublishedOnStorefront: true, sizeChartId: sizeChart!.id })
+      .returning();
+    if (!product) throw new Error(`failed to seed e2e stock product ${def.slug}`);
+    for (const v of def.variants) {
+      const sku = `E2E-${def.code}-${v.color.name.slice(0, 3)}-${v.size}`.toUpperCase();
+      await db.insert(productVariants).values({ sku, productId: product.id, fabricId: fallbackFabric!.id, fabricColorId: v.color.id, closure: "front_zip", size: v.size, isActive: true });
+      if (v.qty > 0) await db.insert(stockMovements).values({ sku, qty: v.qty, valueAmount: v.qty * 48_000, type: "production", refType: "manual" });
+    }
+    return product;
+  }
+  await seedStockProduct({
+    name: E2E_PARTIAL_STOCK_PRODUCT_NAME,
+    code: "E2ESEBAGIAN",
+    slug: E2E_PARTIAL_STOCK_PRODUCT_SLUG,
+    variants: [
+      { color: sage, size: "S", qty: 0 },
+      { color: sage, size: "M", qty: 4 },
+      { color: sage, size: "L", qty: 0 },
+      { color: mocca, size: "M", qty: 0 },
+    ],
+  });
+  const soldOutProduct = await seedStockProduct({
+    name: E2E_SOLD_OUT_PRODUCT_NAME,
+    code: "E2EHABIS",
+    slug: E2E_SOLD_OUT_PRODUCT_SLUG,
+    variants: [{ color: sage, size: "M", qty: 0 }],
+  });
+
   // An active-but-UNPUBLISHED product — getStorefrontProductBySlug (and so the page itself) must
   // treat its slug exactly like one that doesn't exist at all: a 404.
   await db.insert(products).values({
@@ -281,6 +320,7 @@ export async function seedStorefrontFixtures(): Promise<void> {
           { productId: productA.id, fabricColorId: null },
           { productId: productA.id, fabricColorId: navy.id },
           { productId: productB.id, fabricColorId: null },
+          { productId: soldOutProduct.id, fabricColorId: null },
         ],
       },
       publishedAt: new Date(),
@@ -327,7 +367,7 @@ export async function seedStorefrontFixtures(): Promise<void> {
       whatsappNumber: E2E_WHATSAPP_NUMBER,
       supportEmail: E2E_SUPPORT_EMAIL,
       businessAddress: E2E_BUSINESS_ADDRESS,
-      returnPolicySummary: "Tukar ukuran gratis dalam 3 hari E2E",
+      returnPolicySummary: E2E_RETURN_POLICY_SUMMARY,
     })
     .where(eq(storeSettings.id, 1));
 

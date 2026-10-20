@@ -15,7 +15,7 @@ test.describe("/ renders the published homepage", () => {
 
     // Product grid
     await expect(page.getByRole("heading", { level: 2, name: E2E_HOMEPAGE_TITLE })).toBeVisible();
-    await expect(page.getByText("3 produk")).toBeVisible();
+    await expect(page.getByText("4 produk")).toBeVisible();
 
     // Kenapa Ammari
     await expect(page.getByRole("heading", { level: 2, name: E2E_WHY_AMMARI_HEADING })).toBeVisible();

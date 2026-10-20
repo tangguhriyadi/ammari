@@ -13,6 +13,7 @@ function tile(overrides: Partial<StorefrontProductTile> = {}): StorefrontProduct
     basePrice: 269_000,
     colorName: "Taupe",
     colorCount: 1,
+    soldOut: false,
     image: null,
     ...overrides,
   };
@@ -55,5 +56,12 @@ describe("ProductTile image fallback", () => {
 
     expect(sourceOf(image)).toBe("/images/product-placeholder-800.webp");
     expect(image).toHaveAttribute("alt", "");
+  });
+
+  test("shows a small 'Sold out' label only when the product has no stock", () => {
+    const { rerender } = render(<ProductTile tile={tile({ soldOut: true })} />);
+    expect(screen.getByText("Sold out")).toBeInTheDocument();
+    rerender(<ProductTile tile={tile({ soldOut: false })} />);
+    expect(screen.queryByText("Sold out")).toBeNull();
   });
 });

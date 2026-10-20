@@ -12,6 +12,7 @@ function tile(overrides: Partial<StorefrontProductTile> = {}): StorefrontProduct
     basePrice: 269_000,
     colorName: "Beige",
     colorCount: 1,
+    soldOut: false,
     image: null,
     ...overrides,
   };

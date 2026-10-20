@@ -13,6 +13,7 @@ const linkedProduct: StorefrontProductTile = {
   basePrice: 269_000,
   colorName: "Taupe",
   colorCount: 1,
+  soldOut: false,
   image: null,
 };
 

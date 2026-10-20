@@ -8,6 +8,7 @@ import { formatNumber } from "@ammari/ui/lib";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import type { listProductSkusForCount } from "@/lib/stock/queries";
 import { saveStockCountAction } from "../actions";
+import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
 
 type SkuRow = Awaited<ReturnType<typeof listProductSkusForCount>>[number];
 
@@ -48,6 +49,7 @@ export function StockCountForm({
       }
       setPhysicalCounts({});
       toast.success("Hitung stok berhasil disimpan");
+      if (!result.data.storefrontOk) toast.error(STOREFRONT_STALE_MESSAGE);
       router.push("/stock");
     });
   }

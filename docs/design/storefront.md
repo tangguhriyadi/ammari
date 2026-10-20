@@ -83,10 +83,10 @@ Mobile order:
 1. **Gallery** — horizontal swipe, scroll-snap, image ratio 2:3 full width, counter "1 / N" bottom-right on a white chip. Images follow the selected colour. Desktop: two columns — left a vertical stack of images (or grid 2-up), right a sticky info column (max ~440 px).
 2. **Name** (Cormorant 30 px) · **price** (17 px / 500, "Rp269.000" format) · one short muted line.
 3. **Colour** — label "Warna: <name>"; 44 px circular swatches with 4 px white inner gap; selected = 1 px ink ring. Changing colour updates gallery and URL (`?color=`), replace not push.
-4. **Size** — label "Ukuran" (+ ": M" when selected) with "Panduan ukuran" link (opens/scrolls to the Ukuran accordion). 5-column grid of 46 px buttons; selected = ink fill, white text; unavailable = struck-through, `disabled`, muted, `aria-label="M, habis"`.
-5. **Primary button** (brand colour): "PILIH UKURAN" (disabled look) until a size is chosen, then "TAMBAH KE KERANJANG". After adding: inline status box "Masuk keranjang: Beige, M · Lihat". (Cart itself is a later session; until then the button can be hidden or route to WhatsApp — decide in session 7 and report.)
+4. **Size** — label "Ukuran" (+ ": M" when selected) with "Panduan ukuran" link (opens/scrolls to the Ukuran accordion). 5-column grid of 46 px buttons; only sizes with an active variant in the selected colour are shown (size chart order); selected = ink fill, white text; no stock = muted grey fill, struck-through, `aria-disabled`, not selectable, `aria-label="Ukuran M habis"`. The "Panduan ukuran" link opens the Ukuran accordion (it holds the size chart), then smooth-scrolls to and focuses the chart heading.
+5. **Primary button** (brand colour; when the selected colour has no stock, or the product has none, a muted disabled "SOLD OUT" replaces it, WhatsApp included when it is the main CTA): "PILIH UKURAN" (disabled look) until a size is chosen, then "TAMBAH KE KERANJANG". After adding: inline status box "Masuk keranjang: Beige, M · Lihat". (Cart itself is a later session; until then the button can be hidden or route to WhatsApp — decide in session 7 and report.)
 6. **Secondary button** — outlined "TANYA VIA WHATSAPP" (prefilled message with product name, colour, size, URL).
-7. **Trust row** — 3 small items: "Pembayaran aman", "Ongkir otomatis saat checkout", store exchange policy (from settings; hide until it exists).
+7. **Trust row** — exactly 3 small items: "Pembayaran Aman", "Gratis Ongkir Ke Seluruh Indonesia", "Proses Cepat". The store return policy summary (settings) is the first paragraph of the "Pengiriman & Pengembalian" accordion instead. Product tiles show a small "Sold out" label when no colour has stock.
 8. **Keunggulan** — eyebrow "KEUNGGULAN"; numbered rows 01–05 (Cormorant numeral in brand colour + 15 px label + the icon for the key), canonical key order, hairline between rows.
 9. **Accordions** (one open at a time, "Deskripsi" open by default; `+`/`−`, `aria-expanded`): **Deskripsi** (sanitized rich text), **Perawatan** (fabric care text), **Ukuran** (size chart table: Ukuran · Lingkar dada · Panjang gamis · Panjang lengan · Rekomendasi tinggi badan; horizontal scroll inside the accordion on small screens; plus all-size fit note when applicable), **Pengiriman & pengembalian** (general text; no origin city).
 10. **"Lengkapi koleksimu"** — 2 related tiles (same tile component as the grid).
@@ -95,7 +95,7 @@ SEO: unique `<title>`/description per product, Open Graph image = first gallery 
 
 ## 7. Cart and checkout (later sessions — see mockups `mockup-cart.png`, `mockup-checkout.png`)
 
-Cart: line items (image 96×144, name, "Warna · Ukuran", line total, qty stepper 1–10, remove ×), subtotal, "Ongkir: Dihitung saat checkout", primary "LANJUT KE CHECKOUT", text link "LANJUT BELANJA".
+Cart: line items (image 96×144, name, "Warna · Ukuran", line total, qty stepper 1–10, remove ×), subtotal, "Ongkir: Gratis" (free shipping nationwide, no shipping line to calculate), primary "LANJUT KE CHECKOUT", text link "LANJUT BELANJA".
 Checkout (single page, numbered sections 1 Kontak · 2 Alamat pengiriman · 3 Pengiriman · 4 Ringkasan) — behaviour decided by the owner:
 - Guest checkout; email + WhatsApp number required; account auto-created (no password) + required consent checkbox (S&K + privacy links).
 - Logged-in: email and phone are LOCKED (read-only card + "Bukan kamu? Keluar"); address shown as a summary card with "UBAH" / "GANTI ALAMAT"; editing offers "Perbarui alamat tersimpan"; orders store an address SNAPSHOT.

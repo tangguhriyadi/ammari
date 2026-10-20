@@ -25,6 +25,16 @@ export function PrimaryButton({ className, disabled, ...props }: ComponentProps<
   );
 }
 
+/** The main CTA when nothing can be bought: same shape as `PrimaryButton`, muted, inert. Both
+ * `disabled` (not clickable, not focusable) and `aria-disabled` (explicit for assistive tech). */
+export function SoldOutButton({ className, ...props }: Omit<ComponentProps<"button">, "disabled" | "children">) {
+  return (
+    <button type="button" disabled aria-disabled="true" className={cn(BASE, "cursor-not-allowed bg-surface text-ink-muted", className)} {...props}>
+      SOLD OUT
+    </button>
+  );
+}
+
 export function OutlineLink({ className, ...props }: ComponentProps<typeof Link>) {
   return <Link {...props} className={cn(BASE, "border border-ink bg-bg text-ink hover:bg-surface", className)} />;
 }

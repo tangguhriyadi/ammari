@@ -27,6 +27,13 @@ vi.mock("@/lib/receipts/production", () => ({
   closeBatchShort: closeBatchShortMock,
 }));
 
+// Receiving also refreshes the storefront (covered in ../storefront-revalidation.test.ts); mocked
+// here so these tests never touch the database or the network for it.
+vi.mock("@/lib/storefront-stock", () => ({
+  revalidateStorefrontForSkus: vi.fn().mockResolvedValue({ ok: true }),
+  skusForBatchLines: vi.fn().mockResolvedValue([]),
+}));
+
 const { createDraftAction, updateDraftAction, deleteDraftAction, postBatchAction, receiveBatchAction, closeBatchAction } = await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
@@ -176,7 +183,7 @@ describe("output receipt actions (S4): inventory.receive receives, inventory.man
         { productionBatchItemId: "11111111-1111-4111-8111-111111111111", qtyAccepted: "" },
       ],
     });
-    expect(result).toEqual({ ok: true, data: { receiptNo: "GR-202610-001" } });
+    expect(result).toEqual({ ok: true, data: { receiptNo: "GR-202610-001", storefrontOk: true } });
     expect(postGoodsReceiptForBatchMock).toHaveBeenCalledWith(
       expect.objectContaining({ lines: [{ productionBatchItemId: NIL_ID, qtyAccepted: 2 }, { productionBatchItemId: "11111111-1111-4111-8111-111111111111", qtyAccepted: 0 }] }),
       "staff-1",
