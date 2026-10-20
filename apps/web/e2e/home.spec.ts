@@ -67,4 +67,27 @@ test.describe("/ renders the published homepage", () => {
     const pinnedTile = page.getByRole("link", { name: /Navy E2E/ });
     await expect(pinnedTile).toHaveAttribute("href", /\/products\/gamis-flowy-straight-e2e\?color=/);
   });
+
+  test("the feature block image links to the same product as its button, with one link in the tab order, at 390px and 1280px", async ({ page }) => {
+    for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/");
+      const section = page.locator("section").filter({ has: page.getByRole("heading", { level: 3, name: E2E_FEATURE_BLOCK_TITLE }) });
+      const button = section.getByRole("link", { name: "LIHAT" });
+      const imageLink = section.getByTestId("feature-block-image-link");
+
+      // Exactly one accessible link in the block; the image overlay is hidden from the a11y tree
+      // and skipped by Tab.
+      await expect(section.getByRole("link")).toHaveCount(1);
+      await expect(imageLink).toHaveAttribute("tabindex", "-1");
+      await expect(imageLink).toHaveCSS("cursor", "pointer");
+
+      const href = await button.getAttribute("href");
+      expect(href).toMatch(/\/products\/outer-dress-tali-depan-e2e/);
+      await expect(imageLink).toHaveAttribute("href", href!);
+
+      await imageLink.click();
+      await expect(page).toHaveURL(new RegExp(`${href!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+    }
+  });
 });
