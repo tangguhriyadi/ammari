@@ -14,7 +14,8 @@ import {
   listReceiptsForPurchase,
   type PurchaseReceiptRow,
 } from "@/lib/receipts/queries";
-import { getDefectBalance, listDefectMovementsForPurchase, stripDefectMovementAmounts, type DefectBalance } from "@/lib/defects/queries";
+import { getLineDefectTotals, listDefectMovementsForPurchase, stripDefectMovementAmounts } from "@/lib/defects/queries";
+import type { LineDefectTotals } from "@/lib/defects/valuation";
 import { purchaseVariance, summarizeDefectValues, type PurchaseVariance } from "@/lib/defects/variance";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { ClosePurchaseButton } from "../_components/close-purchase-button";
@@ -62,14 +63,11 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
   // Defect actions (inventory.manage, D10) on every line still holding defect stock.
   const actionableLines = canManage ? document.lines.filter((line) => line.defectHeld > 0) : [];
   // Cost data: queried only for finance.view_profit (the disposal preview and the §4.3 panel).
-  const [pools, variance] = canViewProfit
+  const [lineTotals, variance] = canViewProfit
     ? await Promise.all([
         Promise.all(
-          actionableLines.map(async (line) => [
-            line.id,
-            await getDefectBalance(line.itemType === "fabric" ? { kind: "fabric", fabricId: line.itemId } : { kind: "accessory", accessoryId: line.itemId }),
-          ] as const),
-        ).then((entries) => new Map<string, DefectBalance>(entries)),
+          actionableLines.map(async (line) => [line.id, await getLineDefectTotals({ purchaseItemId: line.id })] as const),
+        ).then((entries) => new Map<string, LineDefectTotals>(entries)),
         getSellableReceiptValueForPurchase(document.id).then((sellableValue): PurchaseVariance | null => {
           const defects = summarizeDefectValues(defectRowsRaw);
           return defects
@@ -82,7 +80,7 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
             : null;
         }),
       ])
-    : [new Map<string, DefectBalance>(), null];
+    : [new Map<string, LineDefectTotals>(), null];
 
   return (
     <>
@@ -176,7 +174,7 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
                       itemLabel={line.itemName}
                       maxQty={line.defectHeld}
                       isFabric={line.itemType === "fabric"}
-                      pool={pools.get(line.id) ?? null}
+                      lineTotals={lineTotals.get(line.id) ?? null}
                     />
                   </div>
                 ) : null

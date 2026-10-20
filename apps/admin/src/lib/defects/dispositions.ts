@@ -1,5 +1,5 @@
 import "server-only";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
   accessories,
   DEFECT_DISPOSAL_TYPES,
@@ -19,7 +19,6 @@ import {
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { lockAccessoryForUpdate, lockFabricForUpdate } from "@/lib/inventory/db";
-import { valueDeltaForConsumption } from "@/lib/inventory/moving-average";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { lockProductionBatchForUpdate } from "@/lib/production/db";
 import { batchStatusAfterReceiptChange } from "@/lib/production/receipt-status";
@@ -29,7 +28,8 @@ import { getBatchLineProgress, getBatchQuantitiesByLine } from "@/lib/receipts/p
 import { toCentiQty } from "@/lib/receipts/valuation";
 import { lockVariantForUpdate } from "@/lib/stock/db";
 import { DEFECT_MOVEMENT_TYPE_LABELS } from "./labels";
-import { getDefectBalance, type DefectItemRef, type DefectSourceLine } from "./queries";
+import { getLineDefectTotals, type DefectItemRef, type DefectSourceLine } from "./queries";
+import { lineOutflowValue } from "./valuation";
 
 // Defect dispositions (docs/plans/suppliers-goods-receipt.md §5, D15/D16/D18/D24/D29, session S6):
 // returning defects to the supplier/tailor for a replacement, releasing them ("Pelepasan": Lelang,
@@ -40,11 +40,13 @@ import { getDefectBalance, type DefectItemRef, type DefectSourceLine } from "./q
 // production_batches, the same lock every receipt and receipt reversal takes, so a disposition can
 // never interleave with a receipt or with reverseRejectsInTx's "no live disposition" check), then
 // the ITEM row (fabric / accessory / variant, the same lock the sellable path takes), and only then
-// reads the line's held quantity and the item's defect pool.
+// reads the line's held quantity and defect value.
 //
-// Valuation (§4.2): an outflow is valued at the item's pooled defect average through
-// valueDeltaForConsumption, so a pool that reaches 0 pcs is exactly Rp 0. Proceeds are stored on
-// the row, never netted into value_amount and never booked anywhere (D24).
+// Valuation (§4.2, §10 R1): an outflow is valued at its SOURCE LINE's own defect value
+// (lineOutflowValue, cumulative rounding over the line's net rejects), never at the item's pooled
+// average, so a line that reaches 0 held is exactly Rp 0 and no value moves between documents of
+// the same item bought or made at different costs. The item pool is just the sum of its lines.
+// Proceeds are stored on the row, never netted into value_amount and never booked anywhere (D24).
 
 /** Same cap the server actions apply, re-checked here for any other caller. */
 const MAX_TEXT = 1000;
@@ -130,22 +132,6 @@ async function lockSourceLine(tx: Tx, source: DefectSourceLine): Promise<LockedL
   };
 }
 
-function sourceCondition(source: DefectSourceLine) {
-  return "purchaseItemId" in source
-    ? eq(defectMovements.purchaseItemId, source.purchaseItemId)
-    : eq(defectMovements.productionBatchItemId, source.productionBatchItemId);
-}
-
-/** §4.2 stillHeld(line) = rejected − returned − disposed, all net of reversals: simply SUM(qty)
- * over every defect row naming the line. Read under the document + item locks. */
-async function heldOnLine(tx: Database, source: DefectSourceLine): Promise<number> {
-  const [row] = await tx
-    .select({ qty: sql<string>`coalesce(sum(${defectMovements.qty}), 0)` })
-    .from(defectMovements)
-    .where(sourceCondition(source));
-  return Number(row?.qty ?? 0);
-}
-
 /** Outstanding (qty_ordered / planned − qtySettled) on the line, in centi-units. */
 async function outstandingCentiOnLine(tx: Database, line: LockedLine): Promise<bigint> {
   if (line.document.kind === "purchase") {
@@ -172,8 +158,8 @@ function assertDispositionQty(qty: number, item: DefectItemRef): void {
   if (item.kind !== "fabric" && !Number.isInteger(qty)) throw new FieldError("qty", "Jumlah harus bilangan bulat.");
 }
 
-/** The shared outflow write: refuse more than the line still holds, value it at the pool average,
- * insert one negative row. Caller holds the document + item locks. */
+/** The shared outflow write: refuse more than the line still holds, value it at the line's own
+ * defect value (§10 R1), insert one negative row. Caller holds the document + item locks. */
 async function insertOutflow(
   tx: Tx,
   line: LockedLine,
@@ -188,8 +174,10 @@ async function insertOutflow(
   actorStaffUserId: string,
 ) {
   assertDispositionQty(params.qty, line.item);
-  const held = await heldOnLine(tx, line.source);
-  if (toCentiQty(params.qty) > toCentiQty(held)) {
+  const totals = await getLineDefectTotals(line.source, tx);
+  const heldCenti = toCentiQty(totals.rejectedQty) - toCentiQty(totals.outQty);
+  const held = Number(heldCenti) / 100;
+  if (toCentiQty(params.qty) > heldCenti) {
     throw new FieldError(
       "qty",
       held <= 0
@@ -197,11 +185,8 @@ async function insertOutflow(
         : `Jumlah melebihi stok cacat ${line.label} dari dokumen ini. Stok cacat tersedia: ${line.formatQty(held)}.`,
     );
   }
-  const pool = await getDefectBalance(line.item, tx);
-  // Backstop: the pool is the sum over every line's held quantity, so it can't be smaller.
-  if (toCentiQty(pool.qty) < toCentiQty(params.qty)) throw new Error("defect pool is smaller than a line's held quantity");
   const qtyDelta = -Number(toCentiQty(params.qty)) / 100;
-  const valueAmount = valueDeltaForConsumption(pool, qtyDelta);
+  const valueAmount = -lineOutflowValue(totals, params.qty);
 
   const [movement] = await tx
     .insert(defectMovements)
@@ -239,7 +224,8 @@ export type DocumentStatus = PurchaseStatus | ProductionReceiptStatus;
 /** §5 `returnDefectsToSupplier` ("Kembalikan ke supplier", D15/D16/D18):
  * 1. lock the document row, then the item row;
  * 2. require 0 < qty ≤ stillHeld(line) and a non-blank reason;
- * 3. insert one 'return_out' row (qty negative, value at the defect pool's average);
+ * 3. insert one 'return_out' row (qty negative, valued at the line's own defect value, §10 R1),
+ *    so the replacement receipt's slice enters sellable stock at this line's price;
  * 4. qtySettled drops by qty, so outstanding grows by EXACTLY qty: the replacement then arrives
  *    through the normal receipt flow on the same document and can complete it;
  * 5. a closed/cancelled document is re-opened to partially_received (the only path that re-opens
@@ -326,7 +312,7 @@ export function validateDisposal(disposalType: DefectDisposalType, proceedsAmoun
 
 /** §5 `disposeDefects` ("Pelepasan barang cacat", D24/D29): same locks and checks as a return, a
  * required note and date, the proceeds rule above; inserts one 'dispose' row (qty negative, value
- * at the pool average, disposal_type + proceeds_amount). NO change to qtySettled, outstanding or
+ * at the line's own defect value, disposal_type + proceeds_amount). NO change to qtySettled, outstanding or
  * status: releasing is the owner accepting the shortfall, never room for a replacement. No journal
  * entry anywhere — the proceeds are stored for a future accounting module. One audit entry. */
 export async function disposeDefects(input: DisposeDefectsInput, actorStaffUserId: string, db: Database = defaultDb) {

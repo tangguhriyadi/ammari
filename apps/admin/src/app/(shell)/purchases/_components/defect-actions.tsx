@@ -6,7 +6,7 @@ import { Button, Dialog, Input, Label, Textarea, useToast } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import type { DefectDisposalType } from "@ammari/db/schema";
 import { DEFECT_DISPOSAL_TYPE_LABELS } from "@/lib/defects/labels";
-import { valueDeltaForConsumption } from "@/lib/inventory/moving-average";
+import { lineOutflowValue, type LineDefectTotals } from "@/lib/defects/valuation";
 import { parseRupiah } from "@/lib/products/money";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { disposeDefectsAction, returnDefectsAction, reverseDefectMovementAction } from "../../stock/defects/actions";
@@ -44,6 +44,16 @@ function parseQty(raw: string, maxQty: number, isFabric: boolean): { qty: number
   if (!isFabric && !Number.isInteger(qty)) return { error: "Jumlah harus bilangan bulat." };
   if (Math.round(qty * 100) > Math.round(maxQty * 100)) return { error: `Jumlah melebihi stok cacat tersedia (${formatQty(maxQty, isFabric)}).` };
   return { qty };
+}
+
+/** The server's valuation, for the preview only; null when the totals read for the page no longer
+ * cover the quantity (the server re-checks and refuses). */
+function previewOutflowValue(totals: LineDefectTotals, qty: number): number | null {
+  try {
+    return lineOutflowValue(totals, qty);
+  } catch {
+    return null;
+  }
 }
 
 function ErrorText({ error }: { error: string | null }) {
@@ -155,10 +165,11 @@ export function DisposeDefectsButton({
   itemLabel,
   maxQty,
   isFabric,
-  pool,
+  lineTotals,
 }: LineProps & {
-  /** The item's pooled defect balance, for the live value preview; null without finance.view_profit. */
-  pool: { qty: number; valueAmount: number } | null;
+  /** This line's own defect totals, for the live value preview (a release is valued at its source
+   * line, §10 R1); null without finance.view_profit. */
+  lineTotals: LineDefectTotals | null;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -174,7 +185,7 @@ export function DisposeDefectsButton({
   const idPrefix = `dispose-${useId()}`;
 
   const parsedQty = parseQty(qty, maxQty, isFabric);
-  const releasedValue = pool && "qty" in parsedQty ? -valueDeltaForConsumption(pool, -parsedQty.qty) : null;
+  const releasedValue = lineTotals && "qty" in parsedQty ? previewOutflowValue(lineTotals, parsedQty.qty) : null;
   const proceedsAmount = disposalType === "auction" ? (parseRupiah(proceeds) ?? 0) : 0;
   const netLoss = releasedValue !== null ? releasedValue - proceedsAmount : null;
 

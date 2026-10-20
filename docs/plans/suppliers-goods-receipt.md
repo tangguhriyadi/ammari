@@ -3,8 +3,8 @@
 Status (2026-10-20): **Complete.** S1–S6 shipped (commits `2bc3ce7`, `402e4a3`, `244eee0`,
 `eb22b48`, `6a8246f`, `33d1ded`; migrations 0022–0027). **S7 implemented** (no migration: the
 `/receipts` list, ledger links, review sweep, release notes in `docs/deploy-prod.md` §13), awaiting
-the owner's review and commit. All decisions are recorded in §2 (D1–D29); two review findings
-(R1, R2) await an owner decision (§10).
+the owner's review and commit. All decisions are recorded in §2 (D1–D29); review finding R1 is
+resolved (dispositions valued per source line, 2026-10-20) and R2 awaits an owner decision (§10).
 
 Three linked changes:
 
@@ -109,7 +109,7 @@ them. Everything here is settled; nothing is open.
 | D20 | **HPP is never rewritten** **[owner Q2, retained]**. The frozen `unit_cost_amount` stands; defects and releases are shown as read-only variance on the document, computed from the **net loss** (defect value released minus proceeds) — §4.3. |
 | D21 | **Receipt date defaults to today (Jakarta), backdatable; the receiver is the logged-in staff user, plus an optional free-text "Diterima oleh" [owner Q3].** |
 | D22 | **Received quantity is immediately sellable [owner Q4]** — no extra gate. Unreceived quantity simply isn't in stock, and the existing "stok tidak cukup" check already refuses it. |
-| D23 | **Defect stock is pooled per item [owner N1]**, and every movement names its source line, so "which order or batch did these defects come from" stays answerable while only the *value* average is pooled — consistent with every other balance in this system. No lot-level defect costing. |
+| D23 | **Defect stock is pooled per item [owner N1]**, and every movement names its source line, so "which order or batch did these defects come from" stays answerable. The pooled balance is what the stock views show; **outflows are valued per source line, not at the pooled average** (owner decision on review finding R1, 2026-10-20, §10), so no value moves between documents. No lot-level costing beyond the source line. |
 | D24 | **Releasing a defect (`dispose`) has three types [owner N2, extended by D29]**: **Lelang** (auction — `proceeds_amount` entered by hand, required, **> 0**), **Hibah** (donation — proceeds fixed at **Rp 0**) and **Dibuang/Dimusnahkan** (discarded — proceeds fixed at **Rp 0**, D29). All need a date (`occurred_at`, defaults today, backdatable) and required free-text notes; `disposal_type` carries the category, so there is no separate closed-set reason. All three remove quantity *and* value from the defect pool through the defect ledger, with an audit entry and the same reversing-entry rule as everything else (D8). `proceeds_amount` is **stored but not booked** — no journal entries, no accounting module in this plan; it is persisted precisely so a future double-entry module can book it as other income. Proceeds mean **gross cash actually received** (what reached her hand or account), with no fee breakdown, since there is no expense module to tie fees to yet. |
 | D25 | **Regrading a defect into sellable stock is out of scope [owner N2]**, and deliberately unreachable today (the two ledgers are separate tables, so no manual adjustment can do it). The future shape is recorded in §3.5 so nobody improvises it: one new `DEFECT_MOVEMENT_TYPES` value that moves quantity and value out of the defect pool and inserts a matching sellable `adjustment` in the same transaction. |
 | D26 | **No Overview dashboard tile for defect stock now [owner N3]**, so nobody adds one ad hoc mid-session. SPEC §6 is untouched by this plan. |
@@ -370,14 +370,26 @@ accurate, not less**: a purchase at a new price now moves it as goods actually a
 rejected units are valued into the *defect* pool instead, **rejects never pollute the sellable
 average that feeds HPP** — the single most important consequence of D14.
 
-`return_out` and `dispose` are outflows from the defect pool, valued through
-`valueDeltaForConsumption` at the defect pool's own average — so when an item's defect balance
-returns to 0 its defect value is exactly 0, with any rounding residual absorbed by the movement
-that zeroes it. A `dispose` row's `proceeds_amount` plays no part in that valuation: the ledger
-records what *cost* left the pool, and the proceeds are separate cash (D24). The per-document
+`return_out` and `dispose` are outflows valued at their **source line's own** defect value, never
+at the item's pooled average (§10 R1, owner decision 2026-10-20; `lib/defects/valuation.ts`
+`lineOutflowValue`). Per line, with the line's net rejects (R qty, R value) and its net outflows so
+far (O qty, O value), each net of its own reversals:
+
+```
+outflow(q) = R value − O value                                     if q = R qty − O qty (empties the line)
+           = roundHalfUp(R value × (O qty + q) / R qty) − O value   otherwise, clamped to [0, held value]
+```
+
+the same cumulative-rounding shape as a receipt slice: a line's outflows sum to **exactly** its
+reject value however many steps it takes, a reversal (exact negation) is absorbed by the next
+outflow, and a line at 0 held is at Rp 0. The item pool is just the sum of its lines, so it is
+exactly 0 at 0 qty too. A `return_out` valued this way is what makes the replacement right: the
+slice's `valueBefore` adds the line's defect rows, so the replacement enters sellable stock at
+that line's price. A `dispose` row's `proceeds_amount` plays no part in that valuation: the ledger
+records what *cost* left defect stock, and the proceeds are separate cash (D24). The per-document
 figures in §4.3 are read from that document's own rows' `value_amount`/`proceeds_amount` (exact per
-row); only the *pooled* defect balance averages across documents, which is what moving average
-means everywhere else in this system.
+row), and the release dialog's live preview uses the same per-line rule; only the stock views show
+the pooled per-item balance.
 
 For a **production** receipt, both the accepted and the rejected units are valued at the batch
 line's frozen `unit_cost_amount` — they cost the same to make.
@@ -475,8 +487,7 @@ row per rejected part at the same unit cost. Updates `receipt_status`, not `stat
 
 **`returnDefectsToSupplier(sourceLineId, qty, reason, actor)`** (`inventory.manage`) — lock the
 document row, then the item row; require `qty ≤ stillHeld(line)`; insert one `defect_movements`
-row (`type='return_out'`, `qty` negative, `value_amount` via `valueDeltaForConsumption` on the
-defect pool); recompute `qtySettled`/`outstanding`/status — **and if the document was `closed` or
+row (`type='return_out'`, `qty` negative, `value_amount` at the line's own defect value, §4.2); recompute `qtySettled`/`outstanding`/status — **and if the document was `closed` or
 `cancelled`, re-open it to `partially_received`**, stamping the reopen columns (D18); one audit
 entry.
 
@@ -485,7 +496,7 @@ entry.
 row; require `qty ≤ stillHeld(line)`, a non-blank `note`, and `proceedsAmount > 0` for `auction` /
 `= 0` for `donation` (validated in the action's Zod schema *and* re-checked server-side, with the
 DB CHECKs as the backstop); insert one `defect_movements` row (`type='dispose'`, `qty` negative,
-`value_amount` via `valueDeltaForConsumption` on the defect pool, plus `disposal_type` and
+`value_amount` at the line's own defect value (§4.2), plus `disposal_type` and
 `proceeds_amount`); **no** change to `qtySettled`, `outstanding` or status — releasing is the owner
 accepting the shortfall, not creating room for a replacement; one audit entry recording the
 proceeds. No journal entry is written anywhere (D24).
@@ -834,18 +845,60 @@ CLAUDE.md). If sessions are reordered, renumber — nothing in the plan depends 
 ## 10. Still open
 
 Two findings from the S7 review sweep (database-reviewer), both about rules this plan set, so
-they are recorded here for an owner decision rather than changed in S7:
+they were recorded here for an owner decision rather than changed in S7. R1 is now resolved; R2
+is still open:
 
-- **R1, a return re-prices the replacement through the pooled average.** A `return_out` is valued
-  at the item's pooled defect average (§4.2, D23), and the slice's `valueBefore` subtracts that
-  value (S5 note (b)). When two purchase lines of the same item carry defects at different
-  costs, the replacement on the returning line is valued with the other line's cost mixed in.
-  Confirmed in a rolled-back probe: line A (10 yd, Rp 1.000: 5 good, 5 defect) and line B
-  (10 yd, Rp 200: 5 good, 5 defect); returning A's 5 is booked at Rp 300 (pool average), so A's
-  5-yd replacement enters sellable stock at Rp 300 instead of Rp 500, and B's 5 defect yards are
-  left holding Rp 300 instead of Rp 100. Totals still reconcile; value moves between documents
-  and into the sellable average. Options: value a `return_out` at the returning line's own net
-  reject value (per-line, not pooled, for returns only), or accept it as the price of D23.
+- **R1, a return re-priced the replacement through the pooled average. Resolved 2026-10-20**
+  (owner decision: value every disposition at its own source line). A `return_out` used to be
+  valued at the item's pooled defect average, and the slice's `valueBefore` subtracts that value
+  (S5 note (b)), so with line A (10 yd, Rp 1.000: 5 good, 5 defect) and line B (10 yd, Rp 200:
+  5 good, 5 defect) of one fabric, returning A's 5 was booked at Rp 300, A's replacement entered
+  sellable stock at Rp 300 instead of Rp 500, and B's 5 defect yards were left holding Rp 300
+  instead of Rp 100. Now every `return_out` and `dispose` is valued at its source line's own
+  defect value by cumulative rounding (§4.2, `lib/defects/valuation.ts`), so the return books Rp
+  500, the replacement enters at Rp 500 and B keeps Rp 100. No migration: each defect row already
+  names its source line, and the rule is a read of that line's rows under the locks the writes
+  already take. The pooled per-item balance stays as the stock views' figure; the per-document
+  panels were already per-row and now read per-line values; the release dialog's preview switched
+  from the pool to the line. Reversals are unchanged (exact copy-and-negate). Tests:
+  `lib/defects/valuation.test.ts` and the "per-source-line valuation (§10 R1)" block in
+  `lib/defects/dispositions.test.ts` (the exact scenario above, partial returns over several steps,
+  a release after a partial return, reversals, accessories, production SKUs).
+  **Rows written before the fix** are not rewritten (the ledger is append-only). Prod has no
+  defect data. On a database where an item had defects held on two source lines at different
+  unit values and one of them was returned or released before this fix, that row's value is off
+  the line rule; the new rule absorbs any such drift on the line's next outflow that empties it
+  (it takes exactly what the line still holds) and clamps a partial outflow to [0, held], so it
+  never compounds. What it cannot fix is a replacement receipt already booked at the old value
+  (it is in the sellable moving average). To check a database, run the read-only query below; if
+  it returns rows, the remedy is "Batalkan" and redo the affected return/release where the app
+  still allows it (a return whose replacement already arrived cannot be reversed), otherwise
+  accept the few-rupiah drift. Nothing is run automatically. The query ignores a 1-rupiah
+  difference: a line written after the fix can sit that far off the cumulative target after a
+  reversal of a middle outflow, until its next outflow absorbs it; a line with several such
+  reversals can be listed as a false positive, so check its rows before acting.
+
+  ```sql
+  -- Read-only: source lines whose outflows are off the per-line rule (pre-fix rows).
+  with m as (
+    select d.*, coalesce(r.type, d.type) as category
+    from defect_movements d left join defect_movements r on r.id = d.reverses_movement_id
+  ), line as (
+    select coalesce(purchase_item_id, production_batch_item_id) as line_id, item_kind,
+           coalesce(sku, fabric_id::text, accessory_id::text) as item,
+           sum(qty) filter (where category = 'reject') as rejected_qty,
+           sum(value_amount) filter (where category = 'reject') as rejected_value,
+           coalesce(-sum(qty) filter (where category <> 'reject'), 0) as out_qty,
+           coalesce(-sum(value_amount) filter (where category <> 'reject'), 0) as out_value
+    from m group by 1, 2, 3
+  )
+  select *, rejected_value - out_value as held_value,
+         round(rejected_value * out_qty / nullif(rejected_qty, 0)) as expected_out_value
+  from line
+  where out_qty > 0 and abs(out_value - round(rejected_value * out_qty / nullif(rejected_qty, 0))) > 1
+  order by item, line_id;
+  ```
+
 - **R2, "later movement" checks use `created_at` (transaction start).** Receipt reversal refuses
   when a consumption/sale/adjustment happened after the receipt, judged by `created_at`
   (`hasLaterBlockingMovement`, `hasLaterBlockingStockMovement`, and the legacy void path). A

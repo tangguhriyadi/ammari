@@ -4,7 +4,8 @@ import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getBatchDetail, getBatchExtraCosts, listEligibleSkusForFabric } from "@/lib/production/queries";
 import { getBatchReceiptSummary, listReceiptsForBatch } from "@/lib/receipts/production";
-import { getDefectBalance, heldDefectValue, listDefectMovementsForBatch, stripDefectMovementAmounts, type DefectBalance } from "@/lib/defects/queries";
+import { getLineDefectTotals, heldDefectValue, listDefectMovementsForBatch, stripDefectMovementAmounts } from "@/lib/defects/queries";
+import type { LineDefectTotals } from "@/lib/defects/valuation";
 import { listActiveCostComponents } from "@/lib/production/cost-components";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
@@ -62,8 +63,10 @@ async function PostedView({
   const defectRows = stripDefectMovementAmounts(defectRowsRaw, canViewProfit);
   const canManage = permissionKeys.includes("inventory.manage");
   // Cost data (the disposal dialog's live value preview): only for finance.view_profit.
-  const heldSkus = canManage && canViewProfit ? [...new Set(summary.lines.filter((line) => line.defectHeld > 0).map((line) => line.sku))] : [];
-  const pools = new Map<string, DefectBalance>(await Promise.all(heldSkus.map(async (sku) => [sku, await getDefectBalance({ kind: "sku", sku })] as const)));
+  const heldLineIds = canManage && canViewProfit ? summary.lines.filter((line) => line.defectHeld > 0).map((line) => line.id) : [];
+  const lineTotals = new Map<string, LineDefectTotals>(
+    await Promise.all(heldLineIds.map(async (id) => [id, await getLineDefectTotals({ productionBatchItemId: id })] as const)),
+  );
 
   return (
     <>
@@ -79,7 +82,7 @@ async function PostedView({
           // which this page already required.
           canReceive={permissionKeys.includes("inventory.receive")}
           canManage={canManage}
-          pools={pools}
+          lineTotals={lineTotals}
         />
       </div>
       {canViewProfit && (

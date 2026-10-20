@@ -23,6 +23,7 @@ import {
 import { ActionError } from "@/lib/errors";
 import { defaultDb, type Database, type Tx } from "@/lib/db";
 import { toCentiQty } from "@/lib/receipts/valuation";
+import type { LineDefectTotals } from "./valuation";
 
 // The defect ledger (docs/plans/suppliers-goods-receipt.md §3.5, D14/D23, session S5): balances,
 // the per-line settled reader the receipt paths use, the reject write and its reversal, and the
@@ -61,6 +62,31 @@ function itemColumns(item: DefectItemRef) {
 
 function itemKey(item: DefectItemRef): string {
   return item.kind === "sku" ? `sku:${item.sku}` : item.kind === "fabric" ? `fabric:${item.fabricId}` : `accessory:${item.accessoryId}`;
+}
+
+/** The line's net rejects and net outflows (each net of its own reversals, a reversal attributed
+ * to the type of the row it reverses). stillHeld(line) = rejectedQty − outQty, i.e. SUM(qty) over
+ * every defect row naming the line (§4.2). A write that decides on it must hold the document +
+ * item locks; the document pages read it unlocked for the release dialog's preview (§10 R1). */
+export async function getLineDefectTotals(source: DefectSourceLine, db: Database = defaultDb): Promise<LineDefectTotals> {
+  const reversed = alias(defectMovements, "reversed");
+  const category = sql`coalesce(${reversed.type}, ${defectMovements.type})`;
+  const [row] = await db
+    .select({
+      rejectedQty: sql<string>`coalesce(sum(${defectMovements.qty}) filter (where ${category} = 'reject'), 0)`,
+      rejectedValue: sql<string>`coalesce(sum(${defectMovements.valueAmount}) filter (where ${category} = 'reject'), 0)::bigint`,
+      outQty: sql<string>`coalesce(-sum(${defectMovements.qty}) filter (where ${category} <> 'reject'), 0)`,
+      outValue: sql<string>`coalesce(-sum(${defectMovements.valueAmount}) filter (where ${category} <> 'reject'), 0)::bigint`,
+    })
+    .from(defectMovements)
+    .leftJoin(reversed, eq(reversed.id, defectMovements.reversesMovementId))
+    .where("purchaseItemId" in source ? eq(defectMovements.purchaseItemId, source.purchaseItemId) : eq(defectMovements.productionBatchItemId, source.productionBatchItemId));
+  return {
+    rejectedQty: Number(row?.rejectedQty ?? 0),
+    rejectedValue: Number(row?.rejectedValue ?? 0),
+    outQty: Number(row?.outQty ?? 0),
+    outValue: Number(row?.outValue ?? 0),
+  };
 }
 
 /** An item's pooled defect stock: SUM(qty) / SUM(value_amount) over its ledger (D23), never a

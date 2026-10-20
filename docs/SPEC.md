@@ -333,8 +333,13 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   `accessory_id`, always naming its source purchase line or batch line). A separate table on
   purpose: defect stock can never be sold, ordered, packed, shown as available on the main site,
   or counted as sellable, because none of those paths reads this table. Balance and value per
-  item are `SUM(qty)` / `SUM(value_amount)` (its own moving-average pool, never mixed into the
-  sellable average or HPP). Types: `reject` (written by a receipt, 1:1 with `qty_rejected`),
+  item are `SUM(qty)` / `SUM(value_amount)` (shown pooled per item, never mixed into the sellable
+  average or HPP), but every outflow is valued at its **source line's own** defect value, never
+  at the item's pooled average: a `return_out` or `dispose` takes its share of the line's net
+  reject value by cumulative rounding over the line's net rejects (the same shape as a receipt slice), and the
+  outflow that empties a line takes exactly what that line still holds, so a line's
+  dispositions sum to exactly its reject value and no value moves between two purchases or
+  batches of the same item at different costs. Types: `reject` (written by a receipt, 1:1 with `qty_rejected`),
   `return_out` and `dispose` (exchange and release, S6), and `reversal` (exact negation, never an
   edit; a DB trigger makes rows immutable except for the reversal stamp). A release (`dispose`)
   carries `disposal_type` — `auction` (Lelang, proceeds > 0), `donation` (Hibah, Rp 0) or
@@ -353,9 +358,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   document row first and then the item row):
   - **Return to supplier/tailor** ("Kembalikan ke supplier" / "Kembalikan ke penjahit"):
     quantity (at most what the line still holds), date, required reason. The units leave defect
-    stock at the pool's average value and re-open exactly that much outstanding on the line; the
-    replacement arrives through the normal receipt on the same document, which can then reach
-    `received`. A return against a **closed or cancelled** document (or a short-closed batch)
+    stock at that line's own defect value and re-open exactly that much outstanding on the line;
+    the replacement arrives through the normal receipt on the same document, at that line's
+    price, and the document can then reach `received`. A return against a **closed or cancelled** document (or a short-closed batch)
     re-opens it to `partially_received`, stamping `reopened_at` / `reopened_by_staff_user_id` /
     `reopen_reason` (the return reason), with a "Dibuka kembali" badge; the last close record is
     kept. No other action re-opens a document.

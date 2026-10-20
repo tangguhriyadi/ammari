@@ -5,7 +5,7 @@ import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import type { DocumentDefectMovementRow } from "@/lib/defects/queries";
 import { isOpenBatchReceiptStatus } from "@/lib/production/receipt-status";
 import type { BatchReceiptLine, BatchReceiptRow, BatchReceiptSummary } from "@/lib/receipts/production";
-import type { DefectBalance } from "@/lib/defects/queries";
+import type { LineDefectTotals } from "@/lib/defects/valuation";
 import { DefectHistory } from "../../purchases/_components/defect-history";
 import { DisposeDefectsButton, ReturnDefectsButton } from "../../purchases/_components/defect-actions";
 import { ReverseReceiptButton } from "../../purchases/_components/reverse-receipt-button";
@@ -33,7 +33,7 @@ export function BatchOutputSection({
   defectValue,
   canReceive,
   canManage,
-  pools,
+  lineTotals,
 }: {
   batchId: string;
   summary: BatchReceiptSummary;
@@ -44,8 +44,9 @@ export function BatchOutputSection({
   defectValue: number | null;
   canReceive: boolean;
   canManage: boolean;
-  /** Each held SKU's pooled defect balance (disposal preview); empty without finance.view_profit. */
-  pools: ReadonlyMap<string, DefectBalance>;
+  /** Each holding line's own defect totals, by batch line id (disposal preview, §10 R1); empty
+   * without finance.view_profit. */
+  lineTotals: ReadonlyMap<string, LineDefectTotals>;
 }) {
   const isOpen = isOpenBatchReceiptStatus(summary.receiptStatus);
   // Open but fully settled (some of it as defects): nothing left to receive, only to close.
@@ -119,7 +120,7 @@ export function BatchOutputSection({
                       itemLabel={variantLabel(line)}
                       maxQty={line.defectHeld}
                       isFabric={false}
-                      pool={pools.get(line.sku) ?? null}
+                      lineTotals={lineTotals.get(line.id) ?? null}
                     />
                   </div>
                 ) : null

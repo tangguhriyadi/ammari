@@ -14,6 +14,7 @@ import { currentBalanceForSkuLocked } from "@/lib/stock/queries";
 import { disposeDefects, returnDefectsToSupplier, reverseDefectMovement, validateDisposal } from "./dispositions";
 import {
   getDefectBalance,
+  getLineDefectTotals,
   getDefectQtyByAccessory,
   getDefectQtyByFabric,
   getDefectQtyBySku,
@@ -604,6 +605,186 @@ describe("guards (review follow-up)", () => {
       await reverseDefectMovement(movement.id, staff.id, tx);
       expect(await getDefectBalance({ kind: "sku", sku: variantA.sku }, tx)).toEqual({ qty: 2, valueAmount: 400_000 });
       expect((await getBatchReceiptSummary(batch.id, tx))!.lines.find((row) => row.id === lineA.id)).toMatchObject({ defectHeld: 2, released: 0, outstanding: 0 });
+    });
+  });
+});
+
+describe("per-source-line valuation (§10 R1): a disposition is valued at its own line, never the item pool", () => {
+  /** One single-line purchase of an existing fabric or accessory. */
+  async function singleLinePurchase(
+    tx: TestDatabase,
+    actorId: string,
+    item: { itemType: "fabric" | "accessory"; itemId: string },
+    qtyOrdered: number,
+    totalAmount: number,
+  ) {
+    const supplier = await insertSupplier(tx);
+    const purchase = await createPurchase({ supplierId: supplier.id, orderedAt: "2026-10-01", lines: [{ ...item, qtyOrdered, totalAmount }] }, actorId, tx);
+    const [purchaseLine] = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, purchase.id));
+    return { purchase, line: purchaseLine! };
+  }
+
+  async function lineHeldValue(tx: TestDatabase, source: { purchaseItemId: string } | { productionBatchItemId: string }) {
+    const rows = await tx
+      .select()
+      .from(defectMovements)
+      .where("purchaseItemId" in source ? eq(defectMovements.purchaseItemId, source.purchaseItemId) : eq(defectMovements.productionBatchItemId, source.productionBatchItemId));
+    return rows.reduce((sum, row) => ({ qty: sum.qty + row.qty, value: sum.value + row.valueAmount }), { qty: 0, value: 0 });
+  }
+
+  test("the R1 scenario: A (10 yd Rp 1.000) and B (10 yd Rp 200) of one fabric, 5 defect each; A's return and replacement stay at A's price, B keeps B's", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const fabric = await insertFabric(tx);
+      const item = { itemType: "fabric" as const, itemId: fabric.id };
+      const a = await singleLinePurchase(tx, staff.id, item, 10, 1_000);
+      const b = await singleLinePurchase(tx, staff.id, item, 10, 200);
+      await receive(tx, a.purchase.id, staff.id, [{ purchaseItemId: a.line.id, qtyAccepted: 5, qtyRejected: 5 }]);
+      await receive(tx, b.purchase.id, staff.id, [{ purchaseItemId: b.line.id, qtyAccepted: 5, qtyRejected: 5 }]);
+      const pool = { kind: "fabric" as const, fabricId: fabric.id };
+      expect(await getDefectBalance(pool, tx)).toEqual({ qty: 10, valueAmount: 600 });
+
+      const { movement } = await returnDefectsToSupplier({ source: fabricSource(a.line.id), qty: 5, reason: "Tukar", occurredAt: OCCURRED }, staff.id, tx);
+      // A's own reject value (Rp 500), not the pool average (Rp 300).
+      expect(movement).toMatchObject({ qty: -5, valueAmount: -500 });
+      expect(await getLineDefectTotals(fabricSource(a.line.id), tx)).toEqual({ rejectedQty: 5, rejectedValue: 500, outQty: 5, outValue: 500 });
+      expect(await lineHeldValue(tx, fabricSource(b.line.id))).toEqual({ qty: 5, value: 100 });
+      expect(await getDefectBalance(pool, tx)).toEqual({ qty: 5, valueAmount: 100 });
+
+      // The replacement enters sellable stock at A's price: Rp 500 for 5 yd, so A received exactly Rp 1.000.
+      await receive(tx, a.purchase.id, staff.id, [{ purchaseItemId: a.line.id, qtyAccepted: 5 }]);
+      expect(await getSellableReceiptValueForPurchase(a.purchase.id, tx)).toBe(1_000);
+      expect((await purchaseRow(tx, a.purchase.id)).status).toBe("received");
+      expect(await getFabricBalance(fabric.id, tx)).toEqual({ qty: 15, valueAmount: 500 + 100 + 500 });
+
+      // B's 5 yd still carry B's Rp 100, and releasing them takes exactly that.
+      const released = await disposeDefects({ source: fabricSource(b.line.id), qty: 5, disposalType: "donation", proceedsAmount: 0, note: "Hibah", occurredAt: OCCURRED }, staff.id, tx);
+      expect(released.movement.valueAmount).toBe(-100);
+      expect(await getDefectBalance(pool, tx)).toEqual({ qty: 0, valueAmount: 0 });
+      expect(summarizeDefectValues(await listDefectMovementsForPurchase(b.purchase.id, tx))).toMatchObject({ held: 0, releasedTotal: 100, netLoss: 100 });
+      expect(summarizeDefectValues(await listDefectMovementsForPurchase(a.purchase.id, tx))).toMatchObject({ held: 0, returnedValue: 500, releasedTotal: 0 });
+    });
+  });
+
+  test("partial returns over several steps sum exactly to the line's reject value, unaffected by another line at a different price", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const fabric = await insertFabric(tx);
+      const item = { itemType: "fabric" as const, itemId: fabric.id };
+      const a = await singleLinePurchase(tx, staff.id, item, 7, 1_001);
+      const b = await singleLinePurchase(tx, staff.id, item, 3, 90_000);
+      await receive(tx, a.purchase.id, staff.id, [{ purchaseItemId: a.line.id, qtyAccepted: 4, qtyRejected: 3 }]);
+      await receive(tx, b.purchase.id, staff.id, [{ purchaseItemId: b.line.id, qtyAccepted: 1, qtyRejected: 2 }]);
+      const rejectValue = (await lineHeldValue(tx, fabricSource(a.line.id))).value;
+      expect(rejectValue).toBe(429); // 1.001 − round(1.001 × 4 / 7) = 1.001 − 572
+
+      const values: number[] = [];
+      for (const qty of [1, 0.5, 1.25, 0.25]) {
+        const { movement } = await returnDefectsToSupplier({ source: fabricSource(a.line.id), qty, reason: "Tukar", occurredAt: OCCURRED }, staff.id, tx);
+        values.push(-movement.valueAmount);
+      }
+      expect(values).toEqual([143, 72, 178, 36]); // cumulative targets 143, 215, 393, 429
+      expect(values.reduce((sum, value) => sum + value, 0)).toBe(rejectValue);
+      expect(await lineHeldValue(tx, fabricSource(a.line.id))).toEqual({ qty: 0, value: 0 });
+      expect(await lineHeldValue(tx, fabricSource(b.line.id))).toEqual({ qty: 2, value: 60_000 });
+
+      // The replacements complete A at exactly its total.
+      await receive(tx, a.purchase.id, staff.id, [{ purchaseItemId: a.line.id, qtyAccepted: 3 }]);
+      expect(await getSellableReceiptValueForPurchase(a.purchase.id, tx)).toBe(1_001);
+    });
+  });
+
+  test("a release after a partial return takes the rest of the line's value; the document panel reads those line values", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const fabric = await insertFabric(tx);
+      const item = { itemType: "fabric" as const, itemId: fabric.id };
+      const a = await singleLinePurchase(tx, staff.id, item, 10, 1_000_000);
+      const b = await singleLinePurchase(tx, staff.id, item, 10, 100_000);
+      await receive(tx, a.purchase.id, staff.id, [{ purchaseItemId: a.line.id, qtyAccepted: 5, qtyRejected: 5 }]);
+      await receive(tx, b.purchase.id, staff.id, [{ purchaseItemId: b.line.id, qtyAccepted: 5, qtyRejected: 5 }]);
+      await returnDefectsToSupplier({ source: fabricSource(a.line.id), qty: 2, reason: "Tukar", occurredAt: OCCURRED }, staff.id, tx);
+      const { movement } = await disposeDefects({ source: fabricSource(a.line.id), qty: 3, disposalType: "auction", proceedsAmount: 50_000, note: "Lelang", occurredAt: OCCURRED }, staff.id, tx);
+      expect(movement.valueAmount).toBe(-300_000);
+      await closePurchase(a.purchase.id, "Selesai", staff.id, tx);
+
+      const defects = summarizeDefectValues(await listDefectMovementsForPurchase(a.purchase.id, tx))!;
+      expect(defects).toMatchObject({ held: 0, returnedValue: 200_000, releasedTotal: 300_000, proceedsTotal: 50_000, netLoss: 250_000 });
+      const variance = purchaseVariance({ totalOrdered: 1_000_000, sellableValue: await getSellableReceiptValueForPurchase(a.purchase.id, tx), closed: true, defects });
+      // Never arrived: only the 2 returned yards never replaced, at A's price.
+      expect(variance.unabsorbed).toBe(200_000);
+      expect(await lineHeldValue(tx, fabricSource(b.line.id))).toEqual({ qty: 5, value: 50_000 });
+    });
+  });
+
+  test("a reversal copies and negates exactly, and the next outflow is still valued at the line, not the pool", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const fabric = await insertFabric(tx);
+      const item = { itemType: "fabric" as const, itemId: fabric.id };
+      const a = await singleLinePurchase(tx, staff.id, item, 10, 1_000);
+      const b = await singleLinePurchase(tx, staff.id, item, 10, 200);
+      await receive(tx, a.purchase.id, staff.id, [{ purchaseItemId: a.line.id, qtyAccepted: 5, qtyRejected: 5 }]);
+      await receive(tx, b.purchase.id, staff.id, [{ purchaseItemId: b.line.id, qtyAccepted: 5, qtyRejected: 5 }]);
+      const first = await returnDefectsToSupplier({ source: fabricSource(a.line.id), qty: 3, reason: "Tukar", occurredAt: OCCURRED }, staff.id, tx);
+      expect(first.movement.valueAmount).toBe(-300);
+      const second = await disposeDefects({ source: fabricSource(a.line.id), qty: 1, disposalType: "discarded", proceedsAmount: 0, note: "Dibuang", occurredAt: OCCURRED }, staff.id, tx);
+      expect(second.movement.valueAmount).toBe(-100);
+
+      const { reversal } = await reverseDefectMovement(first.movement.id, staff.id, tx);
+      expect(reversal).toMatchObject({ qty: 3, valueAmount: 300, disposalType: null });
+      expect(await lineHeldValue(tx, fabricSource(a.line.id))).toEqual({ qty: 4, value: 400 });
+
+      const again = await returnDefectsToSupplier({ source: fabricSource(a.line.id), qty: 4, reason: "Tukar", occurredAt: OCCURRED }, staff.id, tx);
+      expect(again.movement.valueAmount).toBe(-400);
+      expect(await getDefectBalance({ kind: "fabric", fabricId: fabric.id }, tx)).toEqual({ qty: 5, valueAmount: 100 });
+    });
+  });
+
+  test("accessories: two purchases of one accessory at different prices keep their own values", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const accessory = await insertAccessory(tx);
+      const item = { itemType: "accessory" as const, itemId: accessory.id };
+      const a = await singleLinePurchase(tx, staff.id, item, 6, 60_000);
+      const b = await singleLinePurchase(tx, staff.id, item, 4, 4_000);
+      await receive(tx, a.purchase.id, staff.id, [{ purchaseItemId: a.line.id, qtyAccepted: 4, qtyRejected: 2 }]);
+      await receive(tx, b.purchase.id, staff.id, [{ purchaseItemId: b.line.id, qtyAccepted: 2, qtyRejected: 2 }]);
+      const { movement } = await returnDefectsToSupplier({ source: fabricSource(a.line.id), qty: 2, reason: "Tukar", occurredAt: OCCURRED }, staff.id, tx);
+      expect(movement.valueAmount).toBe(-20_000);
+      await receive(tx, a.purchase.id, staff.id, [{ purchaseItemId: a.line.id, qtyAccepted: 2 }]);
+      expect(await getSellableReceiptValueForPurchase(a.purchase.id, tx)).toBe(60_000);
+      const release = await disposeDefects({ source: fabricSource(b.line.id), qty: 1, disposalType: "donation", proceedsAmount: 0, note: "Hibah", occurredAt: OCCURRED }, staff.id, tx);
+      expect(release.movement.valueAmount).toBe(-1_000);
+      expect(await getDefectBalance({ kind: "accessory", accessoryId: accessory.id }, tx)).toEqual({ qty: 1, valueAmount: 1_000 });
+    });
+  });
+
+  test("production SKUs: two batches of one SKU at different HPP/pcs keep their own values; the replacement enters at its batch's HPP", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const { fabric, variant } = await insertProductVariant(tx);
+      await recordFabricPurchase({ fabricId: fabric.id, qty: 10, totalAmountPaid: 1_000_000, purchasedAt: "2026-09-01" }, null, tx);
+      const batchOf = async (fabricYards: number) => {
+        const draft = await createDraft({ fabricId: fabric.id, producedAt: "2026-10-01", fabricYards, lines: [{ sku: variant.sku, qty: 2 }] }, null, tx);
+        await postBatch(draft.id, staff.id, tx);
+        const [batchLine] = await tx.select().from(productionBatchItems).where(eq(productionBatchItems.productionBatchId, draft.id));
+        return { batch: draft, line: batchLine! };
+      };
+      const cheap = await batchOf(2);
+      const dear = await batchOf(6);
+      expect(cheap.line.unitCostAmount).toBeLessThan(dear.line.unitCostAmount);
+      await receiveBatch(tx, cheap.batch.id, staff.id, [{ productionBatchItemId: cheap.line.id, qtyAccepted: 1, qtyRejected: 1 }]);
+      await receiveBatch(tx, dear.batch.id, staff.id, [{ productionBatchItemId: dear.line.id, qtyAccepted: 1, qtyRejected: 1 }]);
+
+      const { movement } = await returnDefectsToSupplier({ source: batchSource(cheap.line.id), qty: 1, reason: "Jahitan lepas", occurredAt: OCCURRED }, staff.id, tx);
+      expect(movement.valueAmount).toBe(-cheap.line.unitCostAmount);
+      await receiveBatch(tx, cheap.batch.id, staff.id, [{ productionBatchItemId: cheap.line.id, qtyAccepted: 1 }]);
+      expect(await currentBalanceForSkuLocked(tx, variant.sku)).toEqual({ qty: 3, valueAmount: 2 * cheap.line.unitCostAmount + dear.line.unitCostAmount });
+      expect(await lineHeldValue(tx, batchSource(dear.line.id))).toEqual({ qty: 1, value: dear.line.unitCostAmount });
+      const release = await disposeDefects({ source: batchSource(dear.line.id), qty: 1, disposalType: "auction", proceedsAmount: 10_000, note: "Lelang", occurredAt: OCCURRED }, staff.id, tx);
+      expect(release.movement.valueAmount).toBe(-dear.line.unitCostAmount);
+      expect(await getDefectBalance({ kind: "sku", sku: variant.sku }, tx)).toEqual({ qty: 0, valueAmount: 0 });
     });
   });
 });
