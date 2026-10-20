@@ -36,6 +36,11 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
 - Overview dashboard (§6 metrics).
 - Main site (`apps/web`) — voucher claim flow and the rest of §3.3/§3.4's v1 and December 2026
   scope.
+- Cart, checkout, online payment, web orders, transactional email, order login link, "Pesanan
+  saya" and Komerce courier tracking — plan **approved** (docs/plans/cart-checkout.md; Phase C
+  target ~20 Nov 2026, Phase K in the first weeks of December). Described in §3.4, §5.2, §5.3,
+  §8, §10.2 and §10.3. Nothing is built yet; everything ships dark behind
+  `STOREFRONT_CART_ENABLED` until 1 Dec 2026.
 
 ## 1. Goals
 
@@ -174,12 +179,47 @@ pnpm workspaces + Turborepo:
 
 ### 3.4 Main site — 1 December 2026
 
-- Cart — `/cart`
-- Checkout — `/checkout`
-- Payment
-- Shipping cost calculation
-- Voucher redemption
-- Order status — `/orders`
+Approved plan: docs/plans/cart-checkout.md (owner decisions in its §16 are final). Everything
+below ships behind `STOREFRONT_CART_ENABLED` (default off; with the flag off `/cart`, `/checkout`
+and `/checkout/*` return not-found and the WhatsApp CTA stays primary).
+
+- Cart — `/cart`. Stored in the database (guest: httpOnly cookie holding a random token, only its
+  hash is stored; logged in: keyed by customer, merged after any login). Limits: 1 to 10 per line,
+  at most 20 pieces per cart and per order. No prices are stored on cart lines. "Ongkir: Gratis".
+- Checkout — `/checkout`, one page: Kontak, Alamat pengiriman, Pengiriman, Ringkasan. Guest
+  checkout is allowed (email and WhatsApp number). **Checkout never signs anyone in**: a guest's
+  `customers` row is linked or created by email, but the email is unverified at that point, so no
+  session is created (account-takeover risk).
+- **Shipping is free to all of Indonesia. There is no shipping-cost calculation and no courier
+  choice for the customer.** `orders.shipping_amount` is always 0. The checkout shows one fixed
+  row ("Gratis ongkir ke seluruh Indonesia") and no delivery estimate. The courier cost Ammari
+  pays is recorded only on the shipment (Phase K), never shown to customers.
+- Payment — Midtrans Snap in redirect mode, with exactly these methods: QRIS, GoPay, ShopeePay,
+  and virtual accounts / bill payment for BCA, BNI, BRI, Mandiri and Permata. **No card
+  payments**, not enabled and not planned. Ammari absorbs gateway fees (no fee line). Payment
+  window 60 minutes. The gateway name is never shown to customers (the only possible exception
+  is the privacy page, if the merchant review requires it and the owner confirms).
+- Order creation reserves stock for 75 minutes (physical stock minus active reservations); the
+  real `sale` movement is written only when payment is confirmed. Unpaid orders expire
+  automatically (gateway `expire` notification plus a sweeper run every 5 minutes). Customers
+  cannot cancel unpaid orders themselves.
+- "Paid" is set only after a verified payment notification (SHA512 signature check) **and** a
+  server-to-server status re-fetch from the gateway, never from the browser redirect or the
+  finish page. See also CLAUDE.md "Security".
+- Voucher redemption — logged-in customers only, one per order, applied atomically inside the
+  order transaction. Restored only when the order is cancelled or its payment expires (and the
+  voucher has not itself expired), never after a return. Guests see "Masuk untuk pakai voucher".
+- Order status and "Pesanan saya" — `/account` (list), `/orders` (full list), `/orders/[orderNo]`
+  (detail with status timeline and a "Lacak pengiriman" block). Access is by customer session, or
+  for guests by the view-only "Lihat pesanan" link (one order, 120 days; see §10.3).
+- Transactional email (Resend, Indonesian): order created, paid, shipped, delivered, cancelled,
+  plus an alert to the owner on every paid order (§10.2).
+- Courier tracking via Komerce (Phase K, required; target live in the first weeks of December).
+  Until it ships, staff enter courier and resi by hand ("Tandai dikirim") and mark orders
+  "Selesai" by hand; checkout, totals and payment never depend on Komerce. Once live, web orders
+  move `to_ship -> shipped -> completed` automatically from tracking (a returned-to-sender
+  status only raises a flag, staff confirm the return), with the manual actions kept as a
+  fallback, and customers see the tracking timeline in "Pesanan saya".
 
 ## 4. Voucher & QR thank-you card program
 
@@ -440,8 +480,36 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   rupiah.
 - `order_settlements` — actual payout data from the marketplace, arrives after `orders`.
 - `import_batches` — tracks each Shopee/TikTok export upload.
-- `payments` — unique on `provider_ref`. Not yet implemented — part of the Dec 2026 cart/checkout
-  work (§3.4), same as `customer_addresses` below.
+- `payments` — one row per payment attempt (Midtrans); unique on `provider_order_id`
+  (`<env prefix><order_no>-<attempt>`, prefix `""` in prod and `DEV-` / `LOCAL-` elsewhere because
+  dev and local share one gateway Sandbox account), unique `(order_id, attempt)`, unique nullable
+  `provider_ref` (the gateway transaction id). Not yet implemented — Dec 2026 cart/checkout work
+  (§3.4; migration 0030, plan §3).
+- `payment_notifications` — raw log of every gateway notification (payload, signature validity,
+  processing result); payloads kept 12 months.
+- `stock_reservations` — one row per web order line while its payment is pending
+  (`active` / `consumed` / `released`, `expires_at`). Storefront availability becomes physical
+  stock minus active, unexpired reservations; the append-only `stock_movements` ledger still
+  records real sales only. Admin and marketplace-import paths keep checking physical stock only
+  (a marketplace sale already happened and is never refused).
+- `carts`, `cart_items` — database-backed cart (no price column on items).
+- `shipping_areas` — province / city / kecamatan / postal-code lookup loaded by a data migration,
+  with a nullable `komerce_destination_id` filled in Phase K. If the dataset licence is not
+  clean, checkout uses plain-text address fields instead.
+- `order_access_tokens` — "Lihat pesanan" view-only links; only the sha256 of the token is
+  stored, one row per email sent, expiring 120 days after issuance.
+- `order_notifications` — unique `(order_id, kind)`, the idempotency guard for transactional
+  emails.
+- `shipments`, `shipment_events`, `komerce_webhook_events` — Phase K (Komerce): one shipment per
+  order (courier, service, AWB, the cost Ammari pays, normalized status), de-duplicated tracking
+  events, and a raw webhook log.
+- `orders` additions for web orders (all nullable or defaulted): `payment_status`,
+  `payment_expires_at`, `paid_at`, contact snapshot (`contact_email`, `contact_phone`,
+  `recipient_name`), `shipping_address_snapshot`, `shipping_area_id`, `checkout_attempt_id`
+  (unique, makes double submit idempotent), consent evidence, `cancel_reason`,
+  `needs_attention` (e.g. stock short at payment, paid after cancel, amount mismatch, refund due),
+  and `placed_with_session`. A web order is `awaiting_payment` until paid, then enters the normal
+  `to_ship` queue; the 18% marketplace-fee assumption does not apply to `web`.
 - `ad_spend_daily` — unique on `(date, channel)`.
 - `expenses`
 - `targets` — one row per month.
@@ -455,7 +523,12 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - `customers` — `phone` nullable (optional at account creation; see §10.3) but unique when
   present; unique `email` (stored as `citext` for case-insensitive matching); verification
   timestamps; `pdp_consent_at`; `promo_consent_at`; `type` (`retail` / `reseller`).
-- `customer_addresses` — not yet implemented, see the `payments` note in §5.2.
+- `customer_addresses` — saved addresses (recipient, phone, address, area, optional coordinates,
+  one default per customer); orders always store an address **snapshot**. Not yet implemented,
+  see the `payments` note in §5.2.
+- `customer_login_links` — the "Masuk ke akun" one-time login links (§10.3): hashed token, bound
+  to a customer id and email, 24-hour expiry, `consumed_at` / `superseded_at`; a partial unique
+  index allows at most one live link per customer. Not yet implemented (migration 0032).
 - `otp_codes` — stores a hash of the code, `expires_at`, `attempts`, `consumed_at`.
 - `thank_you_cards` — unique `order_id`; unique `token_hash`; `claim_deadline`; `status`.
 - `vouchers` — unique `card_id`; unique `used_order_id`; `status`
@@ -497,11 +570,21 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - Vouchers cannot be combined with other promos.
 - A voucher is **voided** if its source order is cancelled or returned before the voucher is
   used.
-- A voucher is **restored** if the main-site order that used it is cancelled, provided the
-  voucher has not since expired.
+- A voucher is **restored** if the main-site order that used it is cancelled or its payment
+  expires, provided the voucher has not since expired (an expired one stays expired). It is
+  **not** restored when the order is later returned.
 - The shipping address is collected at **checkout**, not at claim time.
 - OTP delivery is via **email first**; WhatsApp delivery may be added later.
-- Payment gateway and shipping-rate provider are **not yet chosen**.
+- Payment gateway: **Midtrans** (Snap, redirect mode), methods limited to QRIS, GoPay, ShopeePay
+  and BCA / BNI / BRI / Mandiri / Permata virtual accounts. **No card payments.** Ammari absorbs
+  gateway fees.
+- Courier: **Komerce** for booking, label and tracking (Phase K). **Shipping is free to the
+  customer**, so there is no shipping-rate provider and no shipping cost is calculated or shown.
+- Order number stays `ORD-YYYYMM-NNNN`, shared across channels.
+- Maximum 10 per line and 20 pieces per order. The payment window is 60 minutes and stock is held
+  for 75 minutes.
+- When a marketplace sale takes the last piece before a web order is paid, the marketplace sale
+  stands; the paid web order is flagged for refund or restock.
 
 ## 9. Admin access control (RBAC)
 
@@ -676,6 +759,14 @@ without a provider configured — throws loudly rather than silently dropping th
 `ResendEmailSender` (calls Resend's REST API directly via `fetch`, no SDK dependency). Both
 apps select `ResendEmailSender` the same way: `RESEND_API_KEY` + `EMAIL_FROM` set.
 
+Transactional order emails (Dec 2026, plan §8) use the same sender, in Indonesian, plain text
+first: `created` (order number, lines, total, "Lanjutkan pembayaran", payment deadline in WIB,
+"Lihat pesanan"), `paid`, `shipped` (courier and resi), `delivered`, `cancelled`, and `owner_paid`
+(to `store_settings.support_email` on every paid order). Guest orders also carry "Masuk ke akun"
+(§10.3). They are sent after the transaction commits, guarded by a unique
+`order_notifications (order_id, kind)` row so retries never double-send, and a send failure is
+recorded but never fails a payment webhook. Emails never name the payment gateway.
+
 ### 10.3 Customer login (apps/web)
 
 Built — see docs/plans/voucher-claim.md (session 1) for the full plan; the voucher claim flow
@@ -717,7 +808,48 @@ itself (`/claim/[token]`) is session 2, not yet built.
 - Email delivery: `ResendEmailSender` (see §10.2) is shared with the staff instance — same
   `RESEND_API_KEY`/`EMAIL_FROM` env vars, selected the same way in both apps.
 
+**Guest checkout, order access and the order login link (Dec 2026, plan §9).** Checkout never
+creates a session, so a guest has no silent login. Instead a guest order's emails carry two
+separate links:
+
+- **"Lihat pesanan"** — view-only access to that one order: 32 random bytes, only the sha256
+  stored, URL `/orders/<orderNo>?t=<token>` (moved into an httpOnly cookie scoped to that order
+  and removed from the URL on first open). Valid 120 days from the email that issued it; no other
+  orders, vouchers or account data; the only action is re-opening the stored payment link. Rate
+  limited. After expiry the page offers email-OTP login.
+- **"Masuk ke akun"** — a one-time login link, implemented as a **small custom Better Auth
+  plugin** on the customer instance (the stock `magic-link` plugin in 1.7.7 logs in on GET, does
+  not invalidate older links and has public issuance, so it is not used). Rules: issued
+  server-side only (no public endpoint); valid 24 hours; single use; stored hashed; bound to the
+  customer id and the email it was sent to; a newer link supersedes the older one (at most one
+  live link per customer, enforced by a partial unique index); at most 5 issued per customer per
+  24 hours and subject to the existing per-email throttle and circuit breaker (over the limit the
+  email still goes out, without this link).
+- **Opening the link never logs in.** `/login/link?token=...` (GET) is `noindex`, sends
+  `Referrer-Policy: no-referrer`, does a read-only lookup and shows "Masuk sebagai a***@..." with
+  a "Masuk" button (or "Link sudah tidak berlaku" with an OTP login link), so mail scanners and
+  prefetchers cannot consume it. Login happens only on the button's POST, protected by Better
+  Auth's form CSRF and origin check plus a rate limit (10 per 10 minutes per IP). The consume is
+  one atomic `UPDATE ... WHERE consumed_at IS NULL AND superseded_at IS NULL AND expires_at >
+  now() RETURNING`; it then re-checks the customer's email still matches, marks the email
+  verified (the click proves ownership), and creates the session through Better Auth with the
+  same cookie and hooks as OTP and Google logins. Every consume is written to `audit_log` (no
+  staff actor). After login the user lands on `/orders`, the guest cart merges, and the
+  `/consent` gate still applies.
+- The checkout finish page offers a third, separate path: "Masuk untuk melihat semua pesanan",
+  which goes to `/login?next=/orders` with the contact email prefilled (email OTP).
+- Customer sessions still never reach admin endpoints (unchanged).
+
 ## 11. Pre-deploy checklist
+
+Added for the Dec 2026 checkout (details in docs/plans/cart-checkout.md §12, §14 and §15
+session 15; runbook in `docs/runbooks/` when written): Midtrans production approval for exactly
+the §3.4 methods and production keys in the prod env; the payment notification URL set, and the
+dev site's Cloudflare Access bypass for exactly that one path; the internal cron service (expiry
+sweeper every 5 minutes, retention job daily, Komerce polling in Phase K) with
+`INTERNAL_CRON_SECRET`, on the internal network only (Caddy does not route `/api/internal/*`);
+owner-edited privacy policy and terms in admin Konten before launch; footer payment chips
+changed to QRIS, Virtual Account, GoPay, ShopeePay.
 
 The dev deploy pipeline (`.github/workflows/deploy-dev.yml`, `docs/deploy.md`) is built. Items
 below marked **(automated)** are enforced by that pipeline/image and need no per-deploy action;
