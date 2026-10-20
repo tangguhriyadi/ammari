@@ -33,9 +33,10 @@ import { orderItems, orders } from "./orders";
 // Storefront cart, checkout and online payment (docs/plans/cart-checkout.md §3, migration 0030).
 // Schema only: nothing reads or writes these tables until the later sessions of that plan.
 
-/** Province / city / kecamatan / postal code lookup for the checkout address field (plan D12).
- * Empty in 0030; filled by the reference-data migration of session 3. `komerce_destination_id`
- * is matched in Phase K (K1). */
+/** Province / city / kecamatan / postal code lookup (plan D12). **Empty:** session 3 found no
+ * licence-clean kecamatan + kode pos dataset, so checkout uses plain-text address fields
+ * (`@ammari/commerce/address`) and every `shipping_area_id` stays NULL. Phase K (K1) may fill it
+ * from Komerce's destination search, with `komerce_destination_id`. */
 export const shippingAreas = pgTable(
   "shipping_areas",
   {
@@ -44,8 +45,8 @@ export const shippingAreas = pgTable(
     city: text("city").notNull(),
     district: text("district").notNull(),
     postalCode: text("postal_code").notNull(),
-    // Lowercased, normalized "district city province postal code" for the area search. Its
-    // search index ships with the data (session 3), once the query shape is known.
+    // Lowercased, normalized "district city province postal code" for an area search. Its
+    // search index ships with whatever data fills this table (Phase K at the earliest).
     searchText: text("search_text").notNull(),
     komerceDestinationId: text("komerce_destination_id"),
     ...timestamps(),

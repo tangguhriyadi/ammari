@@ -501,9 +501,11 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   records real sales only. Admin and marketplace-import paths keep checking physical stock only
   (a marketplace sale already happened and is never refused).
 - `carts`, `cart_items` — database-backed cart (no price column on items).
-- `shipping_areas` — province / city / kecamatan / postal-code lookup loaded by a data migration,
-  with a nullable `komerce_destination_id` filled in Phase K. If the dataset licence is not
-  clean, checkout uses plain-text address fields instead.
+- `shipping_areas` — province / city / kecamatan / postal-code lookup with a nullable
+  `komerce_destination_id`. **Empty:** no kecamatan + kode pos dataset had a clean licence
+  (checked 2026-10-20), so checkout uses plain-text address fields (province from a fixed list of
+  38, typed city, kecamatan and postal code; `@ammari/commerce/address`) and every
+  `shipping_area_id` stays NULL. Phase K may fill it from the courier API's destination search.
 - `order_access_tokens` — "Lihat pesanan" view-only links; only the sha256 of the token is
   stored, one row per email sent, expiring 120 days after issuance.
 - `order_notifications` — unique `(order_id, kind)`, the idempotency guard for transactional
@@ -539,7 +541,7 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   see the `payments` note in §5.2.
 - `customer_login_links` — the "Masuk ke akun" one-time login links (§10.3): hashed token, bound
   to a customer id and email, 24-hour expiry, `consumed_at` / `superseded_at`; a partial unique
-  index allows at most one live link per customer. Not yet implemented (migration 0032).
+  index allows at most one live link per customer. Not yet implemented (expected migration 0031; the planned area-data migration was skipped).
 - `otp_codes` — stores a hash of the code, `expires_at`, `attempts`, `consumed_at`.
 - `thank_you_cards` — unique `order_id`; unique `token_hash`; `claim_deadline`; `status`.
 - `vouchers` — unique `card_id`; unique `used_order_id`; `status`
