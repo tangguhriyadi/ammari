@@ -107,6 +107,17 @@ export const E2E_LOGIN_OTP_MOBILE_EMAIL = "login-otp-mobile@e2e.ammari.test";
 export const E2E_LOGIN_OTP_RESEND_EMAIL = "login-otp-resend@e2e.ammari.test";
 export const E2E_LOGIN_OTP_EXPIRY_EMAIL = "login-otp-expiry@e2e.ammari.test";
 
+// A dedicated email for stock-reservations.spec.ts (docs/plans/cart-checkout.md session 4: the
+// read-only "Dipesan" figure), on the existing `e2e_orders` role (stock.view + stock.adjust for the
+// count page, orders.view for the order link). Its own OTP throttle, no new permissions.
+export const E2E_STOCK_RESERVATIONS_EMAIL = "stock-reservations@e2e.ammari.test";
+// The product that spec reads: one SKU held by an unpaid web checkout order, one SKU without a
+// hold. Nothing in the admin UI creates a hold (only web checkout does), so it is seeded here.
+export const E2E_RESERVATION_PRODUCT_NAME = "E2E Gamis Dipesan";
+export const E2E_RESERVATION_HELD_SKU = "E2E-DIPESAN-M";
+export const E2E_RESERVATION_FREE_SKU = "E2E-DIPESAN-L";
+export const E2E_RESERVATION_ORDER_NO = "ORD-E2E-DIPESAN-0001";
+
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
 // lib/products/queries.ts. A distinct name prefix keeps this from colliding with anything a
 // test itself creates.
@@ -172,8 +183,22 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   const { and, eq, inArray, notInArray } = await import("drizzle-orm");
   const { db } = await import("@ammari/db");
-  const { roles, permissions, rolePermissions, staffUsers, authEmailThrottle, staffAuthRateLimits, fabrics, products } =
-    await import("@ammari/db/schema");
+  const {
+    roles,
+    permissions,
+    rolePermissions,
+    staffUsers,
+    authEmailThrottle,
+    staffAuthRateLimits,
+    fabrics,
+    fabricColors,
+    products,
+    productVariants,
+    stockMovements,
+    orders,
+    orderItems,
+    stockReservations,
+  } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
 
   async function ensureStaffFixture(email: string, name: string, roleKey: string): Promise<void> {
@@ -253,6 +278,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     "orders.manage",
   ]);
   await ensureStaffFixture(E2E_ORDERS_EMAIL, "E2E Orders", E2E_ORDERS_ROLE_KEY);
+  await ensureStaffFixture(E2E_STOCK_RESERVATIONS_EMAIL, "E2E Stock Reservations", E2E_ORDERS_ROLE_KEY);
 
   await ensureLimitedRole(E2E_PACKING_ROLE_KEY, [
     "products.manage",
@@ -335,6 +361,71 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       .onConflictDoNothing({ target: products.slug });
   }
 
+  // ammari_e2e is truncated at the start of every run (ensureE2eDatabase), so these are plain
+  // inserts. Shaped like what web checkout writes (orders_checkout_fields_check): 5 physical pcs,
+  // 2 held for 75 minutes, plus an expired hold that must not count.
+  await db.transaction(async (tx) => {
+    const [fabric] = await tx.insert(fabrics).values({ name: "E2E Dipesan Fabric" }).returning({ id: fabrics.id });
+    if (!fabric) throw new Error("failed to seed the e2e reservation fabric");
+    const [color] = await tx.insert(fabricColors).values({ fabricId: fabric.id, name: "Mocca" }).returning({ id: fabricColors.id });
+    if (!color) throw new Error("failed to seed the e2e reservation colour");
+    const [product] = await tx
+      .insert(products)
+      .values({
+        name: E2E_RESERVATION_PRODUCT_NAME,
+        code: "E2EDIPESAN",
+        slug: "e2e-gamis-dipesan",
+        fabricId: fabric.id,
+        closure: "front_zip",
+        sizeMode: "sized",
+        basePrice: 259_000,
+      })
+      .returning({ id: products.id, closure: products.closure });
+    if (!product) throw new Error("failed to seed the e2e reservation product");
+    const variantBase = { productId: product.id, fabricId: fabric.id, fabricColorId: color.id, closure: product.closure };
+    await tx.insert(productVariants).values([
+      { ...variantBase, sku: E2E_RESERVATION_HELD_SKU, size: "M" },
+      { ...variantBase, sku: E2E_RESERVATION_FREE_SKU, size: "L" },
+    ]);
+    await tx.insert(stockMovements).values([
+      { sku: E2E_RESERVATION_HELD_SKU, qty: 5, valueAmount: 500_000, type: "production", refType: "manual" },
+      { sku: E2E_RESERVATION_FREE_SKU, qty: 3, valueAmount: 300_000, type: "production", refType: "manual" },
+    ]);
+
+    const now = Date.now();
+    const checkoutOrder = (orderNo: string) => ({
+      channelId: "web" as const,
+      orderNo,
+      status: "awaiting_payment" as const,
+      paymentStatus: "pending" as const,
+      paymentExpiresAt: new Date(now + 60 * 60_000),
+      checkoutAttemptId: crypto.randomUUID(),
+      termsAcceptedAt: new Date(now),
+      promoOptIn: false,
+      placedWithSession: false,
+      orderDate: new Date(now),
+      subtotalAmount: 518_000,
+      shippingAmount: 0,
+      discountAmount: 0,
+      totalAmount: 518_000,
+    });
+    for (const hold of [
+      { orderNo: E2E_RESERVATION_ORDER_NO, expiresAt: new Date(now + 75 * 60_000) },
+      { orderNo: "ORD-E2E-DIPESAN-EXPIRED", expiresAt: new Date(now - 60_000) },
+    ]) {
+      const [order] = await tx.insert(orders).values(checkoutOrder(hold.orderNo)).returning({ id: orders.id });
+      if (!order) throw new Error("failed to seed the e2e reservation order");
+      const [item] = await tx
+        .insert(orderItems)
+        .values({ orderId: order.id, sku: E2E_RESERVATION_HELD_SKU, qty: 2, unitPrice: 259_000, unitCost: 0 })
+        .returning({ id: orderItems.id });
+      if (!item) throw new Error("failed to seed the e2e reservation order item");
+      await tx
+        .insert(stockReservations)
+        .values({ orderId: order.id, orderItemId: item.id, sku: E2E_RESERVATION_HELD_SKU, qty: 2, expiresAt: hold.expiresAt });
+    }
+  });
+
   // Clears rate-limit state left over from a previous run (repeated runs within the same
   // 5-minute window would otherwise throttle out the fixture logins below). Test-only infra
   // against a local DB — never touches anything in a real environment.
@@ -347,6 +438,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_PRODUCTS_NO_FINANCE_EMAIL,
         E2E_PRODUCTION_STOCK_EMAIL,
         E2E_ORDERS_EMAIL,
+        E2E_STOCK_RESERVATIONS_EMAIL,
         E2E_PACKING_EMAIL,
         E2E_PACKING_PRINT_EMAIL,
         E2E_PACKING_PRINT_WEBKIT_EMAIL,

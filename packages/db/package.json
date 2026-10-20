@@ -13,6 +13,7 @@
     "./storefront": "./src/storefront/queries.ts",
     "./storefront-settings": "./src/storefront/settings.ts",
     "./sql-helpers": "./src/sql-helpers.ts",
+    "./stock-availability": "./src/stock-availability.ts",
     "./test-utils": "./test/helpers.ts",
     "./test-fixtures": "./test/fixtures.ts",
     "./test-global-setup": "./test/global-setup.ts",

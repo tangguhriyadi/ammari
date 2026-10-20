@@ -1,8 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
-import { insertProductVariant } from "@ammari/db/test-fixtures";
+import { insertProductVariant, insertStockReservation } from "@ammari/db/test-fixtures";
 import { productVariants, stockMovements } from "@ammari/db/schema";
-import { getSkuDetail, listProductSkusForCount, listStockLedger, listStockOverview } from "./queries";
+import {
+  getReservedQtyBySku,
+  getSkuDetail,
+  listActiveReservationsForSku,
+  listProductSkusForCount,
+  listStockLedger,
+  listStockOverview,
+} from "./queries";
 
 // The write-path tests (adjustStock, saveStockCount) moved with that code to
 // packages/commerce/src/stock/ledger.test.ts.
@@ -110,6 +118,56 @@ describe("read-path aggregates (real numbers, not stringified bigints)", () => {
       expect(rows.map((r) => r.qty)).toEqual([2, -3, 10]);
       expect(rows.map((r) => r.runningBalance)).toEqual([9, 7, 10]);
       expect(rows.every((r) => typeof r.runningBalance === "number")).toBe(true);
+    });
+  });
+});
+
+// docs/plans/cart-checkout.md §7 (session 4): admin shows a read-only "Dipesan" figure from active
+// checkout holds. Physical stock ("currentStock") never changes because of a hold (D4).
+describe("Dipesan (active stock holds)", () => {
+  test("getReservedQtyBySku sums only active, unexpired holds and omits SKUs without any", async () => {
+    await withRollback(async (tx) => {
+      const { variant, product, color, fabric } = await insertProductVariant(tx);
+      const [other] = await tx
+        .insert(productVariants)
+        .values({ sku: `SKU-${randomUUID()}`, productId: product.id, fabricId: fabric.id, fabricColorId: color.id, closure: product.closure, size: "L" })
+        .returning();
+      if (!other) throw new Error("failed to insert second variant fixture");
+      await seedStock(tx, variant.sku, 10);
+      await seedStock(tx, other.sku, 10);
+      await insertStockReservation(tx, { sku: variant.sku, qty: 2 });
+      await insertStockReservation(tx, { sku: variant.sku, qty: 1 });
+      await insertStockReservation(tx, { sku: variant.sku, qty: 5, expiresAt: new Date(Date.now() - 60_000) });
+      await insertStockReservation(tx, { sku: variant.sku, qty: 4, status: "released" });
+      await insertStockReservation(tx, { sku: other.sku, qty: 3, status: "consumed" });
+
+      const reserved = await getReservedQtyBySku([variant.sku, other.sku], tx);
+      expect(reserved.get(variant.sku)).toBe(3);
+      expect(typeof reserved.get(variant.sku)).toBe("number");
+      expect(reserved.has(other.sku)).toBe(false);
+      expect(await getReservedQtyBySku([], tx)).toEqual(new Map());
+
+      // Physical stock is untouched by holds.
+      expect((await getSkuDetail(variant.sku, tx))?.currentStock).toBe(10);
+    });
+  });
+
+  test("listActiveReservationsForSku lists the holding orders, soonest expiry first", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      await seedStock(tx, variant.sku, 10);
+      const later = await insertStockReservation(tx, { sku: variant.sku, qty: 2, expiresAt: new Date(Date.now() + 70 * 60_000) });
+      const sooner = await insertStockReservation(tx, { sku: variant.sku, qty: 1, expiresAt: new Date(Date.now() + 10 * 60_000) });
+      await insertStockReservation(tx, { sku: variant.sku, qty: 5, expiresAt: new Date(Date.now() - 60_000) });
+      await insertStockReservation(tx, { sku: variant.sku, qty: 4, status: "released" });
+
+      const rows = await listActiveReservationsForSku(variant.sku, tx);
+      expect(rows.map((row) => [row.orderNo, row.qty])).toEqual([
+        [sooner.order.orderNo, 1],
+        [later.order.orderNo, 2],
+      ]);
+      expect(rows[0]?.orderId).toBe(sooner.order.id);
+      expect(rows[0]?.expiresAt).toBeInstanceOf(Date);
     });
   });
 });

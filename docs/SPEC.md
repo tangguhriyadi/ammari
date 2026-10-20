@@ -475,6 +475,12 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   shows "Jangan hitung barang cacat, hitung hanya barang yang bisa dijual.", and each SKU row
   shows its defect quantity read-only ("Cacat: N pcs (tidak ikut dihitung)"), never part of the
   system count and never submitted.
+- "Dipesan" (pieces held for unpaid web checkout orders, `stock_reservations`): read-only,
+  shown only while an active, unexpired hold exists. `/stock` shows "Dipesan N" next to the
+  physical count, `/stock/[sku]` lists the holding orders (order number, quantity, hold expiry),
+  and the count page shows "Dipesan: N pcs (tetap dihitung)" per SKU plus a note that held
+  pieces are still on the shelf and are counted. Every physical figure (count, "Sistem", low-stock
+  status) stays physical stock; holds never change it.
 
 ### 5.2 Orders & finance
 
@@ -498,7 +504,8 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - `stock_reservations` — one row per web order line while its payment is pending
   (`active` / `consumed` / `released`, `expires_at`). Storefront availability becomes physical
   stock minus active, unexpired reservations; the append-only `stock_movements` ledger still
-  records real sales only. Admin and marketplace-import paths keep checking physical stock only
+  records real sales only. Paying an order (`awaiting_payment -> to_ship`) consumes its holds;
+  cancelling it unpaid releases them. Admin and marketplace-import paths keep checking physical stock only
   (a marketplace sale already happened and is never refused).
 - `carts`, `cart_items` — database-backed cart (no price column on items).
 - `shipping_areas` — province / city / kecamatan / postal-code lookup with a nullable

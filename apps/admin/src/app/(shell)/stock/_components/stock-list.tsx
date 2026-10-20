@@ -25,15 +25,19 @@ function groupByProduct(rows: StockOverviewRow[]) {
 }
 
 /** `defectQtyBySku` (S5b): each SKU's defect stock, shown as its own "Cacat" figure next to the
- * sellable count it is never part of. */
+ * sellable count it is never part of. `reservedQtyBySku` (docs/plans/cart-checkout.md §7): pieces
+ * held for unpaid web orders, shown as "Dipesan"; unlike defects they ARE part of the count. Both
+ * appear only when non-zero. */
 export function StockList({
   rows,
   canAdjust,
   defectQtyBySku = new Map(),
+  reservedQtyBySku = new Map(),
 }: {
   rows: StockOverviewRow[];
   canAdjust: boolean;
   defectQtyBySku?: ReadonlyMap<string, number>;
+  reservedQtyBySku?: ReadonlyMap<string, number>;
 }) {
   if (rows.length === 0) {
     return <EmptyState title="Tidak ada SKU yang cocok" description="Coba ubah kata kunci atau filter." />;
@@ -73,6 +77,11 @@ export function StockList({
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   <span className="text-base font-semibold tabular-nums text-neutral-900">{formatNumber(row.currentStock)}</span>
+                  {reservedQtyBySku.has(row.sku) && (
+                    <span className="text-sm tabular-nums text-neutral-600" data-testid="sku-reserved-qty">
+                      Dipesan {formatNumber(reservedQtyBySku.get(row.sku) ?? 0)}
+                    </span>
+                  )}
                   {(defectQtyBySku.get(row.sku) ?? 0) !== 0 && (
                     <span className="text-sm tabular-nums text-neutral-600" data-testid="sku-defect-qty">
                       Cacat {formatNumber(defectQtyBySku.get(row.sku) ?? 0)}

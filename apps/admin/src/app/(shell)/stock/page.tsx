@@ -1,6 +1,6 @@
 import { PageHeader, FilterTabs, Input, Checkbox, Button, Pagination, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { listStockOverview, type ActiveFilter } from "@/lib/stock/queries";
+import { getReservedQtyBySku, listStockOverview, type ActiveFilter } from "@/lib/stock/queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { getDefectQtyBySku } from "@/lib/defects/queries";
 import { StockList } from "./_components/stock-list";
@@ -23,8 +23,10 @@ export default async function StockPage({
   const lowStockOnly = low === "1";
 
   const { rows, pagination } = await listStockOverview({ q, activeFilter, lowStockOnly }, page, perPage);
-  // S5b: defect stock per SKU, its own figure, never part of the sellable count.
-  const defectQtyBySku = await getDefectQtyBySku(rows.map((row) => row.sku));
+  const pageSkus = rows.map((row) => row.sku);
+  // S5b: defect stock per SKU, its own figure, never part of the sellable count. "Dipesan"
+  // (docs/plans/cart-checkout.md §7): pieces held for unpaid web orders, still part of the count.
+  const [defectQtyBySku, reservedQtyBySku] = await Promise.all([getDefectQtyBySku(pageSkus), getReservedQtyBySku(pageSkus)]);
 
   return (
     <>
@@ -51,7 +53,12 @@ export default async function StockPage({
           <Checkbox name="low" value="1" defaultChecked={lowStockOnly} label="Stok menipis saja" />
           <Button type="submit">Filter</Button>
         </form>
-        <StockList rows={rows} canAdjust={session.permissionKeys.includes("stock.adjust")} defectQtyBySku={defectQtyBySku} />
+        <StockList
+          rows={rows}
+          canAdjust={session.permissionKeys.includes("stock.adjust")}
+          defectQtyBySku={defectQtyBySku}
+          reservedQtyBySku={reservedQtyBySku}
+        />
       </div>
       <Pagination
         pagination={pagination}

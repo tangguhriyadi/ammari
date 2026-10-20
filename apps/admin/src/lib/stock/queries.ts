@@ -1,9 +1,20 @@
 import "server-only";
-import { and, count, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, ilike, inArray, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { fabricColors, goodsReceiptItems, productionBatchItems, products, productVariants, staffUsers, stockMovements } from "@ammari/db/schema";
+import {
+  fabricColors,
+  goodsReceiptItems,
+  orders,
+  productionBatchItems,
+  products,
+  productVariants,
+  staffUsers,
+  stockMovements,
+  stockReservations,
+} from "@ammari/db/schema";
 import type { Size, StockAdjustmentReason } from "@ammari/db/schema";
 import { qualifiedColumn } from "@ammari/db/sql-helpers";
+import { activeReservedQtySql } from "@ammari/db/stock-availability";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
 
@@ -253,4 +264,51 @@ export async function listProductSkusForCount(productId: string, db: Database = 
 export async function getProductNameAndSkus(productId: string, db: Database = defaultDb) {
   const [product] = await db.select({ id: products.id, name: products.name }).from(products).where(eq(products.id, productId)).limit(1);
   return product ?? null;
+}
+
+// ---------- Dipesan (checkout stock holds) ----------
+//
+// Read-only (docs/plans/cart-checkout.md §7): pieces held for unpaid web checkout orders. They
+// are still on the shelf and still part of every physical figure above (currentStock, the count
+// sheet's "Sistem", stock status); admin writes keep checking physical stock only (D4). Only
+// active, unexpired holds count, the same rule the storefront's availability uses.
+
+/** Held pcs per SKU. SKUs without an active hold are absent (same shape as getDefectQtyBySku). */
+export async function getReservedQtyBySku(skus: readonly string[], db: Database = defaultDb): Promise<Map<string, number>> {
+  if (skus.length === 0) return new Map();
+  const rows = await db
+    .select({
+      sku: productVariants.sku,
+      reservedQty: activeReservedQtySql(qualifiedColumn(productVariants, productVariants.sku)),
+    })
+    .from(productVariants)
+    .where(inArray(productVariants.sku, [...skus]));
+  return new Map(rows.filter((row) => row.reservedQty > 0).map((row) => [row.sku, row.reservedQty]));
+}
+
+export interface ActiveReservationRow {
+  id: string;
+  orderId: string;
+  orderNo: string;
+  qty: number;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+/** The orders currently holding `sku`, soonest expiry first. A hold past its expiry no longer
+ * counts (and is left out) even before the sweeper marks it released. */
+export async function listActiveReservationsForSku(sku: string, db: Database = defaultDb): Promise<ActiveReservationRow[]> {
+  return db
+    .select({
+      id: stockReservations.id,
+      orderId: stockReservations.orderId,
+      orderNo: orders.orderNo,
+      qty: stockReservations.qty,
+      createdAt: stockReservations.createdAt,
+      expiresAt: stockReservations.expiresAt,
+    })
+    .from(stockReservations)
+    .innerJoin(orders, eq(orders.id, stockReservations.orderId))
+    .where(and(eq(stockReservations.sku, sku), eq(stockReservations.status, "active"), gt(stockReservations.expiresAt, sql`now()`)))
+    .orderBy(asc(stockReservations.expiresAt), asc(stockReservations.id));
 }

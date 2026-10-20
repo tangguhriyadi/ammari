@@ -5,7 +5,8 @@
 match this plan). **Session 1 done 2026-10-20** (`@ammari/commerce` extracted, no behavior
 change; see the session table). **Session 2 done 2026-10-20** (migration 0030 `checkout_core`,
 schema only). **Session 3 done 2026-10-20** (area dataset licence not clean: plain-text
-address fields, no data migration; see §3). Next: session 4.
+address fields, no data migration; see §3). **Session 4 done 2026-10-20** (stock holds,
+storefront availability, admin "Dipesan"; see the session table). Next: session 5.
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
@@ -604,7 +605,7 @@ Next.js and Better Auth docs/source before route, action or plugin work.
 | 1 | **DONE 2026-10-20.** Extract `@ammari/commerce` (no behavior change). Moved: `db` (`Tx`, `Database`, `writeAuditLog`), `errors` (`FieldError`, `ActionError`, `mapUniqueViolation`), `jakarta-month`, `moving-average`, `order-status`, `orders` (`createOrder`, `updateOrderItems`, `transitionOrderStatus`, `generateOrderNumber`), `stock` (`lockVariantForUpdate`, `currentBalanceForSkuLocked`, `adjustStock`, `saveStockCount`), `thank-you-cards` (`voidActiveCardForOrder`). Admin's `@/lib/db` and `@/lib/errors` re-export them (one error class for `instanceof`). Admin-only read queries (order list/detail with cost, SKU picker, stock overview/ledger/count sheet) stay in apps/admin, so cost-bearing reads never sit in a package web imports. No voucher redeem/restore code existed to move (§1); it is new in session 7, in this package. apps/web does not use the package yet. Its test task is chained after `@ammari/auth#test` (`packages/commerce/turbo.json`) | none | existing admin tests moved and green | typescript, database |
 | 2 | **DONE 2026-10-20.** Schema `checkout_core` + constants + constraint tests. `packages/db/src/schema/checkout.ts` (new tables), checkout columns on `orders`, constants `STOCK_RESERVATION_STATUSES`, `PAYMENT_PROVIDERS`, `PAYMENT_STATUSES`, `ORDER_PAYMENT_STATUSES`, `ORDER_CANCEL_REASONS`, `ORDER_ATTENTION_FLAGS`, `ORDER_NOTIFICATION_KINDS`. Migration hand edits: `SET LOCAL lock_timeout = '5s'`, `set_updated_at` triggers on the 5 new tables with `updated_at`, and the `order_items` UNIQUE moved before the composite FK that needs it (drizzle-kit emitted it after). Tests: `test/checkout-schema.test.ts`, `test/migration-0030.test.ts` (upgrade from 0029 with data, previous release's writes, idempotent re-run) | 0030 | db tests | database |
 | 3 | **DONE 2026-10-20.** Shipping areas: licence check **not clean** (§3), so the plain-field fallback: `@ammari/commerce/address` (province list, phone normalization, `parseShippingAddress`, `formatShippingAddress`, `toShippingAddressSnapshot`). No dataset script, no data migration, no area search; `shipping_areas` stays empty. Tests: `packages/commerce/src/address.test.ts` (unit, plus DB checks that parsed output satisfies the `customer_addresses` and `orders` constraints). Session 8's form uses a province select and plain city/kecamatan/postal code inputs | none (0031 skipped) | unit + db | database, typescript |
-| 4 | Reservations + storefront availability + admin "Dipesan" | none | TDD stock + admin e2e 390/1280 | database, typescript, react |
+| 4 | **DONE 2026-10-20.** Reservations + storefront availability + admin "Dipesan". `@ammari/commerce/stock`: `reserveStockForOrder(tx, orderId, lines, holdMinutes)` (runs inside the caller's order transaction; per SKU sorted, variant `FOR UPDATE`, `physical - active unexpired holds >= qty`, `expires_at = now() + holdMinutes`; refusal is a `FieldError` on the SKU naming product, colour and size, never a count), `DEFAULT_STOCK_HOLD_MINUTES = 75`, `consumeReservationsForOrder` / `releaseReservationsForOrder` (conditional `UPDATE ... WHERE status = 'active' RETURNING`, replay-safe). Wired into `transitionOrderStatus`: `awaiting_payment -> to_ship` writes the sale (physical check only, D4) then consumes the order's holds, expired or not; an unpaid cancel releases them; a paid cancel restores via the ledger and leaves consumed holds alone. `updateOrderItems` refuses checkout orders (`payment_status` set). The "which holds count" rule (`active` and `expires_at > now()`) lives once in `@ammari/db/stock-availability` (`physicalStockQtySql`, `activeReservedQtySql`, `sellableQtySql`), used by the storefront (`available`, tile `soldOut`) and admin (`getReservedQtyBySku`, `listActiveReservationsForSku`). Admin: "Dipesan N" on `/stock`, a hold list on `/stock/[sku]` (order link with `orders.view`), "Dipesan: N pcs (tetap dihitung)" plus a note on the count page; all shown only while a hold exists, so nothing changes until checkout writes one. Tests: `packages/commerce/src/stock/reservations.test.ts` (incl. last-piece race), storefront availability tests, admin query tests, `apps/admin/e2e/stock-reservations.spec.ts` (390/1280, hold seeded in e2e global setup) | none | TDD stock + admin e2e 390/1280 | database, typescript, react |
 | 5 | Cart backend: cookie, `resolveCart`, actions, caps, merge, rate limits | none | TDD integration | security, typescript, database |
 | 6 | Cart UI: PDP, header count, `/cart`, flag 404 | none | e2e 390/1280 | react, typescript |
 | 7 | `placeOrder` backend with `FakePaymentProvider` | none | TDD vouchers, stock, concurrency | security, database, typescript |
@@ -618,6 +619,23 @@ Next.js and Better Auth docs/source before route, action or plugin work.
 | 15 | Launch readiness: env examples, runbook (Cloudflare Access bypass, cron), full sandbox run on dev, footer chips, launch/rollback checklist in `docs/runbooks/` | none | manual checklist | none |
 
 Sessions 3 and 4 can swap; 6 and 7 can swap after 5; 12 can run any time after 11.
+
+Notes from session 4 for later sessions:
+- **5/6 (cart):** the cart's per-line checks need a sellable quantity per SKU; build it from
+  `sellableQtySql` (never show the number to buyers). PDP/tiles are ISR, so a new hold or release
+  is only visible after revalidation (§7 "Revalidation"): sessions 7 (reserve), 9 (consume,
+  release) and 10 (sweeper release) must revalidate the affected product paths.
+- **7 (placeOrder):** call `reserveStockForOrder` inside the order transaction with
+  `CHECKOUT_STOCK_HOLD_MINUTES` (fallback `DEFAULT_STOCK_HOLD_MINUTES`). It does not check
+  `is_active`/published or merge duplicate cart lines: placeOrder validates both first (step 3).
+  The refusal is a `FieldError` keyed by SKU, for the cart-line alert.
+- **9 (payments):** `transitionOrderStatus(..., "to_ship")` throws a `FieldError` when physical
+  stock is short (an admin adjustment or marketplace sale may have taken held pieces, D4); the
+  webhook must catch it and keep `awaiting_payment` + `payment_status = 'paid'` +
+  `stock_short_at_payment` (§6.2), never drop the notification. A payment after the hold was
+  released still sells (consume is then a no-op); test "paid after expiry/release".
+  `transitionOrderStatus` still requires a staff actor id; webhook/sweeper callers need a null
+  actor path.
 
 ### Phase K: Komerce courier booking and tracking (required; starts when the sandbox key arrives)
 

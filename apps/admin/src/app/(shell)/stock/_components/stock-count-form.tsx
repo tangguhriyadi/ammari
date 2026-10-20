@@ -16,12 +16,16 @@ export function StockCountForm({
   productId,
   skus,
   defectQtyBySku,
+  reservedQtyBySku = {},
 }: {
   productId: string;
   skus: SkuRow[];
   /** Defect pcs per SKU (S5), read-only: shown so the counter knows to leave them out, never
    * counted and never submitted. SKUs without defects are absent. */
   defectQtyBySku: Record<string, number>;
+  /** Pcs held for unpaid web orders per SKU (docs/plans/cart-checkout.md §7), read-only: still on
+   * the shelf and part of "Sistem", so they ARE counted. SKUs without a hold are absent. */
+  reservedQtyBySku?: Record<string, number>;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -65,6 +69,7 @@ export function StockCountForm({
       <div className="flex flex-col gap-2">
         {skus.map((row) => {
           const defectQty = defectQtyBySku[row.sku];
+          const reservedQty = reservedQtyBySku[row.sku];
           return (
             <div key={row.sku} className="flex items-center gap-3 rounded-lg border border-neutral-200 p-3">
               <ColorSwatch hex={row.colorHex} />
@@ -76,6 +81,11 @@ export function StockCountForm({
                 {defectQty !== undefined && (
                   <p className="text-sm text-neutral-600" data-testid="count-defect-qty">
                     Cacat: {formatNumber(defectQty)} pcs (tidak ikut dihitung)
+                  </p>
+                )}
+                {reservedQty !== undefined && (
+                  <p className="text-sm text-neutral-600" data-testid="count-reserved-qty">
+                    Dipesan: {formatNumber(reservedQty)} pcs (tetap dihitung)
                   </p>
                 )}
               </div>

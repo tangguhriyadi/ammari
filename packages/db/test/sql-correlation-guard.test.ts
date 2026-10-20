@@ -21,7 +21,7 @@ import { describe, expect, test } from "vitest";
 
 const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../../../..");
 
-const SCAN_ROOTS = ["apps/admin/src", "apps/web/src", "packages/auth/src", "packages/db/src", "packages/storage/src", "packages/ui/src"];
+const SCAN_ROOTS = ["apps/admin/src", "apps/web/src", "packages/auth/src", "packages/commerce/src", "packages/db/src", "packages/storage/src", "packages/ui/src"];
 
 const EXCLUDED_DIR_NAMES = new Set(["node_modules", ".next", ".turbo", "dist", "build", "coverage"]);
 

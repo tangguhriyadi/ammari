@@ -27,7 +27,7 @@ import {
   getStoreSettings,
 } from "../src/storefront/queries";
 import { ANNOUNCEMENT_BAR_DEFAULT_TEXT } from "../src/storefront/settings";
-import { insertStaffUser } from "./fixtures";
+import { insertStaffUser, insertStockReservation } from "./fixtures";
 import { withRollback, type TestTx } from "./helpers";
 
 // A denylist of substrings that must NEVER appear anywhere in the storefront read layer's
@@ -254,6 +254,33 @@ describe("getStorefrontProductBySlug", () => {
       expect(bySku.get(fixture.variantOutOfStock.sku)?.available).toBe(false);
       // The inactive variant has real stock on the ledger but must never appear at all.
       expect(bySku.has(fixture.variantInactive.sku)).toBe(false);
+    });
+  });
+
+  test("availability subtracts active, unexpired stock holds; expired, released and consumed ones do not count", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await seedFullProductFixture(tx);
+      const availableOf = async () =>
+        new Map((await getStorefrontProductBySlug(fixture.slug, tx))?.variants.map((v) => [v.sku, v.available])).get(
+          fixture.variantAvailable.sku,
+        );
+      // 10 physical pieces.
+      await insertStockReservation(tx, { sku: fixture.variantAvailable.sku, qty: 4, status: "consumed" });
+      await insertStockReservation(tx, { sku: fixture.variantAvailable.sku, qty: 4, status: "released" });
+      await insertStockReservation(tx, {
+        sku: fixture.variantAvailable.sku,
+        qty: 10,
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+      await insertStockReservation(tx, { sku: fixture.variantAvailable.sku, qty: 9 });
+      expect(await availableOf()).toBe(true);
+
+      await insertStockReservation(tx, { sku: fixture.variantAvailable.sku, qty: 1 });
+      expect(await availableOf()).toBe(false);
+
+      // A hold never leaks into the payload as a number either.
+      const serialized = JSON.stringify(await getStorefrontProductBySlug(fixture.slug, tx));
+      expect(serialized).not.toMatch(/reserv|qty/i);
     });
   });
 

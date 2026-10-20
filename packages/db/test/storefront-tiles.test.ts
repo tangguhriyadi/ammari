@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { eq } from "drizzle-orm";
 import { fabricColors, fabrics, productImages, products, productVariants, stockMovements } from "../src/schema";
 import { getRelatedStorefrontProducts, getStorefrontProductTiles } from "../src/storefront/queries";
+import { insertStockReservation } from "./fixtures";
 import { withRollback, type TestTx } from "./helpers";
 
 async function seedPublishedProduct(
@@ -118,6 +119,21 @@ describe("getStorefrontProductTiles", () => {
       const [variant] = await tx.select({ sku: productVariants.sku }).from(productVariants).where(eq(productVariants.fabricColorId, fixture.colors[1]!.id));
       await tx.insert(stockMovements).values({ sku: variant!.sku, qty: 3, valueAmount: 144_000, type: "production", refType: "manual" });
       expect((await getStorefrontProductTiles(refs, tx)).map((tile) => tile.soldOut)).toEqual([false, false]);
+    });
+  });
+
+  test("soldOut also counts active, unexpired stock holds: a product whose every piece is held reads sold out", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await seedPublishedProduct(tx, { colorNames: ["Beige"] });
+      const refs = [{ productId: fixture.product.id, fabricColorId: null }];
+      const [variant] = await tx.select({ sku: productVariants.sku }).from(productVariants).where(eq(productVariants.productId, fixture.product.id));
+      await tx.insert(stockMovements).values({ sku: variant!.sku, qty: 2, valueAmount: 96_000, type: "production", refType: "manual" });
+
+      await insertStockReservation(tx, { sku: variant!.sku, qty: 2, expiresAt: new Date(Date.now() - 60_000) });
+      expect((await getStorefrontProductTiles(refs, tx)).map((tile) => tile.soldOut)).toEqual([false]);
+
+      await insertStockReservation(tx, { sku: variant!.sku, qty: 2 });
+      expect((await getStorefrontProductTiles(refs, tx)).map((tile) => tile.soldOut)).toEqual([true]);
     });
   });
 

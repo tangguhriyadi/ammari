@@ -5,6 +5,7 @@ import type { ChannelId, OrderStatus } from "@ammari/db/schema";
 import { valueDeltaForConsumption } from "../inventory/moving-average";
 import { lockVariantForUpdate } from "../stock/lock";
 import { currentBalanceForSkuLocked } from "../stock/ledger";
+import { consumeReservationsForOrder, releaseReservationsForOrder } from "../stock/reservations";
 import { ActionError, FieldError, mapUniqueViolation } from "../errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "../db";
 import { generateOrderNumber } from "./order-number";
@@ -234,6 +235,12 @@ export async function updateOrderItems(
     if (order.status !== "awaiting_payment") {
       throw new ActionError("Item pesanan hanya bisa diubah selama status masih menunggu bayar. Batalkan dan buat pesanan baru.");
     }
+    // A checkout order (payment_status set, docs/plans/cart-checkout.md §3) was priced, paid for
+    // and stock-held as placed; its lines also carry stock_reservations (RESTRICT FK), so the
+    // delete below would fail with a raw constraint error. Never editable here (plan §7).
+    if (order.paymentStatus !== null) {
+      throw new ActionError("Item pesanan dari checkout website tidak bisa diubah.");
+    }
 
     await tx.delete(orderItems).where(eq(orderItems.orderId, orderId));
     const insertedItems = await tx
@@ -271,8 +278,9 @@ export interface TransitionOrderStatusOptions {
 
 /** The ONLY path allowed to move an order between statuses (status.ts's own doc comment) —
  * checks ORDER_STATUS_TRANSITIONS, stamps the matching timestamp column, and runs the matching
- * stock side effect (decrement on awaiting_payment -> to_ship; whole-item restore on any
- * cancellation/return of an order whose stock had already left), all in one transaction. A
+ * stock side effect (decrement on awaiting_payment -> to_ship, consuming a checkout order's
+ * stock hold; whole-item restore on any cancellation/return of an order whose stock had already
+ * left, or releasing the hold of an unpaid one), all in one transaction. A
  * cancelled/returned transition ALSO voids the order's active thank-you card in this same
  * transaction (docs/plans/packing-cards.md) — an already-`claimed` card/voucher is never
  * touched; that policy is the owner's to decide later. */
@@ -300,9 +308,16 @@ export async function transitionOrderStatus(
     if (fromStatus === "awaiting_payment" && toStatus === "to_ship") {
       const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
       await decrementStockForOrderItems(tx, items, actorStaffUserId);
+      // A checkout order's stock hold ends here: its pieces now leave through the sale rows
+      // above (docs/plans/cart-checkout.md D3). No-op for staff-entered orders, which never hold.
+      // The sale checks physical stock only, so the order's own hold never blocks it (D4).
+      await consumeReservationsForOrder(tx, orderId);
     } else if (toStatus === "cancelled" || toStatus === "returned") {
       if (!STOCK_NOT_YET_DECREMENTED_STATUSES.includes(fromStatus)) {
         await restoreStockForOrderItems(tx, orderId, actorStaffUserId);
+      } else {
+        // Unpaid: nothing left the ledger, only the hold (if any) is given back.
+        await releaseReservationsForOrder(tx, orderId);
       }
       // Same transaction as the status change itself — an active card must never outlive the
       // order it was printed for (docs/plans/packing-cards.md). No-op if there isn't one.

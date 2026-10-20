@@ -8,7 +8,6 @@ import {
   products,
   productVariants,
   sizeChartRows,
-  stockMovements,
   storefrontHomepageSections,
   storeSettings,
 } from "../schema";
@@ -22,6 +21,7 @@ import {
   type SizeMode,
 } from "../schema/constants";
 import { qualifiedColumn } from "../sql-helpers";
+import { sellableQtySql } from "../stock-availability";
 
 // Replaces the old `getActiveProductBySlug` placeholder (deleted — it was a bare `.select()`,
 // exactly the anti-pattern this module must not repeat).
@@ -118,10 +118,11 @@ export interface StorefrontVariant {
   fabricColorId: string;
   size: Size;
   /** Boolean only — never the raw quantity, and never any scarcity-style "only N left" signal
-   * (firmly decided against, see the plan). `true` iff `SUM(stock_movements.qty)` for this SKU
-   * is greater than 0. Only active variants are ever included here at all (filtered in the
-   * query below) — a deactivated variant simply doesn't appear, rather than appearing with
-   * `available: false`. */
+   * (firmly decided against, see the plan). `true` iff the SKU's sellable stock,
+   * `SUM(stock_movements.qty)` minus its active, unexpired checkout holds (stock_reservations,
+   * docs/plans/cart-checkout.md D3), is greater than 0. Only active variants are ever included
+   * here at all (filtered in the query below) — a deactivated variant simply doesn't appear,
+   * rather than appearing with `available: false`. */
   available: boolean;
 }
 
@@ -188,11 +189,12 @@ export async function getStorefrontProductBySlug(slug: string, db: Database = de
     .where(eq(productImages.productId, productRow.id))
     .orderBy(productImages.fabricColorId, productImages.sortOrder);
 
-  // `available` is a boolean derived from a qty-only SUM — never the raw stock number, and
-  // never any other column off stock_movements (value_amount stays untouched).
+  // `available` is a boolean derived from qty-only SUMs (physical stock minus active holds, see
+  // ../stock-availability.ts) — never the raw stock number, and never any other column off
+  // stock_movements (value_amount stays untouched).
   //
-  // This correlated subquery (comparing stock_movements.sku to this query's own
-  // product_variants.sku) MUST use `qualifiedColumn()` for both sides, never bare
+  // The correlated subqueries (comparing stock_movements.sku / stock_reservations.sku to this
+  // query's own product_variants.sku) MUST use `qualifiedColumn()` for both sides, never bare
   // `${table.column}` interpolation — see that helper's doc comment (packages/db/src/sql-helpers.ts)
   // for the exact, confirmed drizzle-orm 0.45.3 bug this avoids: this query has no join (just a
   // single `.from(productVariants)`), which is precisely the condition under which drizzle
@@ -204,7 +206,7 @@ export async function getStorefrontProductBySlug(slug: string, db: Database = de
       sku: productVariants.sku,
       fabricColorId: productVariants.fabricColorId,
       size: productVariants.size,
-      available: sql<boolean>`coalesce((select sum(${qualifiedColumn(stockMovements, stockMovements.qty)}) from ${stockMovements} where ${qualifiedColumn(stockMovements, stockMovements.sku)} = ${qualifiedColumn(productVariants, productVariants.sku)}), 0) > 0`,
+      available: sql<boolean>`${sellableQtySql(qualifiedColumn(productVariants, productVariants.sku))} > 0`,
     })
     .from(productVariants)
     .where(and(eq(productVariants.productId, productRow.id), eq(productVariants.isActive, true)));
@@ -284,8 +286,8 @@ export interface StorefrontProductTile {
    * `fabricColorId` is null; a pinned-colour tile never shows a count. */
   colorCount: number;
   image: StorefrontProductImage | null;
-  /** `true` when NO active variant of the product, in any colour, has stock (`SUM(qty) > 0`, same
-   * boolean-only definition as `StorefrontVariant.available`). Product-level on purpose: a tile
+  /** `true` when NO active variant of the product, in any colour, has sellable stock (same
+   * boolean-only definition as `StorefrontVariant.available`: physical minus active holds > 0). Product-level on purpose: a tile
    * pinned to one colour still reads "sold out" only when the whole product is. */
   soldOut: boolean;
 }
@@ -342,12 +344,12 @@ export async function getStorefrontProductTiles(
     .from(productVariants)
     .where(and(inArray(productVariants.productId, resolvedProductIds), eq(productVariants.isActive, true)));
 
-  // Same qty-only SUM and `qualifiedColumn()` correlation as `getStorefrontProductBySlug`'s
+  // Same qty-only sellable figure and `qualifiedColumn()` correlation as `getStorefrontProductBySlug`'s
   // `available` (see the long comment there for why the qualification is mandatory).
   const stockRows = await db
     .select({
       productId: productVariants.productId,
-      inStock: sql<boolean>`coalesce((select sum(${qualifiedColumn(stockMovements, stockMovements.qty)}) from ${stockMovements} where ${qualifiedColumn(stockMovements, stockMovements.sku)} = ${qualifiedColumn(productVariants, productVariants.sku)}), 0) > 0`,
+      inStock: sql<boolean>`${sellableQtySql(qualifiedColumn(productVariants, productVariants.sku))} > 0`,
     })
     .from(productVariants)
     .where(and(inArray(productVariants.productId, resolvedProductIds), eq(productVariants.isActive, true)));

@@ -5,14 +5,16 @@ import {
   customers,
   fabricColors,
   fabrics,
+  orderItems,
   orders,
   products,
   productVariants,
   roles,
   staffUsers,
+  stockReservations,
   thankYouCards,
 } from "../src/schema";
-import type { Size } from "../src/schema";
+import type { Size, StockReservationStatus } from "../src/schema";
 import type { TestDatabase } from "./helpers";
 
 export async function insertCustomer(tx: TestDatabase, overrides: Partial<typeof customers.$inferInsert> = {}) {
@@ -195,4 +197,52 @@ export async function insertThankYouCard(
     .returning();
   if (!card) throw new Error("failed to insert thank_you_card fixture");
   return card;
+}
+
+/** The columns placeOrder always writes for a checkout order (orders_checkout_fields_check):
+ * awaiting_payment, payment pending, web channel, free shipping. */
+export function checkoutOrderValues(): Partial<typeof orders.$inferInsert> {
+  return {
+    channelId: "web",
+    channelOrderNo: null,
+    status: "awaiting_payment",
+    paymentStatus: "pending",
+    paymentExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    checkoutAttemptId: randomUUID(),
+    termsAcceptedAt: new Date(),
+    promoOptIn: false,
+    placedWithSession: false,
+    shippingAmount: 0,
+  };
+}
+
+/** A checkout order with one line for `sku` and a stock hold on it, written directly (read-side
+ * tests; the write path is @ammari/commerce/stock's reserveStockForOrder). `expiresAt` defaults
+ * to 75 minutes from now; a `consumed`/`released` status gets its matching timestamp. */
+export async function insertStockReservation(
+  tx: TestDatabase,
+  params: { sku: string; qty: number; status?: StockReservationStatus; expiresAt?: Date },
+) {
+  const order = await insertOrder(tx, checkoutOrderValues());
+  const [item] = await tx
+    .insert(orderItems)
+    .values({ orderId: order.id, sku: params.sku, qty: params.qty, unitPrice: 259_000, unitCost: 0 })
+    .returning();
+  if (!item) throw new Error("failed to insert order item fixture");
+  const status = params.status ?? "active";
+  const [reservation] = await tx
+    .insert(stockReservations)
+    .values({
+      orderId: order.id,
+      orderItemId: item.id,
+      sku: params.sku,
+      qty: params.qty,
+      status,
+      expiresAt: params.expiresAt ?? new Date(Date.now() + 75 * 60 * 1000),
+      consumedAt: status === "consumed" ? new Date() : null,
+      releasedAt: status === "released" ? new Date() : null,
+    })
+    .returning();
+  if (!reservation) throw new Error("failed to insert stock reservation fixture");
+  return { order, item, reservation };
 }
