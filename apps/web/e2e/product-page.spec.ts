@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { E2E_PRODUCT_SLUG, E2E_UNPUBLISHED_PRODUCT_SLUG } from "./storefront-fixtures";
+import { animatedBetween, readCurtainLog, recordCurtain } from "./helpers/curtain";
 
 test.describe("/products/[slug]", () => {
   test("renders gallery/price/colours/sizes/keunggulan/accordions at 390px and 1280px", async ({ page }) => {
@@ -83,5 +84,49 @@ test.describe("/products/[slug]", () => {
     await page.goto(`/products/${E2E_PRODUCT_SLUG}`);
     await expect(page.getByRole("button", { name: /Tambah ke keranjang|Pilih ukuran/ })).toHaveCount(0);
     await expect(page.getByRole("link", { name: /Tanya via WhatsApp/ })).toBeVisible();
+  });
+
+  // components/curtain.tsx: panels unroll top to bottom and roll back up, animating their real
+  // height, with the closing state rendered before the content is removed.
+  for (const viewport of [
+    { name: "390px", width: 390, height: 844 },
+    { name: "1280px", width: 1280, height: 900 },
+  ]) {
+    test(`accordion panels unroll and roll back up (${viewport.name})`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`/products/${E2E_PRODUCT_SLUG}`);
+      const perawatan = page.getByRole("button", { name: "Perawatan" });
+      const panel = page.locator(`[id="${await perawatan.getAttribute("aria-controls")}"]`);
+      await recordCurtain(perawatan);
+
+      await perawatan.click();
+      await expect(panel).toHaveAttribute("data-state", "open");
+      const opened = await readCurtainLog(perawatan);
+      expect(opened.states).toEqual(["removed", "entering", "opening", "open"]);
+      const height = (await panel.boundingBox())!.height;
+      expect(height).toBeGreaterThan(20);
+      expect(animatedBetween(opened.heights, height)).toBe(true);
+      // Settled open: no clip left, so focus outlines inside are not cut off.
+      expect(await panel.locator(".curtain-clip").evaluate((element) => getComputedStyle(element).overflow)).toBe("visible");
+
+      await perawatan.click();
+      await expect(panel).toHaveCount(0);
+      const closed = await readCurtainLog(perawatan);
+      expect(closed.states.slice(-2)).toEqual(["closing", "removed"]);
+      expect(animatedBetween(closed.heights.slice(opened.heights.length), height)).toBe(true);
+    });
+  }
+
+  test("prefers-reduced-motion: accordion panels switch instantly", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(`/products/${E2E_PRODUCT_SLUG}`);
+    const perawatan = page.getByRole("button", { name: "Perawatan" });
+    await recordCurtain(perawatan);
+    await perawatan.click();
+    await expect(perawatan).toHaveAttribute("aria-expanded", "true");
+    await perawatan.click();
+    await expect(perawatan).toHaveAttribute("aria-expanded", "false");
+    const { states } = await readCurtainLog(perawatan);
+    expect(states).toEqual(["removed", "open", "removed"]);
   });
 });

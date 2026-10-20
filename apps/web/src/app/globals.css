@@ -63,6 +63,34 @@ body {
   outline-offset: 2px;
 }
 
+/* Curtain (components/curtain.tsx): the mobile menu and PDP accordions unroll from the top edge
+ * and roll back up, animating the real content height through grid-template-rows 0fr/1fr.
+ * Ease-out while opening, ease-in while closing (the timing function of the state being entered
+ * applies). The clip is lifted once fully open so focus outlines inside are never cut off.
+ * Layered so a consumer's Tailwind utilities still win on conflicts. */
+@layer components {
+  .curtain {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 300ms cubic-bezier(0.32, 0, 0.67, 0);
+  }
+
+  .curtain[data-state="opening"],
+  .curtain[data-state="open"] {
+    grid-template-rows: 1fr;
+    transition-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+
+  .curtain-clip {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .curtain[data-state="open"] > .curtain-clip {
+    overflow: visible;
+  }
+}
+
 /* Respect prefers-reduced-motion (docs/design/storefront.md §3 "Motion") — the few transitions
  * this app uses (button hover, product-tile hover scale, accordion icon swap) all become instant
  * rather than animated. */
@@ -72,5 +100,11 @@ body {
   *::after {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
+  }
+
+  /* The component already skips its phases under reduced motion; this covers a mid-session
+   * preference change. */
+  .curtain {
+    transition: none;
   }
 }

@@ -107,6 +107,26 @@ test.describe("PDP trust row and accordion", () => {
       await expect.poll(async () => (await heading.boundingBox())?.y ?? -1).toBeGreaterThanOrEqual(56);
       await expect(heading).toBeInViewport();
       expect(new URL(page.url()).hash).toBe("");
+      // Exactly on the chart: once the smooth scroll settles, the heading sits at its scroll margin
+      // (scroll-mt-20, 80px), where an instant scrollIntoView would put it, so the scroll ran
+      // against the final, fully open layout. Desktop included, despite the sticky purchase
+      // column. Read-only until the smooth scroll has stopped (a scroll call would cancel it).
+      await expect
+        .poll(() =>
+          page.evaluate(async () => {
+            const before = window.scrollY;
+            await new Promise((resolve) => setTimeout(resolve, 150));
+            return window.scrollY === before;
+          }),
+        )
+        .toBe(true);
+      const landing = await heading.evaluate((element) => {
+        const settled = element.getBoundingClientRect().top;
+        element.scrollIntoView({ behavior: "instant", block: "start" });
+        return { settled, target: element.getBoundingClientRect().top };
+      });
+      expect(Math.abs(landing.settled - landing.target)).toBeLessThanOrEqual(1);
+      expect(Math.round(landing.settled)).toBe(80);
 
       // Already open: clicking again keeps it open and focuses the heading again.
       await page.getByRole("link", { name: "Panduan ukuran" }).click();
