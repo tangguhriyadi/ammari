@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@ammari/auth": "workspace:*",
+    "@ammari/commerce": "workspace:*",
     "@ammari/content-sanitize": "workspace:*",
     "@ammari/db": "workspace:*",
     "@ammari/ui": "workspace:*",

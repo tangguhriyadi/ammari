@@ -5,6 +5,10 @@ import { claimRateLimits } from "@ammari/db/schema";
 
 export type Database = typeof defaultDb;
 
+/** `claim_rate_limits.action` keys. The table is shared by every non-Better-Auth storefront
+ * endpoint (docs/plans/cart-checkout.md §3: `cart_write` from session 5, more keys later). */
+export type IpRateLimitAction = "view" | "claim" | "cart_write" | "cart_create";
+
 // Generous enough that a real buyer re-scanning their own card a few times (bad signal, retry,
 // showing a friend) never trips it, tight enough to slow down scripted enumeration of the
 // token space. The "claim" action gets a tighter limit than "view" — a real claim attempt is a
@@ -29,7 +33,7 @@ const CLEANUP_PROBABILITY = 0.05;
 export async function recordClaimAttemptAndCount(
   db: Database,
   ip: string,
-  action: "view" | "claim",
+  action: IpRateLimitAction,
   windowSeconds: number,
 ): Promise<number> {
   const [row] = await db

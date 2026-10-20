@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     "./address": "./src/address.ts",
+    "./cart": "./src/cart/index.ts",
+    "./cart-limits": "./src/cart/limits.ts",
     "./db": "./src/db.ts",
     "./errors": "./src/errors.ts",
     "./jakarta-month": "./src/jakarta-month.ts",

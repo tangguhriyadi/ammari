@@ -317,6 +317,9 @@ importers:
       '@ammari/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@ammari/commerce':
+        specifier: workspace:*
+        version: link:../../packages/commerce
       '@ammari/content-sanitize':
         specifier: workspace:*
         version: link:../../packages/content-sanitize
