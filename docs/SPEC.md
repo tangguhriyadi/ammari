@@ -21,6 +21,10 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
   step, optional profile completion (§10.3).
 - Stock (`/stock`), production (`/production`), and raw-material stock (fabric and accessories),
   all on append-only, moving-average ledgers (§5.1).
+- Order, stock and thank-you-card write paths (`transitionOrderStatus`, `createOrder`,
+  `adjustStock`, `saveStockCount`, the SKU row lock, audit log, domain errors) live in
+  `packages/commerce` (`@ammari/commerce`), shared by both apps (docs/plans/cart-checkout.md D1).
+  Admin-only read queries stay in `apps/admin`.
 - Suppliers (`/suppliers`), purchase documents with goods receipts (`/purchases`), production
   output receipts, defect stock recorded at receipt (`/stock/defects`, plus a "Cacat" figure on
   every stock list and item page), and defect dispositions: return to the supplier/tailor for a

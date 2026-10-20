@@ -2,7 +2,8 @@
 
 **Status:** **Approved by the owner, 2026-10-20** (all §16 decisions are final). **Session 0 done**
 (SPEC.md §3.4, §5.2, §5.3, §8, §10.2, §10.3, §11 and docs/design/storefront.md §4, §7 updated to
-match this plan). Next: session 1. Nothing built yet.
+match this plan). **Session 1 done 2026-10-20** (`@ammari/commerce` extracted, no behavior
+change; see the session table). Next: session 2.
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
@@ -562,7 +563,7 @@ Next.js and Better Auth docs/source before route, action or plugin work.
 | # | Session | Migration | Tests | Reviewers |
 |---|---|---|---|---|
 | 0 | **DONE 2026-10-20.** Approve plan; update SPEC.md (§3.4 no shipping-cost calculation, tracking via Komerce; §5.2/§5.3 new tables; §8 gateway = Midtrans without cards, courier = Komerce; §10.3 order login link) and design spec (§4 footer chips without card, §7 fixed shipping row) | none | none | none |
-| 1 | Extract `@ammari/commerce` (no behavior change) | none | existing admin tests moved and green | typescript, database |
+| 1 | **DONE 2026-10-20.** Extract `@ammari/commerce` (no behavior change). Moved: `db` (`Tx`, `Database`, `writeAuditLog`), `errors` (`FieldError`, `ActionError`, `mapUniqueViolation`), `jakarta-month`, `moving-average`, `order-status`, `orders` (`createOrder`, `updateOrderItems`, `transitionOrderStatus`, `generateOrderNumber`), `stock` (`lockVariantForUpdate`, `currentBalanceForSkuLocked`, `adjustStock`, `saveStockCount`), `thank-you-cards` (`voidActiveCardForOrder`). Admin's `@/lib/db` and `@/lib/errors` re-export them (one error class for `instanceof`). Admin-only read queries (order list/detail with cost, SKU picker, stock overview/ledger/count sheet) stay in apps/admin, so cost-bearing reads never sit in a package web imports. No voucher redeem/restore code existed to move (§1); it is new in session 7, in this package. apps/web does not use the package yet. Its test task is chained after `@ammari/auth#test` (`packages/commerce/turbo.json`) | none | existing admin tests moved and green | typescript, database |
 | 2 | Schema `checkout_core` + constants + constraint tests | 0030 | db tests | database |
 | 3 | Shipping areas: licence check, dataset script, data migration, search (or plain-field fallback) | 0031 | unit + db | database |
 | 4 | Reservations + storefront availability + admin "Dipesan" | none | TDD stock + admin e2e 390/1280 | database, typescript, react |

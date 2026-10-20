@@ -6,7 +6,7 @@ import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import { lockFabricForUpdate } from "./db";
-import { valueDeltaForConsumption, type RawMaterialBalance } from "./moving-average";
+import { valueDeltaForConsumption, type RawMaterialBalance } from "@ammari/commerce/moving-average";
 
 // ---------- Master list with stock balance (the /stock/fabrics tab — see accessories.ts's
 // listAccessories for the identical shape this mirrors) ----------

@@ -9,7 +9,7 @@ import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import type { EligibleSkuRow, ProductUsingFabricRow } from "@/lib/production/queries";
 import type { SupplierOption } from "@/lib/suppliers/queries";
 import { estimateFabricCost } from "@/lib/production/fabric-cost-estimate";
-import type { RawMaterialBalance } from "@/lib/inventory/moving-average";
+import type { RawMaterialBalance } from "@ammari/commerce/moving-average";
 import { parseDecimalQuantity } from "@/lib/production/decimal-quantity";
 import {
   createDraftAction,

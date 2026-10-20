@@ -2,7 +2,7 @@ import "server-only";
 import { sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { Tx } from "@/lib/db";
-import { jakartaYearMonth } from "@/lib/production/jakarta-month";
+import { jakartaYearMonth } from "@ammari/commerce/jakarta-month";
 
 /** Generates the next "<PREFIX>-YYYYMM-NNN" document number for whichever month `now` falls in
  * (Asia/Jakarta), reading the current maximum from `column` (docs/plans/suppliers-goods-receipt.md

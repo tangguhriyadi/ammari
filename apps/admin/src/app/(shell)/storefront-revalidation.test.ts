@@ -26,8 +26,8 @@ vi.mock("@/lib/storefront-stock", () => ({
   skusForBatchLines: m.skusForBatchLines,
   skusForReceipt: m.skusForReceipt,
 }));
-vi.mock("@/lib/stock/queries", () => ({ saveStockCount: m.saveStockCount, adjustStock: m.adjustStock }));
-vi.mock("@/lib/orders/queries", () => ({ createOrder: m.createOrder, transitionOrderStatus: m.transitionOrderStatus }));
+vi.mock("@ammari/commerce/stock", () => ({ saveStockCount: m.saveStockCount, adjustStock: m.adjustStock }));
+vi.mock("@ammari/commerce/orders", () => ({ createOrder: m.createOrder, transitionOrderStatus: m.transitionOrderStatus }));
 vi.mock("@/lib/receipts/production", () => ({ postGoodsReceiptForBatch: m.postGoodsReceiptForBatch, closeBatchShort: vi.fn() }));
 vi.mock("@/lib/receipts/queries", () => ({ postGoodsReceiptForPurchase: vi.fn(), reverseGoodsReceipt: m.reverseGoodsReceipt }));
 

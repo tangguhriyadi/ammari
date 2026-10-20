@@ -4,7 +4,7 @@ import { z } from "zod";
 import { STOCK_ADJUSTMENT_REASONS } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
-import * as stockQueries from "@/lib/stock/queries";
+import * as stockQueries from "@ammari/commerce/stock";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
 import { revalidateStorefrontForSkus } from "@/lib/storefront-stock";
 

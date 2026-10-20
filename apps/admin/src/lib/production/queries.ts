@@ -23,7 +23,7 @@ import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import { lockAccessoryForUpdate, lockFabricForUpdate } from "@/lib/inventory/db";
 import { getAccessoryBalance } from "@/lib/inventory/accessories";
 import { getFabricBalance } from "@/lib/inventory/fabric-stock";
-import { valueDeltaForConsumption, type RawMaterialBalance } from "@/lib/inventory/moving-average";
+import { valueDeltaForConsumption, type RawMaterialBalance } from "@ammari/commerce/moving-average";
 import { lockProductionBatchForUpdate, type Tx } from "./db";
 import { generateBatchNumber } from "./batch-number";
 import { calculateUnitCost } from "./unit-cost";

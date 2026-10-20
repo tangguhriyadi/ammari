@@ -6,7 +6,7 @@ import type { OrderStatus } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/action-result";
-import { createOrder, transitionOrderStatus } from "@/lib/orders/queries";
+import { createOrder, transitionOrderStatus } from "@ammari/commerce/orders";
 import { createCustomer, searchCustomers, type CustomerOption } from "@/lib/customers/queries";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
 import { revalidateStorefrontForSkus, skusForOrder } from "@/lib/storefront-stock";

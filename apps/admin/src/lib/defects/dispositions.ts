@@ -26,7 +26,7 @@ import { formatPurchaseQty, getLineProgress, getLineQuantities, hasAtMostTwoDeci
 import { statusAfterReceiptChange, TERMINAL_PURCHASE_STATUSES } from "@/lib/purchases/status";
 import { getBatchLineProgress, getBatchQuantitiesByLine } from "@/lib/receipts/production";
 import { toCentiQty } from "@/lib/receipts/valuation";
-import { lockVariantForUpdate } from "@/lib/stock/db";
+import { lockVariantForUpdate } from "@ammari/commerce/stock";
 import { DEFECT_MOVEMENT_TYPE_LABELS } from "./labels";
 import { getLineDefectTotals, type DefectItemRef, type DefectSourceLine } from "./queries";
 import { lineOutflowValue } from "./valuation";

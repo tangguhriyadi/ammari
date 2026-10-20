@@ -6,9 +6,10 @@ import { auditLog, goodsReceipts, productionBatches, productionBatchItems, produ
 import { getStorefrontProductBySlug } from "@ammari/db/storefront";
 import { ActionError, FieldError } from "@/lib/errors";
 import { getFabricBalance, recordFabricPurchase } from "@/lib/inventory/fabric-stock";
-import { createOrder } from "@/lib/orders/queries";
+import { createOrder } from "@ammari/commerce/orders";
 import { createDraft, postBatch } from "@/lib/production/queries";
-import { adjustStock, currentBalanceForSkuLocked, listStockLedger } from "@/lib/stock/queries";
+import { adjustStock, currentBalanceForSkuLocked } from "@ammari/commerce/stock";
+import { listStockLedger } from "@/lib/stock/queries";
 import {
   closeBatchShort,
   effectiveReceiptStatuses,

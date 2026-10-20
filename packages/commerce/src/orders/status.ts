@@ -2,10 +2,11 @@ import type { OrderStatus } from "@ammari/db/schema";
 
 /** The one allowed-transitions table for `orders.status` (approved plan, docs/plans/orders-core.md).
  * `packages/db` stays schema-only (docs/SPEC.md §10) — this business rule lives here instead,
- * in app code, mirroring how production's draft->posted transition is enforced by app code (plus
- * a DB trigger locking the already-posted state) rather than a stored transition table.
+ * in @ammari/commerce (shared by both apps), mirroring how production's draft->posted
+ * transition is enforced by app code (plus a DB trigger locking the already-posted state) rather
+ * than a stored transition table.
  *
- * `transitionOrderStatus` (queries.ts) is the ONLY path allowed to move an order between
+ * `transitionOrderStatus` (lifecycle.ts) is the ONLY path allowed to move an order between
  * statuses — every caller (the manual-entry UI, a future importer, a future packing page) must
  * go through it, never an ad hoc `UPDATE orders SET status = ...`.
  *

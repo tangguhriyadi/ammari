@@ -21,6 +21,9 @@ pnpm workspaces + Turborepo:
   site," they mean this app.
 - `apps/admin` — the admin dashboard the wife uses daily.
 - `packages/db` — Drizzle schema + migrations, shared by both apps.
+- `packages/commerce` — order, stock and thank-you-card write paths (`transitionOrderStatus` is
+  the only way an order changes status), shared by both apps. Server-only modules import
+  `server-only`; never import from `apps/*` into it.
 
 ## Conventions
 

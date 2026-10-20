@@ -10,7 +10,7 @@ import { createDraft, postBatch } from "@/lib/production/queries";
 import { closePurchase, createPurchase, getPurchaseDocument } from "@/lib/purchases/queries";
 import { closeBatchShort, getBatchReceiptSummary, postGoodsReceiptForBatch } from "@/lib/receipts/production";
 import { getSellableReceiptValueForPurchase, postGoodsReceiptForPurchase, reverseGoodsReceipt } from "@/lib/receipts/queries";
-import { currentBalanceForSkuLocked } from "@/lib/stock/queries";
+import { currentBalanceForSkuLocked } from "@ammari/commerce/stock";
 import { disposeDefects, returnDefectsToSupplier, reverseDefectMovement, validateDisposal } from "./dispositions";
 import {
   getDefectBalance,

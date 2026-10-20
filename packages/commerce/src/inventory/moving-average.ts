@@ -16,10 +16,11 @@ export function averageCostPerUnit(balance: RawMaterialBalance): number | null {
 }
 
 /** The `value_amount` a 'production' or 'adjustment' movement should carry, given the item's
- * balance BEFORE this movement (read under the item's row lock — see lib/inventory/db.ts) and
- * the signed qty delta being applied. The caller must have already verified
- * `balance.qty + qtyDelta >= 0` (same "lock, check negative, write" discipline adjustStock uses)
- * — this function has no way to reject a would-be-negative result itself.
+ * balance BEFORE this movement (read under the item's row lock — see apps/admin's
+ * lib/inventory/db.ts and this package's stock/lock.ts) and the signed qty delta being applied.
+ * The caller must have already verified `balance.qty + qtyDelta >= 0` (same "lock, check
+ * negative, write" discipline adjustStock uses) — this function has no way to reject a
+ * would-be-negative result itself.
  *
  * Correction #1 (approved plan, binding): if this movement brings qty to EXACTLY zero, the value
  * delta is forced to exactly `-balance.valueAmount` — clearing any rounding residue — rather than

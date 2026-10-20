@@ -62,8 +62,9 @@ export const orders = pgTable(
       .notNull()
       .references(() => channels.id, { onDelete: "restrict" }),
     // Internal, always-present, human-readable number ("ORD-YYYYMM-NNNN", Jakarta month) —
-    // generated for every order regardless of channel (see lib/orders/order-number.ts, mirroring
-    // production's generateBatchNumber). This is what staff and the UI reference everywhere.
+    // generated for every order regardless of channel (see @ammari/commerce's
+    // orders/order-number.ts, mirroring production's generateBatchNumber). This is what staff
+    // and the UI reference everywhere.
     orderNo: text("order_no").notNull().unique(),
     // The MARKETPLACE's own order number — nullable because manual-entry channels (whatsapp/
     // instagram/offline/web/reseller) have no external order number at all. Postgres's plain

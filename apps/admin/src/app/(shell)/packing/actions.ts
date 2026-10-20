@@ -6,7 +6,7 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { ActionError } from "@/lib/errors";
 import { defaultDb } from "@/lib/db";
-import { transitionOrderStatus } from "@/lib/orders/queries";
+import { transitionOrderStatus } from "@ammari/commerce/orders";
 import { getCardPrintStatus, mintThankYouCardsForOrders } from "@/lib/packing/queries";
 import { claimUrl, claimUrlHost, formatClaimTokenForDisplay } from "@/lib/packing/token";
 import { buildStickerSheetPdf, stickerPdfFilename, type StickerPdfCard } from "@/lib/packing/sticker-pdf";

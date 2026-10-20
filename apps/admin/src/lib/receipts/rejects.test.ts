@@ -31,10 +31,12 @@ import {
 } from "@/lib/defects/queries";
 import { getAccessoryBalance } from "@/lib/inventory/accessories";
 import { getFabricBalance, recordFabricPurchase } from "@/lib/inventory/fabric-stock";
-import { createOrder, listOrderableVariants } from "@/lib/orders/queries";
+import { createOrder } from "@ammari/commerce/orders";
+import { listOrderableVariants } from "@/lib/orders/queries";
 import { createDraft, postBatch } from "@/lib/production/queries";
 import { closePurchase, createPurchase, getPurchaseDocument } from "@/lib/purchases/queries";
-import { currentBalanceForSkuLocked, getSkuDetail, listProductSkusForCount, listStockOverview } from "@/lib/stock/queries";
+import { currentBalanceForSkuLocked } from "@ammari/commerce/stock";
+import { getSkuDetail, listProductSkusForCount, listStockOverview } from "@/lib/stock/queries";
 import { closeBatchShort, getBatchReceiptSummary, listReceiptsForBatch, listUnreceivedBatchesForProduct, postGoodsReceiptForBatch } from "./production";
 import { listReceiptsForPurchase, postGoodsReceiptForPurchase, reverseGoodsReceipt } from "./queries";
 

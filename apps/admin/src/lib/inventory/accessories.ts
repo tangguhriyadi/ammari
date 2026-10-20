@@ -6,7 +6,7 @@ import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError, mapUniqueViolation } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import { lockAccessoryForUpdate } from "./db";
-import { valueDeltaForConsumption, type RawMaterialBalance } from "./moving-average";
+import { valueDeltaForConsumption, type RawMaterialBalance } from "@ammari/commerce/moving-average";
 
 const ACCESSORY_CONSTRAINT_FIELDS = {
   accessories_size_group_size_key: {

@@ -3,7 +3,7 @@ import { Badge, Breadcrumb, PageHeader } from "@ammari/ui";
 import { formatDate, formatDateTime, formatRupiah, formatShortDate } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getOrderDetail, stripOrderDetailCost } from "@/lib/orders/queries";
-import { ORDER_STATUS_TRANSITIONS } from "@/lib/orders/status";
+import { ORDER_STATUS_TRANSITIONS } from "@ammari/commerce/order-status";
 import { ORDER_STATUS_BADGE_VARIANT, ORDER_STATUS_LABELS } from "@/lib/orders/status-labels";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { StatusActions } from "./_components/status-actions";

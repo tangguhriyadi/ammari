@@ -21,8 +21,7 @@ import { nextDocumentNumber } from "@/lib/documents/document-number";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { lockProductionBatchForUpdate } from "@/lib/production/db";
 import { batchReceiptProgressStatus, batchStatusAfterReceiptChange, isOpenBatchReceiptStatus, type BatchLineProgress } from "@/lib/production/receipt-status";
-import { lockVariantForUpdate } from "@/lib/stock/db";
-import { currentBalanceForSkuLocked } from "@/lib/stock/queries";
+import { currentBalanceForSkuLocked, lockVariantForUpdate } from "@ammari/commerce/stock";
 import { assertReceivedAt } from "./received-at";
 
 // Goods receipts of production output (docs/plans/suppliers-goods-receipt.md §5, sessions S4 +

@@ -1,8 +1,8 @@
 import "server-only";
 import { sql } from "drizzle-orm";
 import { orders } from "@ammari/db/schema";
-import type { Tx } from "@/lib/db";
-import { jakartaYearMonth } from "@/lib/production/jakarta-month";
+import type { Tx } from "../db";
+import { jakartaYearMonth } from "../jakarta-month";
 
 /** Generates the next "ORD-YYYYMM-NNNN" order number for whichever month `now` falls in
  * (Asia/Jakarta) — same collision-safe idiom as production's generateBatchNumber: a per-month

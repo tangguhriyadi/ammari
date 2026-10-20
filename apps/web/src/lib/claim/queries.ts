@@ -89,10 +89,10 @@ export async function claimVoucher(
   return db.transaction(async (tx) => {
     // Unlocked lookup, only to resolve which order this card belongs to — never trusted for
     // anything past this point (the locked re-read below is what `classifyCard` actually sees).
-    // Locking ORDER then CARD here is required, not arbitrary: apps/admin's
-    // `transitionOrderStatus`/`voidActiveCardForOrder` and `mintThankYouCard` both lock the
-    // order row first and only then touch `thank_you_cards` in the same transaction — locking
-    // the other way round here would deadlock against those under real concurrent traffic (a
+    // Locking ORDER then CARD here is required, not arbitrary: @ammari/commerce's
+    // `transitionOrderStatus`/`voidActiveCardForOrder` and apps/admin's `mintThankYouCard` both
+    // lock the order row first and only then touch `thank_you_cards` in the same transaction —
+    // locking the other way round here would deadlock against those under real concurrent traffic (a
     // staff cancel/reprint racing a customer claim on the same order).
     const [cardRef] = await tx
       .select({ id: thankYouCards.id, orderId: thankYouCards.orderId })

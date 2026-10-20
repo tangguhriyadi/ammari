@@ -1,4 +1,4 @@
-import { averageCostPerUnit, type RawMaterialBalance } from "@/lib/inventory/moving-average";
+import { averageCostPerUnit, type RawMaterialBalance } from "@ammari/commerce/moving-average";
 
 /** A non-binding, display-only estimate of what this draft's fabric consumption will cost once
  * posted — `fabricYards × the fabric's CURRENT moving-average cost per yard` (see

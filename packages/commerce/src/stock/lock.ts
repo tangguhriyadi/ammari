@@ -1,9 +1,7 @@
 import "server-only";
 import { eq } from "drizzle-orm";
 import { productVariants } from "@ammari/db/schema";
-import type { Tx } from "@/lib/db";
-
-export type { Tx, Database } from "@/lib/db";
+import type { Tx } from "../db";
 
 /** `SELECT ... FOR UPDATE` on one product_variants row — MUST be the first statement inside any
  * transaction that adjusts a SKU's stock (manual adjustment, stock count line). Without it, two

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // Same reason as apps/web/turbo.json: this suite migrates+seeds and writes the shared
+      // `ammari_test` database, and @ammari/commerce's only package dependency is @ammari/db,
+      // so the root `^test` alone would let it run concurrently with its sibling @ammari/auth.
+      // This edge keeps the DB-backed chain strictly serial:
+      // db -> auth -> commerce -> admin -> web (admin depends on commerce, so `^test` orders it).
+      "dependsOn": ["$TURBO_EXTENDS$", "@ammari/auth#test"]
+    }
+  }
+}
