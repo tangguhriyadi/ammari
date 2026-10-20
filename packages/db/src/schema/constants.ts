@@ -182,7 +182,9 @@ export type RawMaterialMovementRefType = (typeof RAW_MATERIAL_MOVEMENT_REF_TYPES
  * `channel_order_no` is required for these (validated in app code, see lib/orders/queries.ts)
  * so a later import of the same order updates via the existing unique key instead of duplicating
  * it. "whatsapp"/"instagram"/"offline" are manual-entry-only channels (no external order number
- * ever exists for them); "web" is reserved for the Dec 2026 main-site checkout. */
+ * ever exists for them); "web" is the Dec 2026 main-site checkout's channel. Staff can also
+ * pick "web" for a manual order, so a CHECKOUT order is identified by
+ * `orders.payment_status IS NOT NULL` (migration 0030), never by the channel alone. */
 export const CHANNEL_IDS = ["shopee", "tiktok", "web", "reseller", "whatsapp", "instagram", "offline"] as const;
 export type ChannelId = (typeof CHANNEL_IDS)[number];
 
@@ -202,6 +204,75 @@ export const ORDER_STATUSES = [
   "returned",
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
+
+// ---------- Storefront checkout (docs/plans/cart-checkout.md §3, migration 0030) ----------
+
+/** A web order line's stock hold (plan D3). `active` counts against storefront availability
+ * only while `expires_at > now()`, so a missed sweep never strands stock; `consumed` at payment
+ * (the real `sale` movement is written then), `released` on expiry or cancel. */
+export const STOCK_RESERVATION_STATUSES = ["active", "consumed", "released"] as const;
+export type StockReservationStatus = (typeof STOCK_RESERVATION_STATUSES)[number];
+
+export const PAYMENT_PROVIDERS = ["midtrans"] as const;
+export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
+
+/** One payment ATTEMPT's state (payments.status, plan §6.2). `created` until the gateway answers
+ * the create call; `failed` is an attempt-level outcome (the buyer may retry inside the gateway
+ * page until expiry). No card-only states: cards are never enabled (plan D16). */
+export const PAYMENT_STATUSES = [
+  "created",
+  "pending",
+  "paid",
+  "failed",
+  "expired",
+  "cancelled",
+  "refunded",
+  "partially_refunded",
+  "chargeback",
+] as const;
+export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+
+/** The ORDER's payment state (orders.payment_status), set only on checkout orders (NULL for
+ * every other order, including staff-entered `web` orders). Deliberately not PAYMENT_STATUSES:
+ * `created` and `failed` describe one attempt, never the order (owner decision, 2026-10-20). */
+export const ORDER_PAYMENT_STATUSES = [
+  "pending",
+  "paid",
+  "expired",
+  "cancelled",
+  "refunded",
+  "partially_refunded",
+  "chargeback",
+] as const;
+export type OrderPaymentStatus = (typeof ORDER_PAYMENT_STATUSES)[number];
+
+/** Why a checkout order was cancelled (orders.cancel_reason). NULL for orders cancelled before
+ * migration 0030 and for every non-checkout cancel by the current admin. */
+export const ORDER_CANCEL_REASONS = ["payment_expired", "payment_cancelled", "admin"] as const;
+export type OrderCancelReason = (typeof ORDER_CANCEL_REASONS)[number];
+
+/** Flags on orders.needs_attention (a set: several can hold at once; adding one never removes
+ * another and clearing is per flag; owner decision, 2026-10-20). The admin "Perlu perhatian"
+ * filter is `cardinality(needs_attention) > 0`. The full set ships now, Phase K's
+ * `tracking_stale` / `delivery_problem` included, so no later migration has to replace the CHECK.
+ * `payment_anomaly`: a card-only gateway status (`capture` / `authorize`) or a `credit_card`
+ * payment type, which must never mark an order paid (plan §6.2). */
+export const ORDER_ATTENTION_FLAGS = [
+  "stock_short_at_payment",
+  "paid_after_cancel",
+  "amount_mismatch",
+  "refund_due",
+  "refund_received",
+  "payment_anomaly",
+  "tracking_stale",
+  "delivery_problem",
+] as const;
+export type OrderAttentionFlag = (typeof ORDER_ATTENTION_FLAGS)[number];
+
+/** Transactional emails (plan §8); order_notifications (order_id, kind) is UNIQUE, the
+ * idempotency guard that keeps a retried webhook from sending twice. */
+export const ORDER_NOTIFICATION_KINDS = ["created", "paid", "shipped", "delivered", "cancelled", "owner_paid"] as const;
+export type OrderNotificationKind = (typeof ORDER_NOTIFICATION_KINDS)[number];
 
 export const IMPORT_BATCH_KINDS = ["orders", "income"] as const;
 export type ImportBatchKind = (typeof IMPORT_BATCH_KINDS)[number];

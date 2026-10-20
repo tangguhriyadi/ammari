@@ -3,15 +3,17 @@
 **Status:** **Approved by the owner, 2026-10-20** (all §16 decisions are final). **Session 0 done**
 (SPEC.md §3.4, §5.2, §5.3, §8, §10.2, §10.3, §11 and docs/design/storefront.md §4, §7 updated to
 match this plan). **Session 1 done 2026-10-20** (`@ammari/commerce` extracted, no behavior
-change; see the session table). Next: session 2.
+change; see the session table). **Session 2 done 2026-10-20** (migration 0030 `checkout_core`,
+schema only). Next: session 3.
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
 
 **Courier integration (Komerce) is required** but is a separate phase (Phase K, §15) because the
-sandbox key is not available yet. Checkout, totals and payment never depend on it. Until Phase K
-ships, staff enter courier and resi by hand (existing "Tandai dikirim") and mark orders
-"Selesai" by hand.
+sandbox key is not available yet. It needs the **Komerce Enterprise plan** (Rp249.000/month,
+cheaper annually), the only plan with the Shipping Delivery API; Ammari subscribes when Phase K
+starts (§15). Checkout, totals and payment never depend on it. Until Phase K ships, staff enter
+courier and resi by hand (existing "Tandai dikirim") and mark orders "Selesai" by hand.
 
 ## 1. Grounding: what already exists
 
@@ -118,16 +120,30 @@ ships, staff enter courier and resi by hand (existing "Tandai dikirim") and mark
 - **`shipping_areas`**: `id`, `province`, `city`, `district`, `postal_code`, `search_text`,
   `komerce_destination_id text NULL`. UNIQUE `(province, city, district, postal_code)`. Empty in
   0030.
-- **`orders`** new nullable / defaulted columns: `payment_status` (NULL for non-web),
-  `payment_expires_at`, `paid_at`, `contact_email citext`, `contact_phone`, `recipient_name`,
-  `shipping_address_snapshot jsonb` (the text `shipping_address` is also filled so admin and
-  packing work unchanged), `shipping_area_id`, `checkout_attempt_id uuid UNIQUE NULL`,
-  `terms_accepted_at`, `promo_opt_in bool`, `cancel_reason text` (`payment_expired` /
-  `payment_cancelled` / `admin`), `needs_attention text NULL` (`stock_short_at_payment`,
-  `paid_after_cancel`, `amount_mismatch`, `refund_due`, `refund_received`, later
-  `tracking_stale`, `delivery_problem`), `placed_with_session bool` (whether the buyer was logged
-  in at checkout; decides whether emails carry a magic link). CHECK: `channel_id = 'web'` or
-  `payment_status IS NULL`.
+- **`orders`** new nullable / defaulted columns: `payment_status` (NULL for non-checkout
+  orders; `ORDER_PAYMENT_STATUSES` = `pending` / `paid` / `expired` / `cancelled` / `refunded` /
+  `partially_refunded` / `chargeback`, deliberately without the attempt-only `created` and
+  `failed`; owner decision 2026-10-20), `payment_expires_at`, `paid_at`, `contact_email citext`,
+  `contact_phone`, `recipient_name`, `shipping_address_snapshot jsonb` (the text
+  `shipping_address` is also filled so admin and packing work unchanged), `shipping_area_id`,
+  `checkout_attempt_id uuid UNIQUE NULL`, `terms_accepted_at`, `promo_opt_in bool`,
+  `cancel_reason text` (`payment_expired` / `payment_cancelled` / `admin`, only on a cancelled
+  order), `needs_attention text[] NOT NULL DEFAULT '{}'`, a **set** of flags
+  (`ORDER_ATTENTION_FLAGS`: `stock_short_at_payment`, `paid_after_cancel`, `amount_mismatch`,
+  `refund_due`, `refund_received`, `payment_anomaly` for a card-only status or `credit_card`
+  payment type, and Phase K's `tracking_stale`, `delivery_problem`, all allowed from 0030; owner
+  decision 2026-10-20: adding a flag never removes another, clearing is per flag, the admin
+  "Perlu perhatian" filter is `cardinality(needs_attention) > 0`), `placed_with_session bool`
+  (whether the buyer was logged in at checkout; decides whether emails carry a magic link).
+  CHECKs: `channel_id = 'web'` or `payment_status IS NULL`; a checkout order has
+  `payment_expires_at`, `checkout_attempt_id`, `terms_accepted_at`, `promo_opt_in` and
+  `placed_with_session`; `paid` has `paid_at`; `contact_phone` is `+62...`. A **checkout order is
+  `payment_status IS NOT NULL`**, never just `channel_id = 'web'`: staff can also enter manual
+  orders on the `web` channel.
+- `stock_reservations` references its order line through one composite FK
+  `(order_item_id, order_id, sku) -> order_items (id, order_id, sku)` (new UNIQUE on
+  `order_items`), ON DELETE RESTRICT, so the admin's delete-and-reinsert item edit fails loudly
+  on a line that still holds stock (session 14 blocks item edits on checkout orders anyway).
 - **`order_access_tokens`** (the "Lihat pesanan" links): `id`, `order_id`, `token_hash UNIQUE`,
   `expires_at`, `created_at`, `last_used_at`. One row per email sent, so every email has its own
   working link (raw tokens are never stored, so a later email cannot reuse an earlier one).
@@ -282,8 +298,8 @@ Concurrency tests: last unit with two buyers, the same voucher in two tabs, doub
 3. Unknown `provider_order_id`: 200 and log.
 4. Fetch `GET /v2/{order_id}/status`; apply the state machine to that response. `gross_amount`
    must equal `payments.gross_amount` (IDR), else `needs_attention = 'amount_mismatch'`, never
-   paid. A `payment_type` of `credit_card` (should be impossible) is treated the same way: flag,
-   never paid.
+   paid. A `payment_type` of `credit_card` (should be impossible) adds the `payment_anomaly`
+   flag instead, never paid.
 5. One transaction, `FOR UPDATE` on the order, conditional updates, so replays and out-of-order
    deliveries are no-ops.
 6. 200 after commit, 500 on errors (Midtrans retries). Emails via `after()`.
@@ -302,7 +318,7 @@ path) and from bot challenges.
 | `cancel` | `cancelled` | same, `cancel_reason = 'payment_cancelled'` |
 | `refund` / `partial_refund` | `refunded` / `partially_refunded` | flag `refund_received`; staff decides the order status |
 | `chargeback` / `partial_chargeback` | `chargeback` | flag only (not expected without cards; handled defensively) |
-| `capture`, `authorize` | unchanged | card-only statuses: logged and flagged as an anomaly, never paid |
+| `capture`, `authorize` | unchanged | card-only statuses: logged and flagged `payment_anomaly`, never paid |
 | paid for an order already `cancelled` | `paid` | flag `paid_after_cancel` for a manual refund |
 | paid with insufficient physical stock (decision 9) | `paid` | stays `awaiting_payment`, `payment_status = 'paid'`, flag `stock_short_at_payment`; admin "Proses" retries once stock arrives, or the owner refunds |
 
@@ -564,7 +580,7 @@ Next.js and Better Auth docs/source before route, action or plugin work.
 |---|---|---|---|---|
 | 0 | **DONE 2026-10-20.** Approve plan; update SPEC.md (§3.4 no shipping-cost calculation, tracking via Komerce; §5.2/§5.3 new tables; §8 gateway = Midtrans without cards, courier = Komerce; §10.3 order login link) and design spec (§4 footer chips without card, §7 fixed shipping row) | none | none | none |
 | 1 | **DONE 2026-10-20.** Extract `@ammari/commerce` (no behavior change). Moved: `db` (`Tx`, `Database`, `writeAuditLog`), `errors` (`FieldError`, `ActionError`, `mapUniqueViolation`), `jakarta-month`, `moving-average`, `order-status`, `orders` (`createOrder`, `updateOrderItems`, `transitionOrderStatus`, `generateOrderNumber`), `stock` (`lockVariantForUpdate`, `currentBalanceForSkuLocked`, `adjustStock`, `saveStockCount`), `thank-you-cards` (`voidActiveCardForOrder`). Admin's `@/lib/db` and `@/lib/errors` re-export them (one error class for `instanceof`). Admin-only read queries (order list/detail with cost, SKU picker, stock overview/ledger/count sheet) stay in apps/admin, so cost-bearing reads never sit in a package web imports. No voucher redeem/restore code existed to move (§1); it is new in session 7, in this package. apps/web does not use the package yet. Its test task is chained after `@ammari/auth#test` (`packages/commerce/turbo.json`) | none | existing admin tests moved and green | typescript, database |
-| 2 | Schema `checkout_core` + constants + constraint tests | 0030 | db tests | database |
+| 2 | **DONE 2026-10-20.** Schema `checkout_core` + constants + constraint tests. `packages/db/src/schema/checkout.ts` (new tables), checkout columns on `orders`, constants `STOCK_RESERVATION_STATUSES`, `PAYMENT_PROVIDERS`, `PAYMENT_STATUSES`, `ORDER_PAYMENT_STATUSES`, `ORDER_CANCEL_REASONS`, `ORDER_ATTENTION_FLAGS`, `ORDER_NOTIFICATION_KINDS`. Migration hand edits: `SET LOCAL lock_timeout = '5s'`, `set_updated_at` triggers on the 5 new tables with `updated_at`, and the `order_items` UNIQUE moved before the composite FK that needs it (drizzle-kit emitted it after). Tests: `test/checkout-schema.test.ts`, `test/migration-0030.test.ts` (upgrade from 0029 with data, previous release's writes, idempotent re-run) | 0030 | db tests | database |
 | 3 | Shipping areas: licence check, dataset script, data migration, search (or plain-field fallback) | 0031 | unit + db | database |
 | 4 | Reservations + storefront availability + admin "Dipesan" | none | TDD stock + admin e2e 390/1280 | database, typescript, react |
 | 5 | Cart backend: cookie, `resolveCart`, actions, caps, merge, rate limits | none | TDD integration | security, typescript, database |
@@ -584,7 +600,8 @@ Sessions 3 and 4 can swap; 6 and 7 can swap after 5; 12 can run any time after 1
 ### Phase K: Komerce courier booking and tracking (required; starts when the sandbox key arrives)
 
 Not a launch blocker for 1 Dec (manual courier + resi and manual "Selesai" cover the gap), but
-required: target live within the first weeks of December.
+required: target live within the first weeks of December. **Prerequisite: a Komerce Enterprise
+subscription**, started when Phase K starts (see "Komerce plan" below).
 
 | # | Session | Migration | Notes |
 |---|---|---|---|
@@ -613,20 +630,40 @@ required: target live within the first weeks of December.
   `delivery_problem` and never auto-transitions to `returned` (staff confirm, since stock rows
   follow).
 
-**Komerce plan features required** (confirm with Komerce before subscribing; the public docs do
-not tie features to plans):
-1. Delivery Order API (Komship) production access: Store Order, Cancel Order, Detail Order,
+**Komerce plan: Enterprise** (corrected 2026-10-20; an earlier version of this plan said the
+"Pro" tier was enough, which is wrong).
+- **Pro (Rp149.000/month) does not include the Shipping Delivery API** (Store Order / create
+  AWB, Cancel Order, Detail Order, Pickup Request, Print Label, History AWB tracking). Only
+  **Enterprise (Rp249.000/month, cheaper when paid annually)** includes it, so Phase K needs
+  Enterprise. Shipping Cost (live rates: Search Destination, Calculate) is available on every
+  plan.
+- Ammari does **not** use Komerce Payment or QRISLY; online payment stays on Midtrans (D5).
+- **Cost:** Rp249.000/month (less on the annual plan) from the month Phase K starts, plus the
+  courier fees Ammari pays per shipment (free shipping, D11). Nothing is paid to Komerce before
+  Phase K.
+- **When:** the owner subscribes to Enterprise when Phase K starts; K1 to K3 build against the
+  sandbox key.
+
+What Phase K needs from that plan (confirm each with Komerce when subscribing):
+1. Shipping Delivery API (Komship) production access: Store Order, Cancel Order, Detail Order,
    Pickup Request, Print Label, History AWB.
 2. Webhook registration for order status updates.
 3. Search Destination (and Calculate, to record the cost Ammari pays).
 4. A daily request quota covering destination search at checkout (if switched to Komerce in K1)
-   plus polling: roughly orders in transit x 8 polls/day; the RajaOngkir "Pro" tier (20,000
-   hits/day per the public docs) is comfortably enough, "Starter" (100/day) is not.
+   plus polling: roughly orders in transit x 8 polls/day. Confirm Enterprise's quota covers it.
 5. Universal waybill tracking (RajaOngkir track waybill) only if some web orders will ship
    outside Komship; recommendation: ship every web order through Komship so one tracking source
    covers all.
 6. Billing for shipments (deposit/balance or invoice), since Ammari pays every shipment.
 7. A sandbox key for K1 to K3.
+
+**Risks:**
+- Subscribing to Pro (or no plan) would block K2 and K3 entirely: no booking, labels or
+  tracking. Check the subscription is Enterprise before K2 starts.
+- If Enterprise is not subscribed in time, the manual path (staff "Tandai dikirim" with courier
+  + resi, manual "Selesai") stays the only path; nothing in Phase C depends on Komerce.
+- Enterprise's daily request quota is not in the public docs; if it is too low for polling,
+  lengthen the poll interval (the webhook is a hint anyway) before raising the plan question.
 
 ## 16. Decisions (owner, 2026-10-20)
 
@@ -646,7 +683,9 @@ not tie features to plans):
 12. No delivery estimate at checkout until Komerce.
 13. Area dataset licence checked in session 3; plain-text fields if not clean.
 14. Privacy policy and terms updated before launch by the owner in admin; exact changes in §11.1.
-15. **Komerce tracking is required.** The owner subscribes to the Komerce plan needed (§15 list).
+15. **Komerce tracking is required.** The owner subscribes to the **Komerce Enterprise** plan
+    (Rp249.000/month, cheaper annually; Pro lacks the Shipping Delivery API) when Phase K starts
+    (§15). Komerce Payment / QRISLY are not used.
     Web orders move to `completed` automatically when tracking reports delivered, with a manual
     fallback; customers see tracking in "Pesanan saya". Delivered in Phase K.
 16. **No silent login after guest checkout.** Guest order emails carry a separate "Masuk ke akun"
@@ -656,6 +695,6 @@ not tie features to plans):
     melihat semua pesanan" via OTP. Built as a custom Better Auth plugin because the stock
     `magic-link` plugin in 1.7.7 logs in on GET and does not supersede older links (D15).
 
-Remaining small items to confirm with third parties (not owner decisions): Komerce plan contents
-and the meaning of "Selesai"; whether the Midtrans merchant review requires naming the processor
-on the privacy page.
+Remaining small items to confirm with third parties (not owner decisions): Komerce Enterprise's
+daily request quota and the meaning of "Selesai" (the plan itself is settled: Enterprise); whether
+the Midtrans merchant review requires naming the processor on the privacy page.

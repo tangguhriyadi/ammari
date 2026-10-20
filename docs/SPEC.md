@@ -219,7 +219,10 @@ and `/checkout/*` return not-found and the WhatsApp CTA stays primary).
 - Transactional email (Resend, Indonesian): order created, paid, shipped, delivered, cancelled,
   plus an alert to the owner on every paid order (§10.2).
 - Courier tracking via Komerce (Phase K, required; target live in the first weeks of December).
-  Until it ships, staff enter courier and resi by hand ("Tandai dikirim") and mark orders
+  Requires the **Komerce Enterprise** plan (Rp249.000/month, cheaper annually), subscribed when
+  Phase K starts: Pro (Rp149.000/month) does not include the Shipping Delivery API (create
+  AWB/order, pickup request, tracking, print label); Shipping Cost (live rates) is on every plan.
+  Komerce Payment / QRISLY are not used. Until it ships, staff enter courier and resi by hand ("Tandai dikirim") and mark orders
   "Selesai" by hand; checkout, totals and payment never depend on Komerce. Once live, web orders
   move `to_ship -> shipped -> completed` automatically from tracking (a returned-to-sender
   status only raises a flag, staff confirm the return), with the manual actions kept as a
@@ -487,8 +490,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - `payments` — one row per payment attempt (Midtrans); unique on `provider_order_id`
   (`<env prefix><order_no>-<attempt>`, prefix `""` in prod and `DEV-` / `LOCAL-` elsewhere because
   dev and local share one gateway Sandbox account), unique `(order_id, attempt)`, unique nullable
-  `provider_ref` (the gateway transaction id). Not yet implemented — Dec 2026 cart/checkout work
-  (§3.4; migration 0030, plan §3).
+  `provider_ref` (the gateway transaction id). Schema exists (migration 0030, plan §3); nothing
+  writes it until the Dec 2026 cart/checkout sessions (§3.4). The same holds for every table and
+  `orders` column below that is marked for checkout.
 - `payment_notifications` — raw log of every gateway notification (payload, signature validity,
   processing result); payloads kept 12 months.
 - `stock_reservations` — one row per web order line while its payment is pending
@@ -511,9 +515,12 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   `payment_expires_at`, `paid_at`, contact snapshot (`contact_email`, `contact_phone`,
   `recipient_name`), `shipping_address_snapshot`, `shipping_area_id`, `checkout_attempt_id`
   (unique, makes double submit idempotent), consent evidence, `cancel_reason`,
-  `needs_attention` (e.g. stock short at payment, paid after cancel, amount mismatch, refund due),
-  and `placed_with_session`. A web order is `awaiting_payment` until paid, then enters the normal
-  `to_ship` queue; the 18% marketplace-fee assumption does not apply to `web`.
+  `needs_attention` (a set of flags, `text[]`: e.g. stock short at payment, paid after cancel,
+  amount mismatch, refund due, payment anomaly; several can hold at once and each is cleared on
+  its own), and `placed_with_session`. A checkout order is one with `payment_status` set (staff
+  can also enter manual orders on the `web` channel, which leave it NULL). It is
+  `awaiting_payment` until paid, then enters the normal `to_ship` queue; the 18%
+  marketplace-fee assumption does not apply to `web`.
 - `ad_spend_daily` — unique on `(date, channel)`.
 - `expenses`
 - `targets` — one row per month.
@@ -528,7 +535,7 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   present; unique `email` (stored as `citext` for case-insensitive matching); verification
   timestamps; `pdp_consent_at`; `promo_consent_at`; `type` (`retail` / `reseller`).
 - `customer_addresses` — saved addresses (recipient, phone, address, area, optional coordinates,
-  one default per customer); orders always store an address **snapshot**. Not yet implemented,
+  one default per customer); orders always store an address **snapshot**. Schema only so far,
   see the `payments` note in §5.2.
 - `customer_login_links` — the "Masuk ke akun" one-time login links (§10.3): hashed token, bound
   to a customer id and email, 24-hour expiry, `consumed_at` / `superseded_at`; a partial unique
@@ -582,7 +589,8 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - Payment gateway: **Midtrans** (Snap, redirect mode), methods limited to QRIS, GoPay, ShopeePay
   and BCA / BNI / BRI / Mandiri / Permata virtual accounts. **No card payments.** Ammari absorbs
   gateway fees.
-- Courier: **Komerce** for booking, label and tracking (Phase K). **Shipping is free to the
+- Courier: **Komerce** for booking, label and tracking (Phase K), on the **Enterprise** plan
+  (the only plan with the Shipping Delivery API; see §3.4). **Shipping is free to the
   customer**, so there is no shipping-rate provider and no shipping cost is calculated or shown.
 - Order number stays `ORD-YYYYMM-NNNN`, shared across channels.
 - Maximum 10 per line and 20 pieces per order. The payment window is 60 minutes and stock is held
@@ -853,7 +861,8 @@ dev site's Cloudflare Access bypass for exactly that one path; the internal cron
 sweeper every 5 minutes, retention job daily, Komerce polling in Phase K) with
 `INTERNAL_CRON_SECRET`, on the internal network only (Caddy does not route `/api/internal/*`);
 owner-edited privacy policy and terms in admin Konten before launch; footer payment chips
-changed to QRIS, Virtual Account, GoPay, ShopeePay.
+changed to QRIS, Virtual Account, GoPay, ShopeePay. Before Phase K goes live: a Komerce
+**Enterprise** subscription (not Pro, §3.4) and its production key in the env.
 
 The dev deploy pipeline (`.github/workflows/deploy-dev.yml`, `docs/deploy.md`) is built. Items
 below marked **(automated)** are enforced by that pipeline/image and need no per-deploy action;

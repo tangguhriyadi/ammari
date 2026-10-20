@@ -211,6 +211,13 @@
       "when": 1792482883445,
       "tag": "0029_announcement_bar_homepage_meta_og",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792495933643,
+      "tag": "0030_checkout_core",
+      "breakpoints": true
     }
   ]
 }
