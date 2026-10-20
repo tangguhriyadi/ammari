@@ -153,6 +153,53 @@ test.describe("Konten: Pengaturan Toko", () => {
     await expect(page.getByLabel("Alamat")).toHaveValue("Jl. Contoh Admin E2E No. 1");
   });
 
+  test("announcement bar and homepage meta: live counters, one-line cap, persisted after save — at 390px and 1280px", async ({ page }) => {
+    await loginAs(page, E2E_STOREFRONT_EMAIL);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/content/settings");
+    const toggle = page.getByRole("switch", { name: "Tampilkan bar pengumuman" });
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+
+    const text = page.getByLabel("Teks pengumuman");
+    await text.fill("Promo Ramadan E2E");
+    await expect(page.locator("#settings-announcement-count")).toHaveText("17/40 karakter");
+    await expect(page.getByTestId("announcement-bar-preview")).toHaveText("Promo Ramadan E2E");
+    // The input itself stops at the one-line cap.
+    await text.fill("x".repeat(45));
+    await expect(text).toHaveValue("x".repeat(40));
+    await text.fill("Promo Ramadan E2E");
+
+    const title = page.getByLabel("Judul beranda", { exact: true });
+    await title.fill("a".repeat(61));
+    await expect(page.locator("#settings-homepage-meta-title-count")).toContainText("61/60 karakter");
+    await expect(page.locator("#settings-homepage-meta-title-count")).toContainText("memotong judul");
+    await title.fill("Ammari | Gamis Syar'i Admin E2E");
+    await page.getByLabel("Deskripsi beranda", { exact: true }).fill("Deskripsi admin E2E.");
+    await expect(page.locator("#settings-homepage-meta-description-count")).toHaveText("20/160 karakter");
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByTestId("announcement-bar-preview")).toHaveCount(0);
+    await page.getByRole("button", { name: "Simpan" }).click();
+    await expect(page.getByRole("status")).toContainText("Perubahan berhasil disimpan");
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/content/settings");
+    await expect(page.getByRole("switch", { name: "Tampilkan bar pengumuman" })).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByLabel("Teks pengumuman")).toHaveValue("Promo Ramadan E2E");
+    await expect(page.getByLabel("Judul beranda", { exact: true })).toHaveValue("Ammari | Gamis Syar'i Admin E2E");
+    await expect(page.getByLabel("Deskripsi beranda", { exact: true })).toHaveValue("Deskripsi admin E2E.");
+
+    // Back to the shipped defaults so later runs start from the same state.
+    await page.getByRole("switch", { name: "Tampilkan bar pengumuman" }).click();
+    await page.getByLabel("Teks pengumuman").fill("Gratis Ongkir Ke Seluruh Indonesia");
+    await page.getByLabel("Judul beranda", { exact: true }).fill("");
+    await page.getByLabel("Deskripsi beranda", { exact: true }).fill("");
+    await page.getByRole("button", { name: "Simpan" }).click();
+    await expect(page.getByRole("status")).toContainText("Perubahan berhasil disimpan");
+  });
+
   test("rejects an invalid WhatsApp number with a field error, without saving", async ({ page }) => {
     await loginAs(page, E2E_STOREFRONT_EMAIL);
     await page.goto("/content/settings");

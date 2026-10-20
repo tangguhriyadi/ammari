@@ -13,7 +13,7 @@ export default async function ContentSettingsPage() {
       <Breadcrumb items={rootCrumbs("/content/settings")} />
       <PageHeader
         title="Pengaturan Toko"
-        description="Nomor WhatsApp, email, dan alamat yang ditampilkan di footer dan halaman produk toko online. Simpan langsung tayang."
+        description="Kontak toko, bar pengumuman, serta judul dan deskripsi beranda toko online. Simpan langsung tayang."
       />
       <StoreSettingsForm
         initialValues={{
@@ -21,6 +21,10 @@ export default async function ContentSettingsPage() {
           supportEmail: settings.supportEmail ?? "",
           businessAddress: settings.businessAddress ?? "",
           returnPolicySummary: settings.returnPolicySummary ?? "",
+          announcementBarEnabled: settings.announcementBarEnabled,
+          announcementBarText: settings.announcementBarText ?? "",
+          homepageMetaTitle: settings.homepageMetaTitle ?? "",
+          homepageMetaDescription: settings.homepageMetaDescription ?? "",
         }}
       />
     </>

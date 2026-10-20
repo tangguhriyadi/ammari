@@ -1,6 +1,7 @@
 import "server-only";
 import { unstable_cache } from "next/cache";
 import {
+  getPublishedHeroOgImage,
   getPublishedHomepageContent,
   getStorefrontProductTiles,
   type StorefrontProductTileRef,
@@ -34,5 +35,13 @@ export const getCachedPublishedHomepageContent = unstable_cache(
 export const getCachedHomepageProductTiles = unstable_cache(
   (refs: StorefrontProductTileRef[]) => getStorefrontProductTiles(refs),
   ["storefront-homepage-tiles"],
+  { tags: [HOMEPAGE_CACHE_TAG], revalidate: HOMEPAGE_CACHE_REVALIDATE_SECONDS },
+);
+
+// The Hero-derived OG image (lib/content/site-og-image.ts) changes only when the homepage is
+// published, which is exactly what this tag is revalidated on, so it shares it.
+export const getCachedPublishedHeroOgImage = unstable_cache(
+  () => getPublishedHeroOgImage(),
+  ["storefront-hero-og-image"],
   { tags: [HOMEPAGE_CACHE_TAG], revalidate: HOMEPAGE_CACHE_REVALIDATE_SECONDS },
 );

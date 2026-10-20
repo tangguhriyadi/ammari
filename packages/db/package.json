@@ -11,6 +11,7 @@
     "./highlights": "./src/catalog/highlights.ts",
     "./why-ammari": "./src/catalog/why-ammari.ts",
     "./storefront": "./src/storefront/queries.ts",
+    "./storefront-settings": "./src/storefront/settings.ts",
     "./sql-helpers": "./src/sql-helpers.ts",
     "./test-utils": "./test/helpers.ts",
     "./test-fixtures": "./test/fixtures.ts",

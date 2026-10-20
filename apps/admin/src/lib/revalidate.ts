@@ -31,11 +31,19 @@ function getRevalidateSecret(): string | null {
   return secret;
 }
 
-async function postRevalidate(payload: { paths?: readonly string[]; tags?: readonly string[] }): Promise<RevalidateOutcome> {
+async function postRevalidate(payload: {
+  paths?: readonly string[];
+  layouts?: readonly string[];
+  tags?: readonly string[];
+}): Promise<RevalidateOutcome> {
   const secret = getRevalidateSecret();
   if (!secret) return { ok: false };
 
-  const description = [...(payload.paths ?? []), ...(payload.tags?.map((tag) => `tag:${tag}`) ?? [])].join(", ");
+  const description = [
+    ...(payload.paths ?? []),
+    ...(payload.layouts?.map((layout) => `layout:${layout}`) ?? []),
+    ...(payload.tags?.map((tag) => `tag:${tag}`) ?? []),
+  ].join(", ");
   try {
     const response = await fetch(`${getWebInternalUrl()}/api/revalidate`, {
       method: "POST",
@@ -89,11 +97,17 @@ export async function revalidateProductSlugs(slugs: readonly string[]): Promise<
   return { ok: results.every((result) => result.ok) };
 }
 
-// Info pages (session 8) and store settings (session 8) are NOT revalidated here — on purpose.
-// Both read directly from the database on every request on apps/web (no `unstable_cache`, no
-// route-level ISR): info pages are `dynamic = "force-dynamic"` with a plain, uncached
-// `getPublishedInfoPage` call, and store settings is read fresh on every layout render. An
-// earlier version of this plan cached both with `unstable_cache`, matching the homepage's own
-// pattern — reverted (see this session's own implementation report) after it did not reliably
-// reflect a fresh publish/save within the same apps/web server lifetime. With nothing cached,
-// there is nothing to revalidate: a publish or save is visible on the very next request.
+/** After a store settings save (Pengaturan Toko). The settings are read uncached, but they render
+ * in apps/web's ROOT layout (announcement bar, footer contact) on every page, and the
+ * `/products/[slug]` pages are ISR-cached for up to an hour with that layout baked in. Revalidating
+ * the root LAYOUT path refreshes every page beneath it, and the homepage tag refreshes `/`'s own
+ * cached data. */
+export function revalidateStorefrontLayout(): Promise<RevalidateOutcome> {
+  return postRevalidate({ layouts: ["/"], tags: [HOMEPAGE_CACHE_TAG] });
+}
+
+// Info pages (session 8) are NOT revalidated here, on purpose: they are `dynamic =
+// "force-dynamic"` with a plain, uncached `getPublishedInfoPage` call on apps/web. An earlier
+// version of this plan cached them with `unstable_cache`, matching the homepage's own pattern,
+// reverted after it did not reliably reflect a fresh publish within the same apps/web server
+// lifetime. With nothing cached, there is nothing to revalidate.

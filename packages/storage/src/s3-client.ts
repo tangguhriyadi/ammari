@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { StorageClient } from "./client";
 
@@ -76,6 +76,21 @@ export class S3StorageClient implements StorageClient {
         CacheControl: MEDIA_CACHE_CONTROL,
       }),
     );
+  }
+
+  async get(key: string): Promise<Buffer | null> {
+    try {
+      const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+      if (!response.Body) return null;
+      return Buffer.from(await response.Body.transformToByteArray());
+    } catch (error) {
+      // NoSuchKey is the typed AWS error; some S3-compatible providers only surface a bare 404.
+      if (error instanceof NoSuchKey) return null;
+      if (typeof error === "object" && error !== null && (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   async delete(key: string): Promise<void> {

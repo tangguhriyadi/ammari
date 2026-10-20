@@ -74,6 +74,24 @@ describe("revalidateHomepage / revalidateProductSlug", () => {
   });
 });
 
+describe("revalidateStorefrontLayout", () => {
+  test("posts the root layout path and the homepage tag", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { revalidateStorefrontLayout } = await import("./revalidate");
+    expect(await revalidateStorefrontLayout()).toEqual({ ok: true });
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse(init.body)).toEqual({ layouts: ["/"], tags: ["storefront:homepage"] });
+  });
+
+  test("resolves ok:false (never throws) when apps/web is unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+    const { revalidateStorefrontLayout } = await import("./revalidate");
+    expect(await revalidateStorefrontLayout()).toEqual({ ok: false });
+  });
+});
+
 describe("revalidateProductSlugs", () => {
   test("deduplicates, posts every product path plus the homepage tag once, and batches by 10 paths", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));

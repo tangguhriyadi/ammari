@@ -14,7 +14,7 @@ import { isE2eFixturesRequestAllowed } from "@/lib/fixtures/e2e-fixtures-gate";
 // /api/test/* backdoor in this app.
 const FIXTURES_ROOT = resolve(process.cwd(), "e2e", "fixtures");
 const NAME_PATTERN = /^[a-z0-9-]+$/;
-const FILE_PATTERN = new RegExp(`^(${IMAGE_SIZES.join("|")})\\.webp$`);
+const FILE_PATTERN = new RegExp(`^((${IMAGE_SIZES.join("|")})\\.webp|og\\.jpg)$`);
 
 function notFound(): NextResponse {
   return NextResponse.json({ error: "not_found" }, { status: 404 });
@@ -30,8 +30,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
   const { path } = await params;
   const [name, file] = path;
-  // Strict allowlist, not just "no ..": every fixture is exactly <name>/<size>.webp, so nothing
-  // else should ever resolve, regardless of how the segment got encoded.
+  // Strict allowlist, not just "no ..": every fixture is exactly <name>/<size>.webp (or the Hero's
+  // generated <name>/og.jpg), so nothing else should ever resolve, regardless of how the segment
+  // got encoded.
   if (path.length !== 2 || !name || !file || !NAME_PATTERN.test(name) || !FILE_PATTERN.test(file)) {
     return notFound();
   }
@@ -41,7 +42,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
   try {
     const body = await readFile(filePath);
-    return new NextResponse(body, { headers: { "Content-Type": "image/webp" } });
+    return new NextResponse(body, { headers: { "Content-Type": file.endsWith(".jpg") ? "image/jpeg" : "image/webp" } });
   } catch {
     return notFound();
   }

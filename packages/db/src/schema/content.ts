@@ -3,6 +3,12 @@ import { boolean, check, index, integer, jsonb, pgTable, text, timestamp, unique
 import { checkIn, timestamps } from "./columns";
 import { HOMEPAGE_SECTION_KEYS, INFO_PAGE_SLUGS, SIZES, type Size } from "./constants";
 import { staffUsers } from "./rbac";
+import {
+  ANNOUNCEMENT_BAR_DEFAULT_TEXT,
+  ANNOUNCEMENT_BAR_TEXT_MAX_LENGTH,
+  HOMEPAGE_META_DESCRIPTION_MAX_LENGTH,
+  HOMEPAGE_META_TITLE_MAX_LENGTH,
+} from "../storefront/settings";
 
 // ---------- Homepage content (docs/plans/storefront-cms.md, migration 0019) ----------
 
@@ -47,6 +53,13 @@ export const storefrontHomepageSections = pgTable(
     publishedByStaffUserId: uuid("published_by_staff_user_id").references(() => staffUsers.id, {
       onDelete: "restrict",
     }),
+    // Hero row only (migration 0029): the object key of the 1200x630 Open Graph JPEG generated
+    // from the PUBLISHED Hero image at "Terbitkan" time (apps/admin lib/content/hero-og-image.ts).
+    // Null = no Hero image published, or generation failed, and apps/web falls back to its static
+    // placeholder OG image. A column rather than a key derived from the published image's
+    // storageKey because a Hero published before this column existed has no generated JPEG at
+    // all, and a derived key would point every social preview at a 404 until the next publish.
+    publishedOgImageKey: text("published_og_image_key"),
   },
   (table) => [
     check("storefront_homepage_sections_key_check", checkIn(table.key, HOMEPAGE_SECTION_KEYS)),
@@ -165,7 +178,30 @@ export const storeSettings = pgTable(
     // page — a short plain-text summary, not rich text (one line, no formatting need, same
     // reasoning products.allsize_fit_note is plain text).
     returnPolicySummary: text("return_policy_summary"),
+    // Migration 0029: the full-width bar above the storefront nav. On by default with the
+    // default text, so the bar appears as soon as this ships. Null/empty text hides the bar the
+    // same as `enabled = false`.
+    announcementBarEnabled: boolean("announcement_bar_enabled").notNull().default(true),
+    announcementBarText: text("announcement_bar_text").default(ANNOUNCEMENT_BAR_DEFAULT_TEXT),
+    // Migration 0029: "/"'s <title>/meta description/og:title/og:description. Null = the code
+    // default (@ammari/db/storefront-settings), so the default can be reworded without a migration.
+    homepageMetaTitle: text("homepage_meta_title"),
+    homepageMetaDescription: text("homepage_meta_description"),
     ...timestamps(),
   },
-  (table) => [check("store_settings_id_check", sql`${table.id} = 1`)],
+  (table) => [
+    check("store_settings_id_check", sql`${table.id} = 1`),
+    check(
+      "store_settings_announcement_bar_text_length_check",
+      sql`char_length(${table.announcementBarText}) <= ${sql.raw(String(ANNOUNCEMENT_BAR_TEXT_MAX_LENGTH))}`,
+    ),
+    check(
+      "store_settings_homepage_meta_title_length_check",
+      sql`char_length(${table.homepageMetaTitle}) <= ${sql.raw(String(HOMEPAGE_META_TITLE_MAX_LENGTH))}`,
+    ),
+    check(
+      "store_settings_homepage_meta_description_length_check",
+      sql`char_length(${table.homepageMetaDescription}) <= ${sql.raw(String(HOMEPAGE_META_DESCRIPTION_MAX_LENGTH))}`,
+    ),
+  ],
 );

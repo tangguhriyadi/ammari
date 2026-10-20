@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { HomepageSectionKey } from "@ammari/db/schema";
 import { getStorageClient, getStorageKeyPrefix } from "@/lib/storage";
+import { buildHeroOgImageKey } from "@ammari/db/storefront-settings";
 import { buildImageObjectKey } from "@/lib/products/image-keys";
 import { IMAGE_SIZES, logUploadTiming, processUploadedImage, type ImageSize } from "@/lib/products/image-processing";
 import { ActionError } from "@/lib/errors";
@@ -135,8 +136,18 @@ export async function deleteContentImageObjects(
 
 /** Deletes every (de-duplicated) storage key no longer referenced by any draft/published
  * content — see homepage.ts's diffing logic for how this list is computed. Never throws: each
- * key's deletion is independently best-effort via deleteContentImageObjects above. */
+ * key's deletion is independently best-effort via deleteContentImageObjects above. Also removes
+ * the Hero OG JPEG (hero-og-image.ts) that may sit next to the image's WebP sizes: deleting a key
+ * that was never written (any non-Hero image) is a no-op on S3 and on the in-memory client. */
 export async function cleanupOrphanedContentImages(storageKeys: readonly string[]): Promise<void> {
   const unique = [...new Set(storageKeys)];
-  await Promise.allSettled(unique.map((key) => deleteContentImageObjects(key)));
+  await Promise.allSettled(unique.map((key) => Promise.all([deleteContentImageObjects(key), deleteHeroOgImageObject(key)])));
+}
+
+async function deleteHeroOgImageObject(storageKey: string): Promise<void> {
+  try {
+    await getStorageClient().delete(buildHeroOgImageKey(storageKey));
+  } catch (error) {
+    console.error(`failed to delete hero OG image object for ${storageKey}:`, error);
+  }
 }

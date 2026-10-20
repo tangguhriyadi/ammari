@@ -76,7 +76,7 @@ describe("POST /api/revalidate", () => {
     const response = await POST(postRequest({ paths: ["/", "/products/gamis-basic"] }));
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toEqual({ ok: true, revalidated: { paths: ["/", "/products/gamis-basic"], tags: [] } });
+    expect(body).toEqual({ ok: true, revalidated: { paths: ["/", "/products/gamis-basic"], layouts: [], tags: [] } });
     expect(revalidatePath).toHaveBeenCalledWith("/");
     expect(revalidatePath).toHaveBeenCalledWith("/products/gamis-basic");
     expect(revalidatePath).toHaveBeenCalledTimes(2);
@@ -87,7 +87,7 @@ describe("POST /api/revalidate", () => {
     const response = await POST(postRequest({ tags: ["storefront:homepage"] }));
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toEqual({ ok: true, revalidated: { paths: [], tags: ["storefront:homepage"] } });
+    expect(body).toEqual({ ok: true, revalidated: { paths: [], layouts: [], tags: ["storefront:homepage"] } });
     expect(revalidateTag).toHaveBeenCalledWith("storefront:homepage", { expire: 0 });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
@@ -98,9 +98,24 @@ describe("POST /api/revalidate", () => {
     const body = await response.json();
     expect(body).toEqual({
       ok: true,
-      revalidated: { paths: ["/products/gamis-basic"], tags: ["storefront:homepage"] },
+      revalidated: { paths: ["/products/gamis-basic"], layouts: [], tags: ["storefront:homepage"] },
     });
     expect(revalidatePath).toHaveBeenCalledWith("/products/gamis-basic");
     expect(revalidateTag).toHaveBeenCalledWith("storefront:homepage", { expire: 0 });
+  });
+
+  test("revalidates a layout path with the layout type, so every page beneath it is refreshed", async () => {
+    const response = await POST(postRequest({ layouts: ["/"], tags: ["storefront:homepage"] }));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toEqual({ ok: true, revalidated: { paths: [], layouts: ["/"], tags: ["storefront:homepage"] } });
+    expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
+    expect(revalidatePath).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects a layout path that doesn't start with a slash", async () => {
+    const response = await POST(postRequest({ layouts: ["products"] }));
+    expect(response.status).toBe(400);
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

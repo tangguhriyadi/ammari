@@ -64,8 +64,11 @@ leaves it stuck filled; touch gets its own brief fill on `:active` instead.
 
 ## 4. Global layout
 
+### Announcement bar (above the header)
+Full width, `--color-brand` background, white text, centred, one line. Height exactly 36 px on mobile and 40 px from 1024 px (the header's desktop breakpoint). Type follows the nav link style: Jost 500, uppercase, 11 px with 0.12em tracking on mobile, 12 px with 0.16em from 1024 px; `truncate` guards against wrapping. NOT sticky: it sits in normal flow above the header and scrolls away, and the header (`sticky top-0`) takes over the top edge exactly when the bar is gone, so nothing jumps and no sticky offset (the header itself, the PDP's `md:top-20` columns, the "Panduan ukuran" `scroll-mt-20` landing) depends on the bar. Text and on/off come from store settings (admin Pengaturan Toko; default on, "Gratis Ongkir Ke Seluruh Indonesia", max 40 characters so it fits a 360 px phone). Off or empty: not rendered at all, no gap. A labelled region (`aria-label="Pengumuman"`).
+
 ### Header (56 px, white, bottom hairline)
-Mobile: menu button (left) · wordmark (logo mark + "AMMARI") centred · search + cart (right, cart shows count). Desktop (≥ 1024 px): wordmark left, nav links centre, search/account/cart right. Sticky on scroll. The wordmark's logo mark renders `tone="primary"` here (brand-coloured mark on white), ~24 px.
+Mobile: menu button (left) · wordmark (logo mark + "AMMARI") centred · search + cart (right, cart shows count). Desktop (≥ 1024 px): wordmark left, account/cart right, nothing in the centre (the former centre "Koleksi" nav link was removed; the 3-column grid stays so both ends keep their positions). Sticky on scroll. The wordmark's logo mark renders `tone="primary"` here (brand-coloured mark on white), ~24 px.
 
 ### Footer (`--color-brand` background, white text)
 Wordmark (logo mark + "AMMARI", `tone="white"`, ~28 px) + tagline "Graceful in every thread"; help links (Cara pemesanan, Pengiriman, Pengembalian & penukaran, Panduan ukuran, Syarat & ketentuan → `/terms-of-service`, Kebijakan privasi → `/privacy-policy`); contact (WhatsApp — shown as the formatted number, e.g. "+62 888 0854 1442", linking to wa.me — email, business address — from store settings, CMS session 8; until then hide the block); payment-method chips (QRIS, Virtual Account, GoPay, ShopeePay, Kartu kredit) without naming the gateway; "© 2026 Ammari".
@@ -92,6 +95,10 @@ Mobile order:
 10. **"Lengkapi koleksimu"** — 2 related tiles (same tile component as the grid).
 
 SEO: unique `<title>`/description per product, Open Graph image = first gallery image, `Product` JSON-LD with price in IDR and availability. Dev environment stays `noindex`.
+
+### SEO and social previews (all other pages)
+- `/`: `<title>`, meta description, `og:title`, `og:description` from store settings (admin Pengaturan Toko, "Judul dan deskripsi beranda"), defaulting to "Ammari | Graceful in every thread" and a short brand description. Guidance about 60 / 160 characters.
+- `/` and every non-product page (info pages, account, login, claim, not-found): `og:image` = a 1200x630 JPEG generated from the published Hero image at publish time (centre crop, same framing as the Hero's `object-cover`), absolute URL on the public image domain, with `og:image:width`/`height`/`alt` (the Hero's alt text) and `twitter:card` `summary_large_image`. No published Hero image: the static placeholder `/images/product-placeholder-og.jpg`. Other pages keep their "Name | Ammari" titles, which also become their `og:title`.
 
 ## 7. Cart and checkout (later sessions — see mockups `mockup-cart.png`, `mockup-checkout.png`)
 

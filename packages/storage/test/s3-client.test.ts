@@ -14,10 +14,13 @@ vi.mock("@aws-sdk/client-s3", () => {
   class FakeCommand {
     constructor(public input: unknown) {}
   }
+  class FakeNoSuchKey extends Error {}
   return {
     S3Client: FakeS3Client,
     PutObjectCommand: FakeCommand,
+    GetObjectCommand: FakeCommand,
     DeleteObjectCommand: FakeCommand,
+    NoSuchKey: FakeNoSuchKey,
   };
 });
 
@@ -123,5 +126,23 @@ describe("S3StorageClient", () => {
     const client = new S3StorageClient(baseConfig());
     await client.delete("products/a/400.webp");
     expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ input: { Bucket: "ammari-products", Key: "products/a/400.webp" } }));
+  });
+
+  test("get sends a GetObjectCommand and returns the body bytes", async () => {
+    const client = new S3StorageClient(baseConfig());
+    sendMock.mockResolvedValueOnce({ Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) } });
+    expect(await client.get("content/hero/a/1600.webp")).toEqual(Buffer.from([1, 2, 3]));
+    expect(sendMock).toHaveBeenLastCalledWith(expect.objectContaining({ input: { Bucket: "ammari-products", Key: "content/hero/a/1600.webp" } }));
+  });
+
+  test("get returns null for a missing object (typed NoSuchKey or a bare 404), and rethrows anything else", async () => {
+    const { NoSuchKey } = await import("@aws-sdk/client-s3");
+    const client = new S3StorageClient(baseConfig());
+    sendMock.mockRejectedValueOnce(new NoSuchKey({ message: "missing", $metadata: {} }));
+    expect(await client.get("missing")).toBeNull();
+    sendMock.mockRejectedValueOnce(Object.assign(new Error("Not Found"), { $metadata: { httpStatusCode: 404 } }));
+    expect(await client.get("missing")).toBeNull();
+    sendMock.mockRejectedValueOnce(Object.assign(new Error("Forbidden"), { $metadata: { httpStatusCode: 403 } }));
+    await expect(client.get("forbidden")).rejects.toThrow("Forbidden");
   });
 });

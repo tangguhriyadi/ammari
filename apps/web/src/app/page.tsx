@@ -3,6 +3,8 @@ import { buildHomepageView } from "@/lib/content/homepage-view";
 import { collectHomepageProductRefs, resolveHomepageView } from "@/lib/content/homepage-resolve";
 import { getCachedHomepageProductTiles, getCachedPublishedHomepageContent } from "@/lib/content/homepage-data";
 import { HomepageSections } from "@/components/homepage/homepage-sections";
+import { getHomepageMeta } from "@/lib/store-settings";
+import { getSiteOgImage, siteOgImageMetadata } from "@/lib/content/site-og-image";
 
 // `/` has no dynamic route segment, so without this Next would attempt to prerender it once
 // during `next build` itself — which runs against a non-connecting placeholder DATABASE_URL in
@@ -23,10 +25,20 @@ import { HomepageSections } from "@/components/homepage/homepage-sections";
 // every request doesn't mean a database query on every request.
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "Ammari | Graceful in every thread",
-  description: "Ammari, syar'i gamis. Desain syar'i, bahan premium, nyaman dipakai seharian.",
-};
+// Title/description are editable in admin Pengaturan Toko (store_settings, migration 0029), with
+// a shared default. `title.absolute` so the root layout's plain "Ammari" never wraps it. The
+// openGraph block is repeated here in full, not inherited: a page's `openGraph` replaces the
+// layout's as a whole, and this one needs its own og:title/og:description.
+export async function generateMetadata(): Promise<Metadata> {
+  const [{ title, description }, ogImage] = await Promise.all([getHomepageMeta(), getSiteOgImage()]);
+  const { images, twitter } = siteOgImageMetadata(ogImage);
+  return {
+    title: { absolute: title },
+    description,
+    openGraph: { type: "website", siteName: "Ammari", locale: "id_ID", url: "/", title, description, images },
+    twitter,
+  };
+}
 
 async function getHomepageView() {
   const sections = await getCachedPublishedHomepageContent();

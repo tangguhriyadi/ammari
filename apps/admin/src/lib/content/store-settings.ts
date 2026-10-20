@@ -17,6 +17,10 @@ export interface StoreSettingsRow {
   supportEmail: string | null;
   businessAddress: string | null;
   returnPolicySummary: string | null;
+  announcementBarEnabled: boolean;
+  announcementBarText: string | null;
+  homepageMetaTitle: string | null;
+  homepageMetaDescription: string | null;
 }
 
 const SETTINGS_COLUMNS = {
@@ -24,6 +28,10 @@ const SETTINGS_COLUMNS = {
   supportEmail: storeSettings.supportEmail,
   businessAddress: storeSettings.businessAddress,
   returnPolicySummary: storeSettings.returnPolicySummary,
+  announcementBarEnabled: storeSettings.announcementBarEnabled,
+  announcementBarText: storeSettings.announcementBarText,
+  homepageMetaTitle: storeSettings.homepageMetaTitle,
+  homepageMetaDescription: storeSettings.homepageMetaDescription,
 };
 
 export async function getStoreSettings(db: Database = defaultDb): Promise<StoreSettingsRow> {

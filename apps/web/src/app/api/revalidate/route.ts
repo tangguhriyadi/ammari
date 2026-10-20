@@ -19,18 +19,24 @@ import { isValidRevalidateSecret } from "@/lib/revalidate/secret";
 // it has no Full Route Cache entry for `revalidatePath` to invalidate at all, so the homepage's
 // own cached data (lib/content/homepage-data.ts's `unstable_cache` calls) can only be refreshed
 // on demand via its tag. `paths` stays for routes that DO still have a route-level ISR cache
-// entry (e.g. `/products/[slug]`).
+// entry (e.g. `/products/[slug]`). `layouts` revalidates a LAYOUT path and every page beneath it
+// (`revalidatePath(path, "layout")`): store settings render in the root layout (announcement bar,
+// footer contact) on every page, including the ISR-cached `/products/[slug]` pages, so a settings
+// save sends `layouts: ["/"]`.
+const pathListSchema = z
+  .array(z.string().min(1).startsWith("/", "Setiap path harus diawali \"/\"."))
+  .min(1)
+  .max(10)
+  .optional();
+
 const bodySchema = z
   .object({
-    paths: z
-      .array(z.string().min(1).startsWith("/", "Setiap path harus diawali \"/\"."))
-      .min(1)
-      .max(10)
-      .optional(),
+    paths: pathListSchema,
+    layouts: pathListSchema,
     tags: z.array(z.string().min(1)).min(1).max(10).optional(),
   })
-  .refine((body) => (body.paths?.length ?? 0) + (body.tags?.length ?? 0) > 0, {
-    message: "Provide at least one path or tag.",
+  .refine((body) => (body.paths?.length ?? 0) + (body.layouts?.length ?? 0) + (body.tags?.length ?? 0) > 0, {
+    message: "Provide at least one path, layout or tag.",
   });
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -52,9 +58,13 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const paths = parsed.data.paths ?? [];
+  const layouts = parsed.data.layouts ?? [];
   const tags = parsed.data.tags ?? [];
   for (const path of paths) {
     revalidatePath(path);
+  }
+  for (const layout of layouts) {
+    revalidatePath(layout, "layout");
   }
   for (const tag of tags) {
     // `{ expire: 0 }`, not the (deprecated, TS-error) single-arg form or `"max"` — this call
@@ -66,5 +76,5 @@ export async function POST(request: Request): Promise<NextResponse> {
     revalidateTag(tag, { expire: 0 });
   }
 
-  return NextResponse.json({ ok: true, revalidated: { paths, tags } });
+  return NextResponse.json({ ok: true, revalidated: { paths, layouts, tags } });
 }

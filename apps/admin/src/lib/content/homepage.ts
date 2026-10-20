@@ -3,7 +3,9 @@ import { and, eq } from "drizzle-orm";
 import { fabricColors, productVariants, products, storefrontHomepageSections, type HomepageSectionKey } from "@ammari/db/schema";
 import { ActionError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
+import { buildHeroOgImageKey } from "@ammari/db/storefront-settings";
 import { cleanupOrphanedContentImages } from "./content-image-queries";
+import { generateHeroOgImage, heroImageStorageKeyOf } from "./hero-og-image";
 import { diffOrphanedContentImageKeys } from "./content-image-diff";
 import type {
   FeatureBlockContent,
@@ -269,6 +271,8 @@ export async function saveWhyAmmariDraft(
  * nothing — see getPublishedHomepageContent's own doc comment) without a cross-section "finish
  * everything before you can publish anything" wall that nothing in the plan asks for. */
 export async function publishHomepageSections(actorStaffUserId: string | null, db: Database = defaultDb): Promise<void> {
+  const preparedOg = await prepareHeroOgImage(db);
+
   const orphanedKeys = await db.transaction(async (tx) => {
     const rows = await tx.select(SECTION_COLUMNS).from(storefrontHomepageSections);
     const orphaned: string[] = [];
@@ -281,6 +285,7 @@ export async function publishHomepageSections(actorStaffUserId: string | null, d
           publishedIsVisible: row.draftIsVisible,
           publishedAt: new Date(),
           publishedByStaffUserId: actorStaffUserId,
+          ...(row.key === "hero" ? { publishedOgImageKey: heroOgImageKeyFor(row.draftContent, preparedOg) } : {}),
         })
         .where(eq(storefrontHomepageSections.id, row.id))
         .returning();
@@ -303,6 +308,37 @@ export async function publishHomepageSections(actorStaffUserId: string | null, d
     return orphaned;
   });
   await cleanupOrphanedContentImages(orphanedKeys);
+}
+
+interface PreparedHeroOgImage {
+  /** The Hero image the OG JPEG was cut from. */
+  heroStorageKey: string;
+  /** Null when generation failed (already logged by generateHeroOgImage). */
+  ogKey: string | null;
+}
+
+/** Runs BEFORE the publish transaction, never inside it: it does object-storage I/O and an image
+ * encode, which must not hold row locks open. Skips the work when the Hero being published
+ * already has its OG image (re-publishing an unchanged Hero after editing another section). */
+async function prepareHeroOgImage(db: Database): Promise<PreparedHeroOgImage | null> {
+  const [hero] = await db
+    .select({ draftContent: storefrontHomepageSections.draftContent, publishedOgImageKey: storefrontHomepageSections.publishedOgImageKey })
+    .from(storefrontHomepageSections)
+    .where(eq(storefrontHomepageSections.key, "hero"))
+    .limit(1);
+  const heroStorageKey = heroImageStorageKeyOf(hero?.draftContent);
+  if (!heroStorageKey) return null;
+  if (hero?.publishedOgImageKey === buildHeroOgImageKey(heroStorageKey)) return { heroStorageKey, ogKey: hero.publishedOgImageKey };
+  return { heroStorageKey, ogKey: await generateHeroOgImage(heroStorageKey) };
+}
+
+/** The OG key to publish for the hero draft read INSIDE the transaction. Only used when it was
+ * cut from that exact image: a draft save that swapped the image between prepareHeroOgImage and
+ * the transaction publishes null (placeholder) instead of a preview of the wrong image. */
+function heroOgImageKeyFor(draftContent: unknown, prepared: PreparedHeroOgImage | null): string | null {
+  const heroStorageKey = heroImageStorageKeyOf(draftContent);
+  if (!heroStorageKey || !prepared || prepared.heroStorageKey !== heroStorageKey) return null;
+  return prepared.ogKey;
 }
 
 /** Resets every section's DRAFT back to what's currently published (or to the seeded

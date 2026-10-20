@@ -1,9 +1,9 @@
 import sharp from "sharp";
 import { eq } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { insertProductVariant } from "@ammari/db/test-fixtures";
-import { auditLog, productVariants, products } from "@ammari/db/schema";
+import { auditLog, productVariants, products, storefrontHomepageSections } from "@ammari/db/schema";
 import { InMemoryStorageClient } from "@ammari/storage";
 import { __setStorageClientForTests } from "@/lib/storage";
 import { ActionError } from "@/lib/errors";
@@ -425,7 +425,8 @@ describe("content image reference safety", () => {
       );
 
       // imageA's objects survive — PUBLISHED still points at it — even though the DRAFT moved on.
-      expect(objectKeysUnder(memoryStorage, imageA.storageKey)).toHaveLength(3);
+      // 4 = the 3 WebP sizes + the Hero OG JPEG generated when it was published.
+      expect(objectKeysUnder(memoryStorage, imageA.storageKey)).toHaveLength(4);
       expect(objectKeysUnder(memoryStorage, imageB.storageKey)).toHaveLength(3);
 
       const section = await getHomepageSection("hero", tx);
@@ -455,12 +456,12 @@ describe("content image reference safety", () => {
         ACTOR_ID,
         tx,
       );
-      expect(objectKeysUnder(memoryStorage, imageA.storageKey)).toHaveLength(3); // still kept, per the test above
+      expect(objectKeysUnder(memoryStorage, imageA.storageKey)).toHaveLength(4); // still kept (+ its OG JPEG), per the test above
 
       await publishHomepageSections(ACTOR_ID, tx); // promotes draft (imageB) to published
 
-      expect(objectKeysUnder(memoryStorage, imageA.storageKey)).toHaveLength(0); // now orphaned — deleted
-      expect(objectKeysUnder(memoryStorage, imageB.storageKey)).toHaveLength(3); // the live published image
+      expect(objectKeysUnder(memoryStorage, imageA.storageKey)).toHaveLength(0); // now orphaned — deleted, OG JPEG included
+      expect(objectKeysUnder(memoryStorage, imageB.storageKey)).toHaveLength(4); // the live published image + its OG JPEG
     });
   });
 
@@ -490,7 +491,7 @@ describe("content image reference safety", () => {
       await discardHomepageDraft(ACTOR_ID, tx);
 
       expect(objectKeysUnder(memoryStorage, unsaved.storageKey)).toHaveLength(0); // never published — gone
-      expect(objectKeysUnder(memoryStorage, published.storageKey)).toHaveLength(3); // the real published image survives
+      expect(objectKeysUnder(memoryStorage, published.storageKey)).toHaveLength(4); // the real published image (+ OG JPEG) survives
 
       const section = await getHomepageSection("hero", tx);
       expect(section?.draftContent).toMatchObject({ headline: "Published" });
@@ -515,10 +516,105 @@ describe("content image reference safety", () => {
         ACTOR_ID,
         tx,
       );
-      expect(objectKeysUnder(memoryStorage, image.storageKey)).toHaveLength(3); // still kept — published still has it
+      expect(objectKeysUnder(memoryStorage, image.storageKey)).toHaveLength(4); // still kept (+ OG JPEG) — published still has it
 
       await publishHomepageSections(ACTOR_ID, tx);
       expect(objectKeysUnder(memoryStorage, image.storageKey)).toHaveLength(0);
+    });
+  });
+});
+
+// ---------- Hero Open Graph image at publish time (migration 0029) ----------
+
+describe("publishHomepageSections: Hero OG image", () => {
+  let memoryStorage: InMemoryStorageClient;
+
+  beforeEach(() => {
+    memoryStorage = new InMemoryStorageClient();
+    __setStorageClientForTests(memoryStorage);
+  });
+
+  afterEach(() => {
+    __setStorageClientForTests(undefined);
+  });
+
+  async function publishedOgKey(tx: TestDatabase): Promise<string | null> {
+    const [row] = await tx
+      .select({ key: storefrontHomepageSections.publishedOgImageKey })
+      .from(storefrontHomepageSections)
+      .where(eq(storefrontHomepageSections.key, "hero"));
+    return row?.key ?? null;
+  }
+
+  async function saveHeroWith(tx: TestDatabase, image: Awaited<ReturnType<typeof heroImage>> | null) {
+    await saveHeroDraft(
+      { isVisible: true, content: { eyebrow: "", headline: "Hero", ctaLabel: "Lihat", ctaTarget: { type: "anchor" }, image } },
+      ACTOR_ID,
+      tx,
+    );
+  }
+
+  test("publishing a Hero with an image stores a 1200x630 JPEG next to it and records its key", async () => {
+    await withRollback(async (tx) => {
+      const image = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroWith(tx, await heroImage(image.storageKey));
+      await publishHomepageSections(ACTOR_ID, tx);
+
+      const ogKey = `${image.storageKey}/og.jpg`;
+      expect(await publishedOgKey(tx)).toBe(ogKey);
+      const object = memoryStorage.objects.get(ogKey);
+      expect(object?.contentType).toBe("image/jpeg");
+      const metadata = await sharp(object!.body).metadata();
+      expect({ format: metadata.format, width: metadata.width, height: metadata.height }).toEqual({ format: "jpeg", width: 1200, height: 630 });
+    });
+  });
+
+  test("re-publishing the same Hero image reuses the OG image instead of rendering it again", async () => {
+    await withRollback(async (tx) => {
+      const image = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroWith(tx, await heroImage(image.storageKey));
+      await publishHomepageSections(ACTOR_ID, tx);
+
+      const putSpy = vi.spyOn(memoryStorage, "put");
+      await publishHomepageSections(ACTOR_ID, tx);
+      expect(putSpy).not.toHaveBeenCalled();
+      expect(await publishedOgKey(tx)).toBe(`${image.storageKey}/og.jpg`);
+    });
+  });
+
+  test("a new Hero image gets a new OG image (new URL), and the old one is deleted with the old image", async () => {
+    await withRollback(async (tx) => {
+      const imageA = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroWith(tx, await heroImage(imageA.storageKey));
+      await publishHomepageSections(ACTOR_ID, tx);
+
+      const imageB = await uploadContentImage({ sectionKey: "hero", variant: "desktop", fileBuffer: await jpegFixture() });
+      await saveHeroWith(tx, await heroImage(imageB.storageKey));
+      await publishHomepageSections(ACTOR_ID, tx);
+
+      expect(await publishedOgKey(tx)).toBe(`${imageB.storageKey}/og.jpg`);
+      expect(memoryStorage.objects.has(`${imageA.storageKey}/og.jpg`)).toBe(false);
+    });
+  });
+
+  test("a Hero without an image publishes no OG key (the storefront uses its placeholder)", async () => {
+    await withRollback(async (tx) => {
+      await saveHeroWith(tx, null);
+      await publishHomepageSections(ACTOR_ID, tx);
+      expect(await publishedOgKey(tx)).toBeNull();
+    });
+  });
+
+  test("a generation failure never fails the publish: the Hero is live, the OG key is null", async () => {
+    await withRollback(async (tx) => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      // Never uploaded: the source WebP isn't in storage, so there is nothing to render from.
+      await saveHeroWith(tx, await heroImage("content/hero/missing-image"));
+      await publishHomepageSections(ACTOR_ID, tx);
+
+      expect(await publishedOgKey(tx)).toBeNull();
+      const section = await getHomepageSection("hero", tx);
+      expect(section?.publishedContent).toMatchObject({ headline: "Hero" });
     });
   });
 });

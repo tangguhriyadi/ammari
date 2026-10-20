@@ -13,6 +13,10 @@ export class InMemoryStorageClient implements StorageClient {
     this.objects.set(key, { body, contentType });
   }
 
+  async get(key: string): Promise<Buffer | null> {
+    return this.objects.get(key)?.body ?? null;
+  }
+
   async delete(key: string): Promise<void> {
     this.objects.delete(key);
   }

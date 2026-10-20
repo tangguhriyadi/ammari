@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   costComponents,
   fabricColors,
@@ -21,10 +21,12 @@ import {
 import {
   getDraftHomepageContent,
   getPublishedHomepageContent,
+  getPublishedHeroOgImage,
   getPublishedInfoPage,
   getStorefrontProductBySlug,
   getStoreSettings,
 } from "../src/storefront/queries";
+import { ANNOUNCEMENT_BAR_DEFAULT_TEXT } from "../src/storefront/settings";
 import { insertStaffUser } from "./fixtures";
 import { withRollback, type TestTx } from "./helpers";
 
@@ -400,6 +402,10 @@ describe("getStoreSettings", () => {
           supportEmail: "halo@ammari.id",
           businessAddress: "Jl. Contoh No. 1",
           returnPolicySummary: "Tukar ukuran dalam 3 hari",
+          announcementBarEnabled: false,
+          announcementBarText: "Diskon akhir tahun",
+          homepageMetaTitle: "Ammari | Gamis syar'i",
+          homepageMetaDescription: "Gamis syar'i yang nyaman dipakai seharian.",
         })
         .where(eq(storeSettings.id, 1));
 
@@ -409,19 +415,90 @@ describe("getStoreSettings", () => {
         supportEmail: "halo@ammari.id",
         businessAddress: "Jl. Contoh No. 1",
         returnPolicySummary: "Tukar ukuran dalam 3 hari",
+        announcementBarEnabled: false,
+        announcementBarText: "Diskon akhir tahun",
+        homepageMetaTitle: "Ammari | Gamis syar'i",
+        homepageMetaDescription: "Gamis syar'i yang nyaman dipakai seharian.",
       });
     });
   });
 
-  test("every field is null before the owner fills anything in — never throws, never a missing row", async () => {
+  test("contact fields are null before the owner fills anything in; the bar is on with its default text", async () => {
     await withRollback(async (tx) => {
+      // Back to the column defaults, regardless of what an earlier test/dev session left behind.
+      await tx
+        .update(storeSettings)
+        .set({
+          whatsappNumber: null,
+          supportEmail: null,
+          businessAddress: null,
+          returnPolicySummary: null,
+          announcementBarEnabled: sql`DEFAULT`,
+          announcementBarText: sql`DEFAULT`,
+          homepageMetaTitle: null,
+          homepageMetaDescription: null,
+        })
+        .where(eq(storeSettings.id, 1));
       const result = await getStoreSettings(tx);
       expect(result).toEqual({
         whatsappNumber: null,
         supportEmail: null,
         businessAddress: null,
         returnPolicySummary: null,
+        announcementBarEnabled: true,
+        announcementBarText: ANNOUNCEMENT_BAR_DEFAULT_TEXT,
+        homepageMetaTitle: null,
+        homepageMetaDescription: null,
       });
+    });
+  });
+
+  test("the length CHECKs reject text longer than the admin form allows", async () => {
+    await withRollback(async (tx) => {
+      await expect(
+        tx.update(storeSettings).set({ announcementBarText: "a".repeat(41) }).where(eq(storeSettings.id, 1)),
+      ).rejects.toThrow();
+    });
+  });
+});
+
+describe("getPublishedHeroOgImage", () => {
+  const heroContent = {
+    eyebrow: "",
+    headline: "Graceful",
+    ctaLabel: "Lihat",
+    ctaTarget: { type: "anchor" },
+    image: { storageKey: "content/hero/abc", altText: "Gamis Ammari warna sage", width: 1600, height: 900, mobileStorageKey: null, mobileWidth: null, mobileHeight: null },
+  };
+
+  async function setHero(tx: TestTx, values: Partial<typeof storefrontHomepageSections.$inferInsert>) {
+    await tx.update(storefrontHomepageSections).set(values).where(eq(storefrontHomepageSections.key, "hero"));
+  }
+
+  test("returns the generated key and the Hero's alt text when the published Hero is visible", async () => {
+    await withRollback(async (tx) => {
+      await setHero(tx, { publishedIsVisible: true, publishedContent: heroContent, publishedOgImageKey: "content/hero/abc/og.jpg" });
+      expect(await getPublishedHeroOgImage(tx)).toEqual({ key: "content/hero/abc/og.jpg", altText: "Gamis Ammari warna sage" });
+    });
+  });
+
+  test("null when nothing was generated, the Hero is hidden, or it was never published", async () => {
+    await withRollback(async (tx) => {
+      await setHero(tx, { publishedIsVisible: true, publishedContent: heroContent, publishedOgImageKey: null });
+      expect(await getPublishedHeroOgImage(tx)).toBeNull();
+
+      await setHero(tx, { publishedIsVisible: false, publishedOgImageKey: "content/hero/abc/og.jpg" });
+      expect(await getPublishedHeroOgImage(tx)).toBeNull();
+
+      await setHero(tx, { publishedIsVisible: null, publishedContent: null, publishedOgImageKey: "content/hero/abc/og.jpg" });
+      expect(await getPublishedHeroOgImage(tx)).toBeNull();
+    });
+  });
+
+  test("ignores the DRAFT entirely", async () => {
+    await withRollback(async (tx) => {
+      await setHero(tx, { draftContent: heroContent, publishedIsVisible: null, publishedContent: null, publishedOgImageKey: null });
+      expect(await getPublishedHeroOgImage(tx)).toBeNull();
     });
   });
 });

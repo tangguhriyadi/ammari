@@ -42,6 +42,10 @@ export const E2E_WHATSAPP_NUMBER = "6281234567890";
 export const E2E_WHATSAPP_FORMATTED = "+62 812 3456 7890";
 export const E2E_SUPPORT_EMAIL = "halo-e2e@ammari.id";
 export const E2E_BUSINESS_ADDRESS = "Jl. Contoh E2E No. 1, Bandung";
+// The Hero's generated 1200x630 OG JPEG, committed next to the Hero fixture WebPs (made with the
+// same sharp settings as apps/admin's renderHeroOgJpeg) and served by the fixtures route.
+export const E2E_HERO_OG_IMAGE_KEY = "api/test/fixtures/hero/og.jpg";
+export const E2E_HERO_ALT_TEXT = "Hero Ammari E2E";
 export const E2E_SHIPPING_BODY_TEXT = "Pengiriman E2E dikirim via kurir pilihan.";
 // "shipping" is published; "how-to-order"/"returns-exchange" are left at migration 0020's seeded
 // (unpublished) state on purpose — info-pages.spec.ts asserts BOTH the published and the
@@ -298,7 +302,7 @@ export async function seedStorefrontFixtures(): Promise<void> {
         ctaTarget: { type: "anchor" },
         image: {
           storageKey: "api/test/fixtures/hero",
-          altText: "Hero Ammari E2E",
+          altText: E2E_HERO_ALT_TEXT,
           width: 1600,
           height: 2400,
           mobileStorageKey: "api/test/fixtures/hero-mobile",
@@ -307,6 +311,7 @@ export async function seedStorefrontFixtures(): Promise<void> {
         },
       },
       publishedAt: new Date(),
+      publishedOgImageKey: E2E_HERO_OG_IMAGE_KEY,
     })
     .where(eq(storefrontHomepageSections.key, "hero"));
 
@@ -368,6 +373,12 @@ export async function seedStorefrontFixtures(): Promise<void> {
       supportEmail: E2E_SUPPORT_EMAIL,
       businessAddress: E2E_BUSINESS_ADDRESS,
       returnPolicySummary: E2E_RETURN_POLICY_SUMMARY,
+      // The shipped defaults (migration 0029): bar on with its default text, homepage meta unset.
+      // announcement-bar.spec.ts/seo-meta.spec.ts change these mid-run and restore them.
+      announcementBarEnabled: true,
+      announcementBarText: "Gratis Ongkir Ke Seluruh Indonesia",
+      homepageMetaTitle: null,
+      homepageMetaDescription: null,
     })
     .where(eq(storeSettings.id, 1));
 

@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  ANNOUNCEMENT_BAR_TEXT_MAX_LENGTH,
+  HOMEPAGE_META_DESCRIPTION_MAX_LENGTH,
+  HOMEPAGE_META_TITLE_MAX_LENGTH,
+} from "@ammari/db/storefront-settings";
 
 // ---------- WhatsApp number normalization (docs/plans/storefront-cms.md Phase 2, session 8) ----------
 //
@@ -65,11 +70,32 @@ const optionalTextField = (maxLength: number, message: string) =>
     .refine((value) => value.length <= maxLength, { message })
     .transform((value) => (value === "" ? null : value));
 
+/** One line of plain text: any run of whitespace (including a pasted line break) collapses to a
+ * single space BEFORE the length check, so what's counted is exactly what the storefront shows. */
+const singleLineTextField = (maxLength: number, message: string) =>
+  z
+    .string()
+    .transform((value) => value.replace(/\s+/g, " ").trim())
+    .refine((value) => value.length <= maxLength, { message })
+    .transform((value) => (value === "" ? null : value));
+
 export const saveStoreSettingsSchema = z.object({
   whatsappNumber: whatsappNumberField,
   supportEmail: emailField,
   businessAddress: optionalTextField(500, "Alamat terlalu panjang."),
   returnPolicySummary: optionalTextField(300, "Ringkasan terlalu panjang."),
+  // Empty text is allowed even while enabled: the storefront simply renders no bar (same as off).
+  announcementBarEnabled: z.boolean(),
+  announcementBarText: singleLineTextField(
+    ANNOUNCEMENT_BAR_TEXT_MAX_LENGTH,
+    `Teks pengumuman maksimal ${ANNOUNCEMENT_BAR_TEXT_MAX_LENGTH} karakter agar muat satu baris di HP.`,
+  ),
+  // Empty = the storefront's default title/description (@ammari/db/storefront-settings).
+  homepageMetaTitle: singleLineTextField(HOMEPAGE_META_TITLE_MAX_LENGTH, `Judul beranda maksimal ${HOMEPAGE_META_TITLE_MAX_LENGTH} karakter.`),
+  homepageMetaDescription: singleLineTextField(
+    HOMEPAGE_META_DESCRIPTION_MAX_LENGTH,
+    `Deskripsi beranda maksimal ${HOMEPAGE_META_DESCRIPTION_MAX_LENGTH} karakter.`,
+  ),
 });
 
 export type SaveStoreSettingsInput = z.infer<typeof saveStoreSettingsSchema>;

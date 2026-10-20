@@ -477,13 +477,19 @@ export interface StorefrontSettings {
   supportEmail: string | null;
   businessAddress: string | null;
   returnPolicySummary: string | null;
+  announcementBarEnabled: boolean;
+  announcementBarText: string | null;
+  homepageMetaTitle: string | null;
+  homepageMetaDescription: string | null;
 }
 
 /** The one `store_settings` row (migration 0020 guarantees it always exists — see that
  * migration's own comment). Every field is nullable: the owner fills them in via the admin
  * settings form after this ships, and every web caller (footer, PDP WhatsApp CTA, PDP trust row)
  * must already treat `null` as "hide this," never a broken link/blank line — same contract
- * apps/web/src/lib/store-settings.ts's pre-existing env-var stand-in already uses. */
+ * apps/web/src/lib/store-settings.ts's pre-existing env-var stand-in already uses. The
+ * announcement bar/homepage meta (migration 0029) follow the same rule: null text = no bar, null
+ * meta = the code default. */
 export async function getStoreSettings(db: Database = defaultDb): Promise<StorefrontSettings> {
   const [row] = await db
     .select({
@@ -491,10 +497,52 @@ export async function getStoreSettings(db: Database = defaultDb): Promise<Storef
       supportEmail: storeSettings.supportEmail,
       businessAddress: storeSettings.businessAddress,
       returnPolicySummary: storeSettings.returnPolicySummary,
+      announcementBarEnabled: storeSettings.announcementBarEnabled,
+      announcementBarText: storeSettings.announcementBarText,
+      homepageMetaTitle: storeSettings.homepageMetaTitle,
+      homepageMetaDescription: storeSettings.homepageMetaDescription,
     })
     .from(storeSettings)
     .limit(1);
-  return row ?? { whatsappNumber: null, supportEmail: null, businessAddress: null, returnPolicySummary: null };
+  return (
+    row ?? {
+      whatsappNumber: null,
+      supportEmail: null,
+      businessAddress: null,
+      returnPolicySummary: null,
+      announcementBarEnabled: false,
+      announcementBarText: null,
+      homepageMetaTitle: null,
+      homepageMetaDescription: null,
+    }
+  );
+}
+
+export interface PublishedHeroOgImage {
+  /** Object key of the generated 1200x630 JPEG (resolve against the public storage base URL). */
+  key: string;
+  /** The published Hero image's own alt text, reused as og:image:alt. */
+  altText: string;
+}
+
+/** The OG image generated from the PUBLISHED Hero (migration 0029's `published_og_image_key`),
+ * or null when there is none to use: Hero never published, published hidden, published without
+ * an image, or generation failed at publish time. The caller falls back to its static
+ * placeholder. Published columns only, never the draft. */
+export async function getPublishedHeroOgImage(db: Database = defaultDb): Promise<PublishedHeroOgImage | null> {
+  const [row] = await db
+    .select({
+      ogImageKey: storefrontHomepageSections.publishedOgImageKey,
+      isVisible: storefrontHomepageSections.publishedIsVisible,
+      content: storefrontHomepageSections.publishedContent,
+    })
+    .from(storefrontHomepageSections)
+    .where(eq(storefrontHomepageSections.key, "hero"))
+    .limit(1);
+  if (!row?.ogImageKey || row.isVisible !== true) return null;
+  const image = (row.content as { image?: { altText?: unknown } | null } | null)?.image;
+  const altText = typeof image?.altText === "string" && image.altText.trim() ? image.altText.trim() : "Ammari";
+  return { key: row.ogImageKey, altText };
 }
 
 export async function getRelatedStorefrontProducts(

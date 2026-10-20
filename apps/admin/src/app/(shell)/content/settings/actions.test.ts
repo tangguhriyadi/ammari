@@ -13,7 +13,16 @@ function sessionWithPermissions(permissionKeys: string[]) {
   };
 }
 
-const VALID = { whatsappNumber: "081234567890", supportEmail: "halo@ammari.id", businessAddress: "Jl. Contoh", returnPolicySummary: "Ringkasan" };
+const VALID = {
+  whatsappNumber: "081234567890",
+  supportEmail: "halo@ammari.id",
+  businessAddress: "Jl. Contoh",
+  returnPolicySummary: "Ringkasan",
+  announcementBarEnabled: true,
+  announcementBarText: "Gratis Ongkir Ke Seluruh Indonesia",
+  homepageMetaTitle: "",
+  homepageMetaDescription: "",
+};
 
 describe("saveStoreSettingsAction requires content.manage, NOT products.manage or settings.manage", () => {
   test("rejects a session holding products.manage but not content.manage", async () => {
@@ -43,5 +52,11 @@ describe("saveStoreSettingsAction validation (never reaches the DB)", () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
     const result = await saveStoreSettingsAction({ ...VALID, supportEmail: "not-an-email" });
     expect(result.ok).toBe(false);
+  });
+
+  test("rejects announcement text that wouldn't fit one line on a phone", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["content.manage"]));
+    const result = await saveStoreSettingsAction({ ...VALID, announcementBarText: "a".repeat(41) });
+    expect(result).toEqual({ ok: false, error: "Teks pengumuman maksimal 40 karakter agar muat satu baris di HP." });
   });
 });

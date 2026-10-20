@@ -8,6 +8,13 @@ describe("InMemoryStorageClient", () => {
     expect(client.objects.get("a/b.webp")).toEqual({ body: Buffer.from("hello"), contentType: "image/webp" });
   });
 
+  test("get returns the stored bytes, or null for a key that was never put", async () => {
+    const client = new InMemoryStorageClient();
+    await client.put("a/b.webp", Buffer.from("hello"), "image/webp");
+    expect(await client.get("a/b.webp")).toEqual(Buffer.from("hello"));
+    expect(await client.get("nope")).toBeNull();
+  });
+
   test("delete removes the object", async () => {
     const client = new InMemoryStorageClient();
     await client.put("a/b.webp", Buffer.from("hello"), "image/webp");

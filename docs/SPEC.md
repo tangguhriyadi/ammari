@@ -146,6 +146,32 @@ pnpm workspaces + Turborepo:
 - Privacy policy — `/privacy-policy`
 - Terms of service — `/terms-of-service`
 
+### 3.3a Main site: announcement bar, social previews, homepage meta
+
+- **Announcement bar.** A one-line, full-width bar above the main navigation on every storefront
+  page (brand background `#695A5A`, white text, 36px tall on phones, 40px from 1024px). It is
+  not sticky: it scrolls away while the header stays sticky. Text and an on/off switch live in
+  admin Konten > Pengaturan Toko (`store_settings.announcement_bar_enabled` /
+  `announcement_bar_text`, migration 0029). Default on, default text "Gratis Ongkir Ke Seluruh
+  Indonesia", max 40 characters (fits one line on a 360px phone; backed by a CHECK). Off or empty
+  renders no bar and no gap. Saving revalidates the whole storefront (root layout path plus the
+  homepage cache tag), so the ISR-cached product pages pick it up too.
+- **Open Graph image.** Product pages use the product's main photo (unchanged). The homepage and
+  every other page (info pages, account/login, not-found) use a 1200x630 JPEG (under ~300 KB)
+  that admin generates from the published Hero image when the homepage is published ("Terbitkan"),
+  stored in object storage next to the Hero's own WebP sizes (`<storageKey>/og.jpg`) and
+  referenced by `storefront_homepage_sections.published_og_image_key` (Hero row, migration 0029).
+  Tags: `og:image` (absolute URL on the public image domain) with width/height/alt, and
+  `twitter:card = summary_large_image`. No published Hero image (or a failed generation, which
+  never fails the publish) falls back to the static placeholder `/images/product-placeholder-og.jpg`.
+- **Homepage meta.** "/"'s `<title>`, meta description, `og:title` and `og:description` are
+  editable in Pengaturan Toko (`store_settings.homepage_meta_title` /
+  `homepage_meta_description`; empty = the code default in `@ammari/db/storefront-settings`).
+  Guidance about 60 / 160 characters with live counters, hard caps 80 / 200. Lives in Pengaturan
+  Toko rather than the Beranda editor because it is a save-is-live setting, not part of the
+  Hero/grid layout that Beranda's draft/publish exists to protect, and it sits next to the other
+  storefront-wide settings. Other pages keep their "Name | Ammari" titles.
+
 ### 3.4 Main site — 1 December 2026
 
 - Cart — `/cart`

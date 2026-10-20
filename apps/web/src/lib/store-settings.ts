@@ -1,18 +1,21 @@
 import "server-only";
-import { getStoreSettings } from "@ammari/db/storefront";
+import { cache } from "react";
+import { getStoreSettings, type StorefrontSettings } from "@ammari/db/storefront";
+import { HOMEPAGE_META_DESCRIPTION_DEFAULT, HOMEPAGE_META_TITLE_DEFAULT } from "@ammari/db/storefront-settings";
 
-interface StoreSettingsSnapshot {
-  whatsappNumber: string | null;
-  supportEmail: string | null;
-  businessAddress: string | null;
-  returnPolicySummary: string | null;
-}
+type StoreSettingsSnapshot = StorefrontSettings;
 
+// A failed read hides the announcement bar too (enabled: false), same "null = hide" contract as
+// the contact fields: an outage must never render a stale or default promise to shoppers.
 const EMPTY_SETTINGS: StoreSettingsSnapshot = {
   whatsappNumber: null,
   supportEmail: null,
   businessAddress: null,
   returnPolicySummary: null,
+  announcementBarEnabled: false,
+  announcementBarText: null,
+  homepageMetaTitle: null,
+  homepageMetaDescription: null,
 };
 
 /** Read via the ROOT layout, which wraps every route including ones Next still probes for
@@ -32,14 +35,18 @@ const EMPTY_SETTINGS: StoreSettingsSnapshot = {
  * cached result instead — a correctness bug worse than the extra query it was meant to save. A
  * `SELECT ... LIMIT 1` by primary key on a 1-row table is cheap enough per request that this
  * table doesn't need caching at all. */
-async function safeGetStoreSettings(): Promise<StoreSettingsSnapshot> {
+//
+// React `cache()` (per-request memoization, not a cross-request cache, so the reasoning above
+// still holds): the root layout, the homepage's generateMetadata and a product page all read
+// these settings while rendering one request, and that is now one query instead of several.
+const safeGetStoreSettings = cache(async (): Promise<StoreSettingsSnapshot> => {
   try {
     return await getStoreSettings();
   } catch (error) {
     console.error("store-settings: failed to read store_settings — rendering without store contact info", error);
     return EMPTY_SETTINGS;
   }
-}
+});
 
 /** `STORE_WHATSAPP_NUMBER` is now a FALLBACK, used only when `store_settings.whatsapp_number`
  * is empty (docs/plans/storefront-cms.md Phase 2, session 8) — kept rather than removed: it's
@@ -70,5 +77,30 @@ export async function getStoreContact(): Promise<StoreContact> {
     supportEmail: settings.supportEmail,
     businessAddress: settings.businessAddress,
     returnPolicySummary: settings.returnPolicySummary,
+  };
+}
+
+/** The announcement bar's text, or null when the bar must not render at all (switched off, or
+ * the text is empty). The admin form already collapses whitespace on save; trimmed again here so
+ * a direct DB edit with stray spaces can't render an empty-looking bar. */
+export async function getAnnouncementBarText(): Promise<string | null> {
+  const settings = await safeGetStoreSettings();
+  if (!settings.announcementBarEnabled) return null;
+  const text = settings.announcementBarText?.trim();
+  return text ? text : null;
+}
+
+export interface HomepageMeta {
+  title: string;
+  description: string;
+}
+
+/** "/"'s <title>, meta description, og:title and og:description: the owner's text from
+ * Pengaturan Toko, or the shared default when a field is empty. */
+export async function getHomepageMeta(): Promise<HomepageMeta> {
+  const settings = await safeGetStoreSettings();
+  return {
+    title: settings.homepageMetaTitle?.trim() || HOMEPAGE_META_TITLE_DEFAULT,
+    description: settings.homepageMetaDescription?.trim() || HOMEPAGE_META_DESCRIPTION_DEFAULT,
   };
 }
