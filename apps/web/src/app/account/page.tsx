@@ -2,6 +2,8 @@ import { Badge, EmptyState } from "@ammari/ui";
 import { formatDate, formatRupiah } from "@ammari/ui/lib";
 import { requireConsentedSession } from "@/lib/auth/require-customer";
 import { listMyOrders, listMyVouchers } from "@/lib/account/queries";
+import { loadContactOffer } from "@/lib/account/contact-offer";
+import { ContactOfferCard } from "./contact-offer-card";
 import { LogoutButton } from "./logout-button";
 import { ProfileBanner } from "./profile-banner";
 
@@ -14,7 +16,7 @@ const VOUCHER_STATUS_LABELS: Record<string, string> = {
 
 export default async function AccountPage() {
   const customer = await requireConsentedSession("/account");
-  const [myOrders, myVouchers] = await Promise.all([listMyOrders(customer.id), listMyVouchers(customer.id)]);
+  const [myOrders, myVouchers, contactOffer] = await Promise.all([listMyOrders(customer.id), listMyVouchers(customer.id), loadContactOffer(customer.id)]);
 
   return (
     <div className="mx-auto flex max-w-md flex-col gap-6 px-4 py-8">
@@ -24,7 +26,7 @@ export default async function AccountPage() {
         {customer.email && <p className="text-sm text-neutral-700">{customer.email}</p>}
       </div>
 
-      {!customer.phone && <ProfileBanner />}
+      {contactOffer ? <ContactOfferCard {...contactOffer} /> : !customer.phone && <ProfileBanner />}
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">Voucher saya</h2>

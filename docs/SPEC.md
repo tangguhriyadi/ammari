@@ -597,8 +597,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   see the `payments` note in §5.2.
 - `customer_login_links` — the "Masuk ke akun" one-time login links (§10.3): hashed token, bound
   to a customer id and email, 24-hour expiry, `consumed_at` / `superseded_at`; a partial unique
-  index allows at most one live link per customer. Not yet implemented (expected migration 0033;
-  0031 is the shipping-quote migration since the 2026-10-21 revision).
+  index allows at most one live link per customer. Migration 0033 (session 14), which also added
+  `customers.contact_offer_resolved_at` (when the customer last answered the /account offer to copy
+  contact details from guest orders).
 - `otp_codes` — stores a hash of the code, `expires_at`, `attempts`, `consumed_at`.
 - `thank_you_cards` — unique `order_id`; unique `token_hash`; `claim_deadline`; `status`.
 - `vouchers` — unique `card_id`; unique `used_order_id`; `status`
@@ -898,10 +899,12 @@ separate links:
   server-side only (no public endpoint); valid 24 hours; single use; stored hashed; bound to the
   customer id and the email it was sent to; a newer link supersedes the older one (at most one
   live link per customer, enforced by a partial unique index); at most 5 issued per customer per
-  24 hours and subject to the existing per-email throttle and circuit breaker (over the limit the
-  email still goes out, without this link).
+  24 hours, the only issuance limit (the OTP email throttle is never written by order emails, owner
+  decision 2026-10-21; over the limit the email still goes out, without this link). Only the
+  `created` and `paid` emails of a guest order carry it.
 - **Opening the link never logs in.** `/login/link?token=...` (GET) is `noindex`, sends
-  `Referrer-Policy: no-referrer`, does a read-only lookup and shows "Masuk sebagai a***@..." with
+  `Referrer-Policy: same-origin` (owner decision 2026-10-21: `no-referrer` would make the form POST
+  carry `Origin: null`) and refuses framing, does a read-only lookup and shows "Masuk sebagai a***@..." with
   a "Masuk" button (or "Link sudah tidak berlaku" with an OTP login link), so mail scanners and
   prefetchers cannot consume it. Login happens only on the button's POST, protected by Better
   Auth's form CSRF and origin check plus a rate limit (10 per 10 minutes per IP). The consume is
@@ -909,8 +912,13 @@ separate links:
   now() RETURNING`; it then re-checks the customer's email still matches, marks the email
   verified (the click proves ownership), and creates the session through Better Auth with the
   same cookie and hooks as OTP and Google logins. Every consume is written to `audit_log` (no
-  staff actor). After login the user lands on `/orders`, the guest cart merges, and the
-  `/consent` gate still applies.
+  staff actor). After login the user lands on `/account` (`/orders` once it exists), the guest
+  cart merges, and the `/consent` gate still applies. A login that fails before a session exists
+  gives the link back.
+- **Contact details from guest orders** (owner decision 2026-10-21): a guest checkout records the
+  WhatsApp number and promo choice only on the order. After any login, `/account` offers them (the
+  number only if the account has none and no other account uses it; promo consent only when ticked
+  again); nothing is copied without "Simpan".
 - The checkout finish page offers a third, separate path: "Masuk untuk melihat semua pesanan",
   which goes to `/login?next=/orders` with the contact email prefilled (email OTP).
 - Customer sessions still never reach admin endpoints (unchanged).

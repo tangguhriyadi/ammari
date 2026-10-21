@@ -60,6 +60,31 @@ const nextConfig: NextConfig = {
           { key: "Cache-Control", value: "no-store, no-cache, must-revalidate" },
         ],
       },
+      // The "Masuk ke akun" confirm page carries a one-time login token in its URL
+      // (docs/plans/cart-checkout.md §9.3, session 14): never indexed or cached, and the URL never
+      // sent to another site. `same-origin`, not `no-referrer`: under `no-referrer` browsers send
+      // `Origin: null` on the page's own form POST, which the login's CSRF check would then have to
+      // guess (owner decision 2026-10-21).
+      {
+        source: "/login/link",
+        headers: [
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Cache-Control", value: "no-store" },
+          { key: "Referrer-Policy", value: "same-origin" },
+          // Never framed: a framed "Masuk" button would let another site log a visitor into the
+          // attacker's own account (security review, session 14).
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
+      // The account page carries the contact offer's "Simpan" (session 14): not framed either.
+      {
+        source: "/account",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
     ];
   },
 };

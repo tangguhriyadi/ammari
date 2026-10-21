@@ -30,6 +30,10 @@ export const customers = pgTable(
     // consent is captured.
     pdpConsentAt: timestamp("pdp_consent_at", { withTimezone: true, mode: "date" }),
     promoConsentAt: timestamp("promo_consent_at", { withTimezone: true, mode: "date" }),
+    // Migration 0033 (docs/plans/cart-checkout.md §9.3, session 14): when the customer last saved or
+    // skipped the /account offer to copy the WhatsApp number and promo consent from their guest
+    // orders. Only guest orders placed after it are offered again; null means never answered.
+    contactOfferResolvedAt: timestamp("contact_offer_resolved_at", { withTimezone: true, mode: "date" }),
     ...timestamps(),
   },
   (table) => [

@@ -232,6 +232,13 @@
       "when": 1792543293105,
       "tag": "0032_shipping_provider_area_id",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792562966457,
+      "tag": "0033_customer_login_links",
+      "breakpoints": true
     }
   ]
 }

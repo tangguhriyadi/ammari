@@ -1,6 +1,6 @@
 import "server-only";
 import { sql, type SQL } from "drizzle-orm";
-import { carts, claimRateLimits, orderAccessTokens, paymentNotifications, shippingRateCache } from "@ammari/db/schema";
+import { carts, claimRateLimits, customerLoginLinks, orderAccessTokens, paymentNotifications, shippingRateCache } from "@ammari/db/schema";
 import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import type { Database } from "../db";
 import { errorLogFields } from "../errors";
@@ -15,9 +15,10 @@ import { errorLogFields } from "../errors";
 // - `shipping_rate_cache` rows fetched more than 7 days ago (only fresh rows are ever used);
 // - guest carts 30 days and customer carts 180 days after their last activity (every cart write
 //   bumps it; lines go with the cart, ON DELETE CASCADE);
-// - `order_access_tokens` 30 days after they expired.
-// Not here (later sessions): anonymizing unpaid orders after 90 days and paid ones after 10 years,
-// `customer_login_links` (session 14).
+// - `order_access_tokens` 30 days after they expired;
+// - `customer_login_links` 30 days after they expired (session 14; a used link was used before it
+//   expired, so this is also more than 30 days after its use; the login itself stays in audit_log).
+// Not here (later sessions): anonymizing unpaid orders after 90 days and paid ones after 10 years.
 //
 // Each table is deleted in batches of RETENTION_BATCH_SIZE rows, each batch its own statement, so
 // no delete holds many row locks for long or scans the whole backlog. The batch is picked with
@@ -36,6 +37,7 @@ export const RETENTION_RULES = [
   { name: "guest_carts", table: carts, condition: sql`${carts.customerId} is null and ${carts.lastActivityAt} < now() - interval '30 days'` },
   { name: "customer_carts", table: carts, condition: sql`${carts.customerId} is not null and ${carts.lastActivityAt} < now() - interval '180 days'` },
   { name: "order_access_tokens", table: orderAccessTokens, condition: sql`${orderAccessTokens.expiresAt} < now() - interval '30 days'` },
+  { name: "customer_login_links", table: customerLoginLinks, condition: sql`${customerLoginLinks.expiresAt} < now() - interval '30 days'` },
 ] as const satisfies readonly { name: string; table: { id: unknown }; condition: SQL }[];
 
 export type RetentionRuleName = (typeof RETENTION_RULES)[number]["name"];

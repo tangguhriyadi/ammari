@@ -48,7 +48,8 @@ export interface CustomerOrderEmailView {
   address: OrderEmailAddress | null;
   /** "Lihat pesanan" (view-only token link, plan §9.2). */
   orderUrl: string;
-  /** "Masuk ke akun" for guest orders (plan §9.3, session 14); null until then. */
+  /** "Masuk ke akun" (plan §9.3, session 14): set only on the `created` and `paid` emails of a guest
+   * order whose link was issued (dispatch.ts `loginUrlFor`), otherwise null. */
   loginUrl: string | null;
   /** The storefront home, for "Belanja lagi". */
   shopUrl: string;

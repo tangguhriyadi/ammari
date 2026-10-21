@@ -1,12 +1,14 @@
 import "server-only";
 import { after } from "next/server";
 import { ConsoleEmailSender, ResendEmailSender, type EmailSender } from "@ammari/auth";
+import { issueOrReuseCustomerLoginLink } from "@ammari/auth/customer";
 import { dispatchOrderEmails, type OrderEmailDeps } from "@ammari/commerce/emails";
 import { errorLogFields } from "@ammari/commerce/errors";
 import { defaultDb } from "@/lib/db";
 import { siteOrigin } from "@/lib/site-origin";
 
-// Order emails for apps/web (docs/plans/cart-checkout.md §8, session 13). Every hook (checkout, the
+// Order emails for apps/web (docs/plans/cart-checkout.md §8, session 13; the "Masuk ke akun" link
+// since session 14). Every hook (checkout, the
 // payment notification, the finish page's status check, the expiry sweep) schedules
 // @ammari/commerce/emails' dispatcher with Next's `after()`, so it runs once the response is sent
 // and outside every transaction: an email never delays, fails or rolls back a payment or an expiry.
@@ -94,7 +96,10 @@ export function getOrderEmailConfig(): OrderEmailConfig {
   if (signature && signature !== lastLoggedProblems) console.error("[emails] order email configuration problem", { problems });
   lastLoggedProblems = signature || null;
   if (!transport || !origin || problems.includes("CUSTOMER_BETTER_AUTH_SECRET")) return { deps: null, problems };
-  return { deps: { transport, siteOrigin: origin, adminOrigin: admin, linkSecret }, problems };
+  // "Masuk ke akun" in guest order emails (plan §9.3, session 14): the links live in the customer
+  // auth instance's table; the dispatcher derives the token and decides when one may be issued.
+  const loginLinks = { issueOrReuse: (input: Parameters<typeof issueOrReuseCustomerLoginLink>[1]) => issueOrReuseCustomerLoginLink(defaultDb, input) };
+  return { deps: { transport, siteOrigin: origin, adminOrigin: admin, linkSecret, loginLinks }, problems };
 }
 
 export function getOrderEmailDeps(): OrderEmailDeps | null {

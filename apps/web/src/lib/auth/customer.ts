@@ -5,6 +5,7 @@ import { createCustomerAuth } from "@ammari/auth/customer";
 import { ConsoleEmailSender, ResendEmailSender, UnconfiguredEmailSender } from "@ammari/auth";
 import { CapturingEmailSender } from "@ammari/auth/testing";
 import { db } from "@ammari/db";
+import { LOGIN_LINK_PAGE_PATH, LOGIN_LINK_SUCCESS_PATH } from "./login-link-paths";
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -66,6 +67,7 @@ export const customerAuth = createCustomerAuth({
   globalHourlyCap,
   expiresInSecondsOverride,
   extraPlugins: [nextCookies()],
+  orderLoginLink: { successPath: LOGIN_LINK_SUCCESS_PATH, pagePath: LOGIN_LINK_PAGE_PATH },
   // Runs sendVerificationOTP's email delivery after the HTTP response is already sent, so the
   // caller isn't stuck waiting on the email provider's own round-trip — unlike the staff
   // instance, there's no enumeration/timing-side-channel reason here (self sign-up means

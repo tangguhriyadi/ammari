@@ -14,9 +14,9 @@ import { parsePaymentStatusBody } from "../payments/status";
 import { sweepExpiredPayments } from "../payments/sweep";
 import { adjustStock } from "../stock/ledger";
 import { reserveStockForOrder } from "../stock/reservations";
-import { dispatchOrderEmails, dispatchPendingOrderEmails, dueOrderEmails, type OrderEmailDeps, type OrderEmailState } from "./dispatch";
+import { dispatchOrderEmails, dispatchPendingOrderEmails, dueOrderEmails, type LoginLinkIssueOutcome, type OrderEmailDeps, type OrderEmailState } from "./dispatch";
 import { renderCancelledEmail, renderCreatedEmail, renderOwnerPaidEmail, renderPaidEmail, renderShippedEmail, type CustomerOrderEmailView } from "./templates";
-import { deriveOrderEmailAccessToken } from "./token";
+import { deriveOrderEmailAccessToken, deriveOrderEmailLoginToken } from "./token";
 
 // docs/plans/cart-checkout.md D14, §8 (session 13): order emails. The transport is a recorder
 // (nothing reaches Resend); the link secret is built at runtime.
@@ -212,6 +212,16 @@ describe("deriveOrderEmailAccessToken", () => {
     expect(deriveOrderEmailAccessToken(SECRET, id)).toBe(token);
     expect(deriveOrderEmailAccessToken(SECRET, randomUUID())).not.toBe(token);
     expect(deriveOrderEmailAccessToken(`${SECRET}-other`, id)).not.toBe(token);
+  });
+});
+
+describe("deriveOrderEmailLoginToken", () => {
+  test("deterministic per notification, unrelated to the view token of the same email", () => {
+    const id = randomUUID();
+    const token = deriveOrderEmailLoginToken(SECRET, id);
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(deriveOrderEmailLoginToken(SECRET, id)).toBe(token);
+    expect(token).not.toBe(deriveOrderEmailAccessToken(SECRET, id));
   });
 });
 
@@ -464,6 +474,131 @@ describe("dispatchOrderEmails", () => {
       await ageNotifications(tx, placed.orderId, 11);
       await dispatchPendingOrderEmails(tx, deps);
       expect(forOrder(sent, placed.orderNo).filter((message) => message.to === "pemilik@example.test")).toHaveLength(1);
+    });
+  });
+});
+
+/** An in-memory stand-in for @ammari/auth's issueOrReuseCustomerLoginLink (the real one is tested
+ * in packages/auth and through apps/web's order email tests): same answers, no database. */
+function fakeLoginLinks(options: { answer?: LoginLinkIssueOutcome; fail?: boolean } = {}) {
+  const issued = new Set<string>();
+  const calls: { token: string; customerId: string; email: string; orderId: string; mayIssue: boolean }[] = [];
+  return {
+    calls,
+    loginLinks: {
+      async issueOrReuse(input: (typeof calls)[number]): Promise<LoginLinkIssueOutcome> {
+        calls.push(input);
+        if (options.fail) throw new Error("database down");
+        if (options.answer) return options.answer;
+        if (issued.has(input.token)) return "existing";
+        if (!input.mayIssue) return "not_issued";
+        issued.add(input.token);
+        return "issued";
+      },
+    },
+  };
+}
+
+const loginLinkOf = (message: Sent) => message.body.match(/Masuk ke akun:\n(\S+)/)?.[1] ?? null;
+
+describe("\"Masuk ke akun\" in guest order emails (session 14)", () => {
+  test("created and paid emails of a guest order carry their own login link; shipped does not", async () => {
+    await withRollback(async (tx) => {
+      const { deps, sent } = recorder();
+      const links = fakeLoginLinks();
+      await setSupportEmail(tx, "pemilik@example.test");
+      const placed = await placedOrder(tx);
+      await dispatchOrderEmails(tx, { ...deps, loginLinks: links.loginLinks }, { orderNo: placed.orderNo });
+      await applyPaymentStatus(tx, report(placed, "settlement"));
+      await dispatchOrderEmails(tx, { ...deps, loginLinks: links.loginLinks }, { orderNo: placed.orderNo });
+      await tx.update(orders).set({ status: "shipped", courier: "JNE", trackingNumber: "JNE1" }).where(eq(orders.id, placed.orderId));
+      await dispatchOrderEmails(tx, { ...deps, loginLinks: links.loginLinks }, { orderNo: placed.orderNo });
+
+      const rows = await notificationRows(tx, placed.orderId);
+      const created = rows.find((row) => row.kind === "created")!;
+      const paid = rows.find((row) => row.kind === "paid")!;
+      const [order] = await tx.select().from(orders).where(eq(orders.id, placed.orderId));
+      const buyer = forOrder(sent, placed.orderNo).filter((message) => !message.to.includes("pemilik"));
+      expect(buyer.map((message) => message.subject)).toEqual([
+        `Pesanan ${placed.orderNo} menunggu pembayaran`,
+        `Pembayaran pesanan ${placed.orderNo} sudah kami terima`,
+        `Pesanan ${placed.orderNo} sudah dikirim`,
+      ]);
+      expect(loginLinkOf(buyer[0]!)).toBe(`https://ammari.example/login/link?token=${deriveOrderEmailLoginToken(SECRET, created.id)}`);
+      expect(loginLinkOf(buyer[1]!)).toBe(`https://ammari.example/login/link?token=${deriveOrderEmailLoginToken(SECRET, paid.id)}`);
+      expect(loginLinkOf(buyer[2]!)).toBeNull();
+      expect(buyer[0]!.html).toContain("Masuk ke akun");
+      // The owner email never carries one.
+      expect(forOrder(sent, placed.orderNo).filter((message) => message.to.includes("pemilik")).every((message) => loginLinkOf(message) === null)).toBe(true);
+      // Bound to the order's customer and contact email; both issued on a first attempt.
+      expect(links.calls.map((call) => ({ customerId: call.customerId, email: call.email, orderId: call.orderId, mayIssue: call.mayIssue }))).toEqual([
+        { customerId: order!.customerId, email: order!.contactEmail, orderId: placed.orderId, mayIssue: true },
+        { customerId: order!.customerId, email: order!.contactEmail, orderId: placed.orderId, mayIssue: true },
+      ]);
+    });
+  });
+
+  test("an order placed while logged in, or without the issuer, gets no login link", async () => {
+    await withRollback(async (tx) => {
+      const { deps, sent } = recorder();
+      const links = fakeLoginLinks();
+      const placed = await placedOrder(tx);
+      await tx.update(orders).set({ placedWithSession: true }).where(eq(orders.id, placed.orderId));
+      await dispatchOrderEmails(tx, { ...deps, loginLinks: links.loginLinks }, { orderNo: placed.orderNo });
+      const other = await placedOrder(tx);
+      await dispatchOrderEmails(tx, deps, { orderNo: other.orderNo });
+      expect(links.calls).toHaveLength(0);
+      expect(sent.map(loginLinkOf)).toEqual([null, null]);
+    });
+  });
+
+  test("a retry renders the identical payload: it reuses the first attempt's link and never issues a new one", async () => {
+    await withRollback(async (tx) => {
+      quiet();
+      let down = true;
+      const { deps, attempts } = recorder(() => (down ? deliveryError() : null));
+      const links = fakeLoginLinks();
+      const withLinks = { ...deps, loginLinks: links.loginLinks };
+      const placed = await placedOrder(tx);
+      await dispatchOrderEmails(tx, withLinks, { orderNo: placed.orderNo });
+      down = false;
+      await ageNotifications(tx, placed.orderId, 11);
+      await dispatchOrderEmails(tx, withLinks, { orderNo: placed.orderNo });
+
+      const mine = forOrder(attempts, placed.orderNo);
+      expect(mine).toHaveLength(2);
+      expect(mine[1]).toEqual(mine[0]);
+      expect(loginLinkOf(mine[0]!)).not.toBeNull();
+      expect(links.calls.map((call) => call.mayIssue)).toEqual([true, false]);
+    });
+  });
+
+  test("a first attempt that issued nothing (cap reached) stays without a link on retry", async () => {
+    await withRollback(async (tx) => {
+      quiet();
+      let down = true;
+      const { deps, attempts } = recorder(() => (down ? deliveryError() : null));
+      const placed = await placedOrder(tx);
+      await dispatchOrderEmails(tx, { ...deps, loginLinks: fakeLoginLinks({ answer: "limited" }).loginLinks }, { orderNo: placed.orderNo });
+      down = false;
+      await ageNotifications(tx, placed.orderId, 11);
+      // The retry's issuer would issue if it were allowed to; it is not (mayIssue false).
+      await dispatchOrderEmails(tx, { ...deps, loginLinks: fakeLoginLinks().loginLinks }, { orderNo: placed.orderNo });
+      const mine = forOrder(attempts, placed.orderNo);
+      expect(mine.map(loginLinkOf)).toEqual([null, null]);
+      expect(mine[1]).toEqual(mine[0]);
+    });
+  });
+
+  test("an issuer failure sends the email without the link instead of holding it back", async () => {
+    await withRollback(async (tx) => {
+      quiet();
+      const { deps, sent } = recorder();
+      const placed = await placedOrder(tx);
+      const result = await dispatchOrderEmails(tx, { ...deps, loginLinks: fakeLoginLinks({ fail: true }).loginLinks }, { orderNo: placed.orderNo });
+      expect(result.results).toEqual([{ kind: "created", outcome: "sent" }]);
+      expect(sent.map(loginLinkOf)).toEqual([null]);
+      expect(console.error).toHaveBeenCalledWith("[emails] could not issue the login link; the email goes without it", expect.objectContaining({ orderNo: placed.orderNo }));
     });
   });
 });

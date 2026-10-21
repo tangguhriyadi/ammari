@@ -32,7 +32,7 @@ import {
   type OrderEmailTotals,
   type RenderedEmail,
 } from "./templates";
-import { deriveOrderEmailAccessToken } from "./token";
+import { deriveOrderEmailAccessToken, deriveOrderEmailLoginToken } from "./token";
 
 // Transactional order emails (docs/plans/cart-checkout.md D14, §8; session 13).
 //
@@ -60,14 +60,26 @@ export interface OrderEmailTransport {
   send(message: { to: string; subject: string; body: string; html?: string; idempotencyKey?: string }): Promise<void>;
 }
 
+/** Issues the "Masuk ke akun" login links (apps pass @ammari/auth's issueOrReuseCustomerLoginLink,
+ * which hashes the token, supersedes the customer's live link and applies the per-customer cap).
+ * The email carries the link only for "issued" or "existing". */
+export interface OrderEmailLoginLinks {
+  issueOrReuse(input: { token: string; customerId: string; email: string; orderId: string; mayIssue: boolean }): Promise<LoginLinkIssueOutcome>;
+}
+
+/** Structurally the same as @ammari/auth's IssueLoginLinkResult (commerce never imports auth). */
+export type LoginLinkIssueOutcome = "issued" | "existing" | "not_issued" | "email_mismatch" | "limited";
+
 export interface OrderEmailDeps {
   transport: OrderEmailTransport;
   /** The storefront origin, no trailing slash (links in customer emails). */
   siteOrigin: string;
   /** The admin origin, no trailing slash, or null (the owner email then has no admin link). */
   adminOrigin: string | null;
-  /** The secret the "Lihat pesanan" tokens are derived from (./token.ts). */
+  /** The secret the "Lihat pesanan" and "Masuk ke akun" tokens are derived from (./token.ts). */
   linkSecret: string;
+  /** Without it, guest emails carry no "Masuk ke akun" link. */
+  loginLinks?: OrderEmailLoginLinks | null;
 }
 
 /** A failed or crashed send is retried after this long (also how long a send in progress is left
@@ -153,9 +165,16 @@ const orderColumns = {
   needsAttention: orders.needsAttention,
 };
 
+interface ClaimedNotification {
+  id: string;
+  /** True when this claim inserted the row: the email's first attempt. A retry may already have
+   * reached the provider, so it must render exactly what the first attempt rendered. */
+  firstAttempt: boolean;
+}
+
 /** Claims the notification row for sending, or returns null when it is sent, being sent, or past
  * its retries. */
-async function claimNotification(db: Database, orderId: string, kind: OrderNotificationKind): Promise<string | null> {
+async function claimNotification(db: Database, orderId: string, kind: OrderNotificationKind): Promise<ClaimedNotification | null> {
   const [row] = await db
     .insert(orderNotifications)
     .values({ orderId, kind })
@@ -167,8 +186,11 @@ async function claimNotification(db: Database, orderId: string, kind: OrderNotif
         and ${orderNotifications.createdAt} > now() - make_interval(hours => ${NOTIFICATION_RETRY_HOURS})
         and (${orderNotifications.error} is null or (${orderNotifications.error} <> ${SUPERSEDED} and ${orderNotifications.error} not like ${`${PERMANENT_PREFIX}%`}))`,
     })
-    .returning({ id: orderNotifications.id });
-  return row?.id ?? null;
+    // xmax is 0 on a row this statement inserted, and set on one it updated (the conflict path): a
+    // long-standing Postgres idiom, pinned by emails.test.ts's retry tests (first attempt true,
+    // retry false). It decides whether a new login link may be issued (loginUrlFor).
+    .returning({ id: orderNotifications.id, firstAttempt: sql<boolean>`(xmax = 0)` });
+  return row ? { id: row.id, firstAttempt: Boolean(row.firstAttempt) } : null;
 }
 
 /** A short, address-free description of a failed send for `order_notifications.error` and logs,
@@ -191,6 +213,9 @@ function classifySendError(error: unknown): { text: string; permanent: boolean }
 interface LoadedOrder {
   id: string;
   orderNo: string;
+  customerId: string | null;
+  /** false for a guest checkout order: its emails carry "Masuk ke akun" (plan §8). */
+  placedWithSession: boolean | null;
   contactEmail: string | null;
   contactPhone: string | null;
   customerName: string | null;
@@ -218,6 +243,8 @@ async function loadOrder(db: Database, orderId: string): Promise<LoadedOrder | n
     .select({
       id: orders.id,
       orderNo: orders.orderNo,
+      customerId: orders.customerId,
+      placedWithSession: orders.placedWithSession,
       contactEmail: orders.contactEmail,
       contactPhone: orders.contactPhone,
       customerName: customers.name,
@@ -261,6 +288,8 @@ async function loadOrder(db: Database, orderId: string): Promise<LoadedOrder | n
   return {
     id: order.id,
     orderNo: order.orderNo,
+    customerId: order.customerId,
+    placedWithSession: order.placedWithSession,
     contactEmail: order.contactEmail,
     contactPhone: order.contactPhone,
     customerName: order.customerName,
@@ -326,9 +355,35 @@ function siteHost(origin: string): string {
   }
 }
 
+/** "Masuk ke akun" (plan §8, §9.3): only in the `created` and `paid` emails of a guest checkout
+ * order, sent to the customer's own address. The token is derived from the notification row, so a
+ * retry renders the same link; a new link (superseding the customer's live one) is issued only on
+ * the email's first attempt, and a retry carries the link only if that first attempt issued it. So
+ * a payload that may already have reached the provider never changes. A failure to issue sends the
+ * email without the link rather than holding the order email back. */
+async function loginUrlFor(deps: OrderEmailDeps, order: LoadedOrder, due: DueOrderEmail, claim: ClaimedNotification): Promise<string | null> {
+  if (!deps.loginLinks || order.placedWithSession !== false || !order.customerId || !order.contactEmail) return null;
+  if (due.kind !== "created" && due.kind !== "paid") return null;
+  const token = deriveOrderEmailLoginToken(deps.linkSecret, claim.id);
+  let result: LoginLinkIssueOutcome;
+  try {
+    result = await deps.loginLinks.issueOrReuse({ token, customerId: order.customerId, email: order.contactEmail, orderId: order.id, mayIssue: claim.firstAttempt });
+  } catch (error) {
+    console.error("[emails] could not issue the login link; the email goes without it", { orderNo: order.orderNo, kind: due.kind, ...errorLogFields(error) });
+    return null;
+  }
+  if (result === "issued" || result === "existing") return `${deps.siteOrigin}/login/link?token=${token}`;
+  // Each a deliberate drop (cap reached, the address is no longer the customer's email, or a retry of
+  // an attempt that issued none), logged so an email without the link can be explained.
+  const level = result === "not_issued" ? "info" : "warn";
+  console[level]("[emails] the email goes without a login link", { orderNo: order.orderNo, kind: due.kind, customerId: order.customerId, result });
+  return null;
+}
+
 /** Renders one due email for its recipient, minting the view token for a customer email. Returns
  * null when there is no recipient. */
-async function prepare(db: Database, deps: OrderEmailDeps, order: LoadedOrder, due: DueOrderEmail, notificationId: string): Promise<{ to: string; email: RenderedEmail } | null> {
+async function prepare(db: Database, deps: OrderEmailDeps, order: LoadedOrder, due: DueOrderEmail, claim: ClaimedNotification): Promise<{ to: string; email: RenderedEmail } | null> {
+  const notificationId = claim.id;
   if (due.kind === "owner_paid") {
     if (!order.supportEmail) return null;
     return {
@@ -364,8 +419,7 @@ async function prepare(db: Database, deps: OrderEmailDeps, order: LoadedOrder, d
     courierLabel: order.courierLabel,
     address: addressOf(order, false),
     orderUrl: `${deps.siteOrigin}/orders/${encodeURIComponent(order.orderNo)}?t=${token}`,
-    // "Masuk ke akun" for guest orders arrives with session 14.
-    loginUrl: null,
+    loginUrl: await loginUrlFor(deps, order, due, claim),
     shopUrl: `${deps.siteOrigin}/`,
     siteHost: siteHost(deps.siteOrigin),
     whatsappNumber: order.whatsappNumber,
@@ -390,11 +444,12 @@ function idempotencyKey(notificationId: string): string {
   return `order-email/${notificationId}`;
 }
 
-async function sendOne(db: Database, deps: OrderEmailDeps, order: LoadedOrder, due: DueOrderEmail, notificationId: string): Promise<OrderEmailOutcome> {
+async function sendOne(db: Database, deps: OrderEmailDeps, order: LoadedOrder, due: DueOrderEmail, claim: ClaimedNotification): Promise<OrderEmailOutcome> {
+  const notificationId = claim.id;
   const log = { orderNo: order.orderNo, kind: due.kind };
   let prepared: Awaited<ReturnType<typeof prepare>>;
   try {
-    prepared = await prepare(db, deps, order, due, notificationId);
+    prepared = await prepare(db, deps, order, due, claim);
   } catch (error) {
     console.error("[emails] could not prepare the email; retried later", { ...log, ...errorLogFields(error) });
     await recordFailure(db, notificationId, "prepare_failed", log);
@@ -472,8 +527,8 @@ export async function dispatchOrderEmails(db: Database, deps: OrderEmailDeps, re
     let loaded: LoadedOrder | null = null;
     for (const email of due) {
       if (options.deadline !== undefined && Date.now() > options.deadline) break;
-      const notificationId = await claimNotification(db, state.id, email.kind);
-      if (!notificationId) continue;
+      const claim = await claimNotification(db, state.id, email.kind);
+      if (!claim) continue;
       const log = { orderNo: state.orderNo, kind: email.kind };
       if (!loaded) {
         try {
@@ -482,12 +537,12 @@ export async function dispatchOrderEmails(db: Database, deps: OrderEmailDeps, re
           console.error("[emails] could not load the order; retried later", { ...log, ...errorLogFields(error) });
         }
         if (!loaded) {
-          await recordFailure(db, notificationId, "load_failed", log);
+          await recordFailure(db, claim.id, "load_failed", log);
           results.push({ kind: email.kind, outcome: "failed" });
           break;
         }
       }
-      results.push({ kind: email.kind, outcome: await sendOne(db, deps, loaded, email, notificationId) });
+      results.push({ kind: email.kind, outcome: await sendOne(db, deps, loaded, email, claim) });
     }
     return { orderNo: state.orderNo, results };
   } catch (error) {

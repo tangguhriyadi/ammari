@@ -5,6 +5,8 @@ import { withRollback, withTriggerDisabled, type TestTx } from "@ammari/db/test-
 import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant, shippingQuoteValues } from "@ammari/db/test-fixtures";
 import { orderItems, orderNotifications, orders, payments, stockMovements, stockReservations, storeSettings } from "@ammari/db/schema";
 import { ResendEmailSender } from "@ammari/auth";
+import { findLiveCustomerLoginLink, hashLoginLinkToken } from "@ammari/auth/customer";
+import { customerLoginLinks } from "@ammari/db/schema";
 import { recordFakeTransaction } from "@ammari/commerce/payments";
 
 // docs/plans/cart-checkout.md §8, D14 (session 13): the order email hooks in apps/web (the payment
@@ -182,6 +184,47 @@ describe("payment notification hook", () => {
       // Same payload and idempotency key as the failed attempt.
       const buyer = calls.filter((call) => call.to === fixture.email);
       expect(buyer[1]).toEqual(buyer[0]);
+    });
+  });
+});
+
+const loginTokenIn = (call: ResendCall) => call.text.match(/Masuk ke akun:\n\S+\/login\/link\?token=([A-Za-z0-9_-]{43})/)?.[1] ?? null;
+
+describe("\"Masuk ke akun\" (session 14)", () => {
+  test("a guest order's created and paid emails each carry a working login link; the newer one supersedes the older", async () => {
+    await inRollback(async (tx) => {
+      await setSupportEmail(tx, "pemilik@example.test");
+      const fixture = await checkoutOrder(tx);
+      expect((await cron(emailsRoute, "/api/internal/emails/dispatch")).status).toBe(200);
+      const created = mine(fixture.orderNo)[0]!;
+      const firstToken = loginTokenIn(created);
+      expect(firstToken).not.toBeNull();
+      expect(created.html).toContain(`/login/link?token=${firstToken}`);
+      const [order] = await tx.select({ customerId: orders.customerId }).from(orders).where(eq(orders.id, fixture.orderId));
+      expect(await findLiveCustomerLoginLink(tx, firstToken)).toMatchObject({ customerId: order!.customerId });
+
+      await notify(recordFakeTransaction({ providerOrderId: fixture.providerOrderId, transactionStatus: "settlement", grossAmount: 259_000 }));
+      await runScheduled();
+      const paid = mine(fixture.orderNo).find((call) => call.subject.startsWith("Pembayaran pesanan"))!;
+      const secondToken = loginTokenIn(paid);
+      expect(secondToken).not.toBeNull();
+      expect(secondToken).not.toBe(firstToken);
+      expect(await findLiveCustomerLoginLink(tx, firstToken)).toBeNull();
+      expect(await findLiveCustomerLoginLink(tx, secondToken)).not.toBeNull();
+      // The owner email never carries one; only hashes are stored.
+      expect(loginTokenIn(mine(fixture.orderNo).find((call) => call.to === "pemilik@example.test")!)).toBeNull();
+      const rows = await tx.select({ tokenHash: customerLoginLinks.tokenHash, orderId: customerLoginLinks.orderId }).from(customerLoginLinks).where(eq(customerLoginLinks.customerId, order!.customerId!));
+      expect(rows.map((row) => row.tokenHash).sort()).toEqual([hashLoginLinkToken(firstToken!), hashLoginLinkToken(secondToken!)].sort());
+      expect(rows.every((row) => row.orderId === fixture.orderId)).toBe(true);
+    });
+  });
+
+  test("an order placed while logged in carries no login link", async () => {
+    await inRollback(async (tx) => {
+      const fixture = await checkoutOrder(tx);
+      await tx.update(orders).set({ placedWithSession: true }).where(eq(orders.id, fixture.orderId));
+      expect((await cron(emailsRoute, "/api/internal/emails/dispatch")).status).toBe(200);
+      expect(mine(fixture.orderNo).map(loginTokenIn)).toEqual([null]);
     });
   });
 });

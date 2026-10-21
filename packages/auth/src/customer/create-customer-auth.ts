@@ -8,6 +8,7 @@ import type { EmailSender } from "../email-sender";
 import { recordEmailThrottleAttempt } from "../shared/email-throttle";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "../shared/otp-timing";
 import { type Database, loadOrCreateCustomerForEmail } from "./customer-data";
+import { orderLoginLink } from "./order-login-link-plugin";
 
 // 6 digits / 5 attempts: CLAUDE.md's OTP rules — same hardening as staff. Expiry comes from
 // shared/otp-timing.ts (see staff's own factory for why). Every other constant/comment below
@@ -63,6 +64,9 @@ export interface CreateCustomerAuthOptions {
   /** Test-only escape hatch — see staff's own factory for the full reasoning. Never set in
    * production. */
   disableSendThrottle?: boolean;
+  /** "Masuk ke akun" (./order-login-link-plugin.ts): where a login by link lands, and the confirm
+   * page failures go back to. Defaults to "/account" and "/login/link". */
+  orderLoginLink?: { successPath?: string; pagePath?: string };
 }
 
 export function createCustomerAuth(options: CreateCustomerAuthOptions) {
@@ -78,6 +82,7 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
     globalHourlyCap = DEFAULT_OTP_GLOBAL_HOURLY_CAP,
     expiresInSecondsOverride,
     disableSendThrottle = false,
+    orderLoginLink: orderLoginLinkPaths = {},
   } = options;
 
   if (process.env.NODE_ENV === "production" && !secret) {
@@ -112,6 +117,10 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
       cookiePrefix: "ammari_customer",
       useSecureCookies: baseURL.startsWith("https://"),
       ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
+      // Explicit, so the origin and CSRF checks also run under a test runner: Better Auth 1.7.7
+      // switches both off by default when it detects one (context/create-context.mjs `isTest()`),
+      // which would leave the login link's CSRF tests proving nothing.
+      disableOriginCheck: false,
       ...(backgroundTaskHandler ? { backgroundTasks: { handler: backgroundTaskHandler } } : {}),
     },
     session: {
@@ -211,6 +220,11 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
           }
           onOtpGenerated?.({ email, otp });
         },
+      }),
+      orderLoginLink({
+        db,
+        successPath: orderLoginLinkPaths.successPath ?? "/account",
+        pagePath: orderLoginLinkPaths.pagePath ?? "/login/link",
       }),
       ...extraPlugins,
     ],

@@ -5,6 +5,7 @@ import {
   check,
   foreignKey,
   index,
+  inet,
   integer,
   jsonb,
   numeric,
@@ -15,7 +16,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { checkIn, createdAtOnly, timestamps } from "./columns";
+import { checkIn, citext, createdAtOnly, timestamps } from "./columns";
 import {
   ORDER_NOTIFICATION_KINDS,
   PAYMENT_PROVIDERS,
@@ -269,7 +270,8 @@ export const customerAddresses = pgTable(
     recipientName: text("recipient_name").notNull(),
     phone: text("phone").notNull(),
     addressLine: text("address_line").notNull(),
-    // Set for every address saved from session 10's checkout (plan D12); a row without one shows
+    // Set for every address checkout saves (plan D12; saving addresses was deferred by the owner in
+    // session 10 and is not built yet); a row without one shows
     // "Pilih ulang kecamatan" and cannot be used until re-picked (plan §4.5.1). The names below are
     // denormalized from the area and always filled.
     shippingAreaId: uuid("shipping_area_id").references(() => shippingAreas.id, { onDelete: "restrict" }),
@@ -345,5 +347,45 @@ export const orderNotifications = pgTable(
     // Also the order_id index (leading column).
     unique("order_notifications_order_id_kind_key").on(table.orderId, table.kind),
     check("order_notifications_kind_check", checkIn(table.kind, ORDER_NOTIFICATION_KINDS)),
+  ],
+);
+
+/** "Masuk ke akun" one-time login links in guest order emails (plan §9.3, D15, migration 0033,
+ * session 14). Issued server-side only by the order email step; only the sha256 of the token is
+ * stored. A link logs in once (`consumed_at`), within 24 hours (`expires_at`), and only while it is
+ * the customer's newest link: issuing a new one stamps `superseded_at` on the live one, and the
+ * partial UNIQUE index keeps at most one live link per customer in the database itself. `email` is
+ * the address it was sent to; consuming re-checks that the customer still has it. */
+export const customerLoginLinks = pgTable(
+  "customer_login_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "restrict" }),
+    email: citext("email").notNull(),
+    tokenHash: text("token_hash").notNull().unique("customer_login_links_token_hash_key"),
+    /** The order whose email carried the link. */
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "restrict" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true, mode: "date" }),
+    supersededAt: timestamp("superseded_at", { withTimezone: true, mode: "date" }),
+    consumedIp: inet("consumed_ip"),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    uniqueIndex("customer_login_links_live_customer_id_key")
+      .on(table.customerId)
+      .where(sql`${table.consumedAt} is null and ${table.supersededAt} is null`),
+    // The issuance cap counts a customer's links of the last 24 hours.
+    index("customer_login_links_customer_id_created_at_idx").on(table.customerId, table.createdAt),
+    index("customer_login_links_order_id_idx").on(table.orderId),
+    // Retention: deleted 30 days after expiry (plan §11).
+    index("customer_login_links_expires_at_idx").on(table.expiresAt),
+    check("customer_login_links_token_hash_format_check", sql`${table.tokenHash} ~ '^[0-9a-f]{64}$'`),
+    check("customer_login_links_expires_after_created_check", sql`${table.expiresAt} > ${table.createdAt}`),
+    // A link ends one way: used, or replaced by a newer one.
+    check("customer_login_links_single_end_check", sql`${table.consumedAt} is null or ${table.supersededAt} is null`),
+    check("customer_login_links_consumed_ip_check", sql`${table.consumedIp} is null or ${table.consumedAt} is not null`),
   ],
 );

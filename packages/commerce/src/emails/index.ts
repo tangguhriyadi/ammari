@@ -12,12 +12,14 @@ export {
   type DueOrderEmail,
   type OrderEmailDeps,
   type OrderEmailDispatch,
+  type OrderEmailLoginLinks,
+  type LoginLinkIssueOutcome,
   type OrderEmailOutcome,
   type OrderEmailState,
   type OrderEmailTransport,
   type PendingEmailSummary,
 } from "./dispatch";
-export { deriveOrderEmailAccessToken } from "./token";
+export { deriveOrderEmailAccessToken, deriveOrderEmailLoginToken } from "./token";
 export {
   renderCancelledEmail,
   renderCreatedEmail,

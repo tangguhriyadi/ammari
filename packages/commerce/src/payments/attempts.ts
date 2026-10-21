@@ -188,7 +188,7 @@ export async function reopenPaymentPage(
         attempt,
         grossAmount: order.totalAmount,
         status: "created",
-        expiresAt: sql`(select ${orders.paymentExpiresAt} from ${orders} where ${orders.id} = ${order.id})`,
+        expiresAt: sql`(select ${orders.paymentExpiresAt} from ${orders} where ${eq(orders.id, order.id)})`,
       })
       .returning({ id: payments.id });
     if (!payment) throw new Error("failed to insert payment attempt");
