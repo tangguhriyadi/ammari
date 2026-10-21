@@ -11,20 +11,22 @@ storefront availability, admin "Dipesan"; see the session table). **Session 5 do
 limit; see the session table). **Session 6 done 2026-10-21** (cart UI: PDP add, header count,
 `/cart`, flag 404; see the session table). **Revised 2026-10-21 for the shipping subsidy**
 (owner decision: free shipping is replaced by a subsidy of at most Rp20.000 per order, see §4.5;
-Komerce Shipping Cost and destination search moved from Phase K into Phase C as new sessions 7
-and 8; the old sessions 7 to 15 are now 9 to 17, mapping in §15). **Session 7 done 2026-10-21**
-(migration 0031 `shipping_quote`, product weight in admin; see the session table). Next: session 8.
+shipping rates and area search moved from Phase K into Phase C as new sessions 7 and 8; the old
+sessions 7 to 15 are now 9 to 17, mapping in §15). **Session 7 done 2026-10-21** (migration 0031
+`shipping_quote`, product weight in admin; see the session table). **Revised 2026-10-21 for the
+shipping provider (D18): Komerce is replaced by Biteship** for area search, rates, orders, pickup
+and tracking (one area id across all of them; the Grow plan covers it at Rp149.000/month).
+**Session 8 done 2026-10-21** (see the session table). Next: session 9.
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
 
-**Shipping cost (Komerce Shipping Cost API) is a launch requirement** since 2026-10-21: checkout
-cannot price an order without it (§4.5). Shipping Cost (Search Destination, Calculate) is on
-every Komerce plan, so Ammari needs a Komerce subscription and key before launch (§14).
-**Courier booking and tracking (Komerce Shipping Delivery API) stays in Phase K** (§15): it needs
-the **Komerce Enterprise plan** (Rp249.000/month, cheaper annually). Until Phase K ships, staff
-book the order's quoted courier service by hand, enter the resi with the existing "Tandai
-dikirim", and mark orders "Selesai" by hand.
+**Shipping rates (Biteship Maps + Rates API) are a launch requirement** since 2026-10-21: checkout
+cannot price an order without them (§4.5), so Ammari needs a Biteship account with a live key
+before launch (§14), on the **Grow plan** (§15 "Biteship plan"). **Courier booking and tracking
+(Biteship Order + Tracking API, same account and key) stays in Phase K** (§15). Until Phase K
+ships, staff book the order's quoted courier service by hand, enter the resi with the existing
+"Tandai dikirim", and mark orders "Selesai" by hand.
 
 ## 1. Grounding: what already exists
 
@@ -76,13 +78,44 @@ dikirim", and mark orders "Selesai" by hand.
   footer's payment chips (design §4) list "Kartu kredit", which must go (D16).
 - **No weight anywhere (checked 2026-10-21):** neither `products` nor `product_variants` has a
   weight column, so the parcel weight a shipping quote needs is new (§4.5.3).
-- **Komerce (public docs, checked 2026-10-20):** one API host
-  (`api.collaborator.komerce.id`, sandbox `api-sandbox.collaborator.komerce.id`, header
-  `x-api-key`) with Search Destination, Calculate, Store Order, Cancel Order, Detail Order,
-  History AWB, Pickup Request and Print Label endpoints. A webhook URL is registered with
-  `PUT /webhook`; pushes carry `order_no`, `cnote` (AWB) and `status` (documented examples:
-  Diajukan, Dijemput, Dikirim, Dibatalkan, Selesai). **No signature scheme is documented**, and
-  the full status list and retry rules are not documented.
+- **Biteship (public docs at https://biteship.com/id/docs, read 2026-10-21; replaces Komerce,
+  D18):** one host `https://api.biteship.com`, header `authorization: <key>` (raw key, no
+  `Bearer`), JSON. Test and live mode share the host and are chosen by the key (`biteship_test.` /
+  `biteship_live.` prefix, "Mode Testing" in the dashboard). Endpoints used by this plan:
+  - Maps: `GET /v1/maps/areas?countries=ID&input=<text>&type=single` returns `areas[]` with `id`
+    (e.g. `IDNP6IDNC148IDND843IDZ12250`), `name` ("Pesanggrahan, Jakarta Selatan, DKI Jakarta.
+    12250"), `administrative_division_level_1_name` (province), `_2_` (city), `_3_` (kecamatan)
+    and a numeric `postal_code`. **Ids are kecamatan + kode pos; there is no kelurahan level**
+    (rates docs: "Area Id is using district as its lowest area level"). The docs ask for a
+    debounced call. No `limit` parameter.
+  - Rates: `POST /v1/rates/couriers` with `origin_area_id`, `destination_area_id`, `couriers`
+    (`"jne,jnt,..."`) and `items[]` (`name`, `value`, `weight` in grams, `quantity`; dimensions
+    optional, they can raise the price by volume). Returns `pricing[]` with `courier_code`,
+    `courier_service_code`, `price` (final: fee plus surcharge minus discount plus insurance/COD
+    when requested, which we never request), `duration`, `type`. Errors are `{ success: false,
+    error, code }`; `40001010` is "No courier available for requested location".
+  - Orders (Phase K): `POST /v1/orders` takes the same `origin_area_id` / `destination_area_id`
+    ("Use area_id from Maps API", the wording the rates page uses too), contacts, address,
+    `courier_company` + `courier_type` (= the rates `courier_code` + `courier_service_code`),
+    `delivery_type` `now` (waybill and pickup right away) or `scheduled`, `items`, and a unique
+    `reference_id` (a repeat returns `40002060` with the existing order id, so retries are
+    idempotent). `GET /v1/orders/:id`, `POST /v1/orders/:id/cancel` (reason code
+    `change_courier` / `pickup_delay` / `change_address` / `others`; only before pickup).
+  - Tracking (Phase K): `GET /v1/trackings/:id` (only for orders made through the API), statuses
+    `confirmed`, `scheduled`, `allocated`, `picking_up`, `picked`, `in_transit`, `dropping_off`,
+    `delivered`, `on_hold`, `return_in_transit`, `returned`, `rejected`, `cancelled`, `disposed`,
+    `courier_not_found` (one docs page lists camelCase spellings; normalize both).
+  - Webhooks (Phase K): `order.status`, `order.price` (actual price differs after weighing),
+    `order.waybill_id`, registered in the dashboard. **No body signature is documented**; the help
+    center (not verifiable, it blocks automated reads) mentions optional static header
+    key/secret values. No documented retry policy.
+  - **Labels: the docs say "Biteship does not provide a Shipping Label API"** (dashboard download,
+    or print our own from the order data), while the pricing page lists "Shipping Label API" for
+    Grow: confirm with Biteship before K2.
+  - **Test mode:** Maps, Rates and Tracking return real data and **are billed** even with a test
+    key; the Order API is simulated (no courier pickup). Shipping costs are paid from the account
+    balance (Bitepoints, top-up by QRIS or transfer; not withdrawable; a cancellation refund to the
+    balance goes through Biteship support, per the help center).
 - **Last migration:** 0029. This plan uses 0030 onward.
 
 ## 2. Key decisions (design)
@@ -100,12 +133,13 @@ dikirim", and mark orders "Selesai" by hand.
 | D9 | Guest checkout links or creates a `customers` row by email but **never signs the guest in at checkout**. | The email is unverified at that point; account takeover risk. |
 | D10 | Vouchers only with a session; redeem atomically in the order transaction; restore on cancel or payment expiry only. | SPEC §4.5, §8; decision 8. |
 | D11 | **Shipping subsidy (2026-10-21, replaces free shipping):** Ammari pays at most Rp20.000 of the courier cost per order; the buyer pays `max(0, cost - 20.000)` as a separate "Ongkir" line. `orders.shipping_amount` is the buyer's share; the quoted courier cost and the subsidy are stored on the order too (§4.5.6). Product prices are the same everywhere. The cost actually paid at booking goes on `shipments` in Phase K. | Owner decision: free shipping to e.g. Papua (Rp90.000 to Rp200.000+ per kg) is too expensive. |
-| D12 | **Address area from Komerce Search Destination (2026-10-21).** The buyer picks a Komerce destination (kelurahan, kecamatan, city, province, kode pos) from a search box; the chosen row is cached in **`shipping_areas`** (keyed by `komerce_destination_id`) and the order and saved address point at it. Session 3's plain-text fields (no licensed dataset) are superseded for checkout; `@ammari/commerce/address` stays for validation, formatting and the snapshot. | A quote needs a Komerce destination id; the area list is licensed through the Komerce subscription. |
+| D12 | **Address area from the shipping provider's area search (2026-10-21; Biteship Maps since D18).** The buyer picks a provider area (kecamatan, city, province, kode pos; Biteship has no kelurahan level, so the kelurahan is typed in the street address) from a search box; the chosen row is cached in **`shipping_areas`** (keyed by `provider_area_id`, renamed from `komerce_destination_id` by migration 0032) and the order and saved address point at it. Session 3's plain-text fields (no licensed dataset) are superseded for checkout; `@ammari/commerce/address` stays for validation, formatting and the snapshot. | A quote needs a provider area id; the area list comes with the provider subscription. |
 | D13 | Unpaid expiry finalized by Midtrans `expire` notifications plus a **sweeper** route called every 5 minutes by a cron container on the VPS internal network. The same cron drives Komerce tracking polls in Phase K. | No scheduler exists. |
 | D14 | Transactional emails sent after commit with an `order_notifications (order_id, kind)` UNIQUE row as the idempotency guard. | Retries must not double-send; email failure never fails a webhook. |
 | D15 | **Two separate links in guest order emails.** "Lihat pesanan": view-only access to that one order (§9.2). "Masuk ke akun": a magic login link (§9.3), implemented as a **small custom Better Auth plugin** on the customer instance (our own endpoint, Better Auth's session creation, cookie, rate limiter and CSRF middleware), not the stock `magic-link` plugin. | The stock plugin logs in on GET (email scanners prefetch links), does not invalidate older links, does not bind to a customer id, and exposes public issuance. A plugin keeps the login inside Better Auth's own HTTP router, so its rate limiter and origin checks apply (SPEC §10.1's reason for not calling `.api` from server actions). |
 | D16 | **No card payments**, not enabled in Snap and not planned. | Decision 2. |
-| D17 | **Shipping quotes are server-side only**, behind a `ShippingRateProvider` interface (`@ammari/commerce/shipping`; Komerce in production, a fake in tests and e2e). The browser never sends a price, a courier or a Komerce id; the quote is recomputed in `placeOrder` and locked into the order. No quote, no order (§4.5.5). | Money rule; Ammari must never ship at an unknown cost. |
+| D17 | **Shipping quotes are server-side only**, behind a `ShippingRateProvider` interface (`@ammari/commerce/shipping`; Biteship in production, a fake in tests and e2e). The browser never sends a price, a courier or a provider area id; the quote is recomputed in `placeOrder` and locked into the order. No quote, no order (§4.5.5). | Money rule; Ammari must never ship at an unknown cost. |
+| D18 | **Shipping provider: Biteship, not Komerce (owner decision 2026-10-21, during session 8).** One Biteship account and key covers area search (Maps), rates, orders with pickup, and tracking with webhooks, all on the **same area id**; planned plan **Grow** (Rp149.000/month: 2,000 shipments, 10 active couriers, monthly quota Rates 10.000, Tracking 2.000, Maps 50.000; overage per request); **Starter** (Rp0, pay per request, 3 active couriers) for development. | Komerce's Shipping Cost destination ids are not documented as the ids its Delivery API accepts (two id spaces, two keys, different service codes), and booking/tracking needed its Enterprise plan (Rp249.000/month). Biteship documents one area id for rates and orders, at a lower plan price. |
 
 ## 3. Data model (all expand-only, backward compatible)
 
@@ -133,8 +167,8 @@ dikirim", and mark orders "Selesai" by hand.
   `notes`, `latitude` / `longitude` NULL, `is_default` (partial UNIQUE per customer where true),
   timestamps.
 - **`shipping_areas`**: `id`, `province`, `city`, `district`, `postal_code`, `search_text`,
-  `komerce_destination_id text NULL`. UNIQUE `(province, city, district, postal_code)`. Empty in
-  0030.
+  `komerce_destination_id text NULL` (renamed `provider_area_id` by 0032). UNIQUE `(province,
+  city, district, postal_code)` (replaced in 0031). Empty in 0030.
 - **`orders`** new nullable / defaulted columns: `payment_status` (NULL for non-checkout
   orders; `ORDER_PAYMENT_STATUSES` = `pending` / `paid` / `expired` / `cancelled` / `refunded` /
   `partially_refunded` / `chargeback`, deliberately without the attempt-only `created` and
@@ -194,7 +228,7 @@ recipient data sits in `shipping_address`, `recipient_name` and the snapshot, so
 anonymization must clear all three; "set as default" on `customer_addresses` must unset and set
 in one statement or transaction (partial UNIQUE), never check-then-write. ~~`shipping_areas` stays
 empty and every `shipping_area_id` stays NULL until Phase K K1.~~ **Superseded 2026-10-21 (D12):**
-`shipping_areas` is filled on demand from Komerce Search Destination in Phase C (session 8,
+`shipping_areas` is filled on demand from the provider's area search (Biteship Maps since D18) in Phase C (session 8,
 §4.5.1) and every checkout order and saved address gets a `shipping_area_id`; the `area_search`
 rate-limit key is used from session 8. Numbers are assigned by `drizzle-kit generate` at the time;
 the order below is what matters.
@@ -210,9 +244,11 @@ order, never reads `shipping_areas`, and does not know the new columns):
 - **`orders`** new nullable columns, written only by `placeOrder`:
   `shipping_cost_amount bigint` (the courier cost as quoted), `shipping_subsidy_amount bigint`
   (what Ammari covers on this order), `shipping_courier_code text` / `shipping_service_code text`
-  (e.g. `jne` / `REG`, as Komerce names them), `shipping_courier_label text` (display, e.g.
-  "JNE Reguler"), `shipping_weight_grams int`, `shipping_destination_id text` (the Komerce id,
-  snapshotted because `shipping_areas` rows can be re-synced), `shipping_quoted_at timestamptz`.
+  (e.g. `jne` / `reg`, as the provider names them; Biteship's `courier_code` /
+  `courier_service_code`, which are also its order `courier_company` / `courier_type`),
+  `shipping_courier_label text` (display, e.g. "JNE Reguler"), `shipping_weight_grams int`,
+  `shipping_destination_id text` (the provider area id, snapshotted because `shipping_areas` rows
+  can be re-synced), `shipping_quoted_at timestamptz`.
   CHECKs: the eight are all NULL or all set; when set, `shipping_subsidy_amount BETWEEN 0 AND
   shipping_cost_amount` and **`shipping_amount = shipping_cost_amount - shipping_subsidy_amount`**
   (so the existing `total = subtotal + shipping - discount` CHECK still balances); `payment_status
@@ -229,9 +265,11 @@ order, never reads `shipping_areas`, and does not know the new columns):
   partial index) so the upsert can say `ON CONFLICT (komerce_destination_id)` without a predicate;
   `label` is nullable (columns added by a migration stay nullable) and session 8 always writes it;
   `last_synced_at` is NOT NULL DEFAULT now(). The two loosenings (DROP CONSTRAINT, DROP NOT NULL)
-  were confirmed by the owner on 2026-10-21.
+  were confirmed by the owner on 2026-10-21. (Written when the provider was Komerce; migration
+  0032 renames the column for Biteship, below. With Biteship every area carries a kode pos, so the
+  nullable `postal_code` path stays only as a defensive fallback, and `subdistrict` stays NULL.)
 - **`customer_addresses`**: add `subdistrict text NULL`. The snapshot moves to `version: 2`
-  (adds `subdistrict`, `shippingAreaId`, `komerceDestinationId`); v1 never reached an order.
+  (adds `subdistrict`, `shippingAreaId`, `providerAreaId`); v1 never reached an order.
 - **`shipping_rate_cache`**: `origin_id text`, `destination_id text`, `weight_grams int`,
   `services_key text` (hash of the allowlist), `result jsonb` (allowlisted services and prices
   only), `fetched_at`; UNIQUE `(origin_id, destination_id, weight_grams, services_key)`, written
@@ -239,7 +277,19 @@ order, never reads `shipping_areas`, and does not know the new columns):
 - No permission keys or other reference rows (the courier allowlist and the subsidy cap are code
   constants).
 
-### Migration 0032 `customer_login_links` (session 14; was 0031 before 2026-10-21)
+### Migration 0032 `shipping_provider_area_id` (session 8, added 2026-10-21 for D18)
+
+- **`shipping_areas.komerce_destination_id` renamed to `provider_area_id`**, and its UNIQUE
+  `shipping_areas_komerce_destination_id_key` renamed to `shipping_areas_provider_area_id_key`
+  (owner decision 2026-10-21). It holds the Biteship area id (`IDNP...IDZ12250`). Safe as a rename
+  rather than expand/contract: the table is empty on every environment and no released code (the
+  session 7 image included) reads or writes the column, so a rollback to session 7 against the
+  renamed schema behaves the same. Metadata-only (`RENAME` takes a brief ACCESS EXCLUSIVE lock on
+  an empty table), with `SET LOCAL lock_timeout = '5s'` like 0030 and 0031.
+- No other change. `orders.shipping_destination_id` and `shipping_rate_cache` already have
+  provider-neutral names.
+
+### Migration 0033 `customer_login_links` (session 14; was 0031, then 0032, before 2026-10-21)
 
 - **`customer_login_links`**: `id`, `customer_id` (FK restrict), `email citext` (the address it
   was sent to), `token_hash text UNIQUE`, `order_id NULL` (which order email issued it),
@@ -247,19 +297,22 @@ order, never reads `shipping_areas`, and does not know the new columns):
   Partial UNIQUE on `(customer_id)` WHERE `consumed_at IS NULL AND superseded_at IS NULL`, so at
   most one live link per customer exists, enforced by the database.
 
-### Phase K migrations (numbers assigned at the time, expected 0033 and 0034)
+### Phase K migrations (numbers assigned at the time, expected 0034 and 0035)
 
 - **`shipments`** (K2): `order_id UNIQUE` (one shipment per order in v1), `provider`
-  (`komerce`), `provider_order_no UNIQUE`, `courier`, `service`, `awb UNIQUE NULL`, `cost_amount`
-  (what Ammari actually pays at booking; compare with the order's quoted `shipping_cost_amount`),
-  `label_url`, `status` (normalized: `created` / `pickup_requested` /
-  `picked_up` / `in_transit` / `delivered` / `cancelled` / `returning` / `returned` /
-  `problem`), `provider_status text` (raw), `delivered_at`, `last_polled_at`, `last_event_at`,
-  timestamps.
+  (`biteship`), `provider_order_id UNIQUE` (Biteship order `id`), `provider_tracking_id` (Biteship
+  `courier.tracking_id`, for `GET /v1/trackings/:id`), `courier`, `service`, `awb UNIQUE NULL`
+  (`courier.waybill_id`), `routing_code` (printed on our own label if Biteship has no label API),
+  `cost_amount` (what Ammari actually pays: the order `price`, updated by an `order.price`
+  webhook after re-weighing; compare with the order's quoted `shipping_cost_amount`), `label_url
+  NULL`, `status` (normalized: `created` / `pickup_requested` / `picked_up` / `in_transit` /
+  `delivered` / `cancelled` / `returning` / `returned` / `problem`), `provider_status text` (raw),
+  `delivered_at`, `last_polled_at`, `last_event_at`, timestamps.
 - **`shipment_events`** (K3): `shipment_id`, `occurred_at`, `provider_status`,
   `normalized_status`, `description`, `location`, `source` (`webhook` / `poll`), UNIQUE
   `(shipment_id, occurred_at, provider_status)` so replays and repeated polls never duplicate.
-- **`komerce_webhook_events`** (K3): raw log like `payment_notifications`.
+- **`shipping_webhook_events`** (K3): raw log like `payment_notifications` (was
+  `komerce_webhook_events`).
 
 Rollback safety: every new column is nullable or defaulted; nothing the current release reads is
 renamed or dropped. No contract migration is needed.
@@ -297,10 +350,12 @@ renamed or dropped. No contract migration is needed.
 
 1. **Kontak.** Guest: email + nomor WhatsApp (normalized to `+62...`). Logged in: locked card,
    "Bukan kamu? Keluar". A logged-in customer without a phone types it here.
-2. **Alamat pengiriman.** Nama penerima, nomor HP penerima, **"Kecamatan / kelurahan / kode
-   pos"** search (one combobox, §4.5.1; the chosen area shows as a read-only line "Kelurahan,
-   Kecamatan, Kota, Provinsi 12345" with "Ganti"), Kode pos input only when the chosen area has
-   none, alamat lengkap (jalan, nomor rumah, RT/RW), catatan untuk kurir (optional). Logged in
+2. **Alamat pengiriman.** Nama penerima, nomor HP penerima, **"Kecamatan atau kode pos"**
+   search (one combobox, §4.5.1; the chosen area shows as a read-only line "Kecamatan, Kota,
+   Provinsi 12345" with "Ganti"), Kode pos input only when the chosen area has none (never with
+   Biteship, kept as a fallback), alamat lengkap with the hint "Jalan, nomor rumah, RT/RW,
+   kelurahan" (Biteship areas stop at kecamatan, owner decision 2026-10-21), catatan untuk kurir
+   (optional). Logged in
    with saved address: summary card with "Ubah" / "Ganti alamat" and "Perbarui alamat tersimpan".
    No map pin. Province select and free-typed city/kecamatan/kode pos (session 3) are gone.
 3. **Pengiriman.** One fixed row, no choice and no delivery estimate (decisions 12, 18): before an
@@ -343,28 +398,36 @@ The rule: the buyer pays `buyerShipping = max(0, cost - SHIPPING_SUBSIDY_MAX_AMO
 `subsidy = cost - buyerShipping`. Product prices never depend on location. All of it is computed
 on the server; the browser only ever sees the result.
 
-#### 4.5.1 Address: Komerce destination search
+#### 4.5.1 Address: provider area search (Biteship Maps since D18)
 
-- The combobox calls a flag-gated server endpoint (`GET /api/shipping/destinations?q=`, or a
-  server action; session 8 picks after reading the installed Next docs) after 3 characters and a
-  300 ms debounce. It accepts a kelurahan, kecamatan, city or kode pos fragment.
-- The server calls Komerce Search Destination, **upserts every returned row into `shipping_areas`**
-  (`ON CONFLICT (komerce_destination_id) DO UPDATE`, refreshing names, label, kode pos and
-  `last_synced_at`), and returns at most 10 rows as **our `shipping_areas.id`** plus the display
-  label. The browser never sends a Komerce id: the form posts `shippingAreaId`, and the server
-  reads the area fields from that row. An id not in `shipping_areas` is a validation error.
+- The combobox calls the flag-gated route handler **`GET /api/shipping/areas?q=`** (session 8:
+  a route handler, not a server action, because the installed Next docs say Server Functions are
+  for mutations and are dispatched one at a time, while a debounced search must be able to abort a
+  stale request) after 3 characters and a 300 ms debounce. It accepts a kecamatan, city or kode
+  pos fragment (Biteship areas are kecamatan + kode pos; there is no kelurahan level, so the
+  kelurahan goes in the street address, owner decision 2026-10-21).
+- The server calls Biteship `GET /v1/maps/areas?countries=ID&input=<q>&type=single`, **upserts
+  every returned row into `shipping_areas`** (`ON CONFLICT (provider_area_id) DO UPDATE`,
+  refreshing names, label, kode pos and `last_synced_at`; rows deduplicated by id first, since one
+  INSERT cannot update the same row twice), and returns at most 10 rows as **our
+  `shipping_areas.id`** plus the display label "Kecamatan, Kota, Provinsi 12345" (built from the
+  parts, not Biteship's `name`). The browser never sends a provider area id: the form posts
+  `shippingAreaId`, and the server reads the area fields from that row. An id not in
+  `shipping_areas` is a validation error.
 - `shipping_areas.search_text` (lowercased, accent-free label) stays for a later local-first
-  search; v1 always asks Komerce, so names and ids stay current.
+  search; v1 always asks Biteship, so names and ids stay current. `subdistrict` stays NULL.
 - Rate limits on `claim_rate_limits`: **`area_search` 60 per 10 minutes per IP** (CF-Connecting-IP,
-  same rules as `cart_write`), plus the global Komerce budget (§4.5.4). Over the limit: "Terlalu
-  banyak pencarian. Coba lagi sebentar lagi."
+  same rules as `cart_write`), plus the global daily Maps budget (§4.5.4). Over the limit:
+  "Terlalu banyak pencarian. Coba lagi sebentar lagi." A cross-site request (`Sec-Fetch-Site`
+  present and not `same-origin`) is refused, so another site cannot spend the budget through
+  visitors' browsers. Responses are `Cache-Control: private, no-store`.
 - `@ammari/commerce/address` stays the one validator: `parseShippingAddress` takes the free fields
   (recipient, phone, address line, notes, and a kode pos only when the area has none) plus the
   loaded area row, keeps its cleaning, caps and all-errors-at-once messages, and refuses a missing
-  area ("Pilih kecamatan atau kelurahan dari daftar."). `formatShippingAddress` adds the kelurahan.
-  `toShippingAddressSnapshot` writes `version: 2` (adds `subdistrict`, `shippingAreaId`,
-  `komerceDestinationId`). `INDONESIAN_PROVINCES` is no longer used by the form (kept for admin
-  manual orders if wanted).
+  area ("Pilih kecamatan dari daftar."). `formatShippingAddress` adds the kelurahan when an area has
+  one (never with Biteship). `toShippingAddressSnapshot` writes `version: 2` (adds `subdistrict`,
+  `shippingAreaId`, `providerAreaId`). `INDONESIAN_PROVINCES` is no longer used by the form (kept
+  for admin manual orders if wanted).
 - A saved address without `shipping_area_id` (none exist yet; possible only from a future
   import) shows "Pilih ulang kecamatan" and cannot be used until re-picked.
 
@@ -374,16 +437,21 @@ Options considered: one fixed courier (simplest, often not cheapest outside Java
 has no service); buyer chooses from a list (more UI and more quotes to validate, and Java buyers
 see several "Rp0" rows); **cheapest among an allowlist (chosen)**.
 
-- `SHIPPING_SERVICE_ALLOWLIST` (code constant): regular, non-COD, non-instant, non-cargo services
-  only. Starting proposal, confirmed against the sandbox service codes in session 8: JNE REG,
-  J&T EZ, SiCepat REG, ID Express Standard, AnterAja Reguler, POS Reguler (POS keeps remote
-  destinations covered).
-- One Calculate call per quote returns every courier's services; the server filters to the
-  allowlist and takes the **lowest price, ties broken by allowlist order** (deterministic, so the
-  same inputs always give the same service).
+- `SHIPPING_SERVICE_ALLOWLIST` (code constant, `@ammari/commerce/shipping-rules`): regular,
+  non-COD, non-instant, non-cargo services only, as Biteship's `courier_code` /
+  `courier_service_code` (from its courier list docs, checked 2026-10-21): `jne`/`reg` "JNE
+  Reguler", `jnt`/`ez` "J&T Reguler", `sicepat`/`reg` "SiCepat Reguler", `idexpress`/`reg` "ID
+  Express Reguler", `anteraja`/`reg` "AnterAja Reguler", `pos`/`kilat_khusus` "POS Kilat Khusus"
+  (POS's regular service; Biteship lists no "reguler" code for POS; POS keeps remote destinations
+  covered). Six couriers fit Grow's 10 active couriers; on Starter (3 active couriers) only the
+  ones activated in the dashboard answer, which is fine for development.
+- One Rates call per quote (`couriers` = the allowlist's courier codes) returns every service of
+  those couriers; the server filters to the allowlist and takes the **lowest `price`, ties broken
+  by allowlist order** (deterministic). A price that is not a positive whole rupiah amount is never
+  picked.
 - The chosen courier and service are stored on the order. Before Phase K staff book exactly that
-  service by hand; Phase K's Store Order uses it.
-- No ETA is shown (decision 12), even though Komerce returns one.
+  service by hand; Phase K's `POST /v1/orders` sends them as `courier_company` / `courier_type`.
+- No ETA is shown (decision 12), even though Biteship returns one.
 
 #### 4.5.3 Weight (decision 19)
 
@@ -398,20 +466,24 @@ see several "Rp0" rows); **cheapest among an allowlist (chosen)**.
   weight.
 - Order weight = `sum(qty x shipping_weight_grams) + SHIPPING_PACKAGING_GRAMS` (one outer mailer
   per order, code constant, starting at 100 g; the owner confirms by weighing one packed order).
-  Sent to Komerce in grams; the courier applies its own kg rounding. Volume weight is ignored
-  (folded gamis are small); revisit if a courier starts charging it.
+  Sent to Biteship in grams as **one item** (`name` "Pakaian", `category` "fashion", `value` = the
+  goods value at current prices, `weight` = the parcel weight, `quantity` 1, no dimensions); the
+  courier applies its own kg rounding. Volume weight is ignored (folded gamis are small); revisit
+  if a courier starts charging it (Biteship's `order.price` webhook would show it in Phase K).
 - 20 pieces x ~800 g stays well inside regular-service limits.
 
 #### 4.5.4 Quotes: server-side, cached, locked
 
-- `quoteShipping({ areaId, lines })` in `@ammari/commerce/shipping` (no transaction): loads weights,
-  computes the parcel weight, reads `shipping_rate_cache` for `(KOMERCE_ORIGIN_ID, destination,
-  weight, allowlist hash)`; a hit younger than `SHIPPING_QUOTE_CACHE_MINUTES` (default 360) is
-  used, otherwise one Calculate call refreshes the row. Returns `{ courierCode, serviceCode,
-  label, costAmount, subsidyAmount, buyerAmount, weightGrams, destinationId, quotedAt }` or a
-  typed refusal.
-- **Checkout page:** quotes when the area or the cart changes (server action, never a client
-  computed figure); shows the result in sections 3 and 4.
+- `quoteShipping(db, deps, { areaId, lines })` in `@ammari/commerce/shipping` (no transaction):
+  loads weights and current prices for the lines, computes the parcel weight, reads
+  `shipping_rate_cache` for `(BITESHIP_ORIGIN_AREA_ID, destination, weight, allowlist hash)`; a
+  hit younger than `SHIPPING_QUOTE_CACHE_MINUTES` (default 360) is used, otherwise one Rates call
+  refreshes the row (an empty "no service" answer is cached too). The goods value is not in the
+  cache key: without insurance or COD it does not change the price. Returns `{ courierCode,
+  serviceCode, label, costAmount, subsidyAmount, buyerAmount, weightGrams, destinationId, quotedAt }`
+  or a typed refusal.
+- **Checkout page (session 10):** quotes when the area or the cart changes (server action, never a
+  client computed figure); shows the result in sections 3 and 4.
 - **`placeOrder`:** calls `quoteShipping` again **before** opening the order transaction (no
   external call inside a DB transaction), from the cart lines it is about to lock. Inside the
   transaction it re-checks that the locked lines give the same weight (else rolls back with "Isi
@@ -419,15 +491,21 @@ see several "Rp0" rows); **cheapest among an allowlist (chosen)**.
   `shipping_amount = buyerAmount`. A different total than `expectedTotal` (price, voucher or
   ongkir changed) rolls back with "Harga, ongkir atau voucher berubah. Cek ringkasan lagi."
 - **Locked:** once the order exists its shipping figures never change. A later tariff change, or a
-  different actual cost at booking (Phase K `shipments.cost_amount`), is Ammari's gain or loss,
-  never charged to the buyer.
-- **Rate limits:** `shipping_quote` 30 per 10 minutes per IP; and a **global Komerce budget**:
-  every outgoing Komerce call first inserts into `claim_rate_limits` with ip `*` and action
-  `komerce_call`, refused above `KOMERCE_DAILY_CALL_BUDGET` per Jakarta day (set below the plan's
-  daily quota so a bot cannot exhaust it). Refusal is treated as "Komerce down" (§4.5.5).
-- Komerce calls: 5 s timeout, one retry after 300 ms on network errors and 5xx only, zod-parsed
-  responses, typed errors (`unavailable`, `no_service`, `bad_response`, `budget_exhausted`,
-  `missing_weight`); keys never logged; only the destination id and weight go to Komerce at this
+  different actual cost at booking (Phase K `shipments.cost_amount`, updated by Biteship's
+  `order.price` webhook), is Ammari's gain or loss, never charged to the buyer.
+- **Rate limits:** `shipping_quote` 30 per 10 minutes per IP (session 10's quote action); and two
+  **global daily provider budgets** (Biteship quotas are monthly and overage is billed per
+  request, so a daily cap keeps a bot from spending a month in a day): every outgoing Biteship
+  request (retries included) first inserts into `claim_rate_limits` with ip `0.0.0.0` (the column
+  is `inet`, so not `*`; never a real client address) and action `shipping_maps` or
+  `shipping_rates`, refused above `BITESHIP_DAILY_MAPS_BUDGET` (default 1.500, Grow Maps 50.000 /
+  31) or `BITESHIP_DAILY_RATES_BUDGET` (default 300, Grow Rates 10.000 / 31) per Jakarta day.
+  Refusal is treated as "provider down" (§4.5.5).
+- Biteship calls: 5 s timeout (not retried), one retry after 300 ms on network errors and 5xx
+  only, zod-parsed responses, typed errors (`unavailable` incl. 401/402/403/429 and unknown 4xx,
+  `bad_response`, `budget_exhausted`; "no service" is an empty list, `40001010` included;
+  `missing_weight` and `unknown_area` come from `quoteShipping`); `redirect: "error"`; keys never
+  logged; only the area ids, the parcel weight and the total goods value go to Biteship at this
   stage (no name, phone or street).
 
 #### 4.5.5 Failure handling (decision 20)
@@ -436,13 +514,14 @@ No quote, no order; never a fallback rate.
 
 | Case | Section 3 shows | "Bayar sekarang" |
 |---|---|---|
-| Komerce down, timeout, bad response, budget exhausted | "Ongkir belum bisa dihitung. Coba lagi sebentar lagi." + "Coba lagi" button | refuses with the same message |
+| Provider down, timeout, bad response, budget exhausted, key or balance problem | "Ongkir belum bisa dihitung. Coba lagi sebentar lagi." + "Coba lagi" button | refuses with the same message |
 | No allowlisted service to the destination | "Pengiriman ke alamat ini belum tersedia lewat website. Hubungi kami lewat WhatsApp." + WhatsApp link (prefilled with the area label, no city named in our own copy) | refuses |
 | A product without a weight | "Ongkir belum bisa dihitung untuk pesanan ini. Hubungi kami lewat WhatsApp." + error log naming the SKUs | refuses |
 | `placeOrder` quote differs from the shown one | n/a | rolls back with the drift message, page re-quotes |
 
 Every failure is logged with the typed reason (no key, no address); repeated `unavailable`
-within an hour is worth an owner alert later (not v1).
+within an hour is worth an owner alert later (not v1). A 402 from Biteship (Starter pay per
+request with an empty balance) is logged as such, so a dev check failing for money is recognizable.
 
 #### 4.5.6 Money
 
@@ -585,7 +664,7 @@ used_order_id = NULL, used_at = NULL WHERE used_order_id = $order AND status = '
 - **`/packing`:** paid web orders enter the `to_ship` queue showing the quoted service ("JNE
   Reguler"). Thank-you cards stay marketplace only (verify and enforce server-side). Before Phase
   K: staff book that service by hand, then manual "Tandai dikirim" (courier prefilled from the
-  order) with the resi sends the "Pesanan dikirim" email. After Phase K: "Buat pengiriman" books Komerce and prints
+  order) with the resi sends the "Pesanan dikirim" email. After Phase K: "Buat pengiriman" books Biteship and prints
   the label; the manual path stays as fallback.
 - **`/stock`:** read-only "Dipesan" figure from active reservations, reservation rows on
   `/stock/[sku]`, and a note on the count page that reserved pieces are still counted.
@@ -601,8 +680,8 @@ used_order_id = NULL, used_at = NULL WHERE used_order_id = $order AND status = '
 |---|---|---|
 | `created` | order created | order no, lines, subtotal, ongkir (buyer's share, with "subsidi ongkir Rp20.000" when it applied), voucher, total, "Lanjutkan pembayaran" link, deadline in WIB, **"Lihat pesanan"** link; guest orders (`placed_with_session = false`) also **"Masuk ke akun"** |
 | `paid` | to `to_ship` | "Pembayaran diterima", lines, address, next steps, "Lihat pesanan"; guest orders also a fresh "Masuk ke akun" (supersedes the earlier one) |
-| `shipped` | manual "Tandai dikirim" or Komerce picked-up/in-transit | courier, resi, "Lihat pesanan" (tracking shows there) |
-| `delivered` | Komerce delivered (Phase K) | "Pesanan sudah sampai", returns/exchange info link |
+| `shipped` | manual "Tandai dikirim" or Biteship picked-up/in-transit | courier, resi, "Lihat pesanan" (tracking shows there) |
+| `delivered` | Biteship delivered (Phase K) | "Pesanan sudah sampai", returns/exchange info link |
 | `cancelled` | expire/cancel | reason in plain words, voucher restored note, "Pesan lagi" |
 | `owner_paid` | paid (decision 11) | to `store_settings.support_email`: order no, lines, total, link to admin order |
 
@@ -675,8 +754,8 @@ Custom Better Auth plugin `orderLoginLink` in `packages/auth/src/customer/` (D15
 ## 10. Security checklist
 
 - Server recomputes prices, discount, shipping quote, totals and stock everywhere;
-  `expectedTotal` only detects drift. The browser never sends a price, courier, weight or Komerce
-  id; areas are referenced by our own `shipping_areas.id` (§4.5).
+  `expectedTotal` only detects drift. The browser never sends a price, courier, weight or provider
+  area id; areas are referenced by our own `shipping_areas.id` (§4.5).
 - Atomic patterns only: SKU locks + reservations; conditional voucher UPDATE;
   `checkout_attempt_id` UNIQUE; webhook conditional updates; cart merge upsert; magic link
   consume UPDATE ... RETURNING; one live login link per customer by partial UNIQUE index.
@@ -684,17 +763,17 @@ Custom Better Auth plugin `orderLoginLink` in `packages/auth/src/customer/` (D15
   CSRF middleware; webhooks and the sweep are authenticated by signature, secret path token or
   bearer secret.
 - No silent login anywhere: checkout never creates a session; the magic link needs a POST.
-- Rate limits: cart writes, checkout submit, area search, shipping quote, the global daily Komerce
-  call budget, order view, login link view/consume, magic link issuance.
-- Outbound Komerce calls go only to the configured base URL (no user-controlled URL, so no SSRF),
+- Rate limits: cart writes, checkout submit, area search, shipping quote, the global daily provider
+  call budgets (Maps, Rates), order view, login link view/consume, magic link issuance.
+- Outbound Biteship calls go only to the configured base URL (no user-controlled URL, so no SSRF),
   with a timeout; responses are zod-parsed and only allowlisted fields are cached.
 - Inventory hoarding: 75-minute hold, 3 unpaid orders per email, 20-piece cap.
 - Customer sessions never reach admin (unchanged).
-- Secrets only in env; Midtrans server key and Komerce key never reach the browser.
+- Secrets only in env; Midtrans server key and Biteship key never reach the browser.
 - No cost data in storefront queries.
 - Logs never include keys, signatures, raw tokens or full addresses.
 - Reviewers: `security-reviewer` on sessions 5, 8, 9, 10, 11, 14 and K3; `silent-failure-hunter`
-  on the Komerce rate client (session 8), the payment webhook, sweeper, emails and the Komerce
+  on the Biteship rate client (session 8), the payment webhook, sweeper, emails and the Biteship
   webhook/poller.
 
 ## 11. Data retention
@@ -703,12 +782,12 @@ Custom Better Auth plugin `orderLoginLink` in `packages/auth/src/customer/` (D15
 |---|---|
 | Paid orders, items, payments, address snapshots, shipments and tracking events | 10 years (bookkeeping, UU KUP), then contact fields anonymized |
 | Expired/cancelled unpaid orders | contact and address anonymized after 90 days; rows kept for metrics |
-| `payment_notifications.payload`, `komerce_webhook_events` | 12 months |
+| `payment_notifications.payload`, `shipping_webhook_events` | 12 months |
 | `order_access_tokens` | deleted 30 days after expiry |
 | `customer_login_links` | deleted 30 days after expiry/consume (audit rows stay in `audit_log`) |
 | Guest carts / customer carts | 30 days / 180 days after last activity |
 | `customer_addresses` | until the customer deletes them or the account is deleted |
-| Rate limit rows (incl. `komerce_call`) | 1 day |
+| Rate limit rows (incl. `shipping_maps`, `shipping_rates`) | 1 day |
 | `shipping_rate_cache` | rows older than 7 days deleted (only fresh rows are ever used) |
 | `shipping_areas` | kept (public reference data, no personal data; re-synced on every search hit) |
 
@@ -724,10 +803,13 @@ Run daily from the same internal sweep route.
    emails, customer service, legal bookkeeping obligations, and promotions only with separate
    consent.
 3. Shared with: a licensed payment processor (to process payment), **the shipping service
-   provider and the courier** (updated 2026-10-21): at checkout only the chosen area (kelurahan,
-   kecamatan, kode pos) and the parcel weight are sent to calculate ongkir; once the order is
-   paid, the recipient's name, phone and full address go to the shipping provider and courier to
-   deliver the package and provide tracking. And the email delivery provider. No sale of data.
+   provider and the courier** (updated 2026-10-21, provider Biteship): while the buyer searches,
+   the typed search text (kecamatan, city or kode pos) goes to the shipping provider; at checkout
+   only the chosen area (kecamatan, kode pos), the parcel weight and the total value of the goods
+   are sent to calculate ongkir; once the order is paid and booked (Phase K), the recipient's
+   name, phone and full address and the parcel contents go to the shipping provider and courier
+   to deliver the package and provide tracking. And the email delivery provider. No sale of data.
+   (The policy names the provider or not as the owner prefers; storefront UI never does.)
 4. Accounts: a checkout creates or links an account by email; login is passwordless (email code,
    Google, or a one-time login link sent by email that expires in 24 hours); no password is
    stored.
@@ -774,21 +856,26 @@ apps/web: `MIDTRANS_SERVER_KEY`, `MIDTRANS_IS_PRODUCTION`, `MIDTRANS_ORDER_ID_PR
 `MIDTRANS_NOTIFICATION_URL`, `CHECKOUT_PAYMENT_EXPIRY_MINUTES` (60),
 `CHECKOUT_STOCK_HOLD_MINUTES` (75), `INTERNAL_CRON_SECRET`, existing `STOREFRONT_CART_ENABLED`,
 `RESEND_API_KEY`, `EMAIL_FROM`, `BETTER_AUTH_URL`, `CUSTOMER_BETTER_AUTH_SECRET`.
-apps/web Phase C shipping (session 8): `KOMERCE_COST_API_KEY`, `KOMERCE_COST_BASE_URL` (Shipping
-Cost: Search Destination, Calculate), `KOMERCE_ORIGIN_ID` (Ammari's own destination id, never
-shown), `KOMERCE_DAILY_CALL_BUDGET`, `SHIPPING_QUOTE_CACHE_MINUTES` (360),
-`SHIPPING_RATE_PROVIDER` (`komerce`, or `fake` only behind the e2e fixtures gate; production
-refuses `fake`).
+apps/web Phase C shipping (session 8, Biteship since D18; replaces the earlier `KOMERCE_*`
+names, which were never deployed): `BITESHIP_API_KEY` (one key for Maps, Rates and later Orders
+and Tracking; `biteship_test.` or `biteship_live.`; a test key is refused when
+`DEPLOY_ENV=production`), `BITESHIP_BASE_URL` (`https://api.biteship.com`; must be `https://`),
+`BITESHIP_ORIGIN_AREA_ID` (Ammari's own Biteship area id, from a Maps search on the shop's
+kecamatan and kode pos; never shown), `BITESHIP_DAILY_MAPS_BUDGET` (default 1500),
+`BITESHIP_DAILY_RATES_BUDGET` (default 300), `SHIPPING_QUOTE_CACHE_MINUTES` (360),
+`SHIPPING_RATE_PROVIDER` (`biteship`, the default, or `fake`, accepted only outside a production
+build and with `E2E_TEST_LOGIN=true`, the e2e fixtures gate). The real client is built only when
+the key, base URL and origin are all set; otherwise area search and quotes answer "unavailable"
+(fail closed) and log which variable is missing (name only).
 apps/admin: `MIDTRANS_SERVER_KEY`, `MIDTRANS_IS_PRODUCTION`, `MIDTRANS_ORDER_ID_PREFIX`,
-existing `MAIN_SITE_URL`; Phase K adds `KOMERCE_DELIVERY_API_KEY`, `KOMERCE_DELIVERY_BASE_URL`,
-`KOMERCE_ORIGIN_ID`, `KOMERCE_SHIPPER_*` (name, phone, address as Komerce needs). The cost and
-delivery key pairs are separate names because Komerce may issue separate keys or hosts per
-product; they can hold the same values.
-apps/web Phase K: `KOMERCE_DELIVERY_API_KEY`, `KOMERCE_DELIVERY_BASE_URL`,
-`KOMERCE_WEBHOOK_PATH_TOKEN`.
+existing `MAIN_SITE_URL`; Phase K adds `BITESHIP_API_KEY`, `BITESHIP_BASE_URL`,
+`BITESHIP_ORIGIN_AREA_ID`, `BITESHIP_SHIPPER_*` (origin contact name, phone and address for
+`POST /v1/orders`).
+apps/web Phase K: `BITESHIP_WEBHOOK_PATH_TOKEN` (long random path segment) and, if Biteship's
+optional webhook header key/secret exists as the help center says, `BITESHIP_WEBHOOK_HEADER_SECRET`.
 cron service: `INTERNAL_CRON_SECRET`.
-Added to `deploy/env/*.env.example` and `.env.example`; payment and Komerce code paths fail
-closed when their variables are missing.
+Added to `deploy/env/*.env.example` and `.env.example` in session 17 (names only); payment and
+shipping code paths fail closed when their variables are missing.
 
 ## 13. Testing strategy
 
@@ -796,19 +883,20 @@ closed when their variables are missing.
   voucher, signature, every row of §6.2, provider order id, phone normalization, area search
   parsing, subsidy split (0, 19.999, 20.000, 20.001, 200.000), cheapest-service pick with ties
   and non-allowlisted services, parcel weight with packaging, Midtrans item_details sum with and
-  without an Ongkir line, Komerce response parsing against **hand-written fixtures copied from the
-  documented examples** (never recorded from a real call), Komerce status normalization,
+  without an Ongkir line, Biteship response parsing against **hand-written fixtures copied from the
+  documented examples** (never recorded from a real call), Biteship status normalization,
   retention cut-offs.
 - **DB integration:** reservations, last-unit race, voucher double redeem, double submit, webhook
   replay and out-of-order, expiry release + voucher restore, expired voucher not restored,
   paid-after-cancel, stock-short-at-payment, cart merge caps, admin cancel, login link single use
   and supersede, shipment event dedupe and auto-complete.
 - **Fakes:** `FakePaymentProvider` (with a gated local "Snap" page under `/api/test/...`),
-  `FakeShippingRateProvider` (session 8: a handful of fictional destinations, e.g. "Kelurahan
-  E2E Murah" quoting Rp12.000 (buyer Rp0), "Kelurahan E2E Jauh" quoting Rp95.000 (buyer
-  Rp75.000), one with no allowlisted service, one that times out, one without kode pos) and
-  `FakeShippingProvider` for Phase K, all behind the existing e2e fixtures gate. Unit tests inject
-  a stub `fetch` into the Komerce client; nothing in CI or e2e reaches Komerce or Midtrans.
+  `FakeShippingRateProvider` (session 8: a handful of fictional areas, e.g. "Kecamatan E2E
+  Murah" quoting Rp12.000 (buyer Rp0), "Kecamatan E2E Jauh" quoting Rp95.000 (buyer Rp75.000),
+  one with no allowlisted service, one whose quote fails as unavailable, one without kode pos, and
+  a search text that fails the search itself) and `FakeShippingProvider` for Phase K, all behind
+  the existing e2e fixtures gate. Unit tests inject a stub `fetch` into the Biteship client;
+  nothing in CI or e2e reaches Biteship or Midtrans.
 - **e2e (Chromium + WebKit, 390 px and 1280 px):** add to cart, cart edits and sold-out line,
   guest checkout alert, guest checkout to fake payment to finish page, finish page OTP link,
   magic link (GET page, POST login, cart merged, "Pesanan saya"), "Lihat pesanan" token page,
@@ -818,8 +906,9 @@ closed when their variables are missing.
   and 4, no-service and timeout states block "Bayar sekarang", the Ongkir line reaches the fake
   payment page, at 390 px and 1280 px.
 - **Sandbox contract tests (opt-in with sandbox keys, skipped by default, run by hand):** Midtrans
-  create/status/cancel; Komerce destination search and calculate (session 8), store order,
-  detail, history AWB, cancel (Phase K).
+  create/status/cancel; Biteship Maps and Rates (session 8; **billed even with a test key**, a
+  few rupiah per run), orders create/retrieve/cancel and tracking (Phase K; orders are simulated in
+  test mode).
 - **Manual sandbox checklist:** BCA VA and QRIS via the Midtrans simulator, GoPay and ShopeePay
   simulators, Mandiri bill, expiry after 60 minutes on dev, webhook received on `ammari.my.id`,
   emails and both links received and working. Phase K: a sandbox shipment through to
@@ -833,12 +922,16 @@ closed when their variables are missing.
   2, production keys in prod env, notification URL set, one real low-value QRIS payment refunded,
   privacy policy and terms updated (§11.1), footer payment chips changed to QRIS, Virtual
   Account, GoPay, ShopeePay (remove "Kartu kredit").
-- Before launch, shipping (added 2026-10-21): a Komerce subscription with Shipping Cost access and
-  its production key in the prod env (§15 "Komerce plan"), `KOMERCE_ORIGIN_ID` set to Ammari's
-  own destination, `KOMERCE_DAILY_CALL_BUDGET` below the plan's daily quota, **zero published
-  products without "Berat kirim"**, the packaging allowance confirmed by weighing one packed order,
-  a spot check of 3 quotes on dev (one in Java, one in Sumatra or Sulawesi, one in Papua) against
-  Komerce's own calculator, and the announcement bar and Pengiriman page re-worded by the owner.
+- Before launch, shipping (added 2026-10-21, Biteship since D18): the Biteship account on the
+  **Grow** plan (§15 "Biteship plan"; the new plan structure applies from 2 Nov 2026), the six
+  allowlisted couriers activated in the dashboard, a `biteship_live.` key in the prod env,
+  `BITESHIP_ORIGIN_AREA_ID` set to Ammari's own area, the two daily budgets at or below Grow's
+  monthly quotas / 31, a balance top-up only if Phase K is live (rates and maps inside the quota
+  cost nothing extra), **zero published products without "Berat kirim"**, the packaging allowance
+  confirmed by weighing one packed order, a spot check of 3 quotes on dev (one in Java, one in
+  Sumatra or Sulawesi, one in Papua) against Biteship's own dashboard rate check, the service
+  codes the contract test printed matching the allowlist, and the announcement bar and Pengiriman
+  page re-worded by the owner.
 - Launch: flag `true` in the prod env file, restart the web container (no rebuild), trigger the
   full-storefront revalidation, smoke test one order.
 - Rollback: flag `false`, restart, revalidate. Webhooks, sweeper and `/orders/*` stay on.
@@ -863,16 +956,16 @@ Next.js and Better Auth docs/source before route, action or plugin work.
 | 5 | **DONE 2026-10-20.** Cart backend. `@ammari/commerce/cart` (apps/web now depends on `@ammari/commerce`, workspace link only): `resolveCart` (read, never creates; merges when a session and a guest cookie are both present), `addCartItem` / `setCartItemQty` / `removeCartItem` (one transaction each, cart row locked first by the upsert or `FOR UPDATE`, so the 20-piece cap that spans rows is atomic; a refusal throws inside and rolls the write back, so it never leaves an empty cart; a login merge commits in its own transaction first, so a refused write never undoes it), `getCartView` (current `base_price`, line status `ok` / `insufficient` / `sold_out` / `unavailable` from `sellableQtySql`, image of the line's colour then the thumbnail; no stock number or cost column ever leaves the module), `getCartPieceCount`, token helpers (32 random bytes base64url, sha256 hex stored). `@ammari/commerce/cart-limits` (no server-only, for client UI): `CART_MAX_QTY_PER_LINE` 10, `CART_MAX_PIECES` 20, refusal and line-status messages. Merge: guest lines first (current intent), then the customer's; same SKU `LEAST(old + new, 10)`; trimmed to 20 in that order (`mergeTrimmed` reported); lock order guest then customer. Add refuses inactive/unpublished/inactive-variant SKUs, `line_limit`, `cart_limit`, `sold_out`, `insufficient_stock` (line total vs sellable); set-quantity allows lowering always, re-checks stock and cap only when raising, refuses unavailable lines (remove only). apps/web `lib/cart/`: `identity.ts` (`ammari_cart` cookie: httpOnly, SameSite=Lax, Secure on https and always in a production build, 60 days, re-set on every guest write; malformed values ignored; a well-formed token is reused only while it names a live guest cart, otherwise a fresh one is minted, so a planted token never becomes a shared cart), `ip.ts` (`CF-Connecting-IP` validated with `net.isIP`; missing or invalid in production is logged and the write refused, never one shared bucket; locally 127.0.0.1), `actions.ts` (`addToCartAction`, `updateCartItemQtyAction`, `removeCartItemAction`: flag check first, then per IP on `claim_rate_limits` `cart_write` 120 per 10 minutes and, for an add that creates a guest cart, `cart_create` 20 per hour; zod input; Indonesian messages; unexpected errors logged and returned as "Terjadi kesalahan. Coba lagi."; clears the guest cookie after any customer write that carried one), `queries.ts` (`loadCartView`, `loadCartPieceCount` for server components; empty while the flag is off). Tests: `packages/commerce/src/cart/cart.test.ts` (caps, availability, holds, merge and trim, ownership, three committed-transaction races), `apps/web/src/lib/cart/actions.test.ts` (cookie attributes, hash-only storage, planted token, flag off, both rate limits, IP fallback, generic error, merge on login incl. a refused write) | none | TDD integration | security, typescript, database |
 | 6 | **DONE 2026-10-21.** Cart UI. PDP: "Tambah ke keranjang" calls `addToCartAction` (one piece per tap, the selected size's SKU; `ProductView` now carries `sku` per size option and `allsizeSkuByColor`), then unrolls the inline "Masuk keranjang: Beige, M · Lihat" box with the existing `Curtain`; a refusal shows the server's message (`role="alert"`), a trimmed login merge shows "Maksimal 20 barang per pesanan.". Header: `CartLink` (bag icon after the account icon, at the right edge on every width; count as a small superscript, `aria-label` "Keranjang, N barang") rendered only when the flag is on; the count is **never server-rendered**: the browser fetches `GET /api/cart/count` (uncached route handler, `Cache-Control: private, no-store`, 404 with the flag off) on every navigation, and cart writes announce their new count with a window event (`lib/cart/count-event.ts`; a fetch started before an announcement is ignored). `/cart` (`app/cart/page.tsx`): `force-dynamic` (required: with the flag off the page calls `notFound()` before any cookie read, so a flag-off `next build` would otherwise prerender a static 404 that a runtime flip could never replace), `noindex`, lines per mockup (image 96×144, name, "Warna · Ukuran", line total, 1 to 10 stepper, ×; `insufficient` keeps the stepper but only lowers; `sold_out` / `unavailable` show "Habis" / "Tidak tersedia lagi" with only "Hapus"), "N barang", Subtotal, "Ongkir: Gratis" (changed to "Ongkir: Dihitung saat checkout" on 2026-10-21, subsidy), cap note at 20 pieces or after a trimmed merge, "Lanjut ke checkout" a real link to `/checkout` when `canCheckout` (owner decision 2026-10-21: it 404s until session 8, now 10), otherwise disabled with "Ubah atau hapus barang yang ditandai untuk lanjut ke checkout.", "Lanjut belanja" and the empty state go to `/#koleksi`. Summary beside the lines from `md`, below them on phones. Every stepper/remove goes through the session 5 actions, then `router.refresh()` inside the same transition (the line stays pending until the refreshed props land, so a double tap never sends a stale quantity). Review fixes: a server action call that rejects (offline, 5xx, deploy skew) is caught on the PDP and in `/cart` and shows "Terjadi kesalahan. Coba lagi." instead of throwing into the error boundary; `app/cart/error.tsx` (Indonesian retry) for a failed cart read; always-mounted screen-reader status regions (PDP add with the new count, `/cart` quantity and removal), focus to the heading after a removal, `aria-disabled` instead of `disabled` for pending and bound states so keyboard focus stays; an add that resolves after the buyer changed variant only updates the count; `CartLink` hides itself on a 404 (flag switched off under a cached page), logs non-abort fetch failures and re-fetches on a back/forward-cache restore. Tests: `product-purchase-panel.test.tsx` (add flow, all-size SKU, refusal, trimmed merge, reset on size change), `cart-link.test.tsx`, `cart/cart-line-item.test.tsx`, `api/cart/count/route.test.ts`, rejected-call tests, `e2e/cart.spec.ts` (390/1280: flag off 404s and no icon; PDP add to `/cart`, stepper, remove; seeded line states; 20-piece cap; empty state; header layout; summary layout). e2e runs both ways: `pnpm test:e2e` (flag off, the default) and `pnpm test:e2e:cart` (`E2E_CART_ENABLED=true`); `e2e/helpers/cart-flag.ts` picks each spec's expectations; `e2e/helpers/cart-db.ts` seeds guest carts in `ammari_e2e` | none | e2e 390/1280 | react, typescript |
 | 7 | **DONE 2026-10-21.** Shipping schema + product weight. Migration 0031 `shipping_quote` (hand edits: header and `SET LOCAL lock_timeout = '5s'` only): `products.shipping_weight_grams` (CHECK 50 to 30000, bounds `PRODUCT_SHIPPING_WEIGHT_MIN/MAX_GRAMS` in `@ammari/db/schema`), the eight `orders.shipping_*` columns with `orders_shipping_quote_all_or_none_check` (`num_nulls(...) in (0, 8)`), `orders_shipping_quote_amounts_check` (subsidy between 0 and cost, `shipping_amount = cost - subsidy`), `orders_shipping_weight_grams_check` and `orders_checkout_shipping_quote_check`; `shipping_areas` `subdistrict`, `label`, `last_synced_at`, nullable `postal_code`, UNIQUE `komerce_destination_id` replacing the four-column UNIQUE (§3 "As built"); `customer_addresses.subdistrict`; `shipping_rate_cache` (UNIQUE lookup key, `fetched_at` index for the prune). `@ammari/commerce/shipping` exports `SHIPPING_SUBSIDY_MAX_AMOUNT` (20.000) and `SHIPPING_PACKAGING_GRAMS` (100), no server-only. Admin: "Berat kirim (gram)" on the product form (create and edit, optional to save, dots accepted as thousands, `lib/products/shipping-weight.ts`), publish refused on hidden -> published without a weight (`updateProductStorefront`, under the product lock), clearing a weight refused while published (`updateProduct`), guidance lines in the "Toko online" card, "Berat kirim belum diisi" badge for active products in both list layouts. Nothing is unpublished; prod's published products keep working without a weight. Tests: `packages/db/test/shipping-schema.test.ts` (constraints, subsidy boundaries 0 / 19.999 / 20.000 / 20.001 / 200.000, both upserts), `test/migration-0031.test.ts` (upgrade from 0030 with a published product without weight, orders and a cart; session 6 writes; key swap; idempotent re-run; a quote-less checkout order rolls the whole migration back), admin `shipping-weight.test.ts`, `storefront.test.ts`, `queries.test.ts`, `e2e/storefront-section.spec.ts` (refusal then publish), `e2e/product-shipping-weight.spec.ts` (390/1280 badge, live product stays live; seeded "E2E Gamis Tanpa Berat"). Checkout fixtures (`shippingQuoteValues`, admin e2e hold seed) now carry a quote | 0031 | db constraint tests + admin e2e 390/1280 | database (no Critical/High; Mediums recorded for 8 and 9 below), typescript (nothing above Low), react (one High fixed: `@ammari/ui` Input/Textarea/Select/Checkbox let a caller's `aria-describedby` replace the merged error id; now merged and deduplicated, `packages/ui/test/field-describedby.test.tsx`) |
-| 8 | **New 2026-10-21 (moved from Phase K K1).** Shipping rates: `@ammari/commerce/shipping` (`ShippingRateProvider`, Komerce Shipping Cost client with timeout/retry/zod/typed errors, `FakeShippingRateProvider`, `parcelWeightGrams`, `pickCheapestService`, `splitShippingCost`, `quoteShipping` with `shipping_rate_cache` and the `komerce_call` budget); destination search endpoint (`area_search`, upsert into `shipping_areas`); `@ammari/commerce/address` v2 (area row in, `version: 2` snapshot); allowlist confirmed against sandbox service codes; opt-in sandbox contract test | none | TDD (shipping money) + fixtures | security, silent-failure-hunter, typescript, database |
+| 8 | **DONE 2026-10-21.** Shipping rates on **Biteship** (owner switched from Komerce mid-session, D18, decisions 22 to 26). Migration 0032 renames `shipping_areas.komerce_destination_id` to `provider_area_id` (and its UNIQUE; generated with the rename chosen at drizzle-kit's prompt, hand edits: header, `lock_timeout`, `RENAME CONSTRAINT` instead of DROP+ADD). `zod` 4.6.5 added to `@ammari/commerce` (owner approved). `@ammari/commerce/shipping-rules` (pure, client-safe): `SHIPPING_SERVICE_ALLOWLIST` (Biteship codes `jne/reg`, `jnt/ez`, `sicepat/reg`, `idexpress/reg`, `anteraja/reg`, `pos/kilat_khusus`), `splitShippingCost`, `parcelWeightGrams`, `allowlistedServices`, `pickCheapestService`, `normalizeProviderPostalCode`, `formatShippingAreaLabel`, `shippingAreaSearchText`. `@ammari/commerce/shipping` (server-only): `ShippingRateProvider` + typed `ShippingRateError` (`logFields()` logs reason, status, provider code and the cause's name/code only), `createBiteshipClient` (Maps `GET /v1/maps/areas`, Rates `POST /v1/rates/couriers`, raw-key `authorization` header, 5 s timeout not retried, one retry on network error/5xx, `redirect: "error"`, row-by-row zod parsing, 40001010 on a 400 = no service, Maps 404 = unavailable), `createFakeShippingRateProvider` (fictional "Kecamatan E2E ..." areas: Murah Rp12.000, Jauh Rp95.000, Tanpa Layanan, Gangguan, Tanpa Kode Pos; a query containing "gagal" fails the search), `consumeShippingCallBudget` (daily per Jakarta day, `shipping_maps` / `shipping_rates` rows under ip `0.0.0.0`), rate cache (allowlisted services only; an answer emptied by filtering is logged loudly and never cached; a failed cache write keeps the quote), `searchShippingAreas` (dedupe, upsert sorted by provider id against deadlocks, at most 10 options of our own ids) / `loadShippingArea`, `quoteShipping`, `shippingRuntimeFromEnv` (Biteship only with key + `https://api.biteship.com` + origin; fake only in a non-production build with `E2E_TEST_LOGIN=true`; a test key refused when `DEPLOY_ENV` is production, or unset in a production build). `@ammari/commerce/address` v2 (area row in, `version: 2` snapshot with `shippingAreaId` and `providerAreaId`; "Pilih kecamatan dari daftar."). apps/web: flag-gated `GET /api/shipping/areas?q=` (route handler, see §4.5.1; refuses cross-site `Sec-Fetch-Site`; `area_search` 60/10 min per IP with `Retry-After`; repeated queries answered from process memory for 6 h; `private, no-store`), `lib/shipping/runtime.ts` (logs a misconfiguration once per problem set), per-IP limits now bucket IPv6 by /64 (`lib/cart/ip-bucket.ts`, also applies to cart writes). The commerce test suite now refuses every non-local `fetch` (`packages/commerce/test/setup.ts`); the opt-in `biteship.contract.test.ts` (skipped unless `BITESHIP_CONTRACT_TEST=1`) prints the service codes a real test key returns. e2e: `SHIPPING_RATE_PROVIDER=fake` in `playwright.config.ts`, `e2e/shipping-areas.spec.ts` (route contract, both flag states; the combobox UI and its 390/1280 checks are session 10). Tests: `rules.test.ts`, `biteship.test.ts`, `shipping.test.ts`, `address.test.ts`, `route.test.ts`, `ip-bucket.test.ts`, `migration-0032.test.ts` (0031's test now stops at 0031) | 0032 | TDD (shipping money) + fixtures | typescript, database, security, silent-failure-hunter (no Critical; all High/Medium fixed except those deferred in the notes below) |
 | 9 | `placeOrder` backend with `FakePaymentProvider` and `FakeShippingRateProvider`, incl. the quote before the transaction and the locked `shipping_*` fields (was 7) | none | TDD vouchers, stock, shipping, concurrency | security, database, typescript |
 | 10 | Checkout UI + finish page (incl. "Masuk untuk melihat semua pesanan" OTP link), area combobox, section 3 states, Ongkir in the summary (was 8) | none | e2e guest + logged-in + shipping states | react, security |
 | 11 | Midtrans provider + webhook + mapping + sandbox contract tests; Ongkir `item_details` line (was 9) | none | TDD payments | security, silent-failure-hunter, typescript |
 | 12 | Sweeper + cron service + retention job, incl. `shipping_rate_cache` pruning (was 10) | none | integration | silent-failure-hunter, database |
 | 13 | Emails: templates (with ongkir and subsidy lines), `order_notifications`, `order_access_tokens` minting, owner paid alert, manual-shipped email hook (was 11) | none | unit + integration | typescript, silent-failure-hunter |
-| 14 | Magic login link: `customer_login_links`, `orderLoginLink` plugin, `/login/link` page, issuance in emails, audit, rate limits (was 12) | 0032 | TDD + e2e | security, typescript, database |
+| 14 | Magic login link: `customer_login_links`, `orderLoginLink` plugin, `/login/link` page, issuance in emails, audit, rate limits (was 12) | 0033 | TDD + e2e | security, typescript, database |
 | 15 | "Pesanan saya", `/orders`, `/orders/[orderNo]` (ongkir in totals), "Lihat pesanan" token access, "Lacak pengiriman" block (courier + resi) (was 13) | none | e2e list 390/1280 | react, security |
 | 16 | Admin: payment section, "Pengiriman" section with the locked quote, service on `/packing`, "Perlu dicek", web cancel via Midtrans, item edit block, thank-you cards marketplace-only (was 14) | none | admin e2e 390/1280 | react, security, database |
-| 17 | Launch readiness: env examples (incl. Komerce cost keys), runbook (Cloudflare Access bypass, cron), full sandbox run on dev, footer chips, shipping checks from §14, launch/rollback checklist in `docs/runbooks/` (was 15) | none | manual checklist | none |
+| 17 | Launch readiness: env examples (incl. the Biteship variables), runbook (Cloudflare Access bypass, cron), full sandbox run on dev, footer chips, shipping checks from §14, launch/rollback checklist in `docs/runbooks/` (was 15) | none | manual checklist | none |
 
 Sessions 7 and 8 can overlap only in their pure parts (8's DB-touching code needs 0031); 14 can run
 any time after 13. **Renumbering 2026-10-21:** old 7 to 15 are now 9 to 17 (add 2). Code comments
@@ -881,10 +974,37 @@ written before then (e.g. `packages/commerce/src/cart/cart.ts` "placeOrder in se
 notes below are already renumbered. Schedule risk: two more sessions inside the ~20 Nov target;
 sessions 7 and 8 are small; if session 10 is not done by ~10 Nov, raise it with the owner then.
 
+Notes from session 8 for later sessions:
+- **9 (placeOrder):** build deps with `getShippingRuntime()` (apps/web `lib/shipping/runtime.ts`; null means "Ongkir belum
+  bisa dihitung"). `quoteShipping(db, runtime, { areaId, lines })` returns typed refusals; map `unavailable`,
+  `bad_response`, `budget_exhausted` to the §4.5.5 retry message, `no_service` to the WhatsApp message,
+  `missing_weight` to its message, `unknown_area` to "Pilih kecamatan dari daftar.". Database errors propagate
+  from `quoteShipping` by design: catch them in the action and show the retry message. Load the area with
+  `loadShippingArea`, validate with `parseShippingAddress(input, area)` and write `toShippingAddressSnapshot`
+  (v2); `orders.shipping_destination_id` = `quote.destinationId`. The admin e2e seed
+  (`apps/admin/e2e/global-setup.ts`) still writes the old `REG` service code on its quoted order, harmless.
+- **10 (checkout UI):** the combobox calls `GET /api/shipping/areas?q=` with an `AbortController` per keystroke
+  (300 ms debounce, 3 characters), shows `label`, posts `id`, and shows the Kode pos input when
+  `hasPostalCode` is false. Labels come from the provider's casing. The quote server action needs the
+  `shipping_quote` per-IP limit (30/10 min) **and a per-cart limit** (security review: Rates is the scarcer
+  budget, 300/day by default, and an anonymous caller can vary area and weight to miss the cache).
+  `budget_exhausted` shows the same retry message.
+- **12 (retention):** prune `shipping_rate_cache` older than 7 days (`fetched_at` index exists) and
+  `claim_rate_limits` (1 day, includes `shipping_maps` / `shipping_rates`; the probabilistic cleanup only runs
+  from per-IP writes). Each area search rewrites the returned `shipping_areas` rows (`last_synced_at`); accepted
+  for now (review note), revisit with `IS DISTINCT FROM` if the table gets hot.
+- **17 (launch):** `DEPLOY_ENV=production` must be set in the prod web env (the test-key guard and robots use
+  it); confirm the origin only accepts Cloudflare traffic (per-IP limits trust `CF-Connecting-IP`); run the
+  contract test once with the test key and adjust the allowlist to the codes it prints (JNE `reg`, POS
+  `kilat_khusus` and AnterAja are the ones to watch); set `BITESHIP_ORIGIN_AREA_ID` from a Maps search for the
+  shop's own kecamatan and kode pos; activate the six couriers in the Biteship dashboard (Grow allows 10).
+- **K1/K2:** the label API question and the webhook header secret (§15 "What to confirm with Biteship").
+
 Notes from session 7 for later sessions:
 - **8 (rates, area search):** import the constants from `@ammari/commerce/shipping` (add the
   server-only rate code there; keep the constants file free of server-only if a client needs it).
-  Upsert areas with `ON CONFLICT (komerce_destination_id) DO UPDATE` and always write `label` and
+  Upsert areas with `ON CONFLICT (komerce_destination_id) DO UPDATE` (`provider_area_id` since
+  migration 0032, D18) and always write `label` and
   `last_synced_at`. **Normalize any kode pos that is not `^[0-9]{5}$` (empty, "0", 4 digits) to NULL
   before the upsert** (with a test): `shipping_areas_postal_code_format_check` would otherwise fail
   the whole multi-row upsert. `customer_addresses.postal_code` stays NOT NULL, so the typed kode pos
@@ -954,83 +1074,86 @@ Notes from session 4 for later sessions (renumbered 2026-10-21):
   `transitionOrderStatus` still requires a staff actor id; webhook/sweeper callers need a null
   actor path.
 
-### Phase K: Komerce courier booking and tracking (required; starts when the sandbox key arrives)
+### Phase K: Biteship courier booking and tracking (required; Komerce until 2026-10-21, D18)
 
 Not a launch blocker for 1 Dec (manual courier + resi and manual "Selesai" cover the gap), but
-required: target live within the first weeks of December. **Prerequisite: a Komerce Enterprise
-subscription**, started when Phase K starts (see "Komerce plan" below).
+required: target live within the first weeks of December. **Prerequisite: the Biteship account
+on Grow with the live Order API activated** (live keys need an activation request; test keys have
+the Order API on by default, simulated without pickup). No separate plan or key: the same
+`BITESHIP_API_KEY` session 8 uses for Maps and Rates.
 
 | # | Session | Migration | Notes |
 |---|---|---|---|
-| K1 | Komerce **delivery** client next to session 8's rate client in `@ammari/commerce/shipping`: detail order, history AWB, typed errors, sandbox contract tests. **First, confirm that the Shipping Cost destination ids stored on orders (`shipping_destination_id`) are accepted by Store Order**; if the Delivery API uses its own ids, add the mapping (search by kode pos + kelurahan, unmatched rows reported for manual review). Destination search and the `shipping_areas` fill moved to session 8 (2026-10-21) | none | read-only APIs first |
-| K2 | `shipments` table; admin "Buat pengiriman" on `/packing` and order detail: Store Order with the order's locked courier, service and destination (Ammari as payer; the buyer's share was already collected), Pickup Request, Print Label; AWB written to `orders.tracking_number`/`courier` and `shipments`; actual cost stored as `cost_amount` and shown next to the quote; cancel shipment | expected 0033 | security, database |
-| K3 | Tracking: webhook endpoint + poller + `shipment_events` + status normalization + automatic `to_ship -> shipped` (on picked up/in transit) and `shipped -> completed` (on delivered), emails `shipped`/`delivered`, `tracking_stale` / `delivery_problem` flags | expected 0034 | security, silent-failure-hunter |
+| K1 | Biteship **order** client next to session 8's rate client in `@ammari/commerce/shipping`: create (`POST /v1/orders`), retrieve (`GET /v1/orders/:id`), cancel (`POST /v1/orders/:id/cancel`), tracking (`GET /v1/trackings/:id`), typed errors, fixtures from the docs, opt-in test-key contract tests (simulated orders). No area id mapping: the order takes the same `destination_area_id` the quote used (`orders.shipping_destination_id`). Confirm with Biteship: the label question (below) and the webhook header secret | none | read-only and test-mode calls first |
+| K2 | `shipments` table; admin "Buat pengiriman" on `/packing` and order detail: `POST /v1/orders` with the order's locked `courier_company` / `courier_type` / `destination_area_id`, `origin_area_id`, shipper and recipient contacts, one item (as in §4.5.3, real goods value), `delivery_type` `now` (waybill and pickup request right away), `reference_id` = the order number (unique, so a retried booking returns the existing order via `40002060`, never a second shipment); AWB (`courier.waybill_id`) written to `orders.tracking_number`/`courier` and `shipments`; actual cost (`price`) stored as `cost_amount` and shown next to the quote; label: Biteship's dashboard label or our own printable label from the order data (decided in K1); cancel shipment before pickup (refund to the Biteship balance via Biteship support, staff note) | expected 0034 | security, database |
+| K3 | Tracking: webhook endpoint (`order.status`, `order.price`, `order.waybill_id`) + poller + `shipment_events` + status normalization + automatic `to_ship -> shipped` (on `picked` / `in_transit`) and `shipped -> completed` (on `delivered`), emails `shipped`/`delivered`, `tracking_stale` / `delivery_problem` flags; `order.price` updates `shipments.cost_amount` | expected 0035 | security, silent-failure-hunter |
 | K4 | Customer tracking timeline in "Pesanan saya" and admin "Pengiriman" section; manual fallback actions | none | react, e2e 390/1280 |
 
-**Webhook vs polling.** Komerce documents a webhook (register with `PUT /webhook`; payload
-`order_no`, `cnote`, `status`) but **no signature**. So:
+**Webhook vs polling.** Biteship webhooks are registered in the dashboard and **carry no
+documented signature** (the help center mentions optional static header key/secret values,
+unverified). So:
 - The webhook is a **hint only**: the registered URL carries a long random path token
-  (`/api/shipping/komerce/webhook/<KOMERCE_WEBHOOK_PATH_TOKEN>`); the handler logs the payload,
-  looks up the shipment by `order_no`/`cnote`, then **re-fetches Detail Order / History AWB from
-  Komerce** and acts only on that response (same rule as Midtrans). Always 200 quickly.
-- **Polling is the backstop:** the cron calls an internal route that polls History AWB for every
-  shipment not in a final state, every 3 hours (and once 30 minutes after booking), within the
-  plan's daily hit quota. A shipment with no new event for 5 days flags `tracking_stale`.
-- Normalization maps Komerce statuses (Diajukan, Dijemput, Dikirim, Selesai, Dibatalkan, plus any
-  return/problem statuses found in sandbox) to `shipments.status`; **an unknown status never
-  completes an order**, it is stored raw and flagged. Whether "Selesai" means delivered to the
-  recipient must be confirmed in sandbox and with Komerce support before auto-complete is turned
-  on.
+  (`/api/shipping/biteship/webhook/<BITESHIP_WEBHOOK_PATH_TOKEN>`), plus the header secret if
+  Biteship offers one; the handler logs the payload to `shipping_webhook_events`, looks up the
+  shipment by Biteship `order_id`, then **re-fetches `GET /v1/orders/:id` from Biteship** and acts
+  only on that response (same rule as Midtrans). Always 200 quickly (the help center says Biteship
+  expects a fast 200; retry behavior is not documented, hence the poller).
+- **Polling is the backstop**, sized to Grow's **Tracking quota of 2.000 per month**: the cron
+  polls only shipments not in a final state whose last event is older than 24 hours, at most once
+  a day each (whether `GET /v1/orders/:id` counts against the Tracking quota is not documented;
+  assume it does). A shipment with no new event for 5 days flags `tracking_stale`.
+- Normalization maps Biteship statuses (snake_case, with the camelCase spellings one docs page
+  shows accepted too) to `shipments.status`: `confirmed` / `scheduled` / `allocated` /
+  `picking_up` -> `pickup_requested`, `picked` -> `picked_up`, `in_transit` / `dropping_off` ->
+  `in_transit`, `delivered` -> `delivered`, `return_in_transit` -> `returning`, `returned` ->
+  `returned`, `cancelled` -> `cancelled`, `on_hold` / `rejected` / `courier_not_found` /
+  `disposed` -> `problem`; **an unknown status never completes an order**, it is stored raw and
+  flagged.
 - **Auto-complete:** `shipped -> completed` runs through `transitionOrderStatus` (no staff actor,
   audit-logged) only on a normalized `delivered`. **Manual fallback:** staff can still "Tandai
-  dikirim" and "Tandai selesai" from admin; a returned-to-sender status flags
+  dikirim" and "Tandai selesai" from admin; a returning/returned or problem status flags
   `delivery_problem` and never auto-transitions to `returned` (staff confirm, since stock rows
   follow).
 
-**Komerce plan: Enterprise** (corrected 2026-10-20; an earlier version of this plan said the
-"Pro" tier was enough, which is wrong).
-- **Pro (Rp149.000/month) does not include the Shipping Delivery API** (Store Order / create
-  AWB, Cancel Order, Detail Order, Pickup Request, Print Label, History AWB tracking). Only
-  **Enterprise (Rp249.000/month, cheaper when paid annually)** includes it, so Phase K needs
-  Enterprise. Shipping Cost (live rates: Search Destination, Calculate) is available on every
-  plan.
-- Ammari does **not** use Komerce Payment or QRISLY; online payment stays on Midtrans (D5).
-- **Cost:** Rp249.000/month (less on the annual plan) from the month Phase K starts, plus the
-  courier fees Ammari pays per shipment (the full courier cost; the buyer's share above the
-  Rp20.000 subsidy is collected at checkout, D11). **Since 2026-10-21 Phase C also needs a plan
-  with Shipping Cost** (every plan has it) from about mid-November: a key for session 8's opt-in
-  contract test and dev checks, and production before 1 Dec (§14).
-- **When:** a plan with Shipping Cost before launch (Phase C); Enterprise when Phase K starts.
-  Subscribing to Enterprise directly in November avoids a plan switch if its quota fits both;
-  owner's call when subscribing (open item below). K1 to K3 build against the sandbox key.
+**Biteship plan: Grow** (owner decision 2026-10-21, D18; replaces the Komerce Enterprise plan).
+- **Grow, Rp149.000/month** (structure effective 2 Nov 2026, https://biteship.com/id/harga):
+  2.000 shipments/month, 10 active couriers, monthly API quota Rates 10.000, Tracking 2.000, Maps
+  50.000; overage Rates Rp5, Tracking Rp10, Maps Rp2 per request. Orders, tracking and webhooks are
+  included, so Phase K needs no plan change.
+- **Starter (Rp0)** is fine for development: 100 shipments/month, 3 active couriers, Maps/Rates/
+  Tracking billed per request from the first one (also with a test key: test-mode Maps, Rates and
+  Tracking are real data and billed; only orders are simulated). The dev account needs a small
+  balance top-up for the opt-in contract test and dev checks.
+- **Cost:** Rp149.000/month from launch, plus the courier fees for each shipment (Ammari pays the
+  full courier cost; the buyer's share above the Rp20.000 subsidy is collected at checkout, D11),
+  paid from the Biteship balance (Bitepoints, top-up by QRIS up to Rp1.000.000 or by bank
+  transfer; not withdrawable). Ask Biteship about invoice billing if the balance becomes a chore.
+- Ammari does not use Biteship COD or insurance; online payment stays on Midtrans (D5).
 
-What Phase K needs from that plan (confirm each with Komerce when subscribing):
-1. Shipping Delivery API (Komship) production access: Store Order, Cancel Order, Detail Order,
-   Pickup Request, Print Label, History AWB.
-2. Webhook registration for order status updates.
-3. Search Destination and Calculate (Phase C, from session 8), and whether their destination ids
-   are the ones Store Order accepts (K1).
-4. A daily request quota covering destination search and quotes at checkout (Phase C: roughly 5
-   searches and 1 to 2 uncached quotes per checkout visit, capped by `KOMERCE_DAILY_CALL_BUDGET`)
-   plus polling: roughly orders in transit x 8 polls/day. Confirm the quota covers it.
-5. Universal waybill tracking (RajaOngkir track waybill) only if some web orders will ship
-   outside Komship; recommendation: ship every web order through Komship so one tracking source
-   covers all.
-6. Billing for shipments (deposit/balance or invoice), since Ammari pays every shipment.
-7. A sandbox key for K1 to K3.
+What to confirm with Biteship when subscribing (not owner decisions):
+1. Live Order API activation for the account.
+2. **Labels:** the docs say there is no Shipping Label API (dashboard download or our own
+   label), while the pricing page lists one for Grow.
+3. Webhook authentication options (the header key/secret) and retry behavior.
+4. Whether `GET /v1/orders/:id` counts against the Tracking quota.
+5. That the six allowlisted couriers can all be active at once on Grow, and their service codes
+   (the contract test prints them).
+6. Invoice billing instead of balance top-ups, if wanted, and how cancellation refunds reach the
+   balance.
 
 **Risks:**
-- Subscribing to Pro (or no plan) would block K2 and K3 entirely: no booking, labels or
-  tracking. Check the subscription is Enterprise before K2 starts.
-- If Enterprise is not subscribed in time, the manual path (staff book the quoted service,
-  "Tandai dikirim" with courier + resi, manual "Selesai") stays the only path. **Phase C now
-  depends on Komerce Shipping Cost** (2026-10-21): without a working key checkout refuses every
-  order (§4.5.5), so the key is a hard launch prerequisite and its outage stops web sales (the
-  WhatsApp path stays open).
-- The Shipping Cost quote and the actual booking price can differ (tariff updates, Komship
-  discounts); Ammari carries the difference, visible per order from K2.
-- Enterprise's daily request quota is not in the public docs; if it is too low for polling,
-  lengthen the poll interval (the webhook is a hint anyway) before raising the plan question.
+- **Phase C depends on Biteship Maps and Rates** (2026-10-21): without a working key checkout
+  refuses every order (§4.5.5), so the key is a hard launch prerequisite and an outage stops web
+  sales (the WhatsApp path stays open). An empty balance does not matter inside the Grow quota,
+  but on Starter (dev) it answers 402, which shows as "unavailable".
+- The quoted price and the actual booking price can differ (tariff updates, re-weighing reported
+  by `order.price`); Ammari carries the difference, visible per order from K2.
+- Tracking quota (2.000/month) is tight for polling; the webhook is the primary signal and the
+  poller stays daily. If it is still too low, lengthen the interval before raising the plan
+  question.
+- One provider for everything: a Biteship outage blocks both quotes and bookings. The manual path
+  (staff book with the courier directly, "Tandai dikirim" with courier + resi, manual "Selesai")
+  stays available.
 
 ## 16. Decisions (owner, 2026-10-20)
 
@@ -1047,16 +1170,16 @@ What Phase K needs from that plan (confirm each with Komerce when subscribing):
    flagged at payment for refund or restock.
 10. No customer self-cancel of unpaid orders in v1; they expire.
 11. Email the owner on every paid order (to the support email in store settings).
-12. No delivery estimate at checkout until Komerce. **Kept in v1 (2026-10-21)** even though
-    Komerce rates (which carry an estimate) are now used at checkout.
+12. No delivery estimate at checkout until courier rates are live. **Kept in v1 (2026-10-21)**
+    even though the provider's rates (which carry an estimate) are now used at checkout.
 13. Area dataset licence checked in session 3; plain-text fields if not clean. **Result
     (2026-10-20): not clean; plain-text fields** (§3). **Superseded 2026-10-21:** the area is
-    picked from Komerce Search Destination (D12, §4.5.1).
+    picked from the shipping provider's area search (Komerce at first, Biteship Maps since
+    decision 23; D12, §4.5.1).
 14. Privacy policy and terms updated before launch by the owner in admin; exact changes in §11.1.
-15. **Komerce tracking is required.** The owner subscribes to the **Komerce Enterprise** plan
-    (Rp249.000/month, cheaper annually; Pro lacks the Shipping Delivery API) when Phase K starts
-    (§15). Komerce Payment / QRISLY are not used.
-    Web orders move to `completed` automatically when tracking reports delivered, with a manual
+15. **Courier tracking is required.** ~~The owner subscribes to the Komerce Enterprise plan
+    when Phase K starts.~~ **Superseded 2026-10-21 by decision 23:** Biteship on the Grow plan
+    covers booking and tracking (§15). Web orders move to `completed` automatically when tracking reports delivered, with a manual
     fallback; customers see tracking in "Pesanan saya". Delivered in Phase K.
 16. **No silent login after guest checkout.** Guest order emails carry a separate "Masuk ke akun"
     magic link (24 h, single use, hashed, bound to customer and email, superseded by a newer one,
@@ -1074,14 +1197,28 @@ Owner decisions 2026-10-21 (shipping subsidy):
     fixed row; no buyer choice in v1 (§4.5.2).
 19. **Weight per product, required to publish** (`products.shipping_weight_grams`), plus a
     packaging allowance per order (§4.5.3).
-20. **Komerce down or no service: checkout refuses**, with a retry or the WhatsApp link; never a
+20. **Shipping provider down or no service: checkout refuses**, with a retry or the WhatsApp link; never a
     fallback rate (§4.5.5).
 21. **Migration numbering:** the shipping migration takes 0031; the login-link migration becomes
-    0032; Phase K's expected 0033 and 0034.
+    0032; Phase K's expected 0033 and 0034. **Revised by decision 24.**
 
-Remaining small items to confirm with third parties (not owner decisions): Komerce's daily
-request quota per plan and the meaning of "Selesai" (Enterprise is settled for Phase K); whether
-Shipping Cost destination ids work for Store Order (K1); the exact Komerce service codes for the
-allowlist (session 8); whether the Midtrans merchant review requires naming the processor on the
-privacy page. Open owner item: which plan to subscribe in November (a Shipping Cost plan first, or
-Enterprise directly).
+Owner decisions 2026-10-21 (shipping provider, during session 8):
+
+22. ~~Build session 8 on Komerce Shipping Cost (RajaOngkir) ids; K1 confirms whether Store Order
+    accepts them.~~ Superseded the same day by decision 23.
+23. **Biteship replaces Komerce** for area search, rates, orders, pickup and tracking (D18): one
+    area id across all of them; **Grow** plan (Rp149.000/month) before launch, Starter (Rp0, pay
+    per request) for development.
+24. **Migration 0032 renames `shipping_areas.komerce_destination_id` to `provider_area_id`**
+    (and its UNIQUE). The login-link migration becomes **0033**; Phase K's expected **0034 and
+    0035**.
+25. **No kelurahan field:** Biteship areas stop at kecamatan + kode pos; the search is "Kecamatan
+    atau kode pos" and the buyer types the kelurahan in the street address (hint "Jalan, nomor
+    rumah, RT/RW, kelurahan").
+26. `zod` (4.6.5, already used by both apps) is a dependency of `@ammari/commerce` for parsing
+    provider responses.
+
+Remaining small items to confirm with third parties (not owner decisions): the Biteship items in
+§15 "What to confirm with Biteship" (live Order API activation, labels, webhook authentication,
+Tracking quota use, six active couriers and their service codes, billing); whether the Midtrans
+merchant review requires naming the processor on the privacy page.

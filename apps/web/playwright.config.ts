@@ -90,6 +90,10 @@ export default defineConfig({
       // `pnpm test:e2e:cart` (E2E_CART_ENABLED=true) runs the same suite with the cart on; specs
       // pick their expectations from e2e/helpers/cart-flag.ts. Run both before shipping cart work.
       STOREFRONT_CART_ENABLED: process.env.E2E_CART_ENABLED === "true" ? "true" : "false",
+      // The fictional shipping areas and fixed quotes of @ammari/commerce/shipping's fake provider
+      // (docs/plans/cart-checkout.md §13): nothing in e2e reaches the real shipping provider. The
+      // fake is accepted only with E2E_TEST_LOGIN=true in a non-production build (dev:e2e).
+      SHIPPING_RATE_PROVIDER: "fake",
       STORE_WHATSAPP_NUMBER: E2E_WHATSAPP_NUMBER,
     },
     timeout: 120_000,

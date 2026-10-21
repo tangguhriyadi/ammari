@@ -416,7 +416,7 @@ describe("customer_addresses", () => {
 });
 
 // Migration 0031 replaced the (province, city, district, postal_code) UNIQUE with one on
-// komerce_destination_id; shipping-schema.test.ts covers the new keys.
+// komerce_destination_id (provider_area_id since 0032); shipping-schema.test.ts covers the new keys.
 describe("shipping_areas", () => {
   test("postal code is 5 digits", async () => {
     await withRollback(async (tx) => {

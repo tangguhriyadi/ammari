@@ -24,6 +24,9 @@ export default defineConfig({
     environment: "node",
     // Migrates + seeds `ammari_test` (same as packages/auth and apps/admin).
     globalSetup: "@ammari/db/test-global-setup",
+    // Refuses every non-local fetch, so no test can reach a real provider (Biteship, Midtrans),
+    // even by accident (plan §13).
+    setupFiles: ["./test/setup.ts"],
     testTimeout: 20_000,
     hookTimeout: 20_000,
     fileParallelism: false,

@@ -49,7 +49,7 @@ function area(overrides: Partial<typeof shippingAreas.$inferInsert> = {}): typeo
     postalCode: "40135",
     searchText: "dago coblong kota bandung jawa barat 40135",
     label: "Dago, Coblong, Kota Bandung, Jawa Barat 40135",
-    komerceDestinationId: `komerce-${randomUUID()}`,
+    providerAreaId: `area-${randomUUID()}`,
     ...overrides,
   };
 }
@@ -156,8 +156,8 @@ describe("orders locked shipping quote", () => {
   });
 });
 
-describe("shipping_areas (Komerce destinations)", () => {
-  test("keyed by komerce_destination_id; two kelurahan may share province, city, kecamatan and kode pos", async () => {
+describe("shipping_areas (provider areas)", () => {
+  test("keyed by provider_area_id; two areas may share province, city, kecamatan and kode pos", async () => {
     await withRollback(async (tx) => {
       const [dago] = await tx.insert(shippingAreas).values(area()).returning();
       const [lebakSiliwangi] = await tx
@@ -167,13 +167,13 @@ describe("shipping_areas (Komerce destinations)", () => {
       expect(dago!.lastSyncedAt).toBeInstanceOf(Date);
       expect(lebakSiliwangi!.id).not.toBe(dago!.id);
 
-      await expectViolation(tx, "shipping_areas_komerce_destination_id_key", (sp) =>
-        sp.insert(shippingAreas).values(area({ komerceDestinationId: dago!.komerceDestinationId })),
+      await expectViolation(tx, "shipping_areas_provider_area_id_key", (sp) =>
+        sp.insert(shippingAreas).values(area({ providerAreaId: dago!.providerAreaId })),
       );
     });
   });
 
-  test("the session 8 upsert refreshes a row in place by its Komerce id", async () => {
+  test("the session 8 upsert refreshes a row in place by its provider area id", async () => {
     await withRollback(async (tx) => {
       const values = area();
       const [first] = await tx.insert(shippingAreas).values(values).returning();
@@ -181,7 +181,7 @@ describe("shipping_areas (Komerce destinations)", () => {
         .insert(shippingAreas)
         .values({ ...values, label: "Dago, Coblong, Kota Bandung, Jawa Barat", postalCode: null })
         .onConflictDoUpdate({
-          target: shippingAreas.komerceDestinationId,
+          target: shippingAreas.providerAreaId,
           set: { label: sql`excluded.label`, postalCode: sql`excluded.postal_code`, lastSyncedAt: sql`now()` },
         })
         .returning();

@@ -33,10 +33,10 @@ import { orderItems, orders } from "./orders";
 // Storefront cart, checkout and online payment (docs/plans/cart-checkout.md §3, migration 0030).
 // Schema only: nothing reads or writes these tables until the later sessions of that plan.
 
-/** Komerce destinations (province / city / kecamatan / kelurahan / kode pos), plan D12, §4.5.1.
- * No licence-clean dataset exists (session 3), so the table is filled on demand: every
- * destination search (session 8) upserts what Komerce returns, keyed by
- * `komerce_destination_id`. Checkout orders and saved addresses point here, and the browser only
+/** Shipping-provider areas (province / city / kecamatan / kode pos), plan D12, D18, §4.5.1: Biteship
+ * Maps areas since 2026-10-21 (Komerce before). No licence-clean dataset exists (session 3), so the
+ * table is filled on demand: every area search (session 8) upserts what the provider returns,
+ * keyed by `provider_area_id`. Checkout orders and saved addresses point here, and the browser only
  * ever sends this table's own `id`. Public reference data, no personal data (plan §11). */
 export const shippingAreas = pgTable(
   "shipping_areas",
@@ -45,22 +45,25 @@ export const shippingAreas = pgTable(
     province: text("province").notNull(),
     city: text("city").notNull(),
     district: text("district").notNull(),
-    // Kelurahan / desa (migration 0031). Nullable: a destination can be a whole kecamatan.
+    // Kelurahan / desa (migration 0031). Nullable: Biteship areas are whole kecamatan (kecamatan +
+    // kode pos), so it stays NULL with Biteship; kept for a provider that has the level.
     subdistrict: text("subdistrict"),
-    // Nullable since migration 0031: a few Komerce destinations carry no kode pos; the buyer then
-    // types it at checkout (plan §4.5.1).
+    // Nullable since migration 0031 (some Komerce destinations had none). Every Biteship area carries
+    // one; a missing or malformed one is stored as NULL and the buyer types it (plan §4.5.1).
     postalCode: text("postal_code"),
-    // Lowercased, accent-free label, kept for a later local-first search (v1 always asks
-    // Komerce, plan §4.5.1). No search index yet.
+    // Lowercased, accent-free label, kept for a later local-first search (v1 always asks the
+    // provider, plan §4.5.1). No search index yet.
     searchText: text("search_text").notNull(),
-    // Komerce's own display label (migration 0031). Nullable only because columns added by a
-    // migration stay nullable (CLAUDE.md expand/contract); session 8's upsert always writes it.
+    // Display label "Kecamatan, Kota, Provinsi 12345" (migration 0031). Nullable only because
+    // columns added by a migration stay nullable (CLAUDE.md expand/contract); session 8's upsert
+    // always writes it.
     label: text("label"),
-    // UNIQUE since migration 0031 (several NULLs stay allowed, but every row written from session
-    // 8 on has one): the upsert's ON CONFLICT target. Replaces the old (province, city, district,
-    // postal_code) UNIQUE, which two kelurahan can share.
-    komerceDestinationId: text("komerce_destination_id").unique("shipping_areas_komerce_destination_id_key"),
-    // When this row was last refreshed from a Komerce search (migration 0031).
+    // The provider's area id (Biteship, e.g. `IDNP6IDNC148IDND843IDZ12250`). Named
+    // `komerce_destination_id` until migration 0032 renamed it (plan D18). UNIQUE since migration
+    // 0031 (several NULLs stay allowed, but every row written from session 8 on has one): the
+    // upsert's ON CONFLICT target. Replaces the old (province, city, district, postal_code) UNIQUE.
+    providerAreaId: text("provider_area_id").unique("shipping_areas_provider_area_id_key"),
+    // When this row was last refreshed from a provider search (migration 0031).
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     ...timestamps(),
   },
@@ -70,8 +73,8 @@ export const shippingAreas = pgTable(
   ],
 );
 
-/** Komerce Calculate results, reused for up to SHIPPING_QUOTE_CACHE_MINUTES (plan §4.5.4) and
- * pruned after 7 days (plan §11). `result` holds only the allowlisted services and their prices,
+/** Shipping provider rate results (Biteship Rates since D18), reused for up to
+ * SHIPPING_QUOTE_CACHE_MINUTES (plan §4.5.4) and pruned after 7 days (plan §11). `result` holds only the allowlisted services and their prices,
  * never a raw response. Written with INSERT ... ON CONFLICT DO UPDATE on the UNIQUE below. */
 export const shippingRateCache = pgTable(
   "shipping_rate_cache",

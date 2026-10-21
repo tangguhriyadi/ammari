@@ -225,6 +225,13 @@
       "when": 1792539894061,
       "tag": "0031_shipping_quote",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792543293105,
+      "tag": "0032_shipping_provider_area_id",
+      "breakpoints": true
     }
   ]
 }

@@ -65,6 +65,9 @@ describe("migration 0031 (shipping quote)", () => {
     await recreateDatabase();
     const client = postgres(urlFor(SCRATCH_DATABASE), { max: 1, onnotice: () => {} });
     const upTo0030 = migrationsUpTo(30);
+    // Stops at 0031, so this test keeps describing 0031 itself (0032 renamed the area key column;
+    // migration-0032.test.ts covers that).
+    const upTo0031 = migrationsUpTo(31);
     try {
       await migrate(drizzle(client), { migrationsFolder: upTo0030 });
 
@@ -94,7 +97,7 @@ describe("migration 0031 (shipping quote)", () => {
       const [{ count: areasBefore }] = (await client`select count(*)::int as count from shipping_areas`) as unknown as [{ count: number }];
       expect(areasBefore).toBe(0);
 
-      await migrate(drizzle(client), { migrationsFolder });
+      await migrate(drizzle(client), { migrationsFolder: upTo0031 });
 
       // Nothing unpublished, no weight invented.
       const [haura] = await client`select is_published_on_storefront, shipping_weight_grams from products where id = ${product!.id}`;
@@ -173,12 +176,13 @@ describe("migration 0031 (shipping quote)", () => {
 
       // Re-running the migrator applies nothing and changes nothing.
       const before = await client`select count(*)::int as count from drizzle.__drizzle_migrations`;
-      await migrate(drizzle(client), { migrationsFolder });
+      await migrate(drizzle(client), { migrationsFolder: upTo0031 });
       const after = await client`select count(*)::int as count from drizzle.__drizzle_migrations`;
       expect(after).toEqual(before);
     } finally {
       await client.end();
       rmSync(upTo0030, { recursive: true, force: true });
+      rmSync(upTo0031, { recursive: true, force: true });
     }
   });
 

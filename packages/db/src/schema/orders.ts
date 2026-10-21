@@ -174,14 +174,15 @@ export const orders = pgTable(
     // What Ammari covers on this order (at most the subsidy cap, a code constant in
     // @ammari/commerce/shipping, deliberately not a CHECK so the cap can change).
     shippingSubsidyAmount: bigint("shipping_subsidy_amount", { mode: "number" }),
-    // As Komerce names them, e.g. `jne` / `REG`.
+    // As the shipping provider names them (Biteship `courier_code` / `courier_service_code`, which
+    // are also its order `courier_company` / `courier_type`), e.g. `jne` / `reg`.
     shippingCourierCode: text("shipping_courier_code"),
     shippingServiceCode: text("shipping_service_code"),
     // Display label, e.g. "JNE Reguler".
     shippingCourierLabel: text("shipping_courier_label"),
     // Parcel weight sent for the quote: sum(qty x product weight) + the packaging allowance.
     shippingWeightGrams: integer("shipping_weight_grams"),
-    // The Komerce destination id, snapshotted (a shipping_areas row can be re-synced).
+    // The provider area id (Biteship), snapshotted (a shipping_areas row can be re-synced).
     shippingDestinationId: text("shipping_destination_id"),
     shippingQuotedAt: timestamp("shipping_quoted_at", { withTimezone: true, mode: "date" }),
     ...timestamps(),

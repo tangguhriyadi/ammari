@@ -41,16 +41,19 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
 - Main site (`apps/web`) — voucher claim flow and the rest of §3.3/§3.4's v1 and December 2026
   scope.
 - Cart, checkout, online payment, web orders, transactional email, order login link, "Pesanan
-  saya" and Komerce courier tracking — plan **approved** (docs/plans/cart-checkout.md; Phase C
+  saya" and courier tracking (Biteship) — plan **approved** (docs/plans/cart-checkout.md; Phase C
   target ~20 Nov 2026, Phase K in the first weeks of December). Described in §3.4, §5.2, §5.3,
-  §8, §10.2 and §10.3. Built so far (plan sessions 1 to 7): the shared `@ammari/commerce`
+  §8, §10.2 and §10.3. Built so far (plan sessions 1 to 8): the shared `@ammari/commerce`
   package, the checkout schema, plain-field addresses, stock holds, the cart (backend, PDP
-  "Tambah ke keranjang", header count, `/cart`), and the shipping-quote schema (migration 0031)
-  with the admin "Berat kirim (gram)" field; checkout, payment and the rest are not built yet.
+  "Tambah ke keranjang", header count, `/cart`), the shipping-quote schema (migration 0031)
+  with the admin "Berat kirim (gram)" field, and the shipping rate layer (Biteship client, area
+  search route, quotes with cache and daily budgets; migration 0032); checkout, payment and the
+  rest are not built yet.
   Everything ships dark behind `STOREFRONT_CART_ENABLED` until 1 Dec 2026. **Revised 2026-10-21:**
-  free shipping is replaced by a shipping subsidy of at most Rp20.000 per order (§3.4), so Komerce
-  shipping rates and destination search are now part of the checkout launch (plan sessions 7 and
-  8); booking and tracking stay in Phase K.
+  free shipping is replaced by a shipping subsidy of at most Rp20.000 per order (§3.4), so
+  shipping rates and area search are now part of the checkout launch (plan sessions 7 and 8);
+  booking and tracking stay in Phase K. **Revised again 2026-10-21:** the shipping provider is
+  **Biteship**, not Komerce (one area id across rates, orders and tracking; Grow plan; plan D18).
 
 ## 1. Goals
 
@@ -206,17 +209,18 @@ and `/checkout/*` return not-found and the WhatsApp CTA stays primary).
 - **Shipping subsidy (owner decision 2026-10-21, replaces free shipping).** Ammari covers at most
   **Rp20.000** of the courier cost per order; the buyer pays `max(0, cost - 20.000)` as a separate
   "Ongkir" line. Product prices are the same for every location. Details: plan §4.5.
-  - Address: the buyer picks a Komerce destination (search by kelurahan, kecamatan or kode pos);
-    it is cached in `shipping_areas`. Free-typed kecamatan/kode pos are gone.
+  - Address: the buyer picks a shipping-provider area (Biteship Maps; search by kecamatan, city
+    or kode pos); it is cached in `shipping_areas`. Areas stop at kecamatan + kode pos, so the
+    kelurahan is typed in the street address. Free-typed kecamatan/kode pos are gone.
   - Courier: the server picks the cheapest service from a code allowlist of regular services;
     one fixed row, no buyer choice, no delivery estimate.
   - Weight: `products.shipping_weight_grams` (one packed piece, required to publish) times qty,
     plus a packaging allowance per order.
-  - The quote is computed only on the server (Komerce Shipping Cost, cached up to 6 hours),
+  - The quote is computed only on the server (Biteship Rates, cached up to 6 hours),
     recomputed in order creation and **locked into the order** (`shipping_amount` = buyer's
     share, plus the quoted cost, subsidy, courier/service, weight, destination id and quote
     time). A later tariff change or a different booking price is Ammari's, never the buyer's.
-  - Komerce down, or no service to the destination: checkout refuses with a retry or a WhatsApp
+  - Shipping provider down, or no service to the destination: checkout refuses with a retry or a WhatsApp
     link; there is no fallback rate.
   - Vouchers apply to goods only (never to ongkir). A paid order cancelled before shipping is
     refunded in full, ongkir included.
@@ -240,14 +244,16 @@ and `/checkout/*` return not-found and the WhatsApp CTA stays primary).
   for guests by the view-only "Lihat pesanan" link (one order, 120 days; see §10.3).
 - Transactional email (Resend, Indonesian): order created, paid, shipped, delivered, cancelled,
   plus an alert to the owner on every paid order (§10.2).
-- Courier tracking via Komerce (Phase K, required; target live in the first weeks of December).
-  Requires the **Komerce Enterprise** plan (Rp249.000/month, cheaper annually), subscribed when
-  Phase K starts: Pro (Rp149.000/month) does not include the Shipping Delivery API (create
-  AWB/order, pickup request, tracking, print label); Shipping Cost (live rates) is on every plan.
-  Komerce Payment / QRISLY are not used. Until it ships, staff book the order's quoted service by
-  hand, enter courier and resi ("Tandai dikirim") and mark orders "Selesai" by hand. Checkout
-  **does** depend on Komerce Shipping Cost from launch (every plan has it; a subscription and key
-  are a launch prerequisite), but never on the delivery API. Once live, web orders
+- Courier booking and tracking via **Biteship** (Phase K, required; target live in the first
+  weeks of December), with the same account, key and area ids as checkout's rates. Biteship
+  replaced Komerce on 2026-10-21 (plan D18): Komerce's rate ids were not documented as the ids
+  its booking API accepts, and booking needed its Enterprise plan (Rp249.000/month); Biteship's
+  **Grow** plan (Rp149.000/month: 2.000 shipments, Rates 10.000 / Tracking 2.000 / Maps 50.000
+  requests a month) covers rates, orders with pickup and tracking. Starter (Rp0, pay per
+  request) is used for development. Until Phase K ships, staff book the order's quoted service
+  by hand, enter courier and resi ("Tandai dikirim") and mark orders "Selesai" by hand. Checkout
+  **does** depend on Biteship Maps and Rates from launch (a Grow subscription and live key are a
+  launch prerequisite), but never on booking. Once live, web orders
   move `to_ship -> shipped -> completed` automatically from tracking (a returned-to-sender
   status only raises a flag, staff confirm the return), with the manual actions kept as a
   fallback, and customers see the tracking timeline in "Pesanan saya".
@@ -537,21 +543,23 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   cancelling it unpaid releases them. Admin and marketplace-import paths keep checking physical stock only
   (a marketplace sale already happened and is never refused).
 - `carts`, `cart_items` — database-backed cart (no price column on items).
-- `shipping_areas` — province / city / kecamatan / kelurahan / postal-code rows keyed by
-  `komerce_destination_id` (unique). No licensed dataset exists (checked 2026-10-20), so since
-  the 2026-10-21 revision the table is **filled on demand from Komerce Search Destination** at
-  checkout (each search upserts what it returns); checkout orders and saved addresses point at a
-  row through `shipping_area_id`, and the browser only ever sends that id. Migration 0031 added
+- `shipping_areas` — province / city / kecamatan / postal-code rows keyed by `provider_area_id`
+  (unique; the Biteship area id, which is kecamatan + kode pos level, so `subdistrict` stays
+  NULL). No licensed dataset exists (checked 2026-10-20), so since the 2026-10-21 revision the
+  table is **filled on demand from the provider's area search (Biteship Maps)** at checkout (each
+  search upserts what it returns); checkout orders and saved addresses point at a row through
+  `shipping_area_id`, and the browser only ever sends that id. Migration 0031 added
   `subdistrict`, `label`, `last_synced_at`, made `postal_code` nullable and swapped the
-  `(province, city, district, postal_code)` UNIQUE for a UNIQUE on the Komerce id. `@ammari/commerce/address`
-  stays the validator and snapshot builder.
-- `shipping_rate_cache` — Komerce quotes per (origin, destination, weight, service allowlist),
+  `(province, city, district, postal_code)` UNIQUE for a UNIQUE on the provider id; migration
+  0032 renamed `komerce_destination_id` to `provider_area_id`. `@ammari/commerce/address` stays
+  the validator and snapshot builder.
+- `shipping_rate_cache` — provider quotes per (origin, destination, weight, service allowlist),
   reused for up to 6 hours, pruned after 7 days (migration 0031).
 - `order_access_tokens` — "Lihat pesanan" view-only links; only the sha256 of the token is
   stored, one row per email sent, expiring 120 days after issuance.
 - `order_notifications` — unique `(order_id, kind)`, the idempotency guard for transactional
   emails.
-- `shipments`, `shipment_events`, `komerce_webhook_events` — Phase K (Komerce): one shipment per
+- `shipments`, `shipment_events`, `shipping_webhook_events` — Phase K (Biteship): one shipment per
   order (courier, service, AWB, the cost Ammari pays, normalized status), de-duplicated tracking
   events, and a raw webhook log.
 - `orders` additions for web orders (all nullable or defaulted): `payment_status`,
@@ -589,7 +597,7 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   see the `payments` note in §5.2.
 - `customer_login_links` — the "Masuk ke akun" one-time login links (§10.3): hashed token, bound
   to a customer id and email, 24-hour expiry, `consumed_at` / `superseded_at`; a partial unique
-  index allows at most one live link per customer. Not yet implemented (expected migration 0032;
+  index allows at most one live link per customer. Not yet implemented (expected migration 0033;
   0031 is the shipping-quote migration since the 2026-10-21 revision).
 - `otp_codes` — stores a hash of the code, `expires_at`, `attempts`, `consumed_at`.
 - `thank_you_cards` — unique `order_id`; unique `token_hash`; `claim_deadline`; `status`.
@@ -640,9 +648,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - Payment gateway: **Midtrans** (Snap, redirect mode), methods limited to QRIS, GoPay, ShopeePay
   and BCA / BNI / BRI / Mandiri / Permata virtual accounts. **No card payments.** Ammari absorbs
   gateway fees.
-- Courier: **Komerce** for booking, label and tracking (Phase K), on the **Enterprise** plan
-  (the only plan with the Shipping Delivery API; see §3.4), and **Komerce Shipping Cost** for
-  rates and destination search at checkout from launch. **Shipping subsidy of at most Rp20.000
+- Courier: **Biteship** (decided 2026-10-21, replacing Komerce) for area search and rates at
+  checkout from launch, and for booking, pickup and tracking (Phase K), on the **Grow** plan
+  (Rp149.000/month; Starter for development; see §3.4). **Shipping subsidy of at most Rp20.000
   per order** (2026-10-21; free shipping ended); the buyer pays the rest as "Ongkir". The
   cheapest allowlisted regular service is chosen by the server.
 - Order number stays `ORD-YYYYMM-NNNN`, shared across channels.
@@ -911,15 +919,20 @@ Added for the Dec 2026 checkout (details in docs/plans/cart-checkout.md §12, §
 session 17; runbook in `docs/runbooks/` when written): Midtrans production approval for exactly
 the §3.4 methods and production keys in the prod env; the payment notification URL set, and the
 dev site's Cloudflare Access bypass for exactly that one path; the internal cron service (expiry
-sweeper every 5 minutes, retention job daily, Komerce polling in Phase K) with
+sweeper every 5 minutes, retention job daily, Biteship tracking polls in Phase K) with
 `INTERNAL_CRON_SECRET`, on the internal network only (Caddy does not route `/api/internal/*`);
 owner-edited privacy policy and terms in admin Konten before launch; footer payment chips
 changed to QRIS, Virtual Account, GoPay, ShopeePay. Before checkout launch (added 2026-10-21):
-a Komerce subscription with Shipping Cost and its production key, `KOMERCE_ORIGIN_ID`, a daily
-call budget below the plan's quota, every published product with a shipping weight, and the
-announcement bar, Pengiriman page, privacy policy and terms re-worded for the subsidy. Before
-Phase K goes live: a Komerce **Enterprise** subscription (not Pro, §3.4) and its delivery key in
-the env.
+a Biteship **Grow** subscription (Biteship replaced Komerce, §3.4) with the allowlisted couriers
+activated and a `biteship_live.` key in the prod env; the shipping variables set by name
+(apps/web: `BITESHIP_API_KEY`, `BITESHIP_BASE_URL`, `BITESHIP_ORIGIN_AREA_ID`,
+`BITESHIP_DAILY_MAPS_BUDGET`, `BITESHIP_DAILY_RATES_BUDGET`, `SHIPPING_QUOTE_CACHE_MINUTES`,
+`SHIPPING_RATE_PROVIDER`; a test key is refused when `DEPLOY_ENV=production`; details in plan
+§12), the daily budgets at or below the plan's monthly quotas / 31, every published product with
+a shipping weight, and the announcement bar, Pengiriman page, privacy policy and terms re-worded
+for the subsidy. Before Phase K goes live: Biteship's live Order API activated for the account,
+the webhook registered in the Biteship dashboard with `BITESHIP_WEBHOOK_PATH_TOKEN`, the shipper
+variables (`BITESHIP_SHIPPER_*`) and `BITESHIP_*` in the admin env too.
 
 The dev deploy pipeline (`.github/workflows/deploy-dev.yml`, `docs/deploy.md`) is built. Items
 below marked **(automated)** are enforced by that pipeline/image and need no per-deploy action;

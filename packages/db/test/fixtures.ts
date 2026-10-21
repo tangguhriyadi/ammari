@@ -211,10 +211,10 @@ export function shippingQuoteValues(
     shippingCostAmount: costAmount,
     shippingSubsidyAmount: subsidyAmount,
     shippingCourierCode: "jne",
-    shippingServiceCode: "REG",
+    shippingServiceCode: "reg",
     shippingCourierLabel: "JNE Reguler",
     shippingWeightGrams: 900,
-    shippingDestinationId: "komerce-test-1",
+    shippingDestinationId: "IDNP6IDNC148IDND843IDZ12250",
     shippingQuotedAt: new Date(),
   };
 }

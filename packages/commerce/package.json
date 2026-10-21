@@ -14,6 +14,7 @@
     "./order-status": "./src/orders/status.ts",
     "./orders": "./src/orders/index.ts",
     "./shipping": "./src/shipping/index.ts",
+    "./shipping-rules": "./src/shipping/rules.ts",
     "./stock": "./src/stock/index.ts",
     "./thank-you-cards": "./src/thank-you-cards.ts"
   },
@@ -24,7 +25,8 @@
   "dependencies": {
     "@ammari/db": "workspace:*",
     "drizzle-orm": "0.45.3",
-    "server-only": "0.0.1"
+    "server-only": "0.0.1",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "26.6.3",

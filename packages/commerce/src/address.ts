@@ -1,15 +1,18 @@
-/** Shipping address input for web checkout and saved addresses (plan §4.3, D12).
+/** Shipping address input for web checkout and saved addresses (plan §4.3, §4.5.1, D12).
  *
- * Plain-text fields: no licence-clean kecamatan + kode pos dataset exists (checked in session 3,
- * 2026-10-20), so `shipping_areas` stays empty and the buyer types city, kecamatan and postal code
- * and picks the province from a fixed list. Phase K may fill `shipping_areas` from Komerce's
- * destination search; until then `shippingAreaId` is always null.
+ * Version 2 (session 8, 2026-10-21): the area (kecamatan, city, province, kode pos) is no longer
+ * typed. The buyer picks a shipping-provider area (Biteship Maps) from a search, the server loads
+ * that `shipping_areas` row by our own id, and `parseShippingAddress` takes the free fields plus that
+ * loaded row. Biteship areas stop at kecamatan + kode pos, so the kelurahan is typed in the street
+ * address (owner decision 2026-10-21) and `subdistrict` stays null. Version 1 (session 3, typed
+ * province/city/kecamatan/kode pos) never reached an order.
  *
  * Pure functions with no database or server-only imports, so the checkout form can run the same
  * checks in the browser that the server action runs again before writing. */
 
-/** The 38 provinces (Kepmendagri 2025), alphabetical for the checkout select. Province names are
- * stored as text, never matched as reference data by the database. */
+/** The 38 provinces (Kepmendagri 2025), alphabetical. No longer used by the checkout form (the area
+ * comes from the provider search since v2); kept for admin manual orders (plan §4.5.1). Province
+ * names are stored as text, never matched as reference data by the database. */
 export const INDONESIAN_PROVINCES = [
   "Aceh",
   "Bali",
@@ -53,30 +56,45 @@ export const INDONESIAN_PROVINCES = [
 
 export type IndonesianProvince = (typeof INDONESIAN_PROVINCES)[number];
 
-const PROVINCE_BY_KEY = new Map<string, IndonesianProvince>(
-  INDONESIAN_PROVINCES.map((province) => [province.toLowerCase(), province]),
-);
+/** The picked `shipping_areas` row, as the server loaded it by `shippingAreaId` (never fields the
+ * browser sent). */
+export interface ShippingAddressArea {
+  id: string;
+  province: string;
+  city: string;
+  district: string;
+  subdistrict: string | null;
+  postalCode: string | null;
+  /** The provider's area id; an area without one cannot be quoted, so it counts as not picked. */
+  providerAreaId: string | null;
+}
 
 export interface ShippingAddress {
   recipientName: string;
   /** `+62...`, matching the `+62[0-9]{8,13}` CHECK on customers, orders and customer_addresses. */
   phone: string;
-  province: IndonesianProvince;
-  city: string;
-  district: string;
-  postalCode: string;
+  /** Street, house number, RT/RW and kelurahan. */
   addressLine: string;
   notes: string | null;
+  /** `shipping_areas.id`. */
+  shippingAreaId: string;
+  providerAreaId: string;
+  province: string;
+  city: string;
+  district: string;
+  subdistrict: string | null;
+  /** The area's kode pos, or the one the buyer typed when the area has none. */
+  postalCode: string;
 }
 
-/** Stored in `orders.shipping_address_snapshot`. `version` lets a later shape (e.g. with a
- * Komerce area id) be told apart from rows written now. */
+/** Stored in `orders.shipping_address_snapshot`. `version` tells this shape apart from any later
+ * one. */
 export interface ShippingAddressSnapshot extends ShippingAddress {
-  version: 1;
-  shippingAreaId: string | null;
+  version: 2;
 }
 
-export type ShippingAddressField = keyof ShippingAddress;
+/** The form fields, in form order. */
+export type ShippingAddressField = "recipientName" | "phone" | "shippingAreaId" | "postalCode" | "addressLine" | "notes";
 
 export interface ShippingAddressError {
   field: ShippingAddressField;
@@ -131,19 +149,22 @@ function cleanText(value: unknown): string | null {
 
 const LIMITS = {
   recipientName: { min: 2, max: 100 },
-  city: { min: 2, max: 100 },
-  district: { min: 2, max: 100 },
   addressLine: { min: 5, max: 500 },
   notes: { max: 200 },
 } as const;
 
-/** Validates and normalizes raw form input. Collects every problem (in form order) so checkout
- * can show one alert listing everything to fix. Never throws on malformed input. */
-export function parseShippingAddress(input: unknown): ParseShippingAddressResult {
+/** Same rule as the DB CHECK `[0-9]{5}`, stricter: no Indonesian postal code starts with 0. */
+const POSTAL_CODE = /^[1-9][0-9]{4}$/;
+
+/** Validates and normalizes raw form input against the picked area row (`null` when the form sent
+ * no area id or one that is not in `shipping_areas`). Collects every problem (in form order) so
+ * checkout can show one alert listing everything to fix. Never throws on malformed input. The
+ * typed kode pos is read only when the area has none. */
+export function parseShippingAddress(input: unknown, area: ShippingAddressArea | null): ParseShippingAddressResult {
   const raw = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
   const errors: ShippingAddressError[] = [];
 
-  function requiredText(field: "recipientName" | "city" | "district" | "addressLine", label: string): string {
+  function requiredText(field: "recipientName" | "addressLine", label: string): string {
     const value = cleanText(raw[field]) ?? "";
     const { min, max } = LIMITS[field];
     if (value.length === 0) errors.push({ field, message: `${label} wajib diisi.` });
@@ -161,20 +182,17 @@ export function parseShippingAddress(input: unknown): ParseShippingAddressResult
     errors.push({ field: "phone", message: "Nomor HP penerima tidak valid. Contoh: 0812 3456 7890." });
   }
 
-  const provinceRaw = cleanText(raw.province) ?? "";
-  const province = PROVINCE_BY_KEY.get(provinceRaw.toLowerCase());
-  if (provinceRaw.length === 0) errors.push({ field: "province", message: "Pilih provinsi." });
-  else if (!province) errors.push({ field: "province", message: "Provinsi tidak dikenal. Pilih dari daftar." });
+  const pickedArea = area && area.providerAreaId ? area : null;
+  if (!pickedArea) errors.push({ field: "shippingAreaId", message: "Pilih kecamatan dari daftar." });
 
-  const city = requiredText("city", "Kota atau kabupaten");
-  const district = requiredText("district", "Kecamatan");
-
-  // Spaces inside are dropped ("401 32"). Stricter than the DB CHECK `[0-9]{5}`: no Indonesian
-  // postal code starts with 0.
-  const postalCode = (cleanText(raw.postalCode) ?? "").replace(/\s/g, "");
-  if (postalCode.length === 0) errors.push({ field: "postalCode", message: "Kode pos wajib diisi." });
-  else if (!/^[1-9][0-9]{4}$/.test(postalCode)) {
-    errors.push({ field: "postalCode", message: "Kode pos harus 5 angka." });
+  let postalCode = "";
+  if (pickedArea && pickedArea.postalCode && POSTAL_CODE.test(pickedArea.postalCode)) {
+    postalCode = pickedArea.postalCode;
+  } else if (pickedArea) {
+    // Spaces inside are dropped ("401 32").
+    postalCode = (cleanText(raw.postalCode) ?? "").replace(/\s/g, "");
+    if (postalCode.length === 0) errors.push({ field: "postalCode", message: "Kode pos wajib diisi." });
+    else if (!POSTAL_CODE.test(postalCode)) errors.push({ field: "postalCode", message: "Kode pos harus 5 angka." });
   }
 
   const addressLine = requiredText("addressLine", "Alamat lengkap");
@@ -184,7 +202,7 @@ export function parseShippingAddress(input: unknown): ParseShippingAddressResult
     errors.push({ field: "notes", message: `Catatan untuk kurir maksimal ${LIMITS.notes.max} karakter.` });
   }
 
-  if (errors.length > 0 || phone === null || !province) {
+  if (errors.length > 0 || phone === null || !pickedArea || !pickedArea.providerAreaId) {
     return { ok: false, errors };
   }
   return {
@@ -192,23 +210,28 @@ export function parseShippingAddress(input: unknown): ParseShippingAddressResult
     value: {
       recipientName,
       phone,
-      province,
-      city,
-      district,
-      postalCode,
       addressLine,
       notes: notesValue.length > 0 ? notesValue : null,
+      shippingAreaId: pickedArea.id,
+      providerAreaId: pickedArea.providerAreaId,
+      province: pickedArea.province,
+      city: pickedArea.city,
+      district: pickedArea.district,
+      subdistrict: pickedArea.subdistrict,
+      postalCode,
     },
   };
 }
 
 /** The single-line text written to `orders.shipping_address`, so admin order detail and packing
- * (which show that column as one line) keep working for web orders. */
+ * (which show that column as one line) keep working for web orders. The kelurahan, when an area
+ * has one, comes before the kecamatan; with Biteship it is part of the address line itself. */
 export function formatShippingAddress(address: ShippingAddress): string {
   const line = [
     address.recipientName,
     address.phone,
     address.addressLine,
+    ...(address.subdistrict ? [address.subdistrict] : []),
     address.district,
     address.city,
     `${address.province} ${address.postalCode}`,
@@ -218,20 +241,19 @@ export function formatShippingAddress(address: ShippingAddress): string {
 
 /** Copies the address fields one by one, so an object with extra keys (a `customer_addresses`
  * row, say) never leaks its id, customer id or timestamps into the immutable order snapshot. */
-export function toShippingAddressSnapshot(
-  address: ShippingAddress,
-  shippingAreaId: string | null = null,
-): ShippingAddressSnapshot {
+export function toShippingAddressSnapshot(address: ShippingAddress): ShippingAddressSnapshot {
   return {
-    version: 1,
+    version: 2,
     recipientName: address.recipientName,
     phone: address.phone,
+    addressLine: address.addressLine,
+    notes: address.notes,
+    shippingAreaId: address.shippingAreaId,
+    providerAreaId: address.providerAreaId,
     province: address.province,
     city: address.city,
     district: address.district,
+    subdistrict: address.subdistrict,
     postalCode: address.postalCode,
-    addressLine: address.addressLine,
-    notes: address.notes,
-    shippingAreaId,
   };
 }
