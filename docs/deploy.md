@@ -355,6 +355,41 @@ Rare (Cloudflare publishes changes occasionally), but when it happens:
 Regenerates `deploy/cloudflare-ips.txt` and the two derived Caddy snippets. Commit the result;
 the next deploy syncs it to the server and reloads Caddy automatically.
 
+## Internal cron service (payment expiry sweep, retention)
+
+Added in docs/plans/cart-checkout.md session 12. The `cron` service in
+`deploy/docker-compose.yml` (pinned `curlimages/curl`, script `deploy/cron/cron.sh`, no ports)
+calls the web container directly on the internal network: `POST
+http://web:3000/api/internal/payments/sweep` every 5 minutes and `POST
+http://web:3000/api/internal/retention` once at start and then every 24 hours. Both need
+`Authorization: Bearer <INTERNAL_CRON_SECRET>`; Caddy answers 404 for `/api/internal/*` on the
+public host, and the routes also refuse any request carrying `CF-Connecting-IP` /
+`X-Forwarded-For`. The sweep only acts on checkout orders that already exist, so it is safe with
+`STOREFRONT_CART_ENABLED=false`, and a Postgres advisory lock keeps two runs from overlapping.
+
+The secret lives in two server-only files, **with the same value**: `env/web.env`
+(`INTERNAL_CRON_SECRET=`) and `env/cron.env` (only that one line; never copy web.env's other
+secrets into it). `remote-deploy.sh` creates an empty `env/cron.env` if it is missing (so a deploy
+never fails on it) and recreates the `cron` container on every deploy. Until both files carry the
+secret the cron loop idles and the routes answer 503: nothing is swept or pruned, nothing breaks.
+
+Turning it on (as `deploy`, in `/opt/ammari`):
+
+1. Generate one value without printing it: `openssl rand -hex 32 > /tmp/cron-secret && chmod 600 /tmp/cron-secret`.
+2. Add `INTERNAL_CRON_SECRET=<that value>` to `env/web.env` and write `env/cron.env` with the same
+   line (an editor, never `echo` into a shared terminal log); `chmod 600 env/cron.env`; `rm /tmp/cron-secret`.
+3. `docker compose up -d --force-recreate web cron` (web reads env only at start).
+4. Check: `docker compose logs --tail 20 cron` shows, after ~30 s,
+   `/api/internal/retention -> 200 {...}` and `/api/internal/payments/sweep -> 200 {...}`.
+   `ERROR ... 503` means web.env lacks the secret (or the payment provider is not configured, which
+   is the sweep's 503 too: see web's logs); `401` means the two values differ; `no answer` means web
+   is down; `502` means the payment gateway could not be asked and `500` that an order failed (both
+   retried every 5 minutes; see web's logs). `ALERT: the payment expiry sweep has failed N times in
+   a row` appears after 15 minutes of failures; `order still unpaid and open long after its payment
+   window` in web's logs names an order the sweep cannot end (look at it in admin).
+
+Rotating: change both files, then step 3. Turning it off: empty `env/cron.env` and recreate `cron`.
+
 ## Troubleshooting
 
 Real failures hit during the first dev rollout, and their fixes:

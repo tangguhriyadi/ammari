@@ -67,6 +67,27 @@ services:
     networks:
       - internal
 
+  # The internal cron service (docs/plans/cart-checkout.md §6.3, §11): the payment expiry sweep
+  # every 5 minutes and the retention job daily, as authenticated POSTs straight to web:3000 on the
+  # internal network (./cron/cron.sh explains it). No ports. The script directory is mounted whole
+  # (not a single-file mount, for the same rsync-inode reason as ./caddy above), and
+  # remote-deploy.sh recreates this container on every deploy so a changed script or env/cron.env
+  # takes effect. env/cron.env holds only INTERNAL_CRON_SECRET (never web.env's other secrets);
+  # remote-deploy.sh creates it empty if missing, and an empty secret just idles the loop.
+  cron:
+    image: curlimages/curl:8.22.0
+    restart: unless-stopped
+    logging: *default-logging
+    entrypoint: ["/bin/sh", "/opt/cron/cron.sh"]
+    volumes:
+      - ./cron:/opt/cron:ro
+    env_file:
+      - ./env/cron.env
+    networks:
+      - internal
+    depends_on:
+      - web
+
 networks:
   internal:
     driver: bridge

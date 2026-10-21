@@ -24,7 +24,8 @@ import { parsePaymentStatusBody, verifyMidtransSignature } from "./status";
 //   (negative price allowed for a discount), `customer_details`, `enabled_payments`,
 //   `callbacks.finish`, `expiry { start_time "yyyy-MM-dd HH:mm:ss Z", unit, duration }`. Without
 //   `start_time` the window of an async method (VA, e-wallet) starts only when the buyer picks it,
-//   so it is always sent. BCA VA refuses first_name + last_name over 30 characters.
+//   so it is always sent. `page_expiry { duration, unit }` ends the Snap page itself (default 24 h
+//   for token and page; read 2026-10-21). BCA VA refuses first_name + last_name over 30 characters.
 //   https://docs.midtrans.com/reference/json-objects , https://docs.midtrans.com/docs/snap-advanced-feature
 // - `enabled_payments` codes: `other_qris`, `gopay`, `shopeepay`, `bca_va`, `bni_va`, `bri_va`,
 //   `echannel` (Mandiri bill), `permata_va`. https://docs.midtrans.com/reference/request-body-json-parameter
@@ -32,6 +33,11 @@ import { parsePaymentStatusBody, verifyMidtransSignature } from "./status";
 //   URL for that transaction (D8). https://docs.midtrans.com/docs/https-notification-webhooks
 // - Status: `GET https://api(.sandbox).midtrans.com/v2/{order_id}/status`, same auth.
 //   https://docs.midtrans.com/reference/get-transaction-status
+// - Expire (read 2026-10-21, for the expiry sweep): `POST https://api(.sandbox).midtrans.com/v2/
+//   {order_id}/expire`, same auth, no body. Success is HTTP 200 with `status_code` "407" and
+//   `transaction_status` "expire" plus the usual transaction fields; 412 "Merchant cannot modify
+//   the status of the transaction" when it is no longer pending; 401 for a key that does not
+//   match. https://docs.midtrans.com/reference/expire-transaction
 // The hosts are constants chosen by MIDTRANS_IS_PRODUCTION, never configuration or input (no SSRF).
 
 /** Owner decision 2: exactly these methods, no cards (D16). */
@@ -96,6 +102,51 @@ export function createMidtransPaymentProvider(options: MidtransProviderOptions):
   const fetchFn = () => options.fetch ?? globalThis.fetch;
   const now = options.now ?? (() => new Date());
 
+  /** One call to the Core API (`/v2/{order_id}/<action>`): 5 s, one retry on a network error or a
+   * 5xx, never after a timeout or the caller's abort (the caller has already waited). The body is
+   * parsed as JSON when it is JSON, otherwise null. */
+  async function apiRequest(method: "GET" | "POST", providerOrderId: string, action: "status" | "expire", requestOptions: GetPaymentStatusOptions): Promise<{ response: Response; json: unknown }> {
+    const url = `${hosts.api}/v2/${encodeURIComponent(providerOrderId)}/${action}`;
+    for (let attempt = 1; ; attempt += 1) {
+      let response: Response;
+      try {
+        response = await fetchFn()(url, {
+          method,
+          headers: { authorization, accept: "application/json", ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+          signal: combinedSignal(options.statusTimeoutMs ?? PAYMENT_STATUS_TIMEOUT_MS, requestOptions.signal),
+          cache: "no-store",
+          redirect: "error",
+        });
+      } catch (error) {
+        const aborted = isAbort(error) || requestOptions.signal?.aborted === true;
+        if (!aborted && attempt === 1) {
+          await delay(options.retryDelayMs ?? MIDTRANS_RETRY_DELAY_MS);
+          continue;
+        }
+        throw new PaymentProviderError("unavailable", aborted ? `Midtrans ${action} request timed out` : `Midtrans ${action} request failed`, { cause: error });
+      }
+      if (response.status >= 500 && attempt === 1 && requestOptions.signal?.aborted !== true) {
+        await response.body?.cancel();
+        await delay(options.retryDelayMs ?? MIDTRANS_RETRY_DELAY_MS);
+        continue;
+      }
+      let json: unknown = null;
+      try {
+        json = await response.json();
+      } catch {
+        json = null;
+      }
+      return { response, json };
+    }
+  }
+
+  function reportFor(providerOrderId: string, json: unknown, httpStatus: number, action: "status" | "expire"): PaymentStatusReport {
+    const report = parsePaymentStatusBody(json);
+    if (!report) throw new PaymentProviderError("bad_response", `Midtrans ${action} answered an unexpected shape`, { status: httpStatus });
+    if (report.providerOrderId !== providerOrderId) throw new PaymentProviderError("bad_response", `Midtrans ${action} answered for another order id`, { status: httpStatus });
+    return report;
+  }
+
   return {
     name: "midtrans",
 
@@ -113,6 +164,9 @@ export function createMidtransPaymentProvider(options: MidtransProviderOptions):
         enabled_payments: [...MIDTRANS_ENABLED_PAYMENTS],
         callbacks: { finish: input.finishUrl },
         expiry: { start_time: midtransStartTime(now()), unit: "minute", duration: input.expiryMinutes },
+        // The page itself lives 24 hours by default; it ends with the payment window, so a buyer can
+        // never start a payment on an order the expiry sweep has already ended (session 12).
+        page_expiry: { duration: input.expiryMinutes, unit: "minute" },
       };
 
       // Never retried: a second create with the same order id is refused (406) anyway, and the
@@ -161,52 +215,28 @@ export function createMidtransPaymentProvider(options: MidtransProviderOptions):
     },
 
     async getPaymentStatus(providerOrderId: string, statusOptions: GetPaymentStatusOptions = {}): Promise<PaymentStatusReport | null> {
-      const url = `${hosts.api}/v2/${encodeURIComponent(providerOrderId)}/status`;
-      for (let attempt = 1; ; attempt += 1) {
-        let response: Response;
-        try {
-          response = await fetchFn()(url, {
-            method: "GET",
-            headers: { authorization, accept: "application/json" },
-            signal: combinedSignal(options.statusTimeoutMs ?? PAYMENT_STATUS_TIMEOUT_MS, statusOptions.signal),
-            cache: "no-store",
-            redirect: "error",
-          });
-        } catch (error) {
-          // One retry on a network error, never after a timeout or the caller's abort (the caller
-          // has already waited).
-          const aborted = isAbort(error) || statusOptions.signal?.aborted === true;
-          if (!aborted && attempt === 1) {
-            await delay(options.retryDelayMs ?? MIDTRANS_RETRY_DELAY_MS);
-            continue;
-          }
-          throw new PaymentProviderError("unavailable", aborted ? "Midtrans status request timed out" : "Midtrans status request failed", { cause: error });
-        }
-        if (response.status >= 500 && attempt === 1 && statusOptions.signal?.aborted !== true) {
-          await response.body?.cancel();
-          await delay(options.retryDelayMs ?? MIDTRANS_RETRY_DELAY_MS);
-          continue;
-        }
-
-        let json: unknown = null;
-        try {
-          json = await response.json();
-        } catch {
-          json = null;
-        }
-        const bodyCode = (json as { status_code?: unknown } | null)?.status_code;
-        if (response.status === 404 || bodyCode === "404") return null;
-        if (response.status !== 200) throw new PaymentProviderError("unavailable", `Midtrans status answered ${response.status}`, { status: response.status });
-        // The API answers HTTP 200 with its own status_code; a 401/5xx in the body is a key or
-        // gateway problem, never a transaction state.
-        if (typeof bodyCode === "string" && /^(401|403|5[0-9]{2})$/.test(bodyCode)) {
-          throw new PaymentProviderError("unavailable", `Midtrans status answered status_code ${bodyCode}`, { status: response.status });
-        }
-        const report = parsePaymentStatusBody(json);
-        if (!report) throw new PaymentProviderError("bad_response", "Midtrans status answered an unexpected shape", { status: response.status });
-        if (report.providerOrderId !== providerOrderId) throw new PaymentProviderError("bad_response", "Midtrans status answered for another order id", { status: response.status });
-        return report;
+      const { response, json } = await apiRequest("GET", providerOrderId, "status", statusOptions);
+      const bodyCode = (json as { status_code?: unknown } | null)?.status_code;
+      if (response.status === 404 || bodyCode === "404") return null;
+      if (response.status !== 200) throw new PaymentProviderError("unavailable", `Midtrans status answered ${response.status}`, { status: response.status });
+      // The API answers HTTP 200 with its own status_code; a 401/5xx in the body is a key or
+      // gateway problem, never a transaction state.
+      if (typeof bodyCode === "string" && /^(401|403|5[0-9]{2})$/.test(bodyCode)) {
+        throw new PaymentProviderError("unavailable", `Midtrans status answered status_code ${bodyCode}`, { status: response.status });
       }
+      return reportFor(providerOrderId, json, response.status, "status");
+    },
+
+    async expirePayment(providerOrderId: string, expireOptions: GetPaymentStatusOptions = {}): Promise<PaymentStatusReport | null> {
+      const { response, json } = await apiRequest("POST", providerOrderId, "expire", expireOptions);
+      const bodyCode = (json as { status_code?: unknown } | null)?.status_code;
+      // 404: no transaction for the id (the buyer never picked a method); 412: "Merchant cannot
+      // modify the status of the transaction" (no longer pending: paid, expired or cancelled in
+      // the meantime). Either way the caller re-reads the status.
+      if (response.status === 404 || response.status === 412 || bodyCode === "404" || bodyCode === "412") return null;
+      if (response.status !== 200) throw new PaymentProviderError("unavailable", `Midtrans expire answered ${response.status}`, { status: response.status });
+      if (bodyCode !== "407") throw new PaymentProviderError(typeof bodyCode === "string" && /^(401|403|5[0-9]{2})$/.test(bodyCode) ? "unavailable" : "bad_response", `Midtrans expire answered status_code ${typeof bodyCode === "string" ? bodyCode.slice(0, 8) : typeof bodyCode}`, { status: response.status });
+      return reportFor(providerOrderId, json, response.status, "expire");
     },
 
     verifyNotificationSignature(fields: NotificationSignatureFields): boolean {

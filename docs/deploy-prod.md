@@ -33,7 +33,7 @@ docker compose ps
 cat active-slot-admin active-slot-web          # which slot is live for each app
 
 # Logs for one service
-docker compose logs --tail 100 admin-blue      # or admin-green / web-blue / web-green / caddy / db
+docker compose logs --tail 100 admin-blue      # or admin-green / web-blue / web-green / caddy / db / cron
 
 # Disk / backup status
 df -h /
@@ -321,6 +321,36 @@ deploy-prod/upload-prod-env.sh
 ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 \
   'cd /opt/ammari-prod && docker compose up -d --force-recreate "admin-$(cat active-slot-admin)"'
 ```
+
+### 3.4 The internal cron service's secret (payment expiry sweep, retention)
+
+Added in docs/plans/cart-checkout.md session 12. The `cron` service (pinned `curlimages/curl`,
+`deploy-prod/cron/cron.sh`, `mem_limit: 32m`, no ports) POSTs `http://web:3000/api/internal/payments/sweep`
+every 5 minutes and `/api/internal/retention` daily, through the floating `web` alias that
+`remote-deploy.sh` keeps on the active slot. Caddy answers 404 for `/api/internal/*` on
+`ammari.id`. `remote-deploy.sh` creates an empty `env/cron.env` when it is missing and recreates
+`cron` after every web flip; with an empty secret the loop idles and the routes answer 503, so
+**nothing changes in prod until the secret is set** (do it with the checkout launch, §14 of the
+plan, or earlier: the sweep only acts on existing checkout orders, so it is a no-op with the flag
+off).
+
+```bash
+# On your Mac — one value, in two files, never displayed:
+openssl rand -hex 32 > ~/ammari-secrets/.cron-secret && chmod 600 ~/ammari-secrets/.cron-secret
+$EDITOR ~/ammari-secrets/prod-web.env    # add INTERNAL_CRON_SECRET=<paste the value>
+$EDITOR ~/ammari-secrets/prod-cron.env   # only: INTERNAL_CRON_SECRET=<same value>
+rm ~/ammari-secrets/.cron-secret
+deploy-prod/upload-prod-env.sh           # uploads prod-cron.env too when it exists
+ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 \
+  'cd /opt/ammari-prod && docker compose up -d --force-recreate "web-$(cat active-slot-web)" cron'
+# ~30 s later: both lines answer 200
+ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 \
+  'cd /opt/ammari-prod && docker compose logs --tail 20 cron'
+```
+
+`ERROR ... 503`: web lacks the secret or the payment provider is not configured (see the web
+slot's logs); `401`: the two values differ. A rollback to a release older than session 12 makes
+the cron calls answer 404 (logged as `ERROR` every 5 minutes, harmless) until the next deploy.
 
 ---
 

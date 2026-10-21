@@ -160,6 +160,27 @@ services:
     networks:
       - internal
 
+  # The internal cron service (docs/plans/cart-checkout.md §6.3, §11): the payment expiry sweep
+  # every 5 minutes and the retention job daily, as authenticated POSTs to http://web:3000, the
+  # floating alias remote-deploy.sh's point_web_alias keeps on the active web slot (./cron/cron.sh
+  # explains it). No ports, no depends_on (like caddy: which web slot is live changes at deploy
+  # time). Started and recreated by remote-deploy.sh after the web flip. The script directory is
+  # mounted whole (rsync-inode reason, see caddy above). env/cron.env holds only
+  # INTERNAL_CRON_SECRET; remote-deploy.sh creates it empty if missing, and an empty secret just
+  # idles the loop.
+  cron:
+    image: curlimages/curl:8.22.0
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 32m
+    entrypoint: ["/bin/sh", "/opt/cron/cron.sh"]
+    volumes:
+      - ./cron:/opt/cron:ro
+    env_file:
+      - ./env/cron.env
+    networks:
+      - internal
+
 networks:
   internal:
     driver: bridge

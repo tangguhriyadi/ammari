@@ -78,6 +78,7 @@ describe("createPayment (Snap)", () => {
       enabled_payments: [...MIDTRANS_ENABLED_PAYMENTS],
       callbacks: { finish: "https://ammari.my.id/checkout/finish?order=ORD-202612-0001" },
       expiry: { start_time: "2026-12-01 10:00:00 +0700", unit: "minute", duration: 60 },
+      page_expiry: { duration: 60, unit: "minute" },
     });
     // item_details sum to gross_amount (Midtrans refuses a mismatch).
     expect(body.item_details.reduce((sum: number, line: { price: number; quantity: number }) => sum + line.price * line.quantity, 0)).toBe(573_000);
@@ -213,6 +214,102 @@ describe("getPaymentStatus retries", () => {
   });
 });
 
+describe("expirePayment (expiry sweep)", () => {
+  const ORDER_ID = "LOCAL-ORD-202612-0001-1";
+  const expired = () => statusBody({ status_code: "407", status_message: "Success, transaction has expired", transaction_status: "expire", settlement_time: undefined });
+
+  test("POST /v2/{order_id}/expire on the API host with Basic auth, no retry needed; the answer is a status report", async () => {
+    const fetch = vi.fn(async (..._args: unknown[]) => jsonResponse(200, expired()));
+    const provider = createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: false, notificationUrl: null, fetch: fetch as unknown as typeof globalThis.fetch });
+    const report = await provider.expirePayment(ORDER_ID);
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.sandbox.midtrans.com/v2/LOCAL-ORD-202612-0001-1/expire");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>).authorization).toBe(`Basic ${Buffer.from(`${SERVER_KEY}:`).toString("base64")}`);
+    expect(init.redirect).toBe("error");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(report).toMatchObject({ providerOrderId: ORDER_ID, transactionStatus: "expire", grossAmount: 573_000 });
+
+    const production = vi.fn(async (..._args: unknown[]) => jsonResponse(200, expired()));
+    await createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: true, notificationUrl: null, fetch: production as unknown as typeof globalThis.fetch }).expirePayment(ORDER_ID);
+    expect((production.mock.calls[0] as unknown as [string])[0]).toBe("https://api.midtrans.com/v2/LOCAL-ORD-202612-0001-1/expire");
+  });
+
+  test("404 (no transaction) and 412 (no longer pending), as HTTP or body status_code, are null: the caller re-reads the status", async () => {
+    for (const response of [
+      () => jsonResponse(404, { status_code: "404", status_message: "Transaction doesn't exist." }),
+      () => jsonResponse(200, { status_code: "404", status_message: "Transaction doesn't exist." }),
+      () => jsonResponse(412, { status_code: "412", status_message: "Merchant cannot modify the status of the transaction" }),
+      () => jsonResponse(200, { status_code: "412", status_message: "Merchant cannot modify the status of the transaction" }),
+    ]) {
+      const provider = createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: false, notificationUrl: null, fetch: async () => response() });
+      expect(await provider.expirePayment(ORDER_ID)).toBeNull();
+    }
+  });
+
+  test("a key problem or 5xx is unavailable (a 5xx retried once), an unexpected answer is bad_response", async () => {
+    const cases: [() => Response, PaymentProviderError["reason"]][] = [
+      [() => jsonResponse(200, { status_code: "401", status_message: "Transaction cannot be authorized with the current client/server key." }), "unavailable"],
+      [() => jsonResponse(401, { status_code: "401" }), "unavailable"],
+      [() => jsonResponse(503, { status_code: "503" }), "unavailable"],
+      [() => jsonResponse(200, statusBody()), "bad_response"],
+      [() => jsonResponse(200, { status_code: "407", order_id: ORDER_ID }), "bad_response"],
+      [() => jsonResponse(200, { ...expired(), order_id: "LOCAL-ORD-202612-0002-1" }), "bad_response"],
+    ];
+    for (const [response, reason] of cases) {
+      const fetch = vi.fn(async () => response());
+      const provider = createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: false, notificationUrl: null, fetch, retryDelayMs: 0 });
+      const error = await provider.expirePayment(ORDER_ID).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(PaymentProviderError);
+      expect((error as PaymentProviderError).reason).toBe(reason);
+      if (response().status === 503) expect(fetch).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  test("a 5xx is retried once: the second answer (407) counts; a 412 after a lost first answer is null", async () => {
+    const answers = [jsonResponse(502, {}), jsonResponse(200, expired())];
+    const fetch = vi.fn(async () => answers.shift() ?? jsonResponse(500, {}));
+    const provider = createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: false, notificationUrl: null, fetch, retryDelayMs: 0 });
+    expect(await provider.expirePayment(ORDER_ID)).toMatchObject({ transactionStatus: "expire" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const lost = [jsonResponse(503, {}), jsonResponse(200, { status_code: "412", status_message: "Merchant cannot modify the status of the transaction" })];
+    const again = createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: false, notificationUrl: null, fetch: async () => lost.shift() ?? jsonResponse(500, {}), retryDelayMs: 0 });
+    expect(await again.expirePayment(ORDER_ID)).toBeNull();
+  });
+
+  test("a network error is retried once; a timeout is not", async () => {
+    let calls = 0;
+    const flaky = createMidtransPaymentProvider({
+      serverKey: SERVER_KEY,
+      isProduction: false,
+      notificationUrl: null,
+      retryDelayMs: 0,
+      fetch: async () => {
+        calls += 1;
+        if (calls === 1) throw new TypeError("fetch failed");
+        return jsonResponse(200, expired());
+      },
+    });
+    expect(await flaky.expirePayment(ORDER_ID)).toMatchObject({ transactionStatus: "expire" });
+    expect(calls).toBe(2);
+
+    let slowCalls = 0;
+    const slow = createMidtransPaymentProvider({
+      serverKey: SERVER_KEY,
+      isProduction: false,
+      notificationUrl: null,
+      statusTimeoutMs: 20,
+      fetch: (_url, init) =>
+        new Promise((_, reject) => {
+          slowCalls += 1;
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        }),
+    });
+    await expect(slow.expirePayment(ORDER_ID)).rejects.toMatchObject({ reason: "unavailable", message: "Midtrans expire request timed out" });
+    expect(slowCalls).toBe(1);
+  });
+});
+
 describe("signature", () => {
   test("SHA512(order_id + status_code + gross_amount + server key), constant-time verify", () => {
     const fields = { orderId: "LOCAL-ORD-202612-0001-1", statusCode: "200", grossAmount: "573000.00" };
@@ -262,5 +359,16 @@ describe("fake gateway", () => {
         signatureKey: notification.signature_key!,
       }),
     ).toBe(true);
+  });
+
+  test("expires only a pending transaction it recorded, like Midtrans (otherwise null)", async () => {
+    const provider = createFakePaymentProvider({ baseUrl: "http://localhost:3100" });
+    expect(await provider.expirePayment("E2E-ORD-202612-0010-1")).toBeNull();
+    recordFakeTransaction({ providerOrderId: "E2E-ORD-202612-0010-1", transactionStatus: "pending", grossAmount: 259_000 });
+    expect(await provider.expirePayment("E2E-ORD-202612-0010-1")).toMatchObject({ transactionStatus: "expire", grossAmount: 259_000 });
+    expect(await provider.getPaymentStatus("E2E-ORD-202612-0010-1")).toMatchObject({ transactionStatus: "expire" });
+    expect(await provider.expirePayment("E2E-ORD-202612-0010-1")).toBeNull();
+    recordFakeTransaction({ providerOrderId: "E2E-ORD-202612-0011-1", transactionStatus: "settlement", grossAmount: 259_000 });
+    expect(await provider.expirePayment("E2E-ORD-202612-0011-1")).toBeNull();
   });
 });

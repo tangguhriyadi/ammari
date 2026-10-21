@@ -84,6 +84,14 @@ export function createFakePaymentProvider(options: FakePaymentProviderOptions): 
       const body = fakeStore().get(providerOrderId);
       return body ? parsePaymentStatusBody(body) : null;
     },
+    async expirePayment(providerOrderId: string): Promise<PaymentStatusReport | null> {
+      // Like Midtrans: only a pending transaction can be expired; nothing recorded is a 404.
+      const body = fakeStore().get(providerOrderId);
+      if (!body || body.transaction_status !== "pending") return null;
+      const expired = { ...body, transaction_status: "expire", status_code: FAKE_STATUS_CODES.expire };
+      fakeStore().set(providerOrderId, expired);
+      return parsePaymentStatusBody(expired);
+    },
     verifyNotificationSignature(fields) {
       return verifyMidtransSignature(fields, FAKE_PAYMENT_SERVER_KEY);
     },

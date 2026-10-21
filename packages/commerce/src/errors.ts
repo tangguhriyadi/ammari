@@ -64,3 +64,10 @@ export function mapUniqueViolation(error: unknown, constraintFieldMap: Record<st
   }
   throw error;
 }
+
+/** Safe to log for an unexpected error: its class name and the Postgres code (when it is a
+ * Postgres error), never the message, which for a failed query carries its parameters. */
+export function errorLogFields(error: unknown): { error: string; code: unknown } {
+  const cause = (error instanceof Error ? (error.cause ?? error) : {}) as { code?: unknown };
+  return { error: error instanceof Error ? error.name : typeof error, code: cause.code };
+}

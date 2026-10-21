@@ -110,6 +110,16 @@ REGISTRY="ghcr.io/tangguhriyadi"
 NETWORK="ammari-prod_internal"
 cd "$(dirname "$0")"
 
+# The cron service's env file (docker-compose.yml `cron`, docs/plans/cart-checkout.md §6.3) lives
+# only on this server, like env/web.env. Compose refuses to load the project at all when an
+# env_file is missing, so a deploy that arrives before the owner created it must not break every
+# other service: create it empty (owner-only), which just idles the cron loop until
+# INTERNAL_CRON_SECRET is filled in. Never overwrites an existing file.
+if [ ! -e env/cron.env ]; then
+  echo "==> env/cron.env missing: creating it empty (the cron service idles until INTERNAL_CRON_SECRET is set)"
+  (umask 077 && : > env/cron.env)
+fi
+
 echo "==> Verifying images exist before touching anything (sha=$TARGET_SHA)"
 missing=0
 for image in ammari-admin ammari-web ammari-migrator; do
@@ -494,6 +504,15 @@ process_app() {
 # once; peak is 3 app containers (the other app's single slot + this app's old+new), never 4.
 process_app admin
 process_app web
+
+# The internal cron service (docker-compose.yml `cron`): started or recreated after the web flip,
+# so its first call reaches the new slot through the `web` alias, and so a changed cron/cron.sh
+# or env/cron.env takes effect. A tiny curl container; failing to start it only warns: the deploy
+# itself is done, and the next deploy retries.
+echo "==> (re)starting the cron service"
+if ! docker compose up -d --force-recreate cron; then
+  echo "==> WARNING: the cron service did not start; payment expiry sweep and retention are not running" >&2
+fi
 
 echo "==> Deploy complete: sha=$TARGET_SHA (admin=$(cat active-slot-admin), web=$(cat active-slot-web))"
 

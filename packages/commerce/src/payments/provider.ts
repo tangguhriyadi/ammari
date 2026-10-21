@@ -95,8 +95,8 @@ export interface PaymentStatusReport {
   snapshot: Record<string, string | null>;
 }
 
-/** A status fetch answers a notification (Midtrans waits 15 s and asks for about 5 s) or the
- * finish page. */
+/** A status fetch (or an expire call) answers a notification (Midtrans waits 15 s and asks for
+ * about 5 s), the finish page or the expiry sweep. */
 export const PAYMENT_STATUS_TIMEOUT_MS = 5_000;
 
 export interface GetPaymentStatusOptions {
@@ -110,6 +110,13 @@ export interface PaymentProvider {
    * has no transaction for it yet (the buyer never picked a method). Throws PaymentProviderError
    * when the gateway cannot be asked. */
   getPaymentStatus(providerOrderId: string, options?: GetPaymentStatusOptions): Promise<PaymentStatusReport | null>;
+  /** Asks the gateway to end a still pending attempt (Midtrans `POST /v2/{order_id}/expire`), for
+   * the expiry sweep only (./sweep.ts). Returns the gateway's answer as a status report, or null
+   * when it refused because there is nothing to expire (no transaction yet, or the transaction is
+   * no longer pending): the caller then fetches the status again. Throws PaymentProviderError when
+   * the gateway cannot be asked. Never decides anything itself: the report goes through the state
+   * machine like any fetched status. */
+  expirePayment(providerOrderId: string, options?: GetPaymentStatusOptions): Promise<PaymentStatusReport | null>;
   /** Constant-time check of a notification's `signature_key` with this provider's server key. */
   verifyNotificationSignature(fields: NotificationSignatureFields): boolean;
 }

@@ -25,6 +25,16 @@ set -euo pipefail
 REGISTRY="ghcr.io/tangguhriyadi"
 cd "$(dirname "$0")"
 
+# The cron service's env file (docker-compose.yml `cron`, docs/plans/cart-checkout.md §6.3) lives
+# only on this server, like env/web.env. Compose refuses to load the project at all when an
+# env_file is missing, so a deploy that arrives before the owner created it must not break every
+# other service: create it empty (owner-only), which just idles the cron loop until
+# INTERNAL_CRON_SECRET is filled in. Never overwrites an existing file.
+if [ ! -e env/cron.env ]; then
+  echo "==> env/cron.env missing: creating it empty (the cron service idles until INTERNAL_CRON_SECRET is set)"
+  (umask 077 && : > env/cron.env)
+fi
+
 echo "==> Verifying images exist before touching anything (admin=$ADMIN_IMAGE_TAG web=$WEB_IMAGE_TAG migrator=$MIGRATOR_IMAGE_TAG)"
 missing=0
 for ref in \
@@ -61,6 +71,10 @@ echo "==> Updating image tags"
 
 echo "==> docker compose up -d"
 docker compose up -d
+# Recreated every deploy (a tiny curl container): picks up a changed cron/cron.sh or env/cron.env,
+# which a plain `up -d` would not notice for a bind-mounted script.
+# --no-deps: never restart web a second time (cron depends_on web).
+docker compose up -d --no-deps --force-recreate cron
 
 # Picks up a changed Caddyfile/cert volume without restarting the caddy container — `up -d`
 # alone won't notice a bind-mounted file changed on disk (only an image/env/command diff

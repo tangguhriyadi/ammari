@@ -1,6 +1,6 @@
 import "server-only";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
-import { orderItems, orders, payments, products, productVariants, type OrderAttentionFlag, type OrderPaymentStatus, type PaymentStatus } from "@ammari/db/schema";
+import { orderItems, orders, payments, products, productVariants, stockReservations, type OrderAttentionFlag, type OrderPaymentStatus, type PaymentStatus } from "@ammari/db/schema";
 import type { Database, Tx } from "../db";
 import { FieldError } from "../errors";
 import { transitionOrderStatus } from "../orders/lifecycle";
@@ -338,5 +338,61 @@ export async function applyPaymentStatus(db: Database, report: PaymentStatusRepo
         throw new Error(`unhandled transaction status: ${String(unhandled)}`);
       }
     }
+  });
+}
+
+/** The expiry sweep's last step (./sweep.ts, docs/plans/cart-checkout.md §6.3, owner decision
+ * 2026-10-21): an unpaid order whose stock hold has run out and for which the gateway has no live
+ * transaction (every open attempt was answered "no transaction" (404) or as ended by a status fetch
+ * in the same sweep run) never gets an expiry notification, so it is expired here. Under the order
+ * lock it re-checks everything: still awaiting_payment + pending, the payment window and the stock
+ * hold over, no
+ * attempt recorded as paid, and no open attempt the caller did not confirm (a new attempt or one the
+ * gateway still reports as pending keeps the order open). Then the open attempts become `expired`
+ * and the order is cancelled through transitionOrderStatus (holds released, voucher restored) with
+ * `payment_status = 'expired'` and `cancel_reason = 'payment_expired'`, exactly like a gateway
+ * expiry of the latest attempt. A payment that still arrives later is `paid_after_cancel`. */
+export async function expireOrderWithoutLiveTransaction(db: Database, orderId: string, confirmedEndedAttempts: readonly string[]): Promise<ApplyResult | null> {
+  return db.transaction(async (tx) => {
+    const [order] = await tx
+      .select({ id: orders.id, orderNo: orders.orderNo, status: orders.status, paymentStatus: orders.paymentStatus, windowOver: sql<boolean>`${orders.paymentExpiresAt} <= now()` })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .for("update")
+      .limit(1);
+    if (!order) return null;
+    const result = (outcome: ApplyOutcome, productSlugs: string[] = []): ApplyResult => ({ outcome, orderNo: order.orderNo, productSlugs });
+    if (order.status !== "awaiting_payment" || order.paymentStatus !== "pending" || !order.windowOver) return result("unchanged");
+    // The stock hold must be over too (the sweep checked it before asking the gateway; holds only
+    // ever lapse or end, but nothing here relies on that).
+    const [liveHold] = await tx
+      .select({ id: stockReservations.id })
+      .from(stockReservations)
+      .where(and(eq(stockReservations.orderId, order.id), eq(stockReservations.status, "active"), sql`${stockReservations.expiresAt} > now()`))
+      .limit(1);
+    if (liveHold) return result("unchanged");
+
+    const attempts = await tx
+      .select({ id: payments.id, providerOrderId: payments.providerOrderId, status: payments.status })
+      .from(payments)
+      .where(eq(payments.orderId, order.id))
+      .orderBy(payments.attempt)
+      .for("update");
+    if (attempts.some((attempt) => PAID_LIKE.includes(attempt.status))) return result("unchanged");
+    const open = attempts.filter((attempt) => OPEN.includes(attempt.status));
+    if (open.some((attempt) => !confirmedEndedAttempts.includes(attempt.providerOrderId))) return result("unchanged");
+
+    if (open.length > 0) {
+      await tx
+        .update(payments)
+        .set({ status: "expired", updatedAt: sql`now()` })
+        .where(inArray(payments.id, open.map((attempt) => attempt.id)));
+    }
+    await transitionOrderStatus(order.id, "cancelled", null, tx);
+    await tx
+      .update(orders)
+      .set({ paymentStatus: "expired", cancelReason: "payment_expired", updatedAt: sql`now()` })
+      .where(and(eq(orders.id, order.id), eq(orders.status, "cancelled")));
+    return result("expired", await productSlugsOf(tx, order.id));
   });
 }

@@ -34,7 +34,7 @@ export {
   type PaymentRuntime,
   type PaymentRuntimeResult,
 } from "./config";
-export { applyPaymentStatus, type ApplyOutcome, type ApplyResult } from "./apply-status";
+export { applyPaymentStatus, expireOrderWithoutLiveTransaction, type ApplyOutcome, type ApplyResult } from "./apply-status";
 export {
   PAYMENT_NOTIFICATION_MAX_BYTES,
   handlePaymentNotification,
@@ -44,3 +44,4 @@ export {
 } from "./notification";
 export { MAX_PAYMENT_ATTEMPTS, PAYMENT_PAGE_TIMEOUT_MS, reopenPaymentPage, type ReopenPaymentPageResult } from "./attempts";
 export { syncLatestPaymentStatus, type SyncPaymentResult } from "./sync";
+export { SWEEP_BATCH_SIZE, SWEEP_TIME_BUDGET_MS, sweepExpiredPayments, type SweepOptions, type SweepOrderResult, type SweepSummary } from "./sweep";

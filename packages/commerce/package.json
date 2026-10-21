@@ -12,6 +12,7 @@
     "./db": "./src/db.ts",
     "./errors": "./src/errors.ts",
     "./jakarta-month": "./src/jakarta-month.ts",
+    "./maintenance": "./src/maintenance/index.ts",
     "./moving-average": "./src/inventory/moving-average.ts",
     "./order-status": "./src/orders/status.ts",
     "./orders": "./src/orders/index.ts",

@@ -19,6 +19,9 @@ blob-report/
 # env files
 .env*
 !.env.example
+# the servers' real env files (deploy/env/*.env, deploy-prod/env/*.env); only *.env.example is tracked
+deploy/env/*.env
+deploy-prod/env/*.env
 
 # misc
 .DS_Store
