@@ -6,7 +6,7 @@ import { valueDeltaForConsumption } from "../inventory/moving-average";
 import { lockVariantForUpdate } from "../stock/lock";
 import { currentBalanceForSkuLocked } from "../stock/ledger";
 import { consumeReservationsForOrder, releaseReservationsForOrder } from "../stock/reservations";
-import { ActionError, FieldError, mapUniqueViolation } from "../errors";
+import { ActionError, FieldError, isPostgresConstraintViolation, mapUniqueViolation } from "../errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "../db";
 import { generateOrderNumber } from "./order-number";
 import { canTransitionOrderStatus, ORDER_STATUS_TIMESTAMP_COLUMN, STOCK_NOT_YET_DECREMENTED_STATUSES } from "./status";
@@ -209,6 +209,12 @@ export async function createOrder(input: CreateOrderInput, actorStaffUserId: str
 
 // ---------- Item edit lock (approved plan, rule 4) ----------
 
+export const CHECKOUT_ORDER_LOCKED_MESSAGE = "Item dan ongkir pesanan dari checkout website tidak bisa diubah.";
+
+/** The CHECKs a totals update of a quoted order can trip: the quote's own balance (migration 0031)
+ * and the order's total balance. */
+const QUOTE_LOCK_CONSTRAINTS = ["orders_shipping_quote_amounts_check", "orders_shipping_quote_all_or_none_check", "orders_total_amount_balance_check"];
+
 export interface UpdateOrderItemInput {
   sku: string;
   qty: number;
@@ -230,7 +236,7 @@ export async function updateOrderItems(
 ) {
   validateOrderItemsInput(items);
   return db.transaction(async (tx) => {
-    const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for("update").limit(1);
     if (!order) throw new ActionError("Pesanan tidak ditemukan.");
     if (order.status !== "awaiting_payment") {
       throw new ActionError("Item pesanan hanya bisa diubah selama status masih menunggu bayar. Batalkan dan buat pesanan baru.");
@@ -238,8 +244,11 @@ export async function updateOrderItems(
     // A checkout order (payment_status set, docs/plans/cart-checkout.md §3) was priced, paid for
     // and stock-held as placed; its lines also carry stock_reservations (RESTRICT FK), so the
     // delete below would fail with a raw constraint error. Never editable here (plan §7).
-    if (order.paymentStatus !== null) {
-      throw new ActionError("Item pesanan dari checkout website tidak bisa diubah.");
+    // Same for any order carrying a locked shipping quote (plan §4.5.4: its ongkir, weight and
+    // totals never change once placed). Today only checkout orders have one; checked on its own so
+    // the lock holds whatever writes a quote later.
+    if (order.paymentStatus !== null || order.shippingCostAmount !== null) {
+      throw new ActionError(CHECKOUT_ORDER_LOCKED_MESSAGE);
     }
 
     await tx.delete(orderItems).where(eq(orderItems.orderId, orderId));
@@ -252,7 +261,15 @@ export async function updateOrderItems(
     const totalAmount = subtotalAmount + order.shippingAmount - order.discountAmount;
     if (totalAmount < 0) throw new ActionError("Total pesanan tidak boleh negatif. Periksa diskon.");
 
-    const [updated] = await tx.update(orders).set({ subtotalAmount, totalAmount }).where(eq(orders.id, orderId)).returning();
+    let updated: typeof orders.$inferSelect | undefined;
+    try {
+      [updated] = await tx.update(orders).set({ subtotalAmount, totalAmount }).where(eq(orders.id, orderId)).returning();
+    } catch (error) {
+      // Defense in depth: a quote written between the read above and this update would trip the
+      // quote CHECK; show the same Indonesian refusal instead of a raw constraint error.
+      if (isPostgresConstraintViolation(error, "23514", QUOTE_LOCK_CONSTRAINTS)) throw new ActionError(CHECKOUT_ORDER_LOCKED_MESSAGE);
+      throw error;
+    }
     if (!updated) throw new Error("failed to update order");
 
     await writeAuditLog(tx, {

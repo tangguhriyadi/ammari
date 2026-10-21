@@ -18,10 +18,12 @@ import { CART_MAX_PIECES, CART_MAX_QTY_PER_LINE, type CartLineStatus, type CartR
 // transaction back, so it never leaves an empty cart behind. A login merge runs in its own
 // transaction before the write, so a refused write never undoes the merge.
 //
-// Lock order, for every caller (placeOrder in session 7 included): guest cart row, then
-// customer cart row, then cart_items / product variants. Never lock a variant and then a cart.
+// Lock order, for every caller: guest cart row, then customer cart row, then cart_items / product
+// variants. Never lock a variant and then a cart. placeOrder (../checkout/place-order.ts, session
+// 9) follows it: the cart row, then a per-contact-email advisory lock, the customer row, the
+// order-number advisory lock, the variants (sorted by SKU) and the voucher row.
 //
-// Stock checks here are advisory (a cart holds nothing; placeOrder reserves, session 7): they
+// Stock checks here are advisory (a cart holds nothing; placeOrder reserves, session 9): they
 // use the shared sellable rule (physical minus active, unexpired holds) and never return the
 // number itself (plan §4.2). Prices are always `products.base_price`, read at render; nothing
 // here selects a cost or value column.

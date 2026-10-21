@@ -39,6 +39,13 @@ export function isPostgresErrorCode(error: unknown, code: string): boolean {
   return isPostgresError(cause) && cause.code === code;
 }
 
+/** `code` raised by one of `constraintNames` (checked on `error.cause` first, like
+ * isPostgresErrorCode). */
+export function isPostgresConstraintViolation(error: unknown, code: string, constraintNames: readonly string[]): boolean {
+  const cause = error instanceof Error && error.cause !== undefined ? error.cause : error;
+  return isPostgresError(cause) && cause.code === code && !!cause.constraint_name && constraintNames.includes(cause.constraint_name);
+}
+
 /** Maps a Postgres unique-violation (23505) on a known constraint name to a friendly FieldError.
  * Never pre-checks "does this already exist" — the unique constraint is the source of truth
  * (CLAUDE.md); this only runs AFTER an insert/update has already failed. Rethrows anything it

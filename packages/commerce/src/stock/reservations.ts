@@ -103,7 +103,7 @@ export async function reserveStockForOrder(
 /** At payment (awaiting_payment -> to_ship, inside transitionOrderStatus): every still-active hold
  * of the order becomes `consumed`, expired or not, since the `sale` movement written in the same
  * transaction now carries those pieces. Released holds stay released (a payment after expiry is
- * the payment state machine's case, session 9). Returns the rows it changed, so a replay is an
+ * the payment state machine's case, session 11). Returns the rows it changed, so a replay is an
  * empty no-op. */
 export async function consumeReservationsForOrder(tx: Tx, orderId: string): Promise<StockReservation[]> {
   return tx

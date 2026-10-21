@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase, type TestTx } from "@ammari/db/test-utils";
-import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, insertVariantForProduct } from "@ammari/db/test-fixtures";
+import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, insertVariantForProduct, shippingQuoteValues } from "@ammari/db/test-fixtures";
 import {
   auditLog,
   fabricColors,
@@ -409,9 +409,23 @@ describe("updateOrderItems on a checkout order", () => {
 
       const error = await caught(tx, (sp) => updateOrderItems(order.id, [{ sku: variant.sku, qty: 3, unitPrice: 1 }], staff.id, sp));
       expect(error).toBeInstanceOf(ActionError);
-      expect((error as ActionError).message).toBe("Item pesanan dari checkout website tidak bisa diubah.");
+      expect((error as ActionError).message).toBe("Item dan ongkir pesanan dari checkout website tidak bisa diubah.");
       expect((await tx.select().from(orderItems).where(eq(orderItems.orderId, order.id)))[0]?.qty).toBe(1);
       expect((await reservationsOf(tx, order.id))[0]?.status).toBe("active");
+    });
+  });
+
+  test("any order carrying a locked shipping quote is refused the same way, not with a raw CHECK error", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      // A staff-entered web order (no payment_status) that somehow carries a quote.
+      const order = await insertOrder(tx, { channelId: "web", status: "awaiting_payment", ...shippingQuoteValues(35_000) });
+      await tx.insert(orderItems).values({ orderId: order.id, sku: variant.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      const error = await caught(tx, (sp) => updateOrderItems(order.id, [{ sku: variant.sku, qty: 2, unitPrice: 259_000 }], staff.id, sp));
+      expect(error).toBeInstanceOf(ActionError);
+      expect((error as ActionError).message).toBe("Item dan ongkir pesanan dari checkout website tidak bisa diubah.");
     });
   });
 });
