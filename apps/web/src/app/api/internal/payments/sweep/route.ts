@@ -1,6 +1,7 @@
 import { withExclusiveRun } from "@ammari/commerce/maintenance";
-import { sweepExpiredPayments } from "@ammari/commerce/payments";
+import { sweepExpiredPayments, type SweepOrderResult } from "@ammari/commerce/payments";
 import { defaultDb } from "@/lib/db";
+import { scheduleOrderEmails } from "@/lib/emails/order-emails";
 import { errorLogFields } from "@ammari/commerce/errors";
 import { authorizeCronRequest, cronJson } from "@/lib/internal/cron-auth";
 import { getPaymentProvider } from "@/lib/payments/runtime";
@@ -18,6 +19,9 @@ import { revalidateProductPages } from "@/lib/payments/revalidate";
 
 export const dynamic = "force-dynamic";
 
+/** Sweep results that never change an order, so no email can be due because of them. */
+const SWEEP_RESULTS_WITHOUT_CHANGE = new Set<SweepOrderResult>(["within_hold", "gateway_unavailable", "gateway_pending", "deferred", "unchanged"]);
+
 export async function POST(request: Request): Promise<Response> {
   const auth = authorizeCronRequest(request, "payment_sweep");
   if (!auth.ok) return auth.response;
@@ -33,6 +37,13 @@ export async function POST(request: Request): Promise<Response> {
     }
     const summary = run.value;
     revalidateProductPages(summary.productSlugs, { orderNo: null });
+    // The cancelled (or late paid) emails of the orders this run finalized, after the answer and
+    // outside the sweep's transactions (plan §8; session 12 note). The email pass that the cron
+    // calls next is the backstop.
+    scheduleOrderEmails(
+      summary.results.filter(({ result }) => !SWEEP_RESULTS_WITHOUT_CHANGE.has(result)).map(({ orderNo }) => ({ orderNo })),
+      "payment sweep",
+    );
     const counts: Record<string, number> = {};
     for (const { result } of summary.results) counts[result] = (counts[result] ?? 0) + 1;
     const body = { candidates: summary.candidates, finalized: summary.finalized, truncated: summary.truncated, stuck: summary.stuck, results: counts };

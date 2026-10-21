@@ -21,6 +21,8 @@ vi.mock("@/lib/db", () => ({
 const revalidatePath = vi.fn();
 const revalidateTag = vi.fn();
 vi.mock("next/cache", () => ({ revalidatePath, revalidateTag, unstable_cache: <T,>(fn: T) => fn }));
+// The order email hooks have their own tests (lib/emails/order-emails.test.ts).
+vi.mock("@/lib/emails/order-emails", () => ({ scheduleOrderEmails: vi.fn() }));
 
 const sweep = await import("./route");
 const retention = await import("../../retention/route");

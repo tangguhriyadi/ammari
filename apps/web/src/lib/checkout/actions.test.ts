@@ -63,6 +63,9 @@ vi.mock("@/lib/auth/customer-session", () => ({
     session ? { ...session, name: "Pelanggan", phone: null, pdpConsentAt: new Date(), promoConsentAt: null } : null,
 }));
 vi.mock("@/lib/db", async () => ({ defaultDb: (await import("@ammari/db/test-utils")).testDb }));
+// The `created` email is scheduled after the response (lib/emails/order-emails.ts, tested there).
+const scheduleOrderEmails = vi.fn();
+vi.mock("@/lib/emails/order-emails", () => ({ scheduleOrderEmails }));
 vi.mock("@ammari/commerce/checkout", async (importOriginal) => {
   const original = await importOriginal<typeof import("@ammari/commerce/checkout")>();
   return {
@@ -141,6 +144,7 @@ beforeEach(async () => {
   placeOrderThrows = false;
   revalidatePath.mockClear();
   revalidateTag.mockClear();
+  scheduleOrderEmails.mockClear();
   Object.assign(process.env, ENV);
   clientIp = `198.51.100.${Math.floor(Math.random() * 250) + 1}`;
   usedIps.add(clientIp);
@@ -212,6 +216,7 @@ describe("placeOrderAction", () => {
     expect(revalidateTag).toHaveBeenCalledWith("storefront:homepage", "max");
     // The guest's cart cookie stays (the cart row is kept, now empty).
     expect(deletedCookies.has("ammari_cart")).toBe(false);
+    expect(scheduleOrderEmails).toHaveBeenCalledWith([{ orderId: order!.id }], "checkout");
   });
 
   test("a refusal returns placeOrder's message and field errors; nothing is created or revalidated", async () => {
@@ -225,6 +230,7 @@ describe("placeOrderAction", () => {
     expect(await orderFor(body.checkoutAttemptId)).toBeUndefined();
     expect(revalidatePath).not.toHaveBeenCalled();
     expect(setCookies.has("ammari_checkout_order")).toBe(false);
+    expect(scheduleOrderEmails).not.toHaveBeenCalled();
   });
 
   test("the buyer's ongkir share is part of the total the action checks", async () => {

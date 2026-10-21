@@ -10,6 +10,7 @@
     "./checkout": "./src/checkout/index.ts",
     "./checkout-messages": "./src/checkout/messages.ts",
     "./db": "./src/db.ts",
+    "./emails": "./src/emails/index.ts",
     "./errors": "./src/errors.ts",
     "./jakarta-month": "./src/jakarta-month.ts",
     "./maintenance": "./src/maintenance/index.ts",

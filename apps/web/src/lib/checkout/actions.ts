@@ -11,6 +11,7 @@ import { clearGuestCartCookie, readCartIdentity } from "@/lib/cart/identity";
 import { recordClaimAttemptAndCount } from "@/lib/claim/throttle";
 import { HOMEPAGE_CACHE_TAG } from "@/lib/content/homepage-data";
 import { defaultDb } from "@/lib/db";
+import { scheduleOrderEmails } from "@/lib/emails/order-emails";
 import { getPaymentRuntime } from "@/lib/payments/runtime";
 import { getShippingRuntime } from "@/lib/shipping/runtime";
 import { siteOrigin } from "@/lib/site-origin";
@@ -160,6 +161,9 @@ async function runPlaceOrder(input: PlaceOrderActionInput): Promise<PlaceOrderAc
   } catch (error) {
     console.error("[checkout] order placed but product pages were not revalidated", { orderNo: result.orderNo, ...databaseErrorLogFields(error) });
   }
+
+  // The `created` email (plan §8), after the response; a repeat submit sends nothing new.
+  scheduleOrderEmails([{ orderId: result.orderId }], "checkout");
 
   return { ok: true, orderNo: result.orderNo, redirectUrl: result.redirectUrl };
 }

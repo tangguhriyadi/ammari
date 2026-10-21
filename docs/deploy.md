@@ -355,13 +355,15 @@ Rare (Cloudflare publishes changes occasionally), but when it happens:
 Regenerates `deploy/cloudflare-ips.txt` and the two derived Caddy snippets. Commit the result;
 the next deploy syncs it to the server and reloads Caddy automatically.
 
-## Internal cron service (payment expiry sweep, retention)
+## Internal cron service (payment expiry sweep, order emails, retention)
 
 Added in docs/plans/cart-checkout.md session 12. The `cron` service in
 `deploy/docker-compose.yml` (pinned `curlimages/curl`, script `deploy/cron/cron.sh`, no ports)
 calls the web container directly on the internal network: `POST
-http://web:3000/api/internal/payments/sweep` every 5 minutes and `POST
-http://web:3000/api/internal/retention` once at start and then every 24 hours. Both need
+http://web:3000/api/internal/payments/sweep` every 5 minutes, then `POST
+http://web:3000/api/internal/emails/dispatch` (order emails: retries and the "Pesanan dikirim" email
+after staff's "Tandai dikirim"; session 13), and `POST http://web:3000/api/internal/retention` once at
+start and then every 24 hours. All need
 `Authorization: Bearer <INTERNAL_CRON_SECRET>`; Caddy answers 404 for `/api/internal/*` on the
 public host, and the routes also refuse any request carrying `CF-Connecting-IP` /
 `X-Forwarded-For`. The sweep only acts on checkout orders that already exist, so it is safe with
@@ -387,6 +389,12 @@ Turning it on (as `deploy`, in `/opt/ammari`):
    retried every 5 minutes; see web's logs). `ALERT: the payment expiry sweep has failed N times in
    a row` appears after 15 minutes of failures; `order still unpaid and open long after its payment
    window` in web's logs names an order the sweep cannot end (look at it in admin).
+   `/api/internal/emails/dispatch -> 503 {"problems":[...]}` names the missing email variables
+   (`RESEND_API_KEY`, `EMAIL_FROM`, `BETTER_AUTH_URL`, `CUSTOMER_BETTER_AUTH_SECRET`); `500` means a
+   send failed (retried after 10 minutes for up to 23 hours) or was refused for good (see
+   `order_notifications.error`); `ALERT: the order email pass has failed N times in a row` after 15
+   minutes. A missing `store_settings.support_email` only logs a warning in web (owner emails wait
+   until it is set in admin).
 
 Rotating: change both files, then step 3. Turning it off: empty `env/cron.env` and recreate `cron`.
 

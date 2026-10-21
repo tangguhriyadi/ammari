@@ -16,7 +16,7 @@ import { errorLogFields } from "../errors";
 const CRON_LOCK_NAMESPACE = 72_810_312;
 const CRON_LOCK_KEY = 1;
 
-export const CRON_JOBS = ["paymentSweep", "retention"] as const;
+export const CRON_JOBS = ["paymentSweep", "retention", "orderEmails"] as const;
 export type CronJob = (typeof CRON_JOBS)[number];
 
 export type ExclusiveRun<T> = { ran: true; value: T } | { ran: false };

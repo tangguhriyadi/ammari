@@ -4,8 +4,10 @@
 # curl, nothing else). Kept byte-identical in deploy/cron/ (dev) and deploy-prod/cron/ (prod):
 # each directory is synced to its own server.
 #
-# Every 5 minutes: POST /api/internal/payments/sweep (the payment expiry sweep). Once when the
-# container starts and then every 24 hours: POST /api/internal/retention. Both straight at the web
+# Every 5 minutes: POST /api/internal/payments/sweep (the payment expiry sweep), then POST
+# /api/internal/emails/dispatch (order emails: retries and staff-made changes such as "Tandai
+# dikirim"). Once when the container starts and then every 24 hours: POST /api/internal/retention.
+# All straight at the web
 # container over the internal Docker network (`web` is the dev service name and prod's floating
 # alias for the active slot, deploy-prod/remote-deploy.sh point_web_alias), never through Caddy,
 # which answers 404 for /api/internal/* on the public hosts.
@@ -26,6 +28,11 @@ SWEEP_EVERY=300
 RETENTION_EVERY=86400
 # Below SWEEP_EVERY; the sweep itself stops starting new orders after 4 minutes.
 SWEEP_MAX_TIME=280
+# The email pass stops starting new orders after 150 seconds; each send times out after 10.
+EMAILS_MAX_TIME=240
+# This many failed email passes in a row logs an ALERT line on every further failure (emails not
+# configured, or the email provider down for 15 minutes).
+EMAILS_ALERT_AFTER=3
 RETENTION_MAX_TIME=600
 # A failed retention run is retried after an hour, not a day.
 RETENTION_RETRY_AFTER=3600
@@ -46,7 +53,7 @@ pause() {
 # Whitespace or a CR from the env file would never match the web side (which trims): drop it.
 INTERNAL_CRON_SECRET="$(printf '%s' "${INTERNAL_CRON_SECRET:-}" | tr -d ' \t\r\n')"
 if [ -z "$INTERNAL_CRON_SECRET" ]; then
-  log "INTERNAL_CRON_SECRET is not set in env/cron.env; idle (no sweep, no retention)"
+  log "INTERNAL_CRON_SECRET is not set in env/cron.env; idle (no sweep, no emails, no retention)"
   while :; do pause 3600; done
 fi
 
@@ -68,7 +75,7 @@ call() {
       return 0
       ;;
     401) log "ERROR $1 -> 401: INTERNAL_CRON_SECRET differs between env/cron.env and env/web.env" ;;
-    503) log "ERROR $1 -> 503 $answer (web.env lacks INTERNAL_CRON_SECRET, or the payment provider is not configured: see web's logs)" ;;
+    503) log "ERROR $1 -> 503 $answer (web.env lacks INTERNAL_CRON_SECRET, or the payment provider or email sending is not configured: see web's logs)" ;;
     *) log "ERROR $1 -> ${status:-no answer} (curl exit $rc) $answer" ;;
   esac
   return 1
@@ -78,6 +85,7 @@ call() {
 pause 30
 last_retention=0
 sweep_failures=0
+email_failures=0
 while :; do
   now="$(date +%s)"
   if [ $((now - last_retention)) -ge "$RETENTION_EVERY" ]; then
@@ -93,6 +101,16 @@ while :; do
     sweep_failures=$((sweep_failures + 1))
     if [ "$sweep_failures" -ge "$SWEEP_ALERT_AFTER" ]; then
       log "ALERT: the payment expiry sweep has failed $sweep_failures times in a row; unpaid orders are not being expired"
+    fi
+  fi
+  # Its failures (provider down, an email refused or given up, not configured) are ERROR lines from
+  # call; the next run retries.
+  if call /api/internal/emails/dispatch "$EMAILS_MAX_TIME"; then
+    email_failures=0
+  else
+    email_failures=$((email_failures + 1))
+    if [ "$email_failures" -ge "$EMAILS_ALERT_AFTER" ]; then
+      log "ALERT: the order email pass has failed $email_failures times in a row; order emails are not going out"
     fi
   fi
   pause "$SWEEP_EVERY"

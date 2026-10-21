@@ -326,7 +326,8 @@ ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 \
 
 Added in docs/plans/cart-checkout.md session 12. The `cron` service (pinned `curlimages/curl`,
 `deploy-prod/cron/cron.sh`, `mem_limit: 32m`, no ports) POSTs `http://web:3000/api/internal/payments/sweep`
-every 5 minutes and `/api/internal/retention` daily, through the floating `web` alias that
+every 5 minutes, then `/api/internal/emails/dispatch` (order emails, session 13; see docs/deploy.md
+"Internal cron service" for its log lines), and `/api/internal/retention` daily, through the floating `web` alias that
 `remote-deploy.sh` keeps on the active slot. Caddy answers 404 for `/api/internal/*` on
 `ammari.id`. `remote-deploy.sh` creates an empty `env/cron.env` when it is missing and recreates
 `cron` after every web flip; with an empty secret the loop idles and the routes answer 503, so

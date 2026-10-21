@@ -2,6 +2,7 @@ import { PAYMENT_NOTIFICATION_MAX_BYTES, handlePaymentNotification, logRefusedNo
 import { getCartClientIp } from "@/lib/cart/ip";
 import { recordClaimAttemptAndCount } from "@/lib/claim/throttle";
 import { defaultDb } from "@/lib/db";
+import { scheduleOrderEmails } from "@/lib/emails/order-emails";
 import { getPaymentProvider } from "@/lib/payments/runtime";
 import { revalidateProductPages } from "@/lib/payments/revalidate";
 
@@ -85,6 +86,8 @@ export async function POST(request: Request): Promise<Response> {
       },
     });
     revalidateProductPages(handled.productSlugs, { orderNo: handled.orderNo });
+    // The paid / owner / cancelled emails (plan §8) after the answer, never failing it.
+    if (handled.orderNo) scheduleOrderEmails([{ orderNo: handled.orderNo }], "payment notification");
     return answer(handled.httpStatus, handled.httpStatus === 200 ? "ok" : "refused");
   } catch (error) {
     // Only when even the log row could not be written (database down): 503 so it is retried.

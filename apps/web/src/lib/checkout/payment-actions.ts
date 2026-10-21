@@ -8,6 +8,7 @@ import { isCartEnabled } from "@/lib/cart-flag";
 import { getCartClientIp } from "@/lib/cart/ip";
 import { recordClaimAttemptAndCount } from "@/lib/claim/throttle";
 import { defaultDb } from "@/lib/db";
+import { scheduleOrderEmails } from "@/lib/emails/order-emails";
 import { getPaymentRuntime } from "@/lib/payments/runtime";
 import { revalidateProductPages } from "@/lib/payments/revalidate";
 import { siteOrigin } from "@/lib/site-origin";
@@ -67,7 +68,9 @@ export async function checkPaymentStatusAction(orderNo: string): Promise<{ chang
     });
     if (!result.checked) return { changed: false };
     revalidateProductPages(result.applied.productSlugs, { orderNo: result.applied.orderNo });
-    return { changed: result.applied.outcome !== "unchanged" };
+    const changed = result.applied.outcome !== "unchanged";
+    if (changed) scheduleOrderEmails([{ orderNo: result.applied.orderNo }], "finish page status check");
+    return { changed };
   } catch (error) {
     // The page keeps showing our own state; the notification or the sweep finalizes it.
     console.error("[checkout] finish page status check failed", databaseErrorLogFields(error));

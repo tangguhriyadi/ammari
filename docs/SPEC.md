@@ -832,13 +832,15 @@ without a provider configured — throws loudly rather than silently dropping th
 `ResendEmailSender` (calls Resend's REST API directly via `fetch`, no SDK dependency). Both
 apps select `ResendEmailSender` the same way: `RESEND_API_KEY` + `EMAIL_FROM` set.
 
-Transactional order emails (Dec 2026, plan §8) use the same sender, in Indonesian, plain text
-first: `created` (order number, lines, total, "Lanjutkan pembayaran", payment deadline in WIB,
+Transactional order emails (Dec 2026, plan §8, built in session 13 as `@ammari/commerce/emails`)
+use the same sender (with an HTML part, a plain-text part and an idempotency key), in Indonesian: `created` (order number, lines, total, "Lanjutkan pembayaran", payment deadline in WIB,
 "Lihat pesanan"), `paid`, `shipped` (courier and resi), `delivered`, `cancelled`, and `owner_paid`
 (to `store_settings.support_email` on every paid order). Guest orders also carry "Masuk ke akun"
 (§10.3). They are sent after the transaction commits, guarded by a unique
 `order_notifications (order_id, kind)` row so retries never double-send, and a send failure is
-recorded but never fails a payment webhook. Emails never name the payment gateway.
+recorded but never fails a payment webhook; a cron pass (`POST /api/internal/emails/dispatch`, every
+5 minutes) retries failed sends for up to 23 hours and sends "Pesanan dikirim" after staff's manual
+"Tandai dikirim". Emails never name the payment gateway.
 
 ### 10.3 Customer login (apps/web)
 
