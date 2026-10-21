@@ -1,8 +1,9 @@
-// The payment seam (docs/plans/cart-checkout.md D5, D7, §5 step 11): Midtrans Snap in production
-// (session 11), FakePaymentProvider in tests and e2e. placeOrder calls it once, after its order
-// transaction commits (never inside it), and stores the token and redirect URL on the payment
-// attempt. "Paid" is never decided here: only the verified notification plus a status re-fetch
-// does that (D6, session 11).
+// The payment seam (docs/plans/cart-checkout.md D5, D7, §5 step 11, §6): Midtrans Snap
+// (./midtrans.ts) when configured, FakePaymentProvider in tests and e2e. placeOrder (and the
+// finish page's retry, ./attempts.ts) asks it for a payment page after the order transaction
+// commits (never inside it). "Paid" is never decided by a provider call either: only a notification
+// whose signature verifies, followed by a server-to-server status fetch, or that status fetch
+// alone on the finish page, feeds the one state machine (./apply-status.ts, D6).
 
 /** One line of the amount the gateway charges (Midtrans `item_details`, plan §4.5.6). Prices are
  * whole rupiah; the voucher is a negative line. The lines always sum to the attempt's gross amount
@@ -66,7 +67,49 @@ export class PaymentProviderError extends Error {
   }
 }
 
+/** The signed fields of a payment notification, exactly as received (strings, `gross_amount` with
+ * its ".00"). */
+export interface NotificationSignatureFields {
+  orderId: string;
+  statusCode: string;
+  grossAmount: string;
+  signatureKey: string;
+}
+
+/** What the gateway's status API says about one attempt, parsed (./status.ts). Only this, never a
+ * notification body, decides what happens to an order. */
+export interface PaymentStatusReport {
+  providerOrderId: string;
+  /** Raw `transaction_status` (lower case); an unknown value is kept and flagged, never guessed. */
+  transactionStatus: string;
+  /** Midtrans `transaction_id` (`payments.provider_ref`). */
+  transactionId: string | null;
+  paymentType: string | null;
+  /** `gross_amount` in whole rupiah; null when it is missing or has a non-zero fraction. */
+  grossAmount: number | null;
+  currency: string | null;
+  fraudStatus: string | null;
+  /** `refund_amount` in whole rupiah, when the gateway reports one. */
+  refundAmount: number | null;
+  /** The allowlisted fields stored in `payments.last_status` (no signature, no key). */
+  snapshot: Record<string, string | null>;
+}
+
+/** A status fetch answers a notification (Midtrans waits 15 s and asks for about 5 s) or the
+ * finish page. */
+export const PAYMENT_STATUS_TIMEOUT_MS = 5_000;
+
+export interface GetPaymentStatusOptions {
+  signal?: AbortSignal;
+}
+
 export interface PaymentProvider {
   readonly name: "midtrans" | "fake";
   createPayment(input: CreatePaymentInput): Promise<CreatedPayment>;
+  /** The attempt's current status from the gateway (server to server), or null when the gateway
+   * has no transaction for it yet (the buyer never picked a method). Throws PaymentProviderError
+   * when the gateway cannot be asked. */
+  getPaymentStatus(providerOrderId: string, options?: GetPaymentStatusOptions): Promise<PaymentStatusReport | null>;
+  /** Constant-time check of a notification's `signature_key` with this provider's server key. */
+  verifyNotificationSignature(fields: NotificationSignatureFields): boolean;
 }

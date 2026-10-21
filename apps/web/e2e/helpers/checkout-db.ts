@@ -162,3 +162,17 @@ export async function countOrdersFor(email: string): Promise<number> {
     return row?.n ?? 0;
   });
 }
+
+/** The latest checkout order's status, payment status and how many sale movements its lines have
+ * (the payment state machine's effects, session 11). */
+export async function orderPaymentStateFor(email: string): Promise<{ status: string; paymentStatus: string; sales: number; activeHolds: number } | null> {
+  return withSql(async (sql) => {
+    const [row] = await sql<{ status: string; paymentStatus: string; sales: number; activeHolds: number }[]>`
+      select o.status, o.payment_status as "paymentStatus",
+        (select count(*)::int from stock_movements m join order_items i on m.ref_type = 'order_item' and m.ref_id = i.id::text
+          where i.order_id = o.id and m.type = 'sale') as sales,
+        (select count(*)::int from stock_reservations r where r.order_id = o.id and r.status = 'active') as "activeHolds"
+      from orders o where o.contact_email = ${email} and o.payment_status is not null order by o.created_at desc limit 1`;
+    return row ?? null;
+  });
+}

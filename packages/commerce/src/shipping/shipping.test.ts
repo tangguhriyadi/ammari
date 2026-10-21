@@ -12,6 +12,7 @@ import { FAKE_ORIGIN_AREA_ID, createFakeShippingRateProvider } from "./fake";
 import { ShippingRateError, type ShippingArea, type ShippingRateProvider } from "./provider";
 import { quoteShipping, type ShippingQuoteDeps } from "./quote";
 import { SHIPPING_PACKAGING_GRAMS, SHIPPING_SERVICE_ALLOWLIST, type RatedService } from "./rules";
+import { fakeBiteshipKey } from "../../test/fake-keys";
 
 // docs/plans/cart-checkout.md §4.5.1, §4.5.4, session 8: area search with the shipping_areas
 // upsert, the daily provider budgets, the rate cache and quoteShipping, against the test database
@@ -439,7 +440,7 @@ describe("quoteShipping", () => {
 
 describe("shippingRuntimeFromEnv", () => {
   const complete = {
-    BITESHIP_API_KEY: "biteship_test.not-a-real-key",
+    BITESHIP_API_KEY: fakeBiteshipKey("test"),
     BITESHIP_BASE_URL: "https://api.biteship.com",
     BITESHIP_ORIGIN_AREA_ID: "IDNP9IDNC23IDND245IDZ40132",
   };
@@ -505,7 +506,7 @@ describe("shippingRuntimeFromEnv", () => {
 
   test("a live key is fine in production; an unknown provider name is refused", async () => {
     await withRollback(async (tx) => {
-      expect(shippingRuntimeFromEnv(tx, { ...complete, BITESHIP_API_KEY: "biteship_live.x", DEPLOY_ENV: "production" }).ok).toBe(true);
+      expect(shippingRuntimeFromEnv(tx, { ...complete, BITESHIP_API_KEY: fakeBiteshipKey("live"), DEPLOY_ENV: "production" }).ok).toBe(true);
       expect(shippingRuntimeFromEnv(tx, { ...complete, SHIPPING_RATE_PROVIDER: "komerce" })).toEqual({
         ok: false,
         problems: ["SHIPPING_RATE_PROVIDER must be biteship or fake"],

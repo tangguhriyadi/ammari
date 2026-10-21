@@ -6,9 +6,14 @@ import { beforeEach, vi } from "vitest";
 // injects one into the client.
 const realFetch = globalThis.fetch;
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
-// The one exception: the opt-in Biteship contract test (src/shipping/biteship.contract.test.ts),
-// run by hand with BITESHIP_CONTRACT_TEST=1 and a test key; never in CI or a normal `pnpm test`.
-const allowedHosts = process.env.BITESHIP_CONTRACT_TEST === "1" ? new Set(["api.biteship.com"]) : new Set<string>();
+// The only exceptions: the opt-in contract tests (src/shipping/biteship.contract.test.ts,
+// src/payments/midtrans.contract.test.ts), run by hand with BITESHIP_CONTRACT_TEST=1 /
+// MIDTRANS_CONTRACT_TEST=1 and test or sandbox keys; never in CI or a normal `pnpm test`. The
+// Midtrans exception names the Sandbox hosts only.
+const allowedHosts = new Set<string>([
+  ...(process.env.BITESHIP_CONTRACT_TEST === "1" ? ["api.biteship.com"] : []),
+  ...(process.env.MIDTRANS_CONTRACT_TEST === "1" ? ["app.sandbox.midtrans.com", "api.sandbox.midtrans.com"] : []),
+]);
 
 beforeEach(() => {
   globalThis.fetch = async (input: URL | Request | string, init?: RequestInit) => {

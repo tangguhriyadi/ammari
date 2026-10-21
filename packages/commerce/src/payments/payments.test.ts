@@ -1,11 +1,16 @@
 import { describe, expect, test } from "vitest";
-import { paymentRuntimeFromEnv } from "./config";
+import { paymentProviderFromEnv, paymentRuntimeFromEnv } from "./config";
 import { createFakePaymentProvider } from "./fake";
 import { buildPaymentLines, providerOrderId } from "./lines";
 import { PaymentProviderError } from "./provider";
+import { fakeMidtransServerKey } from "../../test/fake-keys";
 
-// docs/plans/cart-checkout.md D7, §4.5.6, §12, session 9: the pure payment helpers, the fake
-// provider and the env runtime. Nothing here reaches a gateway.
+// docs/plans/cart-checkout.md D7, §4.5.6, §12: the pure payment helpers, the fake provider and
+// the env runtime. Nothing here reaches a gateway.
+
+// Fake keys with the real prefixes (sandbox keys carry SB-), built at runtime (test/fake-keys.ts).
+const SANDBOX_KEY = fakeMidtransServerKey("sandbox");
+const PRODUCTION_KEY = fakeMidtransServerKey("production");
 
 const product = { sku: "GB-BLK-M", name: "Gamis Basic Black M", unitPrice: 259_000, qty: 2 };
 
@@ -92,10 +97,50 @@ describe("paymentRuntimeFromEnv", () => {
     expect(paymentRuntimeFromEnv({ PAYMENT_PROVIDER: "fake", NODE_ENV: "test" }, origin).ok).toBe(false);
   });
 
-  test("midtrans (the default) is not configured until session 11; unknown names are refused", () => {
+  test("midtrans (the default) needs its key and an explicit mode; unknown names are refused", () => {
     const result = paymentRuntimeFromEnv({}, origin);
-    expect(result).toEqual({ ok: false, problems: ["PAYMENT_PROVIDER=midtrans is not available yet (plan session 11)"] });
+    expect(result).toEqual({ ok: false, problems: ["MIDTRANS_SERVER_KEY is not set", "MIDTRANS_IS_PRODUCTION must be true or false"] });
     expect(paymentRuntimeFromEnv({ PAYMENT_PROVIDER: "stripe" }, origin).ok).toBe(false);
+
+    const sandbox = paymentRuntimeFromEnv({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "false", DEPLOY_ENV: "dev", NODE_ENV: "production" }, origin);
+    expect(sandbox.ok && sandbox.runtime.provider.name).toBe("midtrans");
+  });
+
+  test("real money only in production: sandbox key or sandbox mode refused there, production mode refused elsewhere", () => {
+    const problems = (env: Record<string, string>) => {
+      const result = paymentRuntimeFromEnv(env, origin);
+      return result.ok ? [] : result.problems;
+    };
+    // A sandbox key in production.
+    expect(problems({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production" })).toContain(
+      "MIDTRANS_SERVER_KEY is a sandbox key but MIDTRANS_IS_PRODUCTION is true",
+    );
+    // Sandbox mode in production, or in a production build that does not name its environment.
+    expect(problems({ MIDTRANS_SERVER_KEY: PRODUCTION_KEY, MIDTRANS_IS_PRODUCTION: "false", DEPLOY_ENV: "production" })).toHaveLength(1);
+    expect(problems({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "false", NODE_ENV: "production" })).toHaveLength(1);
+    // Production mode on dev or locally.
+    expect(problems({ MIDTRANS_SERVER_KEY: PRODUCTION_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "dev" })).toHaveLength(1);
+    expect(problems({ MIDTRANS_SERVER_KEY: PRODUCTION_KEY, MIDTRANS_IS_PRODUCTION: "true", NODE_ENV: "development" })).toHaveLength(1);
+    // Production done right.
+    expect(problems({ MIDTRANS_SERVER_KEY: PRODUCTION_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production", NODE_ENV: "production" })).toEqual([]);
+    // Names only, never the key.
+    expect(problems({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production" }).join(" ")).not.toContain(SANDBOX_KEY);
+  });
+
+  test("an unknown DEPLOY_ENV fails closed; the notification route's provider ignores checkout timing problems", () => {
+    expect(paymentRuntimeFromEnv({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "false", DEPLOY_ENV: "prod" }, origin).ok).toBe(false);
+    const midtrans = { MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "false", CHECKOUT_PAYMENT_EXPIRY_MINUTES: "nope" };
+    expect(paymentRuntimeFromEnv(midtrans, origin).ok).toBe(false);
+    const provider = paymentProviderFromEnv(midtrans, origin);
+    expect(provider.ok && provider.provider.name).toBe("midtrans");
+  });
+
+  test("the notification URL is optional, one https URL", () => {
+    const base = { MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "false" };
+    expect(paymentRuntimeFromEnv({ ...base, MIDTRANS_NOTIFICATION_URL: "https://ammari.my.id/api/payments/midtrans/notification" }, origin).ok).toBe(true);
+    for (const bad of ["http://ammari.my.id/x", "https://a.test/x,https://b.test/y", "not a url", `https://a.test/${"x".repeat(260)}`]) {
+      expect(paymentRuntimeFromEnv({ ...base, MIDTRANS_NOTIFICATION_URL: bad }, origin).ok).toBe(false);
+    }
   });
 
   test("timing and prefix are validated; the hold must outlast the payment window", () => {

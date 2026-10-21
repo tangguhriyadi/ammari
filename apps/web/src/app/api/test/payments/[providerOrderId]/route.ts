@@ -1,11 +1,12 @@
 import { asc, eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { fabricColors, orderItems, orders, payments, products, productVariants } from "@ammari/db/schema";
-import { buildPaymentLines, type PaymentLine } from "@ammari/commerce/payments";
+import { buildPaymentLines, recordFakeTransaction, type PaymentLine } from "@ammari/commerce/payments";
 import { isCartEnabled } from "@/lib/cart-flag";
 import { defaultDb } from "@/lib/db";
 import { isE2eFixturesRequestAllowed } from "@/lib/fixtures/e2e-fixtures-gate";
 import { formatPriceIdr } from "@/lib/format";
+import { getPaymentRuntime } from "@/lib/payments/runtime";
 
 // e2e-only stand-in for the payment gateway's page (docs/plans/cart-checkout.md §13, session 10):
 // the fake payment provider (@ammari/commerce/payments, PAYMENT_PROVIDER=fake) sends the buyer
@@ -13,11 +14,13 @@ import { formatPriceIdr } from "@/lib/format";
 // route (non-production build, E2E_TEST_LOGIN=true, a loopback Host) plus the cart flag, and
 // deploy/Caddyfile blocks /api/test/* at the edge anyway.
 //
-// READ-ONLY by design: it shows what the gateway would charge (the same buildPaymentLines the real
-// provider gets, so the "Ongkir" line can be checked end to end) and links back to the finish
-// page, simulating only the gateway's redirect. It never marks anything paid: "paid" may only come
-// from a verified server-to-server notification (CLAUDE.md, plan D6), which session 11 builds;
-// a browser request here can never be that.
+// GET is read-only: it shows what the gateway would charge (the same buildPaymentLines the real
+// provider gets, so the "Ongkir" line can be checked end to end), links back to the finish page,
+// and offers two test buttons. The buttons (POST) never write an order or a payment themselves:
+// they record what the FAKE gateway answers for this attempt (@ammari/commerce/payments
+// recordFakeTransaction) and post a notification signed with the fake key to the real
+// notification route, which verifies it and re-fetches the status from the fake gateway exactly as
+// it does with Midtrans (CLAUDE.md, plan D6). Then the browser goes to the finish page.
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +58,8 @@ function page(params: { orderNo: string; lines: PaymentLine[]; grossAmount: numb
 <tbody>${rows}</tbody>
 </table>
 <p>Total <strong data-testid="fake-payment-total">${escapeHtml(formatPriceIdr(params.grossAmount))}</strong></p>
+<form method="post"><input type="hidden" name="status" value="settlement"><button type="submit" data-testid="fake-payment-pay">Bayar (uji)</button></form>
+<form method="post"><input type="hidden" name="status" value="expire"><button type="submit" data-testid="fake-payment-expire">Kedaluwarsa (uji)</button></form>
 <p><a href="${escapeHtml(finishHref)}">Kembali ke toko</a></p>
 </body>
 </html>`;
@@ -66,7 +71,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     e2eTestLoginFlag: process.env.E2E_TEST_LOGIN,
     host: request.headers.get("host"),
   });
-  if (!allowed || !isCartEnabled()) return notFound();
+  if (!allowed || !isCartEnabled() || getPaymentRuntime()?.provider.name !== "fake") return notFound();
 
   const { providerOrderId } = await params;
   if (!PROVIDER_ORDER_ID_PATTERN.test(providerOrderId)) return notFound();
@@ -124,4 +129,46 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   return new Response(page({ orderNo: payment.orderNo, lines, grossAmount: payment.grossAmount }), {
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow" },
   });
+}
+
+const FAKE_STATUSES = new Set(["settlement", "expire"]);
+
+/** The test buttons: the fake gateway's answer, then a signed notification through the real route. */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ providerOrderId: string }> }): Promise<Response> {
+  const allowed = isE2eFixturesRequestAllowed({
+    nodeEnv: process.env.NODE_ENV,
+    e2eTestLoginFlag: process.env.E2E_TEST_LOGIN,
+    host: request.headers.get("host"),
+  });
+  // Only with the fake provider: never sign anything for a real gateway's attempts.
+  if (!allowed || !isCartEnabled() || getPaymentRuntime()?.provider.name !== "fake") return notFound();
+
+  const { providerOrderId } = await params;
+  if (!PROVIDER_ORDER_ID_PATTERN.test(providerOrderId)) return notFound();
+  const form = await request.formData();
+  const status = String(form.get("status") ?? "");
+  if (!FAKE_STATUSES.has(status)) return notFound();
+
+  const [payment] = await defaultDb
+    .select({ orderNo: orders.orderNo, grossAmount: payments.grossAmount })
+    .from(payments)
+    .innerJoin(orders, eq(orders.id, payments.orderId))
+    .where(eq(payments.providerOrderId, providerOrderId))
+    .limit(1);
+  if (!payment) return notFound();
+
+  const notification = recordFakeTransaction({ providerOrderId, transactionStatus: status as "settlement" | "expire", grossAmount: payment.grossAmount });
+  // Loopback only (the gate above): this dev server's own notification route.
+  const origin = new URL(request.url).origin;
+  const delivered = await fetch(`${origin}/api/payments/midtrans/notification`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(notification),
+    cache: "no-store",
+  });
+  if (!delivered.ok) {
+    console.error("[test payments] the fake notification was not accepted", { status: delivered.status });
+    return new Response("Fake notification was not accepted", { status: 500, headers: { "Cache-Control": "no-store" } });
+  }
+  return new Response(null, { status: 303, headers: { Location: `/checkout/finish?order=${encodeURIComponent(payment.orderNo)}`, "Cache-Control": "no-store" } });
 }

@@ -93,7 +93,7 @@ async function areaQuoting(db: Database, rates: RatedService[] | "unavailable" |
 function recordingPaymentProvider(base: PaymentProvider = createFakePaymentProvider({ baseUrl: "http://localhost:3000" })) {
   const calls: CreatePaymentInput[] = [];
   const provider: PaymentProvider = {
-    name: base.name,
+    ...base,
     createPayment: vi.fn(async (input: CreatePaymentInput) => {
       calls.push(input);
       return base.createPayment(input);
@@ -755,7 +755,8 @@ describe("placeOrder", () => {
       const result = await placeOrder(tx, deps(), guestInput({ shippingAreaId: areaId, guestTokenHash: cart.tokenHash, expectedTotal: 2 * PRICE }));
       if (!result.ok) throw new Error(result.reason);
 
-      // The payment webhook (session 11) goes through this same transition.
+      // The payment state machine goes through this same transition (payments/apply-status.test.ts
+      // checks it from a notification).
       await transitionOrderStatus(result.orderId, "to_ship", staff.id, tx);
 
       const [item] = await tx.select().from(orderItems).where(eq(orderItems.orderId, result.orderId));

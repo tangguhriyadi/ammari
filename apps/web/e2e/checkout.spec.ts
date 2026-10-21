@@ -7,6 +7,7 @@ import {
   countOrdersFor,
   fillRateLimit,
   latestOrderFor,
+  orderPaymentStateFor,
   seedCheckoutProduct,
   seedVoucherFor,
   sellOut,
@@ -14,9 +15,10 @@ import {
 import { takeOtp } from "./helpers/otp";
 import { E2E_WHATSAPP_NUMBER } from "./storefront-fixtures";
 
-// docs/plans/cart-checkout.md session 10 (§4.3 to §4.5, §13 "e2e shipping"): the checkout page,
-// the area combobox, section 3's states, the summary, "Bayar sekarang", the fake payment page and
-// the finish page, at 390px and 1280px. The fake shipping provider (fictional "Kecamatan E2E ..."
+// docs/plans/cart-checkout.md sessions 10 and 11 (§4.3 to §4.5, §6, §13 "e2e shipping"): the
+// checkout page, the area combobox, section 3's states, the summary, "Bayar sekarang", the fake
+// payment page, its test buttons (a signed fake notification through the real notification route)
+// and the finish page, at 390px and 1280px. The fake shipping provider (fictional "Kecamatan E2E ..."
 // areas) and the fake payment provider come from playwright.config.ts; nothing reaches a real
 // provider. Each test seeds its own product, so its stock holds never change another spec.
 // Murah: courier Rp12.000, buyer Rp0. Jauh: Rp95.000, buyer Rp75.000 (POS Kilat Khusus).
@@ -161,6 +163,48 @@ test.describe("checkout, flag on", () => {
       await page.getByRole("link", { name: "Masuk untuk melihat semua pesanan" }).click();
       await expect(page).toHaveURL(/\/login\?next=%2Faccount$/);
       await expect(page.getByLabel("Email")).toHaveValue(email);
+    });
+
+    test(`the fake gateway pays through the real notification route: "Pembayaran berhasil", sold (${viewport.name})`, async ({ page, context, baseURL }, testInfo) => {
+      await page.setViewportSize(viewport);
+      const product = await seedCheckoutProduct({ label: `Lunas ${viewport.name}` });
+      await seedGuestCart(context, baseURL!, [{ sku: product.sku, qty: 1 }]);
+      const email = uniqueEmail("lunas", testInfo);
+
+      await openCheckout(page);
+      await fillGuestForm(page, email);
+      await pickArea(page, "40111", /Kecamatan E2E Murah, Kota E2E, Provinsi E2E 40111/);
+      await expect(page.getByTestId("summary-total")).toHaveText("Rp250.000");
+      await page.getByLabel(/Saya setuju dengan/).check();
+      await payButton(page).click();
+      await expect(page).toHaveURL(/\/api\/test\/payments\/E2E-ORD-\d{6}-\d{4,}-1$/);
+      // No Ongkir line when the subsidy covers it all (plan §4.5.6).
+      await expect(page.locator('tr[data-line-id="SHIPPING"]')).toHaveCount(0);
+
+      await page.getByTestId("fake-payment-pay").click();
+      await expect(page).toHaveURL(/\/checkout\/finish\?order=ORD-/);
+      await expect(page.getByTestId("finish-heading")).toHaveText("Pembayaran berhasil");
+      await expect(page.getByRole("link", { name: "Lanjutkan pembayaran" })).toHaveCount(0);
+      expect(await orderPaymentStateFor(email)).toEqual({ status: "to_ship", paymentStatus: "paid", sales: 1, activeHolds: 0 });
+    });
+
+    test(`the fake gateway expires the payment: cancelled, holds released, "Pembayaran gagal atau kedaluwarsa" (${viewport.name})`, async ({ page, context, baseURL }, testInfo) => {
+      await page.setViewportSize(viewport);
+      const product = await seedCheckoutProduct({ label: `Habis waktu ${viewport.name}` });
+      await seedGuestCart(context, baseURL!, [{ sku: product.sku, qty: 1 }]);
+      const email = uniqueEmail("kedaluwarsa", testInfo);
+
+      await openCheckout(page);
+      await fillGuestForm(page, email);
+      await pickArea(page, "40111", /Kecamatan E2E Murah, Kota E2E, Provinsi E2E 40111/);
+      await page.getByLabel(/Saya setuju dengan/).check();
+      await payButton(page).click();
+      await expect(page).toHaveURL(/\/api\/test\/payments\//);
+      expect(await orderPaymentStateFor(email)).toMatchObject({ status: "awaiting_payment", activeHolds: 1 });
+
+      await page.getByTestId("fake-payment-expire").click();
+      await expect(page.getByTestId("finish-heading")).toHaveText("Pembayaran gagal atau kedaluwarsa");
+      expect(await orderPaymentStateFor(email)).toEqual({ status: "cancelled", paymentStatus: "expired", sales: 0, activeHolds: 0 });
     });
 
     test(`area fully covered by the subsidy shows Rp0; an empty submit lists what to fix (${viewport.name})`, async ({ page, context, baseURL }, testInfo) => {

@@ -24,7 +24,7 @@ import { generateOrderAccessToken, hashOrderAccessToken } from "@ammari/commerce
 
 vi.mock("@/lib/db", async () => ({ defaultDb: (await import("@ammari/db/test-utils")).testDb }));
 
-const { listUsableVouchers, loadFinishOrder } = await import("./queries");
+const { findOwnedCheckoutOrderId, listUsableVouchers, loadFinishOrder } = await import("./queries");
 
 const created = { orderIds: [] as string[], customerIds: [] as string[], skus: [] as string[], productIds: [] as string[], colorIds: [] as string[], fabricIds: [] as string[], cardIds: [] as string[] };
 let sequence = 0;
@@ -161,6 +161,18 @@ describe("loadFinishOrder", () => {
     expect(await loadFinishOrder({ orderNo: cancelled.order.orderNo, sessionCustomerId: null, accessToken: cancelled.token }, testDb)).toMatchObject({
       state: "failed",
     });
+    // Paid after the order was cancelled: never "Pembayaran berhasil", the money goes back.
+    const refund = await checkoutOrder({ status: "cancelled", paymentStatus: "paid", paidAt: new Date(), cancelReason: "payment_expired" });
+    expect(await loadFinishOrder({ orderNo: refund.order.orderNo, sessionCustomerId: null, accessToken: refund.token }, testDb)).toMatchObject({
+      state: "refund_pending",
+    });
+  });
+
+  test("findOwnedCheckoutOrderId: the buyer's order id, null for a stranger or a malformed number", async () => {
+    const placed = await checkoutOrder({});
+    expect(await findOwnedCheckoutOrderId({ orderNo: placed.order.orderNo, sessionCustomerId: null, accessToken: placed.token }, testDb)).toBe(placed.order.id);
+    expect(await findOwnedCheckoutOrderId({ orderNo: placed.order.orderNo, sessionCustomerId: null, accessToken: null }, testDb)).toBeNull();
+    expect(await findOwnedCheckoutOrderId({ orderNo: "ORD-x", sessionCustomerId: null, accessToken: placed.token }, testDb)).toBeNull();
   });
 
   test("a non-checkout order is never shown", async () => {

@@ -28,3 +28,16 @@ export const SHIPPING_QUOTE_PENDING_MESSAGE = "Ongkir sedang dihitung. Tunggu se
 /** "Bayar sekarang" whose answer never arrived (connection lost, a 5xx). Pressing again is safe:
  * the same page-load attempt id answers with the order if it was placed (plan §5). */
 export const CHECKOUT_CALL_LOST_MESSAGE = "Koneksi terputus sebelum ada jawaban. Tekan Bayar sekarang sekali lagi; pesanan yang sama tidak akan dibuat dua kali.";
+
+/** The finish page's status check (plan §4.4): per IP `payment_status_check` 30 per 10 minutes
+ * (each one asks the gateway). Over the limit the page simply keeps showing our own state. */
+export const PAYMENT_STATUS_CHECK_WINDOW_SECONDS = 600;
+export const PAYMENT_STATUS_CHECK_LIMIT = 30;
+/** "Buka halaman pembayaran" (a new payment attempt): per IP `payment_retry` 10 per 10 minutes. */
+export const PAYMENT_RETRY_WINDOW_SECONDS = 600;
+export const PAYMENT_RETRY_LIMIT = 10;
+export const PAYMENT_RETRY_UNAVAILABLE_MESSAGE = "Halaman pembayaran belum bisa dibuka. Coba lagi sebentar lagi atau hubungi kami lewat WhatsApp.";
+export const PAYMENT_RETRY_BUSY_MESSAGE = "Halaman pembayaran sedang disiapkan. Coba lagi sebentar lagi.";
+export const PAYMENT_RETRY_CLOSED_MESSAGE = "Pesanan ini sudah tidak bisa dibayar. Muat ulang halaman untuk melihat statusnya.";
+export const PAYMENT_RETRY_LIMIT_MESSAGE = "Terlalu banyak percobaan. Hubungi kami lewat WhatsApp untuk menyelesaikan pesanan ini.";
+export const PAYMENT_RETRY_RATE_LIMITED_MESSAGE = "Terlalu banyak percobaan. Coba lagi beberapa menit lagi.";

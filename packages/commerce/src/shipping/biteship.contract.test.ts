@@ -4,7 +4,7 @@ import { SHIPPING_SERVICE_ALLOWLIST, allowlistCourierCodes, allowlistedServices 
 
 // Opt-in contract test against the REAL Biteship API (docs/plans/cart-checkout.md §13, session 8).
 // Skipped unless run by hand:
-//   BITESHIP_CONTRACT_TEST=1 BITESHIP_API_KEY=biteship_test.... BITESHIP_ORIGIN_AREA_ID=... \
+//   BITESHIP_CONTRACT_TEST=1 BITESHIP_API_KEY=<your Biteship test key> BITESHIP_ORIGIN_AREA_ID=... \
 //     pnpm --filter @ammari/commerce exec vitest run src/shipping/biteship.contract.test.ts
 // Test-mode Maps and Rates are real data and billed (a few rupiah per run). It prints every service
 // code Biteship returns, so the allowlist in ./rules.ts can be checked against reality. It never

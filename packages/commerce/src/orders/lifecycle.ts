@@ -1,6 +1,6 @@
 import "server-only";
-import { and, eq } from "drizzle-orm";
-import { orderItems, orders, stockMovements, MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
+import { and, eq, sql } from "drizzle-orm";
+import { orderItems, orders, stockMovements, vouchers, MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
 import type { ChannelId, OrderStatus } from "@ammari/db/schema";
 import { valueDeltaForConsumption } from "../inventory/moving-average";
 import { lockVariantForUpdate } from "../stock/lock";
@@ -293,6 +293,21 @@ export interface TransitionOrderStatusOptions {
   trackingNumber?: string | null;
 }
 
+/** A checkout order's voucher goes back to its owner when the order is cancelled
+ * (docs/plans/cart-checkout.md §6.4, owner decision 8): `active` again while it has not expired,
+ * otherwise `expired`. One conditional UPDATE, so a replayed cancel restores nothing twice. Never
+ * on `returned` (decision 8). No-op for every order that redeemed no voucher. */
+async function restoreVoucherForCancelledOrder(tx: Tx, orderId: string): Promise<void> {
+  await tx
+    .update(vouchers)
+    .set({
+      status: sql`case when ${vouchers.expiresAt} > now() then 'active' else 'expired' end`,
+      usedOrderId: null,
+      usedAt: null,
+    })
+    .where(and(eq(vouchers.usedOrderId, orderId), eq(vouchers.status, "used")));
+}
+
 /** The ONLY path allowed to move an order between statuses (status.ts's own doc comment) —
  * checks ORDER_STATUS_TRANSITIONS, stamps the matching timestamp column, and runs the matching
  * stock side effect (decrement on awaiting_payment -> to_ship, consuming a checkout order's
@@ -300,11 +315,17 @@ export interface TransitionOrderStatusOptions {
  * left, or releasing the hold of an unpaid one), all in one transaction. A
  * cancelled/returned transition ALSO voids the order's active thank-you card in this same
  * transaction (docs/plans/packing-cards.md) — an already-`claimed` card/voucher is never
- * touched; that policy is the owner's to decide later. */
+ * touched; that policy is the owner's to decide later. A cancel also restores the voucher the
+ * order redeemed at checkout (restoreVoucherForCancelledOrder).
+ *
+ * `actorStaffUserId` is null only for the system callers of a checkout order: the payment
+ * notification and the expiry sweep (docs/plans/cart-checkout.md §6). The audit row and stock
+ * movements then carry no staff actor. Run inside a caller's transaction (`db` = its `tx`), the
+ * work here is a savepoint, so a refused sale rolls back only this transition. */
 export async function transitionOrderStatus(
   orderId: string,
   toStatus: OrderStatus,
-  actorStaffUserId: string,
+  actorStaffUserId: string | null,
   db: Database = defaultDb,
   options: TransitionOrderStatusOptions = {},
 ) {
@@ -339,6 +360,7 @@ export async function transitionOrderStatus(
       // Same transaction as the status change itself — an active card must never outlive the
       // order it was printed for (docs/plans/packing-cards.md). No-op if there isn't one.
       await voidActiveCardForOrder(tx, orderId, actorStaffUserId);
+      if (toStatus === "cancelled") await restoreVoucherForCancelledOrder(tx, orderId);
     }
 
     const timestampColumn = (ORDER_STATUS_TIMESTAMP_COLUMN as Record<string, string>)[toStatus];

@@ -6,7 +6,7 @@ import { defaultDb, type Database } from "@/lib/db";
 import { formatJakartaDate, formatJakartaDateTime } from "@/lib/format";
 import type { CheckoutVoucherOption } from "./form";
 
-// Reads for the checkout and finish pages (docs/plans/cart-checkout.md §4.3, §4.4, session 10).
+// Reads for the checkout and finish pages (docs/plans/cart-checkout.md §4.3, §4.4).
 // Customer-facing: no cost column is ever selected (order_items.unit_cost stays out), and nothing
 // here returns a stock number.
 
@@ -22,11 +22,11 @@ export async function listUsableVouchers(customerId: string, db: Database = defa
   return rows.map((row) => ({ id: row.id, amount: row.amount, expiresOn: formatJakartaDate(row.expiresAt) }));
 }
 
-/** `paid`: a verified notification marked it paid. `pending`: still inside the payment window.
+/** `paid`: a verified notification (or the page's status check) marked it paid. `pending`: still inside the payment window.
  * `confirming`: past the window but not finalized yet (a payment made at the last minute may still
  * be confirmed; the expiry sweep or a notification decides). `failed`: cancelled, expired or the
- * payment failed. */
-export type FinishState = "paid" | "pending" | "confirming" | "failed";
+ * payment failed. `refund_pending`: paid after the order had already been cancelled. */
+export type FinishState = "paid" | "pending" | "confirming" | "failed" | "refund_pending";
 
 export interface FinishOrderLine {
   name: string;
@@ -61,6 +61,9 @@ function sizeLabel(size: string): string {
 }
 
 function finishState(order: { orderNo: string; status: string; paymentStatus: string | null; stillPayable: boolean }): FinishState {
+  // Paid after the order was cancelled (the window ran out first): the money goes back (plan §6.2,
+  // flagged paid_after_cancel + refund_due for staff).
+  if (order.status === "cancelled" && order.paymentStatus === "paid") return "refund_pending";
   if (order.paymentStatus === "paid") return "paid";
   if (order.status === "awaiting_payment" && order.paymentStatus === "pending") return order.stillPayable ? "pending" : "confirming";
   if (order.status === "cancelled" || order.paymentStatus === "expired" || order.paymentStatus === "cancelled") return "failed";
@@ -69,14 +72,53 @@ function finishState(order: { orderNo: string; status: string; paymentStatus: st
   return "failed";
 }
 
+/** Who may see a checkout order here: the session customer who placed it while logged in, or the
+ * browser holding the checkout's order access cookie (its token's sha256 matches an unexpired
+ * `order_access_tokens` row of this order). A guest order that only got linked to a customer by
+ * its unverified email is not shown to that customer's session (session 15 decides how
+ * "Pesanan saya" treats those). Shared by the finish page and its payment actions. */
+async function ownsCheckoutOrder(
+  db: Database,
+  order: { id: string; customerId: string | null; placedWithSession: boolean | null },
+  params: { sessionCustomerId: string | null; accessToken: string | null },
+): Promise<boolean> {
+  if (params.sessionCustomerId !== null && order.placedWithSession === true && order.customerId === params.sessionCustomerId) return true;
+  if (!params.accessToken || !isWellFormedOrderAccessToken(params.accessToken)) return false;
+  const [match] = await db
+    .select({ id: orderAccessTokens.id })
+    .from(orderAccessTokens)
+    .where(
+      and(
+        eq(orderAccessTokens.orderId, order.id),
+        eq(orderAccessTokens.tokenHash, hashOrderAccessToken(params.accessToken)),
+        sql`${orderAccessTokens.expiresAt} > now()`,
+      ),
+    )
+    .limit(1);
+  return match !== undefined;
+}
+
+/** The id of the checkout order `orderNo` when the visitor may act on it (the finish page's status
+ * check and retry), otherwise null for every case alike. */
+export async function findOwnedCheckoutOrderId(
+  params: { orderNo: string; sessionCustomerId: string | null; accessToken: string | null },
+  db: Database = defaultDb,
+): Promise<string | null> {
+  if (!ORDER_NO_PATTERN.test(params.orderNo)) return null;
+  const [order] = await db
+    .select({ id: orders.id, customerId: orders.customerId, placedWithSession: orders.placedWithSession })
+    .from(orders)
+    .where(and(eq(orders.orderNo, params.orderNo), isNotNull(orders.paymentStatus)))
+    .limit(1);
+  if (!order) return null;
+  return (await ownsCheckoutOrder(db, order, params)) ? order.id : null;
+}
+
 /** The finish page's order (plan §4.4), or null for anything the visitor may not see: not a
- * checkout order, unknown, or neither proof of ownership holds. Proof is either the session
- * customer who placed it while logged in, or the checkout's order access cookie (its token's
- * sha256 matches an unexpired `order_access_tokens` row of this order). A guest order that only
- * got linked to a customer by its unverified email is not shown to that customer's session here
- * (session 15 decides how "Pesanan saya" treats those). The same null for every case, so the page
- * shows the same "log in to see it" answer and never confirms that an order number exists. The state comes from our
- * own database only (a provider status check arrives with the real provider, session 11). */
+ * checkout order, unknown, or neither proof of ownership holds (ownsCheckoutOrder). The same null
+ * for every case, so the page shows the same "log in to see it" answer and never confirms that an
+ * order number exists. The state comes from our own database; the page's status check
+ * (lib/checkout/payment-actions.ts) asks the gateway and refreshes it. */
 export async function loadFinishOrder(
   params: { orderNo: string; sessionCustomerId: string | null; accessToken: string | null },
   db: Database = defaultDb,
@@ -104,24 +146,7 @@ export async function loadFinishOrder(
     .where(and(eq(orders.orderNo, params.orderNo), isNotNull(orders.paymentStatus)))
     .limit(1);
   if (!order) return null;
-
-  const ownsBySession = params.sessionCustomerId !== null && order.placedWithSession === true && order.customerId === params.sessionCustomerId;
-  let ownsByToken = false;
-  if (!ownsBySession && params.accessToken && isWellFormedOrderAccessToken(params.accessToken)) {
-    const [match] = await db
-      .select({ id: orderAccessTokens.id })
-      .from(orderAccessTokens)
-      .where(
-        and(
-          eq(orderAccessTokens.orderId, order.id),
-          eq(orderAccessTokens.tokenHash, hashOrderAccessToken(params.accessToken)),
-          sql`${orderAccessTokens.expiresAt} > now()`,
-        ),
-      )
-      .limit(1);
-    ownsByToken = match !== undefined;
-  }
-  if (!ownsBySession && !ownsByToken) return null;
+  if (!(await ownsCheckoutOrder(db, order, params))) return null;
 
   const state = finishState(order);
 

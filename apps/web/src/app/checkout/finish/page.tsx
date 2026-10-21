@@ -8,14 +8,17 @@ import { formatPriceIdr } from "@/lib/format";
 import { Container } from "@/components/container";
 import { OutlineLink, PrimaryLink } from "@/components/buttons";
 import { LoginPrefillLink } from "@/components/checkout/login-prefill-link";
+import { PaymentStatusCheck } from "@/components/checkout/payment-status-check";
+import { ReopenPaymentButton } from "@/components/checkout/reopen-payment-button";
 import { LOGIN_FOR_ORDERS_HREF } from "@/lib/auth/login-prefill";
 
 // Where the payment page sends the buyer back (docs/plans/cart-checkout.md §4.4,
 // docs/design/storefront.md §7): `/checkout/finish?order=<orderNo>`. Shown only to the buyer who
 // placed the order (their session, or the checkout's order access cookie; lib/checkout/queries.ts),
 // otherwise the same "log in to see it" page as an unknown order. The state comes from our own database
-// only, never from the redirect itself: "Pembayaran berhasil" appears only once a verified
-// notification has marked the order paid (session 11). force-dynamic like /checkout.
+// only, never from the redirect itself (its order_id / transaction_status query is ignored):
+// "Pembayaran berhasil" appears only once a verified notification, or the page's own server-side
+// status check (PaymentStatusCheck), has marked the order paid. force-dynamic like /checkout.
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
@@ -31,6 +34,7 @@ const HEADINGS: Record<FinishOrderView["state"], string> = {
   pending: "Menunggu pembayaran",
   confirming: "Menunggu konfirmasi pembayaran",
   failed: "Pembayaran gagal atau kedaluwarsa",
+  refund_pending: "Pesanan dibatalkan",
 };
 
 /** Every visit this browser cannot prove is the buyer's (an unknown order number included) gets
@@ -77,7 +81,12 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
         )}
         {view.state === "confirming" && (
           <p className="text-sm text-ink-muted">
-            Batas waktu pembayaran sudah lewat. Kalau kamu sudah membayar, konfirmasinya sedang kami tunggu dan status pesanan diperbarui otomatis. Jangan bayar dua kali.
+            Batas waktu pembayaran sudah lewat. Kalau kamu sudah membayar, konfirmasinya sedang kami tunggu. Muat ulang halaman ini beberapa saat lagi untuk melihat statusnya. Jangan bayar dua kali.
+          </p>
+        )}
+        {view.state === "refund_pending" && (
+          <p className="text-sm text-ink-muted">
+            Pembayaranmu kami terima setelah batas waktu pesanan ini habis, jadi pesanan dibatalkan. Dananya akan kami kembalikan penuh dan kami akan menghubungimu.
           </p>
         )}
         {view.state === "failed" && <p className="text-sm text-ink-muted">Waktu pembayaran pesanan ini sudah habis atau pembayarannya tidak berhasil. Kamu bisa pesan lagi kapan saja.</p>}
@@ -93,10 +102,9 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
             Lanjutkan pembayaran
           </a>
         ) : (
-          <p className="border border-error-border px-4 py-3 text-sm text-error">
-            Halaman pembayaran belum bisa dibuka. Coba lagi sebentar lagi atau hubungi kami lewat WhatsApp.
-          </p>
+          <ReopenPaymentButton orderNo={view.orderNo} />
         ))}
+      {(view.state === "pending" || view.state === "confirming") && <PaymentStatusCheck orderNo={view.orderNo} />}
 
       <section aria-label="Ringkasan pesanan" className="flex flex-col gap-4 bg-surface p-4 md:p-6">
         <ul className="flex flex-col gap-3 text-sm">

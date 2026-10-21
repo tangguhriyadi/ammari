@@ -13,7 +13,7 @@ vi.mock("@/lib/db", async () => ({ defaultDb: (await import("@ammari/db/test-uti
 
 const { GET } = await import("./route");
 
-const ENV = { STOREFRONT_CART_ENABLED: "true", E2E_TEST_LOGIN: "true" };
+const ENV = { STOREFRONT_CART_ENABLED: "true", E2E_TEST_LOGIN: "true", PAYMENT_PROVIDER: "fake" };
 const created = { orderIds: [] as string[], skus: [] as string[], productIds: [] as string[], colorIds: [] as string[], fabricIds: [] as string[] };
 
 beforeEach(() => {

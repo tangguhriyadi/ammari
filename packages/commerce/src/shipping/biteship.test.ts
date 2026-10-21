@@ -9,11 +9,12 @@ import {
 } from "./biteship-fixtures";
 import { ShippingRateError } from "./provider";
 import type { ShippingCallKind } from "./provider";
+import { fakeBiteshipKey } from "../../test/fake-keys";
 
 // docs/plans/cart-checkout.md §4.5.4, session 8: the Biteship client against hand-written fixtures
 // through a stub fetch. Nothing here reaches the network.
 
-const API_KEY = "biteship_test.not-a-real-key";
+const API_KEY = fakeBiteshipKey("test");
 const BASE_URL = "https://biteship.invalid";
 
 function jsonResponse(status: number, body: unknown): Response {

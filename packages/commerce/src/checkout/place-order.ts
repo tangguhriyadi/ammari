@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   cartItems,
@@ -28,7 +28,7 @@ import { FieldError, isPostgresConstraintViolation, isPostgresErrorCode } from "
 import { generateOrderNumber } from "../orders/order-number";
 import type { PaymentRuntime } from "../payments/config";
 import { buildPaymentLines, providerOrderId } from "../payments/lines";
-import { PaymentProviderError } from "../payments/provider";
+import { PAYMENT_PAGE_TIMEOUT_MS, requestPaymentPage } from "../payments/attempts";
 import { loadShippingArea } from "../shipping/areas";
 import { quoteShipping, type QuoteLine, type ShippingQuote, type ShippingQuoteDeps, type ShippingQuoteRefusal } from "../shipping/quote";
 import { parcelWeightGrams } from "../shipping/rules";
@@ -61,8 +61,9 @@ import {
 //    voucher row. Never a variant before the cart.
 //    The locked lines must be exactly the quoted ones, every product still active and published,
 //    and their parcel weight the quote's; otherwise it rolls back with "Isi keranjang berubah".
-// 5. After commit: the payment page. A provider failure keeps the order pending without one; the
-//    finish page offers a retry, and the expiry sweep (session 12) cancels it if never paid.
+// 5. After commit: the payment page (payments/attempts.ts). A provider failure keeps the order
+//    pending without one; the finish page offers a retry (a new attempt), and the expiry sweep
+//    (session 12) cancels it if never paid.
 //
 // Checkout never signs anyone in (D9): a guest is linked to (or creates) a `customers` row by email,
 // but an existing row matched by that unverified email is never changed, and a new one gets only
@@ -146,9 +147,8 @@ const emailSchema = z.email().max(254);
  * never collide. */
 const CONTACT_EMAIL_LOCK_NAMESPACE = 914_201;
 
-/** The payment page request runs in the buyer's request after the commit, so a hung gateway must
- * not hang checkout: past this it counts as unavailable (the order stays pending). */
-export const PAYMENT_PAGE_TIMEOUT_MS = 15_000;
+/** The payment page request's cap (it runs in the buyer's request after the commit). */
+export { PAYMENT_PAGE_TIMEOUT_MS };
 
 /** `lock_timeout` inside the order transaction. */
 const ORDER_LOCK_TIMEOUT_SECONDS = 5;
@@ -295,11 +295,14 @@ async function replay(db: Database, order: ExistingOrder, input: PlaceOrderInput
         : [];
     mayPay = match !== undefined;
   }
+  // The latest attempt: a finish-page retry may have replaced attempt 1's page.
   const [payment] = mayPay
     ? await db
         .select({ redirectUrl: payments.redirectUrl })
         .from(payments)
-        .where(and(eq(payments.orderId, order.id), eq(payments.attempt, 1)))
+        .where(eq(payments.orderId, order.id))
+        .orderBy(desc(payments.attempt))
+        .limit(1)
     : [];
   return {
     ok: true,
@@ -554,7 +557,8 @@ async function placeInTransaction(tx: Tx, ctx: Context): Promise<PlacedOrder | {
   if (!order) throw new Error("failed to insert checkout order");
 
   // unit_cost stays 0 until payment: transitionOrderStatus's awaiting_payment -> to_ship writes
-  // the sale movements and locks the moving-average cost then (session 11's webhook path).
+  // the sale movements and locks the moving-average cost then (the payment state machine,
+  // payments/apply-status.ts).
   const items = await tx
     .insert(orderItems)
     .values(lines.map((line) => ({ orderId: order.id, sku: line.sku, qty: line.qty, unitPrice: line.unitPrice, unitCost: 0 })))
@@ -681,59 +685,6 @@ async function placeInTransaction(tx: Tx, ctx: Context): Promise<PlacedOrder | {
   };
 }
 
-/** Asks the provider for the payment page and stores it on the attempt. Never throws: the order is
- * already committed, so a failure here only leaves it without a payment page (logged with the
- * typed reason, never a key or the buyer's data). */
-async function createPaymentPage(db: Database, deps: PlaceOrderDeps, placed: PlacedOrder, value: ValidatedInput): Promise<string | null> {
-  let created: { token: string; redirectUrl: string };
-  const signal = AbortSignal.timeout(PAYMENT_PAGE_TIMEOUT_MS);
-  try {
-    const request = deps.payment.provider.createPayment({
-      providerOrderId: placed.providerOrderId,
-      grossAmount: placed.grossAmount,
-      lines: placed.paymentLines,
-      customer: { name: value.address.recipientName, email: value.contactEmail, phone: value.contactPhone },
-      expiryMinutes: deps.payment.paymentExpiryMinutes,
-      finishUrl: deps.finishUrl(placed.orderNo),
-      signal,
-    });
-    created = await Promise.race([
-      request,
-      new Promise<never>((_, reject) => {
-        signal.addEventListener("abort", () => reject(new PaymentProviderError("unavailable", "payment provider timed out")), { once: true });
-      }),
-    ]);
-  } catch (error) {
-    if (error instanceof PaymentProviderError) {
-      console.error("[checkout] payment page not created; order stays pending", { orderNo: placed.orderNo, provider: deps.payment.provider.name, ...error.logFields() });
-    } else {
-      // A bug in the adapter, not a provider payload: message and stack are safe to log.
-      console.error("[checkout] payment page not created (unexpected error); order stays pending", {
-        orderNo: placed.orderNo,
-        provider: deps.payment.provider.name,
-        error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
-      });
-    }
-    return null;
-  }
-
-  const where = { orderNo: placed.orderNo, paymentId: placed.paymentId, providerOrderId: placed.providerOrderId };
-  try {
-    const stored = await db
-      .update(payments)
-      .set({ snapToken: created.token, redirectUrl: created.redirectUrl })
-      .where(and(eq(payments.id, placed.paymentId), isNull(payments.snapToken)))
-      .returning({ id: payments.id });
-    if (stored.length === 0) console.error("[checkout] payment page created but the attempt already had one; not stored", where);
-  } catch (error) {
-    // The buyer can still pay through the page they are sent to; the notification matches the
-    // attempt by provider_order_id. Only a later "Lanjutkan pembayaran" lacks the stored URL.
-    // Never the driver's message: a failed query's text carries its parameters.
-    console.error("[checkout] payment page created but not stored", { ...where, ...databaseErrorLogFields(error) });
-  }
-  return created.redirectUrl;
-}
-
 /** What is safe to log about a database (or other unexpected) error: its name and the Postgres
  * code and constraint, never the message (drizzle's "Failed query" text carries the parameters:
  * the buyer's email, phone and address). */
@@ -817,7 +768,16 @@ async function placeOrderSteps(db: Database, deps: PlaceOrderDeps, input: PlaceO
   }
   if (outcome.kind === "replay") return replay(db, outcome.order, input, value.contactEmail);
 
-  const redirectUrl = await createPaymentPage(db, deps, outcome, value);
+  const redirectUrl = await requestPaymentPage(db, deps.payment, {
+    paymentId: outcome.paymentId,
+    orderNo: outcome.orderNo,
+    providerOrderId: outcome.providerOrderId,
+    grossAmount: outcome.grossAmount,
+    lines: outcome.paymentLines,
+    customer: { name: value.address.recipientName, email: value.contactEmail, phone: value.contactPhone },
+    expiryMinutes: deps.payment.paymentExpiryMinutes,
+    finishUrl: deps.finishUrl(outcome.orderNo),
+  });
   return {
     ok: true,
     orderId: outcome.orderId,

@@ -305,11 +305,14 @@ describe("placeOrderAction", () => {
 
     process.env.SHIPPING_RATE_PROVIDER = "fake";
     delete process.env.PAYMENT_PROVIDER;
+    // Midtrans (the default) without its key, whatever a developer's .env holds.
+    vi.stubEnv("MIDTRANS_SERVER_KEY", "");
     const second = input();
     expect(await placeOrderAction(second)).toMatchObject({ ok: false, message: "Pembayaran belum bisa diproses. Coba lagi sebentar lagi." });
     expect(await orderFor(second.checkoutAttemptId)).toBeUndefined();
     // Variable names only in the log.
-    expect(JSON.stringify(errors.mock.calls)).toContain("PAYMENT_PROVIDER=midtrans is not available yet");
+    expect(JSON.stringify(errors.mock.calls)).toContain("MIDTRANS_SERVER_KEY is not set");
+    vi.unstubAllEnvs();
     errors.mockRestore();
   });
 
