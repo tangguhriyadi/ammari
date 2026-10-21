@@ -128,6 +128,32 @@ describe("createPayment (Snap)", () => {
     }
   });
 
+  test("a 401 is a rejected key (missing, wrong, or for the other environment): unavailable, flagged, named but never printed", async () => {
+    for (const isProduction of [false, true]) {
+      const provider = createMidtransPaymentProvider({
+        serverKey: SERVER_KEY,
+        isProduction,
+        notificationUrl: null,
+        fetch: async () => jsonResponse(401, { error_messages: ["Access denied due to unauthorized transaction, please check client or server key"] }),
+      });
+      const error = (await provider.createPayment(input).catch((caught: unknown) => caught)) as PaymentProviderError;
+      expect(error).toBeInstanceOf(PaymentProviderError);
+      expect(error.reason).toBe("unavailable");
+      expect(error.keyRejected).toBe(true);
+      const logged = error.logFields();
+      expect(logged).toMatchObject({ reason: "unavailable", status: 401, keyRejected: true });
+      expect(String(logged.message)).toContain("MIDTRANS_SERVER_KEY");
+      expect(String(logged.message)).toContain("wrong key for this environment");
+      expect(String(logged.message)).toContain(isProduction ? "production" : "sandbox");
+      expect(JSON.stringify(logged)).not.toContain(SERVER_KEY);
+    }
+    // Any other failure is not reported as a key problem.
+    const other = createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: false, notificationUrl: null, fetch: async () => jsonResponse(500, {}) });
+    const error = (await other.createPayment(input).catch((caught: unknown) => caught)) as PaymentProviderError;
+    expect(error.keyRejected).toBe(false);
+    expect(error.logFields()).not.toHaveProperty("keyRejected");
+  });
+
   test("honours the caller's abort signal", async () => {
     const controller = new AbortController();
     const provider = createMidtransPaymentProvider({
@@ -183,7 +209,11 @@ describe("getPaymentStatus", () => {
       notificationUrl: null,
       fetch: async () => jsonResponse(200, { status_code: "401", status_message: "Transaction cannot be authorized with the current client/server key." }),
     });
-    await expect(unauthorized.getPaymentStatus("LOCAL-ORD-202612-0001-1")).rejects.toMatchObject({ reason: "unavailable" });
+    await expect(unauthorized.getPaymentStatus("LOCAL-ORD-202612-0001-1")).rejects.toMatchObject({ reason: "unavailable", keyRejected: true });
+    const unauthorizedHttp = createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: true, notificationUrl: null, fetch: async () => jsonResponse(401, { status_code: "401" }) });
+    const rejected = (await unauthorizedHttp.getPaymentStatus("LOCAL-ORD-202612-0001-1").catch((caught: unknown) => caught)) as PaymentProviderError;
+    expect(rejected).toMatchObject({ reason: "unavailable", keyRejected: true, status: 401 });
+    expect(JSON.stringify(rejected.logFields())).not.toContain(SERVER_KEY);
 
     const other = createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: false, notificationUrl: null, fetch: async () => jsonResponse(200, statusBody({ order_id: "LOCAL-ORD-202612-0002-1" })) });
     await expect(other.getPaymentStatus("LOCAL-ORD-202612-0001-1")).rejects.toMatchObject({ reason: "bad_response" });
@@ -256,12 +286,14 @@ describe("expirePayment (expiry sweep)", () => {
       [() => jsonResponse(200, { status_code: "407", order_id: ORDER_ID }), "bad_response"],
       [() => jsonResponse(200, { ...expired(), order_id: "LOCAL-ORD-202612-0002-1" }), "bad_response"],
     ];
-    for (const [response, reason] of cases) {
+    for (const [index, [response, reason]] of cases.entries()) {
       const fetch = vi.fn(async () => response());
       const provider = createMidtransPaymentProvider({ serverKey: SERVER_KEY, isProduction: false, notificationUrl: null, fetch, retryDelayMs: 0 });
       const error = await provider.expirePayment(ORDER_ID).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(PaymentProviderError);
       expect((error as PaymentProviderError).reason).toBe(reason);
+      // The first two cases are a 401 (in the body, then as HTTP status): a rejected key.
+      expect((error as PaymentProviderError).keyRejected).toBe(index < 2);
       if (response().status === 503) expect(fetch).toHaveBeenCalledTimes(2);
     }
   });

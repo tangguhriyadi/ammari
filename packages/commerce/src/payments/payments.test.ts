@@ -8,8 +8,10 @@ import { fakeMidtransServerKey } from "../../test/fake-keys";
 // docs/plans/cart-checkout.md D7, §4.5.6, §12: the pure payment helpers, the fake provider and
 // the env runtime. Nothing here reaches a gateway.
 
-// Fake keys with the real prefixes (sandbox keys carry SB-), built at runtime (test/fake-keys.ts).
+// Fake keys with the real prefixes, built at runtime (test/fake-keys.ts): newer sandbox keys share
+// production's Mid-server- prefix; only an old-style SB- key is recognisably sandbox.
 const SANDBOX_KEY = fakeMidtransServerKey("sandbox");
+const LEGACY_SANDBOX_KEY = fakeMidtransServerKey("legacy-sandbox");
 const PRODUCTION_KEY = fakeMidtransServerKey("production");
 
 const product = { sku: "GB-BLK-M", name: "Gamis Basic Black M", unitPrice: 259_000, qty: 2 };
@@ -106,15 +108,20 @@ describe("paymentRuntimeFromEnv", () => {
     expect(sandbox.ok && sandbox.runtime.provider.name).toBe("midtrans");
   });
 
-  test("real money only in production: sandbox key or sandbox mode refused there, production mode refused elsewhere", () => {
+  test("real money only in production: an SB- key or sandbox mode refused there, production mode refused elsewhere", () => {
     const problems = (env: Record<string, string>) => {
       const result = paymentRuntimeFromEnv(env, origin);
       return result.ok ? [] : result.problems;
     };
-    // A sandbox key in production.
-    expect(problems({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production" })).toContain(
+    // An old-style SB- key in production.
+    expect(problems({ MIDTRANS_SERVER_KEY: LEGACY_SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production" })).toContain(
       "MIDTRANS_SERVER_KEY is a sandbox key but MIDTRANS_IS_PRODUCTION is true",
     );
+    // A Mid-server- key cannot be told apart by shape: accepted in sandbox mode on dev (newer sandbox
+    // keys) and in production mode in production; a wrong-environment key is Midtrans' 401.
+    expect(problems({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "false", DEPLOY_ENV: "dev" })).toEqual([]);
+    expect(problems({ MIDTRANS_SERVER_KEY: PRODUCTION_KEY, MIDTRANS_IS_PRODUCTION: "false", DEPLOY_ENV: "dev" })).toEqual([]);
+    expect(problems({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production" })).toEqual([]);
     // Sandbox mode in production, or in a production build that does not name its environment.
     expect(problems({ MIDTRANS_SERVER_KEY: PRODUCTION_KEY, MIDTRANS_IS_PRODUCTION: "false", DEPLOY_ENV: "production" })).toHaveLength(1);
     expect(problems({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "false", NODE_ENV: "production" })).toHaveLength(1);
@@ -124,7 +131,7 @@ describe("paymentRuntimeFromEnv", () => {
     // Production done right.
     expect(problems({ MIDTRANS_SERVER_KEY: PRODUCTION_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production", NODE_ENV: "production" })).toEqual([]);
     // Names only, never the key.
-    expect(problems({ MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production" }).join(" ")).not.toContain(SANDBOX_KEY);
+    expect(problems({ MIDTRANS_SERVER_KEY: LEGACY_SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production" }).join(" ")).not.toContain(LEGACY_SANDBOX_KEY);
   });
 
   test("an unknown DEPLOY_ENV fails closed; the notification route's provider ignores checkout timing problems", () => {

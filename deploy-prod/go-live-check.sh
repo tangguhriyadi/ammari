@@ -453,7 +453,7 @@ check_checkout_config() {
   elif [ "$state" = "other" ]; then
     report 1 "checkout: web.env MIDTRANS_SERVER_KEY does not look like a Midtrans production server key (Mid-server-...); check what was pasted"
   else
-    report "$(is_eq "$state" "production")" "checkout: web.env MIDTRANS_SERVER_KEY kind is ${state:-unknown}"
+    report "$(is_eq "$state" "production")" "checkout: web.env MIDTRANS_SERVER_KEY kind is ${state:-unknown} (by prefix only; newer sandbox keys share Mid-server-, checkout-prod.md 2.4 verifies the environment)"
   fi
   state="$(grep '^SAME:midtrans:' <<<"$output" | cut -d: -f3)"
   if [ "$state" = "mismatch" ]; then

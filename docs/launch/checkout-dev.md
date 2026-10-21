@@ -171,14 +171,32 @@ the Sandbox account if needed). **Settings → Access Keys**: copy the **Server 
 Key is not used: Snap runs in redirect mode).
 
 **[Mac]** capture it (section 0, way a or b) as `~/ammari-secrets/dev-midtrans-server-key`, then
-check its kind without printing it:
+check that it works on the **Sandbox** without printing it. The prefix says nothing: newer Sandbox
+accounts issue `Mid-server-...` keys, the same shape as production. Instead, ask the Sandbox status
+API about an order id that cannot exist: a valid Sandbox key gets `404` (no such transaction), a
+production key or a mistyped key gets `401`. As in B4, the key goes into a header file (curl reads
+it with `-H @file`), never onto a command line:
 
 ```bash
-grep -q '^SB-' ~/ammari-secrets/dev-midtrans-server-key && echo sandbox-key-ok || echo NOT-A-SANDBOX-KEY
+( H="$HOME/ammari-secrets/.midtrans-header"; trap 'rm -f "$H"' EXIT INT TERM; umask 077
+  printf 'authorization: Basic %s\n' "$(printf '%s:' "$(cat ~/ammari-secrets/dev-midtrans-server-key)" | base64)" > "$H"
+  code="$(curl -sS --max-time 15 -H @"$H" -H 'accept: application/json' \
+    "https://api.sandbox.midtrans.com/v2/KEYCHECK-$(date +%s)/status" \
+    | grep -oE '"status_code" *: *"[0-9]+"' | head -n 1 | tr -dc '0-9')"
+  case "$code" in
+    404) echo sandbox-key-ok ;;
+    401) echo "WRONG-KEY: the Sandbox answered 401 (a production key, or a mistyped key)" ;;
+    *) echo "UNEXPECTED: status_code '${code:-none}' (network? retry once)" ;;
+  esac )
 ```
 
-Expected: `sandbox-key-ok`. (The `SB-` rule is Midtrans' key convention; the app refuses a
-non-`SB-` key only in production mode, so a wrong key here would just fail at Midtrans.)
+Expected: `sandbox-key-ok`. (`printf` is a builtin and `base64` reads the key on stdin, so the key
+never appears in `ps`; only the answer's `status_code` is printed. Midtrans' auth is HTTP Basic
+with the server key as user and an empty password, hence the trailing `:`.) On `WRONG-KEY`, copy
+the key again from **dashboard.sandbox.midtrans.com** (not the production dashboard). The app
+cannot tell the two kinds apart by shape either: on dev it runs with `MIDTRANS_IS_PRODUCTION=false`
+(Sandbox hosts), and a wrong key shows up in the web logs as `rejected MIDTRANS_SERVER_KEY (401)`
+with `keyRejected: true` while checkout refuses to create a payment page.
 
 **B2. [Dashboard: Midtrans Sandbox] Settings** (menu names as of Oct 2026; Midtrans moves them
 sometimes):

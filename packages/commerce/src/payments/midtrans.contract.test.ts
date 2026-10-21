@@ -7,14 +7,17 @@ import { createMidtransPaymentProvider } from "./midtrans";
 //     pnpm --filter @ammari/commerce exec vitest run src/payments/midtrans.contract.test.ts
 // Creates one Snap transaction under a CONTRACT- order id (never a real order's), checks the
 // documented create shape, then the status API before any method is picked (expected: no
-// transaction yet). Sandbox only: refuses anything but an SB- key. Writes to no database.
+// transaction yet). Sandbox only, by mode and host: the provider is built with isProduction false
+// and test/setup.ts lets only the Sandbox hosts through. The key's prefix says nothing (newer
+// sandbox keys start with Mid-server-, like production ones); a production key here is answered
+// 401 by the Sandbox. Writes to no database.
 
 const enabled = process.env.MIDTRANS_CONTRACT_TEST === "1";
 const serverKey = process.env.MIDTRANS_SERVER_KEY ?? "";
 
 describe.skipIf(!enabled)("Midtrans contract (opt-in, real Sandbox)", () => {
   test("Snap create answers a token and a sandbox redirect URL; the status API answers for the order id", { timeout: 40_000 }, async () => {
-    expect(serverKey.startsWith("SB-")).toBe(true);
+    expect(serverKey).not.toBe("");
     const provider = createMidtransPaymentProvider({ serverKey, isProduction: false, notificationUrl: null });
     const providerOrderId = `CONTRACT-ORD-209912-${Date.now().toString().slice(-6)}-1`;
     const created = await provider.createPayment({

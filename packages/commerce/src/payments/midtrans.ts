@@ -39,6 +39,9 @@ import { parsePaymentStatusBody, verifyMidtransSignature } from "./status";
 //   the status of the transaction" when it is no longer pending; 401 for a key that does not
 //   match. https://docs.midtrans.com/reference/expire-transaction
 // The hosts are constants chosen by MIDTRANS_IS_PRODUCTION, never configuration or input (no SSRF).
+// Sandbox and production server keys can share the "Mid-server-" prefix (newer sandbox accounts
+// have no "SB-"), so the key cannot be told apart by its shape: a key used on the wrong environment
+// is caught only by Midtrans answering 401, logged as a key problem (keyRejected) and never retried.
 
 /** Owner decision 2: exactly these methods, no cards (D16). */
 export const MIDTRANS_ENABLED_PAYMENTS = ["other_qris", "gopay", "shopeepay", "bca_va", "bni_va", "bri_va", "echannel", "permata_va"] as const;
@@ -101,6 +104,17 @@ export function createMidtransPaymentProvider(options: MidtransProviderOptions):
   const authorization = `Basic ${Buffer.from(`${options.serverKey}:`, "utf8").toString("base64")}`;
   const fetchFn = () => options.fetch ?? globalThis.fetch;
   const now = options.now ?? (() => new Date());
+  const environment = options.isProduction ? "production" : "sandbox";
+
+  /** A 401 (HTTP or body status_code): the key is missing, wrong, or for the other environment.
+   * Variable names and the mode only, never the key. */
+  function keyRejected(action: string, httpStatus: number): PaymentProviderError {
+    return new PaymentProviderError(
+      "unavailable",
+      `Midtrans ${action} rejected MIDTRANS_SERVER_KEY (401): not configured, or the wrong key for this environment (MIDTRANS_IS_PRODUCTION selects ${environment})`,
+      { status: httpStatus, keyRejected: true },
+    );
+  }
 
   /** One call to the Core API (`/v2/{order_id}/<action>`): 5 s, one retry on a network error or a
    * 5xx, never after a timeout or the caller's abort (the caller has already waited). The body is
@@ -192,6 +206,7 @@ export function createMidtransPaymentProvider(options: MidtransProviderOptions):
       } catch {
         json = null;
       }
+      if (response.status === 401) throw keyRejected("Snap", response.status);
       if (response.status !== 201 && response.status !== 200) {
         // error_messages may echo our request (the buyer's email); only their count is logged.
         const messages = (json as { error_messages?: unknown } | null)?.error_messages;
@@ -218,6 +233,7 @@ export function createMidtransPaymentProvider(options: MidtransProviderOptions):
       const { response, json } = await apiRequest("GET", providerOrderId, "status", statusOptions);
       const bodyCode = (json as { status_code?: unknown } | null)?.status_code;
       if (response.status === 404 || bodyCode === "404") return null;
+      if (response.status === 401 || bodyCode === "401") throw keyRejected("status", response.status);
       if (response.status !== 200) throw new PaymentProviderError("unavailable", `Midtrans status answered ${response.status}`, { status: response.status });
       // The API answers HTTP 200 with its own status_code; a 401/5xx in the body is a key or
       // gateway problem, never a transaction state.
@@ -234,6 +250,7 @@ export function createMidtransPaymentProvider(options: MidtransProviderOptions):
       // modify the status of the transaction" (no longer pending: paid, expired or cancelled in
       // the meantime). Either way the caller re-reads the status.
       if (response.status === 404 || response.status === 412 || bodyCode === "404" || bodyCode === "412") return null;
+      if (response.status === 401 || bodyCode === "401") throw keyRejected("expire", response.status);
       if (response.status !== 200) throw new PaymentProviderError("unavailable", `Midtrans expire answered ${response.status}`, { status: response.status });
       if (bodyCode !== "407") throw new PaymentProviderError(typeof bodyCode === "string" && /^(401|403|5[0-9]{2})$/.test(bodyCode) ? "unavailable" : "bad_response", `Midtrans expire answered status_code ${typeof bodyCode === "string" ? bodyCode.slice(0, 8) : typeof bodyCode}`, { status: response.status });
       return reportFor(providerOrderId, json, response.status, "expire");

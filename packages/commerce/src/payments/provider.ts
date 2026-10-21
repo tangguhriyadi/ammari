@@ -47,12 +47,16 @@ export type PaymentProviderErrorReason = "unavailable" | "bad_response";
 export class PaymentProviderError extends Error {
   readonly reason: PaymentProviderErrorReason;
   readonly status: number | undefined;
+  /** The gateway refused the server key (401): not configured, or a key for the other environment.
+   * Always `unavailable`, so checkout fails closed; flagged so the log says what to fix. */
+  readonly keyRejected: boolean;
 
-  constructor(reason: PaymentProviderErrorReason, message: string, details: { status?: number; cause?: unknown } = {}) {
+  constructor(reason: PaymentProviderErrorReason, message: string, details: { status?: number; cause?: unknown; keyRejected?: boolean } = {}) {
     super(message, details.cause === undefined ? undefined : { cause: details.cause });
     this.name = "PaymentProviderError";
     this.reason = reason;
     this.status = details.status;
+    this.keyRejected = details.keyRejected === true;
   }
 
   /** Safe to log: reason, status and our own message; the cause by name and code only (e.g.
@@ -63,7 +67,7 @@ export class PaymentProviderError extends Error {
       cause instanceof Error
         ? { name: cause.name, code: (cause as { code?: unknown }).code ?? (cause.cause as { code?: unknown } | undefined)?.code }
         : undefined;
-    return { reason: this.reason, status: this.status, message: this.message, cause: causeSummary };
+    return { reason: this.reason, status: this.status, message: this.message, ...(this.keyRejected ? { keyRejected: true } : {}), cause: causeSummary };
   }
 }
 

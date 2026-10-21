@@ -177,7 +177,9 @@ case "$v" in
   *) echo "KEYKIND:biteship:other" ;;
 esac
 v="$(env_value env/web.env MIDTRANS_SERVER_KEY || true)"
-# Midtrans' key convention: production server keys start with Mid-server-, sandbox ones with SB-.
+# Midtrans' key shapes: production server keys start with Mid-server-; old sandbox keys with SB-,
+# newer sandbox keys with Mid-server- too. So "production" here only means "not SB-": the key's
+# environment is verified against the production API in checkout-prod.md 2.4 (404 vs 401).
 case "$v" in
   SB-*) echo "KEYKIND:midtrans:sandbox" ;;
   Mid-server-*) echo "KEYKIND:midtrans:production" ;;

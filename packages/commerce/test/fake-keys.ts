@@ -5,9 +5,11 @@
 
 const MIDTRANS_SERVER_PREFIX = ["Mid", "server", ""].join("-");
 
-/** A fake Midtrans server key: sandbox keys carry the "SB-" prefix, production keys do not. */
-export function fakeMidtransServerKey(mode: "sandbox" | "production", tag = "FAKE"): string {
-  return `${mode === "sandbox" ? "SB-" : ""}${MIDTRANS_SERVER_PREFIX}${tag}${"0".repeat(20)}`;
+/** A fake Midtrans server key. Newer sandbox accounts and production both use the "Mid-server-"
+ * prefix (only the default tag differs, so the two never collide); `legacy-sandbox` is an old-style
+ * sandbox key with the "SB-" prefix, the only shape the config can still refuse in production. */
+export function fakeMidtransServerKey(mode: "sandbox" | "legacy-sandbox" | "production", tag = mode === "production" ? "FAKEPROD" : "FAKESBX"): string {
+  return `${mode === "legacy-sandbox" ? "SB-" : ""}${MIDTRANS_SERVER_PREFIX}${tag}${"0".repeat(20)}`;
 }
 
 /** A fake Biteship API key with the real mode prefix (`biteship_test.` / `biteship_live.`). */

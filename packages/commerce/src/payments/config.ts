@@ -48,8 +48,12 @@ function minutes(value: string | undefined, fallback: number): number | null {
  * `MIDTRANS_NOTIFICATION_URL` is optional (sent as X-Override-Notification, D8; https only). Real
  * money only where it belongs: the production environment (`DEPLOY_ENV=production`, or a production
  * build that does not say which environment it is) must use production mode, and production mode
- * is refused everywhere else; a sandbox key (`SB-` prefix, Midtrans' sandbox key convention) is
- * refused in production mode. */
+ * is refused everywhere else. An old-style sandbox key (`SB-` prefix) is refused in production
+ * mode, but newer sandbox keys carry the same `Mid-server-` prefix as production keys, so the key's
+ * shape cannot say which environment it belongs to and a `Mid-server-` key is accepted in either
+ * mode. The real protection is `MIDTRANS_IS_PRODUCTION` (tied to `DEPLOY_ENV` above, choosing the
+ * API host) plus Midtrans itself answering 401 to a key used on the wrong environment; the adapter
+ * logs that as `keyRejected` and checkout fails closed (./midtrans.ts). */
 /** Only the provider (no checkout timing or prefix), for the notification route: a bad checkout
  * variable must never stop a paid notification from being verified and applied. */
 export function paymentProviderFromEnv(env: PaymentEnv, options: { siteOrigin: string }): { ok: true; provider: PaymentProvider } | { ok: false; problems: string[] } {
@@ -109,6 +113,7 @@ function midtransFromEnv(env: PaymentEnv, problems: string[]): PaymentProvider |
   if (deployEnvProblem) problems.push(deployEnvProblem);
   if (isProductionDeploy && mode === "false") problems.push("MIDTRANS_IS_PRODUCTION must be true when DEPLOY_ENV is production or unset");
   if (!isProductionDeploy && isProduction) problems.push("MIDTRANS_IS_PRODUCTION=true is only allowed when DEPLOY_ENV is production");
+  // Only an explicit SB- key is known to be sandbox; a Mid-server- key may be either (see above).
   if (isProduction && serverKey.startsWith("SB-")) problems.push("MIDTRANS_SERVER_KEY is a sandbox key but MIDTRANS_IS_PRODUCTION is true");
 
   let notificationUrl: string | null = null;

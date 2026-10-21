@@ -1223,8 +1223,13 @@ Notes from session 11 for later sessions:
   `https://<dev host>/api/payments/midtrans/notification` (and `MIDTRANS_NOTIFICATION_URL` per
   environment, since local cannot receive it), Finish redirect URL (callbacks.finish overrides it per
   transaction), enable exactly the 8 methods, no card. The Cloudflare Access bypass for exactly that
-  path on dev. The rule that sandbox server keys start with `SB-` (production keys do not) comes from Midtrans' key convention, not
-  their docs: check the real keys when they arrive. Snap's `page_expiry` was not set (the token
+  path on dev. The rule that sandbox server keys start with `SB-` (production keys do not) came from Midtrans' key convention, not
+  their docs, and **turned out false** (dev sandbox run, 2026-10-21): newer Sandbox accounts issue
+  `Mid-server-` keys (35 characters) like production. The config now refuses only an explicit `SB-`
+  key in production mode; the real protection is `MIDTRANS_IS_PRODUCTION` (tied to `DEPLOY_ENV`)
+  plus Midtrans answering 401 to a wrong-environment key, logged as `keyRejected` (checkout fails
+  closed). The runbooks verify a key with a status call for a non-existent order id (404 valid,
+  401 wrong key or environment). Snap's `page_expiry` was not set (the token
   page lives 24 h by default; the transaction itself expires after 60 minutes); revisit if buyers
   reopen dead pages. `other_qris` has its own 15-minute default; confirm in the Sandbox that the
   Snap `expiry` (60 minutes) wins. The shipping config's `DEPLOY_ENV` check is still a denylist

@@ -277,23 +277,34 @@ name the gateway" (plan §11.1); `legal-drafts.md` has the optional sentence.
 # Midtrans production dashboard → Settings → Access Keys → Server Key → Copy, then:
 (umask 077 && pbpaste > ~/ammari-secrets/prod-midtrans-server-key) && pbcopy < /dev/null
 K=~/ammari-secrets/prod-midtrans-server-key
-grep -q '^Mid-server-' "$K" \
+( H="$HOME/ammari-secrets/.midtrans-header"; trap 'rm -f "$H"' EXIT INT TERM; umask 077
+  printf 'authorization: Basic %s\n' "$(printf '%s:' "$(cat "$K")" | base64)" > "$H"
+  code="$(curl -sS --max-time 15 -H @"$H" -H 'accept: application/json' \
+    "https://api.midtrans.com/v2/KEYCHECK-$(date +%s)/status" \
+    | grep -oE '"status_code" *: *"[0-9]+"' | head -n 1 | tr -dc '0-9')"
+  echo "Midtrans production API answered status_code ${code:-none}"
+  [ "$code" = 404 ] ) \
   && deploy/set-env-var.sh ~/ammari-secrets/prod-web.env MIDTRANS_SERVER_KEY < "$K" \
   && deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env MIDTRANS_SERVER_KEY < "$K" \
   && deploy/set-env-var.sh --same ~/ammari-secrets/prod-web.env ~/ammari-secrets/prod-admin.env MIDTRANS_SERVER_KEY \
   && rm "$K" && echo MIDTRANS-KEY-DONE \
-  || echo "STOPPED: not a Midtrans production server key (Mid-server-...), or a write failed; nothing after the failing step ran"
+  || echo "STOPPED: the key does not work on the production API, or a write failed; nothing after the failing step ran"
 printf 'true\n' | deploy/set-env-var.sh ~/ammari-secrets/prod-web.env MIDTRANS_IS_PRODUCTION
 printf 'true\n' | deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env MIDTRANS_IS_PRODUCTION
 printf 'https://ammari.id/api/payments/midtrans/notification\n' | deploy/set-env-var.sh ~/ammari-secrets/prod-web.env MIDTRANS_NOTIFICATION_URL
 ```
 
-Expected: `MIDTRANS_SERVER_KEY: MATCH` then `MIDTRANS-KEY-DONE`. `STOPPED` with a key that does
-look right in the dashboard: Midtrans' prefix convention (`Mid-server-` in production, `SB-Mid-server-`
-in Sandbox) is not in their docs (plan session 11 note), so check the dashboard's key once more; if
-it really has another prefix, run the three `set-env-var.sh` lines by hand and tell the next
-session (the go-live check reports the kind as `other`). **`MIDTRANS_ORDER_ID_PREFIX` stays empty in
-prod** (plan D7). Never set `PAYMENT_PROVIDER` or `SHIPPING_RATE_PROVIDER`.
+Expected: `Midtrans production API answered status_code 404`, `MIDTRANS_SERVER_KEY: MATCH`, then
+`MIDTRANS-KEY-DONE`. The check asks the **production** status API about an order id that cannot
+exist (the key travels in a header file that is removed afterwards, never on a command line or in
+`ps`; only the answer's `status_code` is printed): `404` (no such transaction) means the key is
+valid on production; `401` means a Sandbox key (newer Sandbox keys also start with `Mid-server-`,
+so the prefix proves nothing) or a mistyped one: copy it again from **dashboard.midtrans.com**, not
+the Sandbox dashboard, and rerun the block. Anything else (`none`, `5xx`): network or Midtrans
+trouble, retry later; do not set the key by hand. The app itself only refuses an old-style `SB-`
+key in production; a wrong-environment key would surface as `rejected MIDTRANS_SERVER_KEY (401)`
+with `keyRejected: true` in the web logs while checkout refuses to create payment pages.
+**`MIDTRANS_ORDER_ID_PREFIX` stays empty in prod** (plan D7). Never set `PAYMENT_PROVIDER` or `SHIPPING_RATE_PROVIDER`.
 
 **2.5 [Dashboard: Biteship] Grow plan, couriers, live key.**
 
@@ -401,7 +412,8 @@ deploy-prod/go-live-check.sh --checkout=ready
 ```
 
 Expected: no `FAIL`. It verifies, without printing any secret: the production Midtrans key in web
-and admin (same value, not `SB-`), `MIDTRANS_IS_PRODUCTION=true` in both, admin
+and admin (same value, not an old-style `SB-` key; the prefix cannot tell a newer Sandbox key, so 2.4's
+API check is what proves the environment), `MIDTRANS_IS_PRODUCTION=true` in both, admin
 `DEPLOY_ENV=production`, the notification URL, a live Biteship key and its base URL, no fake
 provider and no order-id prefix, the cron secret matching in web.env and cron.env, the internal
 `web` alias, and in the cron log at least one `sweep -> 200` and one `emails/dispatch -> 200` with
