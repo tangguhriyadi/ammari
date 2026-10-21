@@ -28,7 +28,7 @@ verifies against *our* CA root, not Cloudflare's published Global CA. The two tr
 not interchangeable: pointing prod's `trust_pool` at Cloudflare's Global CA (or leaving Zone-level
 off while the Caddyfile expects it) breaks origin pulls outright.
 
-## 2. The flow, as actually done (status: leaf+key uploaded, CA on origin, toggle OFF)
+## 2. The flow, as actually done (status: leaf+key uploaded, CA on origin, toggle ON since go-live; see step 5)
 
 This was done directly against the real Cloudflare dashboard and the real VPS — not simulated —
 per `docs/plans/prod-deploy.md` §4 step 5. Recorded here for the renewal procedure (§3 below) and
@@ -78,7 +78,11 @@ so this isn't tribal knowledge.
    Caddyfile (this session's own deliverable) exists would make the origin unreachable with
    nothing behind it to notice or roll back cleanly — the same 520-with-no-useful-Caddy-log
    failure mode dev's own README warns about for the opposite (Zone-level-on-with-nothing-
-   uploaded) misconfiguration. **Still OFF as of this writing** — turn it on only after:
+   uploaded) misconfiguration. **Status (session 17 of the cart plan, 2026-10-21):** this line
+   said "Still OFF" at the time of writing; prod has served through Caddy's `client_auth` with
+   our CA since go-live, which only works with this toggle ON, and `deploy-prod/go-live-check.sh`
+   proves the boundary on every run. Confirm once in the dashboard that Zone-level shows ON
+   (docs/launch/checkout-prod.md 2.3). The original order, for a rebuild: turn it on only after:
    - `deploy-prod/Caddyfile` (this session) is deployed and `caddy validate` passes against it
      on the real VPS, and
    - the CA root from step 4 is confirmed present and readable at

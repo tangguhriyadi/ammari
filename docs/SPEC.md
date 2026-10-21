@@ -7,53 +7,43 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
 
 ## Status
 
+As of 2026-10-21 (cart plan session 17).
+
 **Built:**
 
-- Schema v1 (`packages/db`): products/fabrics/catalog, orders & finance, customers & vouchers,
-  RBAC, staff auth tables.
+- Schema (`packages/db`): products/fabrics/catalog, orders & finance, customers & vouchers, RBAC,
+  staff and customer auth tables, suppliers/purchases/receipts, and the checkout schema
+  (migrations 0030 to 0033: carts, stock holds, payments, shipping areas and quotes, order emails,
+  login links).
 - Staff auth + RBAC (`apps/admin`): email OTP + Google login, server-side permission checks (§9,
-  §10.1).
-- Admin shell: app shell, design tokens, permission-aware navigation.
-- Products, fabrics, and fabric colors (`apps/admin`), including SKU generation and pagination.
-- Product photos, per color, with thumbnail selection, staged uploads, and S3-backed storage
-  (`packages/storage`).
-- Customer auth + account (`apps/web`): email OTP + Google self-signup, mandatory PDP consent
-  step, optional profile completion (§10.3).
-- Stock (`/stock`), production (`/production`), and raw-material stock (fabric and accessories),
-  all on append-only, moving-average ledgers (§5.1).
-- Order, stock and thank-you-card write paths (`transitionOrderStatus`, `createOrder`,
-  `adjustStock`, `saveStockCount`, the SKU row lock, audit log, domain errors) live in
-  `packages/commerce` (`@ammari/commerce`), shared by both apps (docs/plans/cart-checkout.md D1).
-  Admin-only read queries stay in `apps/admin`.
-- Suppliers (`/suppliers`), purchase documents with goods receipts (`/purchases`), production
-  output receipts, defect stock recorded at receipt (`/stock/defects`, plus a "Cacat" figure on
-  every stock list and item page), and defect dispositions: return to the supplier/tailor for a
-  replacement (re-opening a closed document), release by lelang / hibah / dibuang, their
-  reversals, and read-only variance figures on each purchase and batch (§5.1a;
-  docs/plans/suppliers-goods-receipt.md, complete through S7), plus the all-receipts list
-  (`/receipts`, "Penerimaan").
+  §10.1); admin shell with permission-aware navigation.
+- Products, fabrics, fabric colors, product photos (`packages/storage`, Cloudflare R2), the
+  storefront CMS (homepage sections, info pages, store settings) and product shipping weight.
+- Stock, production and raw-material stock on append-only, moving-average ledgers (§5.1);
+  suppliers, purchase documents with goods receipts, production output receipts, defect stock and
+  dispositions (§5.1a; docs/plans/suppliers-goods-receipt.md).
+- Orders (`/orders`), packing with printable QR thank-you cards (`/packing`), the shared order,
+  stock and card write paths in `packages/commerce` (`@ammari/commerce`).
+- Main site (`apps/web`): catalog, product pages, customer login and account (§10.3), voucher
+  claim flow (`/claim/[token]`), info pages.
+- **Cart, checkout, online payment and web orders** (docs/plans/cart-checkout.md Phase C, sessions
+  1 to 17): cart, checkout with Biteship shipping quotes and the Rp20.000 shipping subsidy,
+  Midtrans Snap payments (verified webhook, expiry sweep), order emails, the order login link,
+  "Pesanan saya", and admin handling of checkout orders. **Dark behind `STOREFRONT_CART_ENABLED`**:
+  built and tested; on dev only after `docs/launch/checkout-dev.md`; prod still runs the release
+  from before the checkout sessions (migration 0029) with the flag off.
+- Dev and prod deploy pipelines, backups, monitoring (`docs/deploy.md`, `docs/deploy-prod.md`).
 
 **Next:**
 
-- Orders import (`/import` — Shopee/TikTok Shop export parsing).
-- Packing (`/packing`) + QR thank-you cards.
-- Overview dashboard (§6 metrics).
-- Main site (`apps/web`) — voucher claim flow and the rest of §3.3/§3.4's v1 and December 2026
-  scope.
-- Cart, checkout, online payment, web orders, transactional email, order login link, "Pesanan
-  saya" and courier tracking (Biteship) — plan **approved** (docs/plans/cart-checkout.md; Phase C
-  target ~20 Nov 2026, Phase K in the first weeks of December). Described in §3.4, §5.2, §5.3,
-  §8, §10.2 and §10.3. Built so far (plan sessions 1 to 8): the shared `@ammari/commerce`
-  package, the checkout schema, plain-field addresses, stock holds, the cart (backend, PDP
-  "Tambah ke keranjang", header count, `/cart`), the shipping-quote schema (migration 0031)
-  with the admin "Berat kirim (gram)" field, and the shipping rate layer (Biteship client, area
-  search route, quotes with cache and daily budgets; migration 0032); checkout, payment and the
-  rest are not built yet.
-  Everything ships dark behind `STOREFRONT_CART_ENABLED` until 1 Dec 2026. **Revised 2026-10-21:**
-  free shipping is replaced by a shipping subsidy of at most Rp20.000 per order (§3.4), so
-  shipping rates and area search are now part of the checkout launch (plan sessions 7 and 8);
-  booking and tracking stay in Phase K. **Revised again 2026-10-21:** the shipping provider is
-  **Biteship**, not Komerce (one area id across rates, orders and tracking; Grow plan; plan D18).
+- Checkout launch: `docs/launch/checkout-dev.md` (sandbox run on dev), then
+  `docs/launch/checkout-prod.md` (deploy 0030 to 0033 with the flag off, pre-launch setup, launch on
+  **1 Dec 2026**); owner texts in `docs/launch/legal-drafts.md`.
+- Phase K: Biteship courier booking and tracking (plan §15; target the first weeks of December).
+- The 90-day anonymization of unpaid checkout orders (plan §11; the privacy policy promises it,
+  first due 1 Mar 2027) and saved addresses at checkout (deferred, plan session 10 notes).
+- Orders import (`/import`, Shopee/TikTok Shop exports) and the Overview dashboard (§6 metrics):
+  placeholders today.
 
 ## 1. Goals
 
@@ -845,8 +835,8 @@ recorded but never fails a payment webhook; a cron pass (`POST /api/internal/ema
 
 ### 10.3 Customer login (apps/web)
 
-Built — see docs/plans/voucher-claim.md (session 1) for the full plan; the voucher claim flow
-itself (`/claim/[token]`) is session 2, not yet built.
+Built — see docs/plans/voucher-claim.md for the full plan; the voucher claim flow itself
+(`/claim/[token]`) is built too.
 
 - Self sign-up allowed (unlike staff), via Google or email OTP.
 - **Login creates only the minimal identity needed to authenticate — it never captures PDP
@@ -930,7 +920,7 @@ separate links:
 ## 11. Pre-deploy checklist
 
 Added for the Dec 2026 checkout (details in docs/plans/cart-checkout.md §12, §14 and §15
-session 17; runbook in `docs/runbooks/` when written): Midtrans production approval for exactly
+session 17; step-by-step runbooks: `docs/launch/checkout-dev.md` and `docs/launch/checkout-prod.md`): Midtrans production approval for exactly
 the §3.4 methods and production keys in the prod env; the payment notification URL set, and the
 dev site's Cloudflare Access bypass for exactly that one path; the internal cron service (expiry
 sweeper every 5 minutes, retention job daily, Biteship tracking polls in Phase K) with

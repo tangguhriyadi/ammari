@@ -504,6 +504,30 @@ describe("shippingRuntimeFromEnv", () => {
     });
   });
 
+  test("an unknown DEPLOY_ENV fails closed with either key (a typo must not unlock a test key in prod)", async () => {
+    await withRollback(async (tx) => {
+      for (const deployEnv of ["prod", "Production", "staging", "production "]) {
+        for (const key of [fakeBiteshipKey("test"), fakeBiteshipKey("live")]) {
+          const result = shippingRuntimeFromEnv(tx, { ...complete, BITESHIP_API_KEY: key, NODE_ENV: "production", DEPLOY_ENV: deployEnv });
+          if (deployEnv === "production ") {
+            // Trimmed like the payment check: this one IS production, so only the test key is refused.
+            expect(result.ok).toBe(key.startsWith("biteship_live."));
+          } else {
+            expect(result).toEqual({ ok: false, problems: ["DEPLOY_ENV must be production, dev, development or test"] });
+          }
+        }
+      }
+      for (const deployEnv of ["dev", "development", "test"]) {
+        expect(shippingRuntimeFromEnv(tx, { ...complete, NODE_ENV: "production", DEPLOY_ENV: deployEnv }).ok).toBe(true);
+      }
+      // Blank counts as unset: a production build then refuses the test key.
+      expect(shippingRuntimeFromEnv(tx, { ...complete, NODE_ENV: "production", DEPLOY_ENV: " " })).toEqual({
+        ok: false,
+        problems: ["BITESHIP_API_KEY is a test key but DEPLOY_ENV is production or unset"],
+      });
+    });
+  });
+
   test("a live key is fine in production; an unknown provider name is refused", async () => {
     await withRollback(async (tx) => {
       expect(shippingRuntimeFromEnv(tx, { ...complete, BITESHIP_API_KEY: fakeBiteshipKey("live"), DEPLOY_ENV: "production" }).ok).toBe(true);

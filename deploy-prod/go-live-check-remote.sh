@@ -104,16 +104,31 @@ docker ps --format '{{.Names}}|{{.Label "com.docker.compose.service"}}|{{.Ports}
 done
 echo "PORTAUDIT_DONE:0"
 
+# The LAST line for a key wins (like docker compose), with an `export ` prefix, indentation, a CR,
+# outer blanks and one pair of surrounding quotes dropped the same way compose reads them.
+env_value() {
+  # $1 file, $2 key. Prints the value (captured by the caller only) or returns 1 when absent.
+  local line value
+  [ -f "$1" ] || return 1
+  line="$(grep -E "^[[:blank:]]*(export[[:blank:]]+)?$2=" "$1" 2>/dev/null | tail -n 1)" || return 1
+  [ -n "$line" ] || return 1
+  value="$(printf '%s' "${line#*=}" | tr -d '\r' | sed -e 's/^[[:blank:]]*//' -e 's/[[:blank:]]*$//')"
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s' "$value"
+}
+
 if [ -f env/web.env ]; then
-  v="$(grep -m1 '^STOREFRONT_CART_ENABLED=' env/web.env || true)"
-  echo "ENVKV:web.env:${v:-STOREFRONT_CART_ENABLED=<missing>}"
-  v="$(grep -m1 '^DEPLOY_ENV=' env/web.env || true)"
-  echo "ENVKV:web.env:${v:-DEPLOY_ENV=<missing>}"
+  for key in STOREFRONT_CART_ENABLED DEPLOY_ENV; do
+    if v="$(env_value env/web.env "$key")"; then echo "ENVKV:web.env:$key=$v"; else echo "ENVKV:web.env:$key=<missing>"; fi
+  done
 else
   echo "ENVMISSING:web.env"
 fi
 
-for f in admin.env web.env db.env backup.env; do
+for f in admin.env web.env db.env backup.env cron.env; do
   if [ ! -f "env/$f" ]; then
     echo "ENVMISSING:$f"
     continue
@@ -125,6 +140,70 @@ for f in admin.env web.env db.env backup.env; do
   done
   echo "ENVCHECKED:$f"
 done
+
+# --- Checkout configuration (docs/launch/checkout-prod.md). Secret values stay in this remote
+# shell's variables and are never printed: only set/empty/missing, a key KIND (test/live,
+# sandbox/production) or a MATCH between two files. Non-secret flags are printed as KEY=value.
+# env_value (above) reads them the way docker compose does.
+cfg_state() {
+  local v
+  if v="$(env_value "env/$1" "$2")"; then
+    if [ -n "$v" ]; then echo "CFG:$1:$2:set"; else echo "CFG:$1:$2:empty"; fi
+  else
+    echo "CFG:$1:$2:missing"
+  fi
+}
+cfg_kv() {
+  local v
+  if v="$(env_value "env/$1" "$2")"; then echo "CFGKV:$1:$2=$v"; else echo "CFGKV:$1:$2=<missing>"; fi
+}
+for key in MIDTRANS_SERVER_KEY BITESHIP_API_KEY BITESHIP_ORIGIN_AREA_ID INTERNAL_CRON_SECRET RESEND_API_KEY EMAIL_FROM CUSTOMER_BETTER_AUTH_SECRET; do
+  cfg_state web.env "$key"
+done
+cfg_state admin.env MIDTRANS_SERVER_KEY
+cfg_state cron.env INTERNAL_CRON_SECRET
+for key in MIDTRANS_IS_PRODUCTION MIDTRANS_ORDER_ID_PREFIX MIDTRANS_NOTIFICATION_URL PAYMENT_PROVIDER SHIPPING_RATE_PROVIDER BITESHIP_BASE_URL; do
+  cfg_kv web.env "$key"
+done
+cfg_kv admin.env MIDTRANS_IS_PRODUCTION
+cfg_kv admin.env DEPLOY_ENV
+cfg_kv admin.env PAYMENT_PROVIDER
+
+v="$(env_value env/web.env BITESHIP_API_KEY || true)"
+case "$v" in
+  biteship_live.*) echo "KEYKIND:biteship:live" ;;
+  biteship_test.*) echo "KEYKIND:biteship:test" ;;
+  "") echo "KEYKIND:biteship:missing" ;;
+  *) echo "KEYKIND:biteship:other" ;;
+esac
+v="$(env_value env/web.env MIDTRANS_SERVER_KEY || true)"
+# Midtrans' key convention: production server keys start with Mid-server-, sandbox ones with SB-.
+case "$v" in
+  SB-*) echo "KEYKIND:midtrans:sandbox" ;;
+  Mid-server-*) echo "KEYKIND:midtrans:production" ;;
+  "") echo "KEYKIND:midtrans:missing" ;;
+  *) echo "KEYKIND:midtrans:other" ;;
+esac
+a="$(env_value env/web.env MIDTRANS_SERVER_KEY || true)"
+b="$(env_value env/admin.env MIDTRANS_SERVER_KEY || true)"
+if [ -z "$a" ] || [ -z "$b" ]; then echo "SAME:midtrans:missing"; elif [ "$a" = "$b" ]; then echo "SAME:midtrans:match"; else echo "SAME:midtrans:mismatch"; fi
+a="$(env_value env/web.env INTERNAL_CRON_SECRET || true)"
+b="$(env_value env/cron.env INTERNAL_CRON_SECRET || true)"
+if [ -z "$a" ] || [ -z "$b" ]; then echo "SAME:cron:missing"; elif [ "$a" != "$b" ]; then echo "SAME:cron:mismatch"; elif [ "${#a}" -lt 32 ]; then echo "SAME:cron:short"; else echo "SAME:cron:match"; fi
+unset v a b
+
+# The floating `web` alias (cron and admin revalidation): a bare recreate of the web slot drops it
+# (deploy-prod/recreate-active-slot.sh).
+if docker compose exec -T caddy curl -sf "http://web:3000/api/health" >/dev/null 2>&1 </dev/null; then
+  echo "WEBALIAS:ok"
+else
+  echo "WEBALIAS:fail"
+fi
+
+# The cron service's last 15 minutes (log lines carry no secret: cron.sh never prints it).
+cron_log="$(docker compose logs --no-log-prefix --since 15m cron 2>/dev/null </dev/null || true)"
+echo "CRONLOG:sweep200=$(grep -c '/api/internal/payments/sweep -> 200' <<<"$cron_log"):email200=$(grep -c '/api/internal/emails/dispatch -> 200' <<<"$cron_log"):errors=$(grep -c 'ERROR\|ALERT' <<<"$cron_log"):idle=$(grep -c 'idle (no sweep' <<<"$cron_log")"
+unset cron_log
 
 for t in pg-backup.timer disk-alert.timer backup-check.timer health-check.timer; do
   # No `|| echo unknown` fallback here: `systemctl is-active` always prints the unit's state word

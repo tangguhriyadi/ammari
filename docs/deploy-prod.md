@@ -297,14 +297,21 @@ deploy-prod/upload-prod-env.sh
 **Redeploying the same SHA through the GitHub workflow does *not* restart anything** —
 `remote-deploy.sh` checks `deployed-sha-<app>` and skips an app entirely if the target SHA
 already matches. An env-file change needs an explicit, manual recreate of whichever slot is
-currently active:
+currently active, **through `recreate-active-slot.sh`** (synced to the VPS by every deploy):
 
 ```bash
 ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121
 cd /opt/ammari-prod
-docker compose up -d --force-recreate "admin-$(cat active-slot-admin)"
-docker compose up -d --force-recreate "web-$(cat active-slot-web)"
+./recreate-active-slot.sh admin
+./recreate-active-slot.sh web      # also re-attaches the internal `web` alias and recreates cron
 ```
+
+**Never a bare `docker compose up -d --force-recreate "web-$(cat active-slot-web)"`** (this
+section said so until 2026-10-21): the floating internal `web` alias that admin's storefront
+revalidation and the cron service use is attached by `remote-deploy.sh` with `docker network
+connect`, and a recreated container comes back without it, so cron logs `no answer` every 5
+minutes and admin's revalidation fails until the next deploy (reproduced on a local copy of the
+prod compose layout). If that already happened, run `./recreate-active-slot.sh web` once.
 
 Run only the one(s) whose env file actually changed. **This is a brief, single-slot restart, not
 a blue-green flip** — there's a short gap (a few seconds, while the container restarts) during
@@ -314,13 +321,18 @@ reach for it as a substitute for the real deploy workflow.
 ### 3.3 Adding a brand-new secret, without ever displaying it
 
 ```bash
-# On your Mac — add the new KEY=value line with your editor (never `echo`/`cat` it to a terminal):
-$EDITOR ~/ammari-secrets/prod-admin.env
+# On your Mac, in the repo — a hidden prompt (read -s); the value never reaches the terminal,
+# a command line or shell history:
+deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env NEW_KEY
 # then upload + recreate as above
 deploy-prod/upload-prod-env.sh
 ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 \
-  'cd /opt/ammari-prod && docker compose up -d --force-recreate "admin-$(cat active-slot-admin)"'
+  'cd /opt/ammari-prod && ./recreate-active-slot.sh admin'
 ```
+
+`deploy/set-env-var.sh FILE KEY < file` takes the value from a file instead (one line), and
+`deploy/set-env-var.sh --check FILE KEY...` / `--same FILE_A FILE_B KEY` report set/empty/missing
+or MATCH/MISMATCH without showing a value.
 
 ### 3.4 The internal cron service's secret (payment expiry sweep, retention)
 
@@ -336,14 +348,15 @@ plan, or earlier: the sweep only acts on existing checkout orders, so it is a no
 off).
 
 ```bash
-# On your Mac — one value, in two files, never displayed:
-openssl rand -hex 32 > ~/ammari-secrets/.cron-secret && chmod 600 ~/ammari-secrets/.cron-secret
-$EDITOR ~/ammari-secrets/prod-web.env    # add INTERNAL_CRON_SECRET=<paste the value>
-$EDITOR ~/ammari-secrets/prod-cron.env   # only: INTERNAL_CRON_SECRET=<same value>
+# On your Mac, in the repo — one value, in two files, never displayed:
+(umask 077 && openssl rand -hex 32 > ~/ammari-secrets/.cron-secret)
+deploy/set-env-var.sh ~/ammari-secrets/prod-web.env INTERNAL_CRON_SECRET < ~/ammari-secrets/.cron-secret
+deploy/set-env-var.sh ~/ammari-secrets/prod-cron.env INTERNAL_CRON_SECRET < ~/ammari-secrets/.cron-secret
+deploy/set-env-var.sh --same ~/ammari-secrets/prod-web.env ~/ammari-secrets/prod-cron.env INTERNAL_CRON_SECRET
 rm ~/ammari-secrets/.cron-secret
 deploy-prod/upload-prod-env.sh           # uploads prod-cron.env too when it exists
 ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 \
-  'cd /opt/ammari-prod && docker compose up -d --force-recreate "web-$(cat active-slot-web)" cron'
+  'cd /opt/ammari-prod && ./recreate-active-slot.sh web'   # web, its `web` alias, then cron
 # ~30 s later: both lines answer 200
 ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 \
   'cd /opt/ammari-prod && docker compose logs --tail 20 cron'
@@ -749,8 +762,8 @@ longer load `env/admin.env` at all. Do this once, in order:
 | GHCR access token (classic PAT, `read:packages`, used for `docker login ghcr.io` as `deploy`) | **~Oct 2027** (1-year token) | GitHub → Settings → Developer settings → Personal access tokens → generate a new one, same `read:packages` scope. On the VPS, as `deploy`: `echo "<new PAT>" \| docker login ghcr.io -u <github-username> --password-stdin`. |
 | Cloudflare zone-level AOP leaf cert (`client.pem`/`client.key`, uploaded to Cloudflare) | **2036** | `deploy-prod/cloudflare/README.md` §3 — reissue a new leaf from the **same CA** (never regenerate the CA itself for a routine renewal), re-upload both halves to Cloudflare's Zone-level AOP slot, re-verify with the §4 `curl --resolve` check. **No Caddy config change needed** — `trust_pool` trusts the CA, not the specific leaf. Cloudflare's own dashboard also emails expiry reminders ahead of this date — don't rely on that being the *only* reminder. |
 | Cloudflare origin certificate (`caddy/certs/origin.{pem,key}` — Caddy's TLS identity *to* Cloudflare) | **~2041** (15-year validity) | `ammari.id` zone → SSL/TLS → Origin Server → Create Certificate (same hostnames: `ammari.id`, `www.ammari.id`, `admin.ammari.id`) → replace `/opt/ammari-prod/caddy/certs/origin.{pem,key}` on the VPS (`chmod 600` the key) → `docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile`. |
-| Resend API key (`ammari-prod`) | No expiry | Only rotate if leaked: Resend dashboard → create a new key, revoke the old one. Then §3: edit `RESEND_API_KEY` in both `~/ammari-secrets/prod-admin.env` and `prod-web.env`, `upload-prod-env.sh`, force-recreate both active slots. |
-| Google OAuth client secret | No expiry | Only rotate if leaked: Google Cloud Console → Credentials → reset secret. Then §3: edit `GOOGLE_CLIENT_SECRET` in both prod env files, upload, force-recreate both active slots. |
+| Resend API key (`ammari-prod`) | No expiry | Only rotate if leaked: Resend dashboard → create a new key, revoke the old one. Then §3: edit `RESEND_API_KEY` in both `~/ammari-secrets/prod-admin.env` and `prod-web.env`, `upload-prod-env.sh`, then `./recreate-active-slot.sh admin` and `./recreate-active-slot.sh web` on the VPS (§3.2). |
+| Google OAuth client secret | No expiry | Only rotate if leaked: Google Cloud Console → Credentials → reset secret. Then §3: edit `GOOGLE_CLIENT_SECRET` in both prod env files, upload, then `./recreate-active-slot.sh admin` and `web` (§3.2). |
 
 ---
 

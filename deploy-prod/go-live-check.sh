@@ -18,7 +18,13 @@
 # Facts hardcoded below (VPS IP, S3 endpoint/bucket) are public/non-secret, taken from
 # docs/deploy-prod.md §0's own facts table — update both places together if they ever change.
 #
-# Usage: deploy-prod/go-live-check.sh [--skip-ssh]
+# Usage: deploy-prod/go-live-check.sh [--skip-ssh] [--checkout=off|ready|live]
+#   --checkout=off    (default) the cart flag must be off; checkout settings are only reported.
+#   --checkout=ready  before launch day (docs/launch/checkout-prod.md part 2): the flag is still off
+#                     but every checkout setting must be in place (production Midtrans key in web and
+#                     admin, live Biteship key, cron secret matching in web.env and cron.env, the
+#                     cron service answering 200, the internal `web` alias).
+#   --checkout=live   after the flag went on (part 3): the same, and the PDP must show the cart.
 set -uo pipefail # NOT -e: every check must run and report, even if an earlier one fails
 
 # The remote half lives in its own file (go-live-check-remote.sh, same directory) — see that
@@ -42,16 +48,20 @@ SSH_HOST="$VPS_IP"
 CURL_TIMEOUT=10
 
 SKIP_SSH=0
+CHECKOUT_MODE="off"
 for arg in "$@"; do
   case "$arg" in
     --skip-ssh) SKIP_SSH=1 ;;
+    --checkout=off | --checkout=ready | --checkout=live) CHECKOUT_MODE="${arg#--checkout=}" ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [--skip-ssh]" >&2
+      echo "Usage: $0 [--skip-ssh] [--checkout=off|ready|live]" >&2
       exit 2
       ;;
   esac
 done
+EXPECTED_CART_FLAG="false"
+[ "$CHECKOUT_MODE" = "live" ] && EXPECTED_CART_FLAG="true"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -324,18 +334,20 @@ check_media_not_listable() {
 }
 check_media_not_listable
 
-# --- 11. PDP's primary CTA is WhatsApp (STOREFRONT_CART_ENABLED=false), if any product page
-#     exists yet — SKIP (not FAIL) on a brand-new catalog with nothing published. ---
+# --- 11. PDP's primary CTA is WhatsApp (STOREFRONT_CART_ENABLED=false), or "Tambah ke keranjang"
+#     with --checkout=live, if any product page exists yet — SKIP (not FAIL) on a brand-new
+#     catalog with nothing published. ---
 check_pdp_whatsapp_cta() {
   local code slug
   code="$(fetch "https://${WEB_HOST}/" -L)"
   if [ "$code" != "200" ]; then
-    skip "PDP WhatsApp CTA — homepage did not return 200, cannot discover a product slug"
+    # With the cart live, "never looked" must not read as a pass.
+    if [ "$CHECKOUT_MODE" = "live" ]; then fail "PDP CTA — homepage returned $code, cannot verify the cart"; else skip "PDP WhatsApp CTA — homepage did not return 200, cannot discover a product slug"; fi
     return
   fi
   slug="$(grep -oE 'href="/products/[^"?#]+' "$BODY_FILE" | head -n1 | sed -E 's#href="/products/##')"
   if [ -z "$slug" ]; then
-    skip "PDP WhatsApp CTA — no product link found on the homepage (no products published yet)"
+    if [ "$CHECKOUT_MODE" = "live" ]; then fail "PDP CTA — no product link on the homepage, cannot verify the cart"; else skip "PDP WhatsApp CTA — no product link found on the homepage (no products published yet)"; fi
     return
   fi
   local pcode
@@ -344,7 +356,13 @@ check_pdp_whatsapp_cta() {
     fail "product page /products/${slug} (linked from the homepage) returned $pcode"
     return
   fi
-  if grep -q 'Tambah ke keranjang' "$BODY_FILE"; then
+  if [ "$CHECKOUT_MODE" = "live" ]; then
+    if grep -q 'Tambah ke keranjang' "$BODY_FILE"; then
+      pass "product page /products/${slug} shows 'Tambah ke keranjang' (cart live)"
+    else
+      fail "product page /products/${slug} does not show 'Tambah ke keranjang' — flag not on in the running web slot, or the page was not revalidated (Konten > Pengaturan > Simpan)"
+    fi
+  elif grep -q 'Tambah ke keranjang' "$BODY_FILE"; then
     fail "product page /products/${slug} renders 'Tambah ke keranjang' — STOREFRONT_CART_ENABLED may be true in prod"
   elif grep -q 'Tanya via WhatsApp' "$BODY_FILE"; then
     pass "product page /products/${slug} CTA is 'Tanya via WhatsApp' (cart disabled)"
@@ -354,8 +372,123 @@ check_pdp_whatsapp_cta() {
 }
 check_pdp_whatsapp_cta
 
+# --- 12. /cart and /checkout: 404 while the flag is off, 200 once it is live. ---
+check_cart_routes() {
+  local path code expected="404"
+  [ "$CHECKOUT_MODE" = "live" ] && expected="200"
+  for path in /cart /checkout; do
+    code="$(fetch "https://${WEB_HOST}${path}")"
+    if [ "$code" = "$expected" ]; then
+      pass "https://${WEB_HOST}${path} returns $code (cart flag expected $( [ "$expected" = "200" ] && echo on || echo off))"
+    elif [ "${code#000}" != "$code" ]; then
+      # fetch prints 000 (plus its own fallback 000) when the connection itself failed.
+      warn "https://${WEB_HOST}${path}: no answer (network), could not check"
+    else
+      fail "https://${WEB_HOST}${path} returns $code, expected $expected for --checkout=${CHECKOUT_MODE}"
+    fi
+  done
+}
+check_cart_routes
+
 echo
 echo "===== SSH CHECKS (as deploy, no sudo) ====="
+
+# --- Checkout configuration (docs/launch/checkout-prod.md). Only states, key kinds and non-secret
+#     flags arrive from the VPS (go-live-check-remote.sh), never a secret value. With
+#     --checkout=off every line is INFO except the ones that are wrong in any mode. ---
+check_checkout_config() {
+  local output="$1" line state need=0
+  [ "$CHECKOUT_MODE" != "off" ] && need=1
+  # report <ok?> <message>: PASS/FAIL when the mode requires it, INFO otherwise.
+  report() {
+    if [ "$need" -eq 1 ]; then
+      if [ "$1" -eq 0 ]; then pass "$2"; else fail "$2"; fi
+    else
+      info "$2"
+    fi
+  }
+  # 0 when the two strings are equal, 1 otherwise (report's first argument).
+  is_eq() { if [ "$1" = "$2" ]; then echo 0; else echo 1; fi; }
+  local item
+  for item in web.env:MIDTRANS_SERVER_KEY web.env:BITESHIP_API_KEY web.env:BITESHIP_ORIGIN_AREA_ID web.env:INTERNAL_CRON_SECRET web.env:RESEND_API_KEY web.env:EMAIL_FROM web.env:CUSTOMER_BETTER_AUTH_SECRET admin.env:MIDTRANS_SERVER_KEY cron.env:INTERNAL_CRON_SECRET; do
+    line="$(grep "^CFG:${item}:" <<<"$output" | head -n 1)"
+    state="${line##*:}"
+    report "$(is_eq "$state" "set")" "checkout: ${item%%:*} ${item#*:} is ${state:-unknown}"
+  done
+  local kv
+  kv="$(grep '^CFGKV:web.env:MIDTRANS_IS_PRODUCTION=' <<<"$output" | cut -d: -f3-)"
+  report "$(is_eq "$kv" "MIDTRANS_IS_PRODUCTION=true")" "checkout: web.env ${kv:-MIDTRANS_IS_PRODUCTION=<no data>}"
+  kv="$(grep '^CFGKV:admin.env:MIDTRANS_IS_PRODUCTION=' <<<"$output" | cut -d: -f3-)"
+  report "$(is_eq "$kv" "MIDTRANS_IS_PRODUCTION=true")" "checkout: admin.env ${kv:-MIDTRANS_IS_PRODUCTION=<no data>}"
+  kv="$(grep '^CFGKV:admin.env:DEPLOY_ENV=' <<<"$output" | cut -d: -f3-)"
+  report "$(is_eq "$kv" "DEPLOY_ENV=production")" "checkout: admin.env ${kv:-DEPLOY_ENV=<no data>}"
+  kv="$(grep '^CFGKV:web.env:BITESHIP_BASE_URL=' <<<"$output" | cut -d: -f3-)"
+  report "$(is_eq "$kv" "BITESHIP_BASE_URL=https://api.biteship.com")" "checkout: web.env ${kv:-BITESHIP_BASE_URL=<no data>}"
+  kv="$(grep '^CFGKV:web.env:MIDTRANS_NOTIFICATION_URL=' <<<"$output" | cut -d: -f3-)"
+  report "$(is_eq "$kv" "MIDTRANS_NOTIFICATION_URL=https://${WEB_HOST}/api/payments/midtrans/notification")" "checkout: web.env ${kv:-MIDTRANS_NOTIFICATION_URL=<no data>}"
+
+  # Wrong in every mode: a fake provider or a sandbox order prefix in prod.
+  for kv in "web.env:PAYMENT_PROVIDER" "admin.env:PAYMENT_PROVIDER" "web.env:SHIPPING_RATE_PROVIDER"; do
+    line="$(grep "^CFGKV:${kv}=" <<<"$output" | cut -d: -f3-)"
+    case "$line" in
+      *"=<missing>" | *"=" | *"=midtrans" | *"=biteship") pass "checkout: ${kv%%:*} ${line:-${kv#*:}=<no data>} (no fake provider)" ;;
+      *) fail "checkout: ${kv%%:*} ${line:-${kv#*:}=<no data>} — must be unset (or midtrans/biteship) in prod" ;;
+    esac
+  done
+  line="$(grep '^CFGKV:web.env:MIDTRANS_ORDER_ID_PREFIX=' <<<"$output" | cut -d: -f3-)"
+  case "$line" in
+    "MIDTRANS_ORDER_ID_PREFIX=<missing>" | "MIDTRANS_ORDER_ID_PREFIX=") pass "checkout: web.env MIDTRANS_ORDER_ID_PREFIX is empty (prod order ids carry no prefix)" ;;
+    *) fail "checkout: web.env ${line:-MIDTRANS_ORDER_ID_PREFIX=<no data>} — must be empty in prod (plan D7)" ;;
+  esac
+
+  state="$(grep '^KEYKIND:biteship:' <<<"$output" | cut -d: -f3)"
+  if [ "$state" = "test" ]; then
+    fail "checkout: web.env BITESHIP_API_KEY is a TEST key (the app refuses it in prod; use the live key)"
+  else
+    report "$(is_eq "$state" "live")" "checkout: web.env BITESHIP_API_KEY kind is ${state:-unknown}"
+  fi
+  state="$(grep '^KEYKIND:midtrans:' <<<"$output" | cut -d: -f3)"
+  if [ "$state" = "sandbox" ]; then
+    fail "checkout: web.env MIDTRANS_SERVER_KEY is a SANDBOX key (SB-) in prod"
+  elif [ "$state" = "other" ]; then
+    report 1 "checkout: web.env MIDTRANS_SERVER_KEY does not look like a Midtrans production server key (Mid-server-...); check what was pasted"
+  else
+    report "$(is_eq "$state" "production")" "checkout: web.env MIDTRANS_SERVER_KEY kind is ${state:-unknown}"
+  fi
+  state="$(grep '^SAME:midtrans:' <<<"$output" | cut -d: -f3)"
+  if [ "$state" = "mismatch" ]; then
+    fail "checkout: MIDTRANS_SERVER_KEY differs between web.env and admin.env"
+  else
+    report "$(is_eq "$state" "match")" "checkout: MIDTRANS_SERVER_KEY in web.env and admin.env: ${state:-unknown}"
+  fi
+  state="$(grep '^SAME:cron:' <<<"$output" | cut -d: -f3)"
+  if [ "$state" = "mismatch" ] || [ "$state" = "short" ]; then
+    fail "checkout: INTERNAL_CRON_SECRET in web.env and cron.env: $state (cron calls answer 401/503)"
+  else
+    report "$(is_eq "$state" "match")" "checkout: INTERNAL_CRON_SECRET in web.env and cron.env: ${state:-unknown}"
+  fi
+
+  # Needed in every mode: admin's storefront revalidation goes through this alias.
+  if grep -q '^WEBALIAS:ok$' <<<"$output"; then
+    pass "internal alias http://web:3000 answers (admin revalidation, cron)"
+  else
+    fail "internal alias http://web:3000 does not answer — run ./recreate-active-slot.sh web on the VPS (a bare recreate drops the alias)"
+  fi
+
+  line="$(grep '^CRONLOG:' <<<"$output")"
+  if [ -z "$line" ]; then
+    report 1 "cron: no log data from the VPS"
+  else
+    local sweep200 email200 errors idle
+    sweep200="$(sed -E 's/.*sweep200=([0-9]+).*/\1/' <<<"$line")"
+    email200="$(sed -E 's/.*email200=([0-9]+).*/\1/' <<<"$line")"
+    errors="$(sed -E 's/.*errors=([0-9]+).*/\1/' <<<"$line")"
+    idle="$(sed -E 's/.*idle=([0-9]+).*/\1/' <<<"$line")"
+    local cron_ok=1
+    if [ "$sweep200" -gt 0 ] 2>/dev/null && [ "$email200" -gt 0 ] 2>/dev/null && [ "$errors" = "0" ]; then cron_ok=0; fi
+    report "$cron_ok" "cron (last 15 min): sweep 200 x${sweep200}, email pass 200 x${email200}, ERROR/ALERT lines ${errors}, idle notices ${idle}"
+  fi
+}
 
 run_ssh_checks() {
   if [ "$SKIP_SSH" = "1" ]; then
@@ -449,11 +582,11 @@ run_ssh_checks() {
 
   # --- STOREFRONT_CART_ENABLED / DEPLOY_ENV — printing the key=value pair is explicitly allowed
   #     (both are non-secret flags, not credentials) ---
-  if grep -q '^ENVKV:web.env:STOREFRONT_CART_ENABLED=false$' <<<"$output"; then
-    pass "web.env: STOREFRONT_CART_ENABLED=false"
+  if grep -q "^ENVKV:web.env:STOREFRONT_CART_ENABLED=${EXPECTED_CART_FLAG}\$" <<<"$output"; then
+    pass "web.env: STOREFRONT_CART_ENABLED=${EXPECTED_CART_FLAG}"
   else
     line="$(grep '^ENVKV:web.env:STOREFRONT_CART_ENABLED=' <<<"$output")"
-    fail "web.env STOREFRONT_CART_ENABLED is not 'false' (${line#ENVKV:web.env:})"
+    fail "web.env STOREFRONT_CART_ENABLED is not '${EXPECTED_CART_FLAG}' (${line#ENVKV:web.env:}) for --checkout=${CHECKOUT_MODE}"
   fi
   if grep -q '^ENVKV:web.env:DEPLOY_ENV=production$' <<<"$output"; then
     pass "web.env: DEPLOY_ENV=production"
@@ -465,9 +598,14 @@ run_ssh_checks() {
   # --- NODE_ENV / E2E_TEST_LOGIN must not exist in ANY env file — only key NAMES are ever
   #     printed here, never a value (ENVBAD lines above never carried one). ---
   local f
-  for f in admin.env web.env db.env backup.env; do
+  for f in admin.env web.env db.env backup.env cron.env; do
     if grep -q "^ENVMISSING:$f$" <<<"$output"; then
-      fail "env/$f is missing on the VPS"
+      if [ "$f" = "cron.env" ] && [ "$CHECKOUT_MODE" = "off" ]; then
+        # remote-deploy.sh creates it from the checkout release (cart plan session 12) on.
+        skip "env/cron.env does not exist yet (created by the first deploy of the checkout release)"
+      else
+        fail "env/$f is missing on the VPS"
+      fi
       continue
     fi
     if ! grep -q "^ENVCHECKED:$f$" <<<"$output"; then
@@ -485,6 +623,8 @@ run_ssh_checks() {
       fail "env/$f has forbidden key(s): $bad_keys"
     fi
   done
+
+  check_checkout_config "$output"
 
   # --- monitoring timers ---
   local t state

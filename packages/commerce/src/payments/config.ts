@@ -1,4 +1,5 @@
 import "server-only";
+import { readDeployEnv } from "../deploy-env";
 import { DEFAULT_STOCK_HOLD_MINUTES } from "../stock/reservations";
 import { createFakePaymentProvider } from "./fake";
 import { PAYMENT_ORDER_ID_PREFIX_PATTERN } from "./lines";
@@ -102,14 +103,10 @@ function midtransFromEnv(env: PaymentEnv, problems: string[]): PaymentProvider |
   const mode = env.MIDTRANS_IS_PRODUCTION?.trim();
   if (mode !== "true" && mode !== "false") problems.push("MIDTRANS_IS_PRODUCTION must be true or false");
   const isProduction = mode === "true";
-  // Fails closed when a production build does not say which environment it is (same rule as the
-  // Biteship test-key guard).
-  const deployEnv = env.DEPLOY_ENV?.trim();
-  // An allowlist, failing closed: a typo (`prod`, `Production`) must not let prod run in sandbox mode.
-  if (deployEnv !== undefined && deployEnv !== "" && !["production", "dev", "development", "test"].includes(deployEnv)) {
-    problems.push("DEPLOY_ENV must be production, dev, development or test");
-  }
-  const isProductionDeploy = deployEnv === "production" || (env.NODE_ENV === "production" && !deployEnv);
+  // Allowlist, failing closed; a production build without DEPLOY_ENV counts as production (same
+  // rule as the Biteship test-key guard, ../deploy-env.ts).
+  const { isProductionDeploy, problem: deployEnvProblem } = readDeployEnv(env);
+  if (deployEnvProblem) problems.push(deployEnvProblem);
   if (isProductionDeploy && mode === "false") problems.push("MIDTRANS_IS_PRODUCTION must be true when DEPLOY_ENV is production or unset");
   if (!isProductionDeploy && isProduction) problems.push("MIDTRANS_IS_PRODUCTION=true is only allowed when DEPLOY_ENV is production");
   if (isProduction && serverKey.startsWith("SB-")) problems.push("MIDTRANS_SERVER_KEY is a sandbox key but MIDTRANS_IS_PRODUCTION is true");

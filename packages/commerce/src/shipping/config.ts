@@ -1,5 +1,6 @@
 import "server-only";
 import type { Database } from "../db";
+import { readDeployEnv } from "../deploy-env";
 import { createBiteshipClient } from "./biteship";
 import { DEFAULT_DAILY_SHIPPING_BUDGETS, consumeShippingCallBudget } from "./budget";
 import { DEFAULT_SHIPPING_QUOTE_CACHE_MINUTES } from "./cache";
@@ -61,8 +62,11 @@ export function shippingRuntimeFromEnv(db: Database, env: ShippingEnv): Shipping
   const apiKey = env.BITESHIP_API_KEY?.trim();
   const baseUrl = env.BITESHIP_BASE_URL?.trim();
   const originAreaId = env.BITESHIP_ORIGIN_AREA_ID?.trim();
+  // An allowlist, failing closed like the payment guard: a typo never unlocks a test key in prod.
+  const { isProductionDeploy, problem: deployEnvProblem } = readDeployEnv(env);
+  if (deployEnvProblem) problems.push(deployEnvProblem);
   if (!apiKey) problems.push("BITESHIP_API_KEY is not set");
-  else if (apiKey.startsWith("biteship_test.") && (env.DEPLOY_ENV === "production" || (env.NODE_ENV === "production" && !env.DEPLOY_ENV))) {
+  else if (apiKey.startsWith("biteship_test.") && isProductionDeploy) {
     // Fails closed when a production build does not say which environment it is.
     problems.push("BITESHIP_API_KEY is a test key but DEPLOY_ENV is production or unset");
   }

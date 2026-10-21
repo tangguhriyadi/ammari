@@ -375,11 +375,15 @@ secrets into it). `remote-deploy.sh` creates an empty `env/cron.env` if it is mi
 never fails on it) and recreates the `cron` container on every deploy. Until both files carry the
 secret the cron loop idles and the routes answer 503: nothing is swept or pruned, nothing breaks.
 
-Turning it on (as `deploy`, in `/opt/ammari`):
+Turning it on (as `deploy`, in `/opt/ammari`; `docs/launch/checkout-dev.md` D3 does the same from
+your Mac over ssh):
 
-1. Generate one value without printing it: `openssl rand -hex 32 > /tmp/cron-secret && chmod 600 /tmp/cron-secret`.
-2. Add `INTERNAL_CRON_SECRET=<that value>` to `env/web.env` and write `env/cron.env` with the same
-   line (an editor, never `echo` into a shared terminal log); `chmod 600 env/cron.env`; `rm /tmp/cron-secret`.
+1. Generate one value without printing it: `(umask 077 && openssl rand -hex 32 > /tmp/cron-secret)`.
+2. Write it into both files with the synced helper, which never prints a value:
+   `./set-env-var.sh env/web.env INTERNAL_CRON_SECRET < /tmp/cron-secret`,
+   `./set-env-var.sh env/cron.env INTERNAL_CRON_SECRET < /tmp/cron-secret`,
+   `./set-env-var.sh --same env/web.env env/cron.env INTERNAL_CRON_SECRET` (expect `MATCH`);
+   `rm /tmp/cron-secret`.
 3. `docker compose up -d --force-recreate web cron` (web reads env only at start).
 4. Check: `docker compose logs --tail 20 cron` shows, after ~30 s,
    `/api/internal/retention -> 200 {...}` and `/api/internal/payments/sweep -> 200 {...}`.
