@@ -136,6 +136,10 @@ import active-upstream.caddy
 	# The internal cron routes are never needed here either (the cron service calls web:3000).
 	@internal path /api/internal/*
 	respond @internal 404
+	# Marks every request this block proxies to web, so web's internal cron routes can refuse one
+	# that got here (apps/web/src/lib/internal/cron-auth.ts). `request_header` with a value SETS it,
+	# overwriting anything a client sent. A header Next never adds itself, unlike X-Forwarded-*.
+	request_header X-Ammari-Proxy caddy
 	import active_upstream_web
 }
 
@@ -172,6 +176,10 @@ ammari.id {
 	# also need a bearer secret. Never routed from the public internet, same reasoning as above.
 	@internal path /api/internal/*
 	respond @internal 404
+	# Marks every request this block proxies to web, so web's internal cron routes can refuse one
+	# that got here (apps/web/src/lib/internal/cron-auth.ts). `request_header` with a value SETS it,
+	# overwriting anything a client sent. A header Next never adds itself, unlike X-Forwarded-*.
+	request_header X-Ammari-Proxy caddy
 	# /api/test/* (apps/web's e2e preview-token backdoor) must NEVER be reachable from the public
 	# internet, full stop — it is gated in code (NODE_ENV != production AND
 	# E2E_TEST_LOGIN=true, see src/lib/preview/e2e-gate.ts), but that gate lives in an env var

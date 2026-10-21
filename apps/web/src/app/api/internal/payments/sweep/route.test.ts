@@ -106,7 +106,8 @@ describe("internal cron route authentication", () => {
       expect((await call(route, path, { authorization: `Bearer ${SECRET}x` })).status).toBe(401);
       expect((await call(route, path, { authorization: SECRET })).status).toBe(401);
       expect((await call(route, path, { authorization: `Bearer ${SECRET}`, "cf-connecting-ip": "203.0.113.5" })).status).toBe(404);
-      expect((await call(route, path, { authorization: `Bearer ${SECRET}`, "x-forwarded-for": "203.0.113.5" })).status).toBe(404);
+      expect((await call(route, path, { authorization: `Bearer ${SECRET}`, "cf-ray": "8f0c1e2d3a4b5c6d-SIN" })).status).toBe(404);
+      expect((await call(route, path, { authorization: `Bearer ${SECRET}`, "x-ammari-proxy": "caddy" })).status).toBe(404);
 
       // Nothing ran, and no log line carries the secret.
       expect(await orderStatus(tx, fixture.orderId)).toMatchObject({ status: "awaiting_payment", paymentStatus: "pending" });

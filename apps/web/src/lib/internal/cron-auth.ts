@@ -7,13 +7,24 @@ import { createHash, timingSafeEqual } from "node:crypto";
 // Caddy (which answers 404 for `/api/internal/*` on every public host). Three checks:
 // 1. INTERNAL_CRON_SECRET must be configured (at least 32 characters); otherwise every call is
 //    refused with 503 and the problem logged once per process (name only, never a value).
-// 2. A request that came through a proxy (`CF-Connecting-IP` or `X-Forwarded-For` present) is
-//    refused as not found: the cron service calls the container directly, so such a request
-//    means the path is reachable from outside, which it must never be.
+// 2. A request that came through Caddy or Cloudflare is refused as not found: the cron service
+//    calls the container directly, so such a request means the path is reachable from outside,
+//    which it must never be. The signals are headers Next never adds itself: `X-Ammari-Proxy`
+//    (set by every web site block in deploy*/caddy/Caddyfile, overwriting any client value) and
+//    Cloudflare's `CF-Connecting-IP` / `CF-Ray`. NOT `X-Forwarded-*`: Next's own server fills in
+//    `x-forwarded-for` (from the socket address), `-host`, `-port` and `-proto` on every incoming
+//    request when they are absent (next/dist/server/base-server.js, Next 16.3.7), so a direct
+//    curl from the cron container carries them too; checking `x-forwarded-for` refused every
+//    cron call on dev. test/cron-auth-standalone.test.ts proves this against the real
+//    standalone server.
 // 3. `Authorization: Bearer <INTERNAL_CRON_SECRET>`, compared in constant time (as SHA-256
 //    digests, so the lengths always match).
 
 export const INTERNAL_CRON_SECRET_MIN_LENGTH = 32;
+
+/** Set by Caddy on every request it proxies to web (deploy/caddy/Caddyfile, deploy-prod/caddy/Caddyfile). */
+export const CADDY_PROXY_HEADER = "x-ammari-proxy";
+const PROXY_HEADERS = [CADDY_PROXY_HEADER, "cf-connecting-ip", "cf-ray"] as const;
 
 export type CronAuth = { ok: true } | { ok: false; response: Response };
 
@@ -38,7 +49,7 @@ export function authorizeCronRequest(request: Request, job: string): CronAuth {
   }
   loggedMissingSecret = false;
 
-  if (request.headers.has("cf-connecting-ip") || request.headers.has("x-forwarded-for")) {
+  if (PROXY_HEADERS.some((name) => request.headers.has(name))) {
     console.error("[cron] internal cron route reached through a proxy; refused", { job });
     return { ok: false, response: plain(404, "not found") };
   }

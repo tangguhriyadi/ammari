@@ -14,6 +14,8 @@ node_modules
 **/.next-e2e
 .next-deploy-regression-test
 **/.next-deploy-regression-test
+.next-cron-auth-test
+**/.next-cron-auth-test
 .turbo
 **/.turbo
 

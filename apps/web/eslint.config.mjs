@@ -20,6 +20,8 @@ const eslintConfig = defineConfig([
     // list, a build this test leaves behind (e.g. after a failed run) gets linted as if it were
     // source, which it isn't.
     ".next-deploy-regression-test/**",
+    // cron-auth-standalone.test.ts's own distDir, same reasoning.
+    ".next-cron-auth-test/**",
     // Playwright's own generated output (gitignored already) — the HTML report in particular
     // bundles third-party JS assets (e.g. CodeMirror, for the trace viewer) that trip
     // react-hooks/rules-of-hooks and other rules meant for our own source.

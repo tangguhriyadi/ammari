@@ -19,12 +19,16 @@ const nextConfig: NextConfig = {
   // a real `next build` + `next start`, outside Vitest's module graph, to reproduce the
   // build-time-DB-unavailable deploy scenario — it needs its own distDir so it never reads or
   // clobbers the developer's own `.next` (possibly mid-`pnpm dev`) or the Playwright e2e build.
+  // CRON_AUTH_STANDALONE_TEST (set only by test/cron-auth-standalone.test.ts): same reason, for
+  // that test's own `next build` + standalone `server.js`.
   distDir:
     process.env.E2E_TEST_LOGIN === "true"
       ? ".next-e2e"
       : process.env.DEPLOY_REGRESSION_TEST === "true"
         ? ".next-deploy-regression-test"
-        : ".next",
+        : process.env.CRON_AUTH_STANDALONE_TEST === "true"
+          ? ".next-cron-auth-test"
+          : ".next",
   // `images.remotePatterns` CANNOT be driven by `process.env.STORAGE_PUBLIC_BASE_URL` here, even
   // though that's the normal next/image pattern: per apps/web/Dockerfile, this image is built
   // ONCE in CI with placeholder env (see its "ENV NODE_ENV=production DATABASE_URL=... " block's
