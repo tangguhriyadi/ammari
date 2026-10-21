@@ -42,7 +42,7 @@ export default async function AccountPage() {
         {customer.email && <p className="text-sm text-neutral-700">{customer.email}</p>}
       </div>
 
-      {contactOffer ? <ContactOfferCard {...contactOffer} /> : !customer.phone && <ProfileBanner />}
+      {contactOffer ? <ContactOfferCard key={contactOffer.orderNo} {...contactOffer} /> : !customer.phone && <ProfileBanner />}
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">Voucher saya</h2>

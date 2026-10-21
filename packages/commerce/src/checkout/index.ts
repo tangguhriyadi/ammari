@@ -12,6 +12,7 @@ export {
   type PlaceOrderInput,
   type PlaceOrderResult,
 } from "./place-order";
+export { saveDefaultCustomerAddress, type SavedAddressVersion } from "./saved-address";
 export { ORDER_ACCESS_TOKEN_DAYS, generateOrderAccessToken, hashOrderAccessToken, isWellFormedOrderAccessToken } from "./access-token";
 export {
   CHECKOUT_FIELD_MESSAGES,

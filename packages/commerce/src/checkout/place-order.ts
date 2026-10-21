@@ -4,7 +4,6 @@ import { z } from "zod";
 import {
   cartItems,
   carts,
-  customerAddresses,
   customers,
   fabricColors,
   orderAccessTokens,
@@ -35,6 +34,7 @@ import { quoteShipping, type QuoteLine, type ShippingQuote, type ShippingQuoteDe
 import { parcelWeightGrams } from "../shipping/rules";
 import { reserveStockForOrder } from "../stock/reservations";
 import { ORDER_ACCESS_TOKEN_DAYS, generateOrderAccessToken, hashOrderAccessToken, isWellFormedOrderAccessToken } from "./access-token";
+import { saveDefaultCustomerAddress } from "./saved-address";
 import {
   CHECKOUT_FIELD_MESSAGES,
   MAX_UNPAID_ORDERS_PER_EMAIL,
@@ -416,37 +416,14 @@ async function updateSessionCustomer(tx: Tx, customerId: string, contactPhone: s
 }
 
 /** A session customer's address for the next checkout (owner, 2026-10-21: "saved address", plan
- * §4.3): the order's address becomes the customer's default address, replaced in place by one
- * INSERT ... ON CONFLICT on the partial UNIQUE (customer_id) WHERE is_default, so the default
- * switches atomically and two orders at once just apply one after the other. Never for a guest
- * (the email is unverified, D9). Inside the order transaction, so a refused or rolled-back order
+ * §4.3): the order's address becomes the customer's default address (saveDefaultCustomerAddress,
+ * an atomic default switch). Never for a guest (the email is unverified, D9; the /account offer
+ * asks after a login instead). Inside the order transaction, so a refused or rolled-back order
  * saves nothing; under a savepoint, so an address the table refuses (a CHECK) never fails the order. */
 async function saveSessionCustomerAddress(tx: Tx, customerId: string, address: ShippingAddress): Promise<void> {
-  const fields = {
-    recipientName: address.recipientName,
-    phone: address.phone,
-    addressLine: address.addressLine,
-    notes: address.notes,
-    shippingAreaId: address.shippingAreaId,
-    province: address.province,
-    city: address.city,
-    district: address.district,
-    subdistrict: address.subdistrict,
-    postalCode: address.postalCode,
-    // Checkout has no map pin: coordinates of an earlier address never stay on a new one.
-    latitude: null,
-    longitude: null,
-  };
   try {
     await tx.transaction(async (savepoint) => {
-      await savepoint
-        .insert(customerAddresses)
-        .values({ customerId, ...fields, isDefault: true })
-        .onConflictDoUpdate({
-          target: customerAddresses.customerId,
-          targetWhere: sql`${customerAddresses.isDefault}`,
-          set: { ...fields, updatedAt: sql`now()` },
-        });
+      await saveDefaultCustomerAddress(savepoint, customerId, address);
     });
   } catch (error) {
     // Data the table refuses (a CHECK, a length, a vanished area: 22xxx and 23xxx) only costs the

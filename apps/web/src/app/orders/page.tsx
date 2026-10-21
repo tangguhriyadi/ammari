@@ -35,7 +35,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
         </Link>
       </div>
 
-      {contactOffer && <ContactOfferCard {...contactOffer} />}
+      {contactOffer && <ContactOfferCard key={contactOffer.orderNo} {...contactOffer} />}
 
       {list.rows.length === 0 ? (
         <div className="flex flex-col items-start gap-4 bg-surface p-6">

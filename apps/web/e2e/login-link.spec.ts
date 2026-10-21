@@ -200,7 +200,7 @@ test("after login, Pesanan saya offers the WhatsApp number and promo choice of t
   await page.getByRole("button", { name: "Masuk" }).click();
   await expect(page).toHaveURL(/\/orders$/);
 
-  await expect(page.getByRole("heading", { name: "Simpan data dari pesananmu?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pakai data ini untuk belanja berikutnya?" })).toBeVisible();
   await expect(page.getByText(`memakai nomor WhatsApp ${phone}`, { exact: false })).toBeVisible();
   await expect(page.getByText(`Pesanan ${orderNo}`, { exact: false })).toBeVisible();
   const promo = page.getByRole("checkbox", { name: "Kirimi saya kabar koleksi baru dan promo dari Ammari." });
@@ -210,7 +210,7 @@ test("after login, Pesanan saya offers the WhatsApp number and promo choice of t
   await promo.check();
   await page.getByRole("button", { name: "Simpan" }).click();
   await expect(page.getByRole("status")).toHaveText("Tersimpan di akunmu.");
-  await expect(page.getByRole("heading", { name: "Simpan data dari pesananmu?" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Pakai data ini untuk belanja berikutnya?" })).toHaveCount(0);
   expect(await customerContact(customer)).toEqual({ phone, promo: true });
 });
 
