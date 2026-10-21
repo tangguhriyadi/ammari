@@ -327,14 +327,14 @@ describe("transitionOrderStatus with reservations", () => {
   test("awaiting_payment -> to_ship writes the sale and consumes the order's own hold; its own hold never blocks the sale", async () => {
     await withRollback(async (tx) => {
       const { variant } = await insertProductVariant(tx);
-      const staff = await insertStaffUser(tx);
       await seedStock(tx, variant.sku, 1, 100_000);
       const { order, items } = await insertCheckoutOrder(tx, [{ sku: variant.sku, qty: 1 }]);
       await reserveStockForOrder(tx, order.id, linesOf(items), 75);
 
-      // The checkout order's payment fields are the payment webhook's job (session 11); this only
-      // covers the stock side of the status change.
-      await transitionOrderStatus(order.id, "to_ship", staff.id, tx);
+      // The checkout order's payment fields are the payment webhook's job; this only covers the
+      // stock side of the status change, through the system path (null actor) the state machine and
+      // the sweep use (staff moves of checkout orders are limited: payments/staff.test.ts).
+      await transitionOrderStatus(order.id, "to_ship", null, tx);
 
       const movements = await tx.select().from(stockMovements).where(eq(stockMovements.sku, variant.sku));
       expect(movements.find((m) => m.type === "sale")?.qty).toBe(-1);
@@ -349,14 +349,13 @@ describe("transitionOrderStatus with reservations", () => {
   test("a sale that fails the physical stock check rolls back the consume too", async () => {
     await withRollback(async (tx) => {
       const { variant } = await insertProductVariant(tx);
-      const staff = await insertStaffUser(tx);
       await seedStock(tx, variant.sku, 1);
       const { order, items } = await insertCheckoutOrder(tx, [{ sku: variant.sku, qty: 1 }]);
       await reserveStockForOrder(tx, order.id, linesOf(items), 75);
       // A marketplace sale took the last piece meanwhile (decision 9: it stands).
       await tx.insert(stockMovements).values({ sku: variant.sku, qty: -1, valueAmount: -100_000, type: "sale", refType: "manual" });
 
-      const error = await caught(tx, (sp) => transitionOrderStatus(order.id, "to_ship", staff.id, sp));
+      const error = await caught(tx, (sp) => transitionOrderStatus(order.id, "to_ship", null, sp));
       expect(error).toBeInstanceOf(FieldError);
       expect((await reservationsOf(tx, order.id))[0]?.status).toBe("active");
     });
@@ -365,12 +364,11 @@ describe("transitionOrderStatus with reservations", () => {
   test("awaiting_payment -> cancelled releases the hold and writes no stock movement", async () => {
     await withRollback(async (tx) => {
       const { variant } = await insertProductVariant(tx);
-      const staff = await insertStaffUser(tx);
       await seedStock(tx, variant.sku, 2);
       const { order, items } = await insertCheckoutOrder(tx, [{ sku: variant.sku, qty: 2 }]);
       await reserveStockForOrder(tx, order.id, linesOf(items), 75);
 
-      await transitionOrderStatus(order.id, "cancelled", staff.id, tx);
+      await transitionOrderStatus(order.id, "cancelled", null, tx);
 
       expect((await reservationsOf(tx, order.id))[0]?.status).toBe("released");
       const movements = await tx.select().from(stockMovements).where(eq(stockMovements.sku, variant.sku));
@@ -383,13 +381,12 @@ describe("transitionOrderStatus with reservations", () => {
   test("to_ship -> cancelled after payment restores stock and leaves the consumed hold alone", async () => {
     await withRollback(async (tx) => {
       const { variant } = await insertProductVariant(tx);
-      const staff = await insertStaffUser(tx);
       await seedStock(tx, variant.sku, 1);
       const { order, items } = await insertCheckoutOrder(tx, [{ sku: variant.sku, qty: 1 }]);
       await reserveStockForOrder(tx, order.id, linesOf(items), 75);
-      await transitionOrderStatus(order.id, "to_ship", staff.id, tx);
+      await transitionOrderStatus(order.id, "to_ship", null, tx);
 
-      await transitionOrderStatus(order.id, "cancelled", staff.id, tx);
+      await transitionOrderStatus(order.id, "cancelled", null, tx);
 
       expect((await reservationsOf(tx, order.id))[0]?.status).toBe("consumed");
       const movements = await tx.select().from(stockMovements).where(eq(stockMovements.sku, variant.sku));

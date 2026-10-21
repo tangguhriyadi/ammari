@@ -87,7 +87,7 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
         )}
         {view.state === "refund_pending" && (
           <p className="text-sm text-ink-muted">
-            Pembayaranmu kami terima setelah batas waktu pesanan ini habis, jadi pesanan dibatalkan. Dananya akan kami kembalikan penuh dan kami akan menghubungimu.
+            Pesanan ini dibatalkan. Pembayaranmu sudah kami terima dan dananya akan kami kembalikan penuh. Kami akan menghubungimu lewat WhatsApp.
           </p>
         )}
         {view.state === "failed" && <p className="text-sm text-ink-muted">Waktu pembayaran pesanan ini sudah habis atau pembayarannya tidak berhasil. Kamu bisa pesan lagi kapan saja.</p>}

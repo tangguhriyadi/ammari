@@ -25,7 +25,8 @@ export async function listUsableVouchers(customerId: string, db: Database = defa
 /** `paid`: a verified notification (or the page's status check) marked it paid. `pending`: still inside the payment window.
  * `confirming`: past the window but not finalized yet (a payment made at the last minute may still
  * be confirmed; the expiry sweep or a notification decides). `failed`: cancelled, expired or the
- * payment failed. `refund_pending`: paid after the order had already been cancelled. */
+ * payment failed. `refund_pending`: cancelled with the payment received (paid after an expiry, or
+ * cancelled by staff after payment, session 16); the money goes back. */
 export type FinishState = "paid" | "pending" | "confirming" | "failed" | "refund_pending";
 
 export interface FinishOrderLine {

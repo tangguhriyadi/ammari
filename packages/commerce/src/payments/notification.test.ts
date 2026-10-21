@@ -28,6 +28,7 @@ import { createFakePaymentProvider } from "./fake";
 import { handlePaymentNotification } from "./notification";
 import type { PaymentProvider, PaymentStatusReport } from "./provider";
 import { midtransSignature, parsePaymentStatusBody, verifyMidtransSignature } from "./status";
+import { cancelCheckoutOrderByStaff } from "./staff";
 import { syncLatestPaymentStatus } from "./sync";
 import { fakeMidtransServerKey } from "../../test/fake-keys";
 
@@ -374,7 +375,8 @@ describe("handlePaymentNotification", () => {
       expect((await handlePaymentNotification(tx, provider, gatewaySays(fixture.providerOrderId, "settlement", fixture.total))).result).toBe("unchanged");
       await tx.insert(stockMovements).values({ sku: fixture.sku, qty: 1, valueAmount: UNIT_COST, type: "production", refType: "manual" });
       await transitionOrderStatus(fixture.orderId, "to_ship", staff.id, tx);
-      expect(await orderRow(tx, fixture.orderId)).toMatchObject({ status: "to_ship", paymentStatus: "paid", needsAttention: ["stock_short_at_payment"] });
+      // "Proses" resolves the flag in the same update (session 16).
+      expect(await orderRow(tx, fixture.orderId)).toMatchObject({ status: "to_ship", paymentStatus: "paid", needsAttention: [] });
     });
   });
 
@@ -450,12 +452,12 @@ describe("cancel paths restore the voucher (plan §6.4)", () => {
     await withRollback(async (tx) => {
       const staff = await insertStaffUser(tx);
       const unpaid = await checkoutOrder(tx, { voucher: {} });
-      await transitionOrderStatus(unpaid.orderId, "cancelled", staff.id, tx);
+      expect(await cancelCheckoutOrderByStaff(tx, provider, unpaid.orderId, staff.id)).toMatchObject({ outcome: "cancelled", refundDue: false });
       expect((await tx.select().from(vouchers).where(eq(vouchers.id, unpaid.voucherId!)))[0]?.status).toBe("active");
 
       const paid = await checkoutOrder(tx, { voucher: {} });
       await handlePaymentNotification(tx, provider, gatewaySays(paid.providerOrderId, "settlement", paid.total));
-      await transitionOrderStatus(paid.orderId, "cancelled", staff.id, tx);
+      expect(await cancelCheckoutOrderByStaff(tx, provider, paid.orderId, staff.id)).toMatchObject({ outcome: "cancelled", refundDue: true });
       expect((await tx.select().from(vouchers).where(eq(vouchers.id, paid.voucherId!)))[0]?.status).toBe("active");
 
       const returned = await checkoutOrder(tx, { voucher: {} });

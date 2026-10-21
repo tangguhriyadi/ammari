@@ -62,8 +62,13 @@ export interface CreatedEmailView extends CustomerOrderEmailView {
   paymentUrl: string | null;
 }
 
+/** Why the `cancelled` email goes out: the payment window ended or the payment was cancelled at the
+ * gateway, or staff cancelled the order before (`admin_unpaid`) or after (`admin_paid`) it was paid
+ * (session 16, owner decision 45). */
+export type CancelledEmailReason = "payment_expired" | "payment_cancelled" | "admin_unpaid" | "admin_paid";
+
 export interface CancelledEmailView extends CustomerOrderEmailView {
-  reason: "payment_expired" | "payment_cancelled";
+  reason: CancelledEmailReason;
   paymentDeadline: Date | null;
 }
 
@@ -328,20 +333,40 @@ export function renderPaidEmail(view: CustomerOrderEmailView, variant: "confirme
   return render(subject, "Pesanan kamu sedang kami siapkan.", blocks, customerFooter(view));
 }
 
-/** `cancelled`: the payment window ended (gateway expiry or the sweep) or the payment was
- * cancelled at the gateway. */
+/** `cancelled`: the payment window ended (gateway expiry or the sweep), the payment was cancelled at
+ * the gateway, or staff cancelled the order (session 16, owner decision 45: no reason named; a paid
+ * order is refunded in full, ongkir included, and staff follow up by WhatsApp). */
 export function renderCancelledEmail(view: CancelledEmailView): RenderedEmail {
+  const voucherBlocks: Block[] = view.totals.discount > 0 ? [{ kind: "paragraph", text: "Voucher yang kamu pakai sudah kembali ke akunmu dan bisa dipakai lagi selama masa berlakunya." }] : [];
+  if (view.reason === "admin_paid") {
+    const blocks: Block[] = [
+      { kind: "heading", text: "Pesanan dibatalkan" },
+      greeting(view),
+      {
+        kind: "paragraph",
+        text: `Pesanan ${view.orderNo} kami batalkan. Dana ${formatRupiah(view.totals.total)} (termasuk ongkir) akan kami kembalikan penuh. Tim kami akan menghubungi kamu lewat WhatsApp untuk proses pengembaliannya. Mohon maaf atas ketidaknyamanannya.`,
+      },
+      ...voucherBlocks,
+      ...accessBlocks(view, false),
+      { kind: "divider" },
+      ...orderBlocks(view),
+      ...contactLine(view.whatsappNumber),
+    ];
+    return render(`Pesanan ${view.orderNo} dibatalkan`, "Dana pesanan ini akan kami kembalikan penuh.", blocks, customerFooter(view));
+  }
   const why =
-    view.reason === "payment_expired"
-      ? view.paymentDeadline
-        ? `karena pembayarannya belum kami terima sampai batas waktu ${formatWib(view.paymentDeadline)}`
-        : "karena pembayarannya belum kami terima sampai batas waktu"
-      : "karena pembayarannya dibatalkan";
+    view.reason === "admin_unpaid"
+      ? ""
+      : view.reason === "payment_expired"
+        ? view.paymentDeadline
+          ? ` karena pembayarannya belum kami terima sampai batas waktu ${formatWib(view.paymentDeadline)}`
+          : " karena pembayarannya belum kami terima sampai batas waktu"
+        : " karena pembayarannya dibatalkan";
   const blocks: Block[] = [
     { kind: "heading", text: "Pesanan dibatalkan" },
     greeting(view),
-    { kind: "paragraph", text: `Pesanan ${view.orderNo} kami batalkan ${why}. Tidak ada dana yang ditarik untuk pesanan ini.` },
-    ...(view.totals.discount > 0 ? [{ kind: "paragraph" as const, text: "Voucher yang kamu pakai sudah kembali ke akunmu dan bisa dipakai lagi selama masa berlakunya." }] : []),
+    { kind: "paragraph", text: `Pesanan ${view.orderNo} kami batalkan${why}. Tidak ada dana yang ditarik untuk pesanan ini.` },
+    ...voucherBlocks,
     { kind: "paragraph", text: "Kalau masih ingin memesan, tekan Pesan lagi: barang dari pesanan ini kami masukkan lagi ke keranjangmu, selama stoknya masih ada." },
     // The order page (the "Lihat pesanan" link) has the "Pesan lagi" button (plan §9.1, session 15).
     { kind: "button", label: "Pesan lagi", url: view.orderUrl },
@@ -349,7 +374,8 @@ export function renderCancelledEmail(view: CancelledEmailView): RenderedEmail {
     ...orderBlocks(view),
     ...contactLine(view.whatsappNumber),
   ];
-  return render(`Pesanan ${view.orderNo} dibatalkan`, "Pembayaran belum kami terima sampai batas waktu.", blocks, customerFooter(view));
+  const preheader = view.reason === "admin_unpaid" ? "Tidak ada dana yang ditarik untuk pesanan ini." : "Pembayaran belum kami terima sampai batas waktu.";
+  return render(`Pesanan ${view.orderNo} dibatalkan`, preheader, blocks, customerFooter(view));
 }
 
 /** `shipped`: staff marked the order sent ("Tandai dikirim"; Phase K: the courier picked it up). */

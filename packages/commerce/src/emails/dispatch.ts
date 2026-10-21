@@ -26,6 +26,7 @@ import {
   renderOwnerPaidEmail,
   renderPaidEmail,
   renderShippedEmail,
+  type CancelledEmailReason,
   type CustomerOrderEmailView,
   type OrderEmailAddress,
   type OrderEmailLine,
@@ -104,7 +105,7 @@ export type DueOrderEmail =
   | { kind: "created" }
   | { kind: "paid"; variant: "confirmed" | "review" }
   | { kind: "owner_paid"; variant: "paid" | "stock_short" | "after_cancel" }
-  | { kind: "cancelled"; reason: "payment_expired" | "payment_cancelled" }
+  | { kind: "cancelled"; reason: CancelledEmailReason }
   | { kind: "shipped" };
 
 export interface OrderEmailState {
@@ -112,6 +113,8 @@ export interface OrderEmailState {
   paymentStatus: OrderPaymentStatus | null;
   paymentExpiresAt: Date | null;
   paidAt: Date | null;
+  /** Tells a staff cancel of a paid order from a payment that arrived after the cancel. */
+  cancelledAt: Date | null;
   cancelReason: OrderCancelReason | null;
   needsAttention: OrderAttentionFlag[];
 }
@@ -136,7 +139,14 @@ export function dueOrderEmails(order: OrderEmailState, now: Date): DueOrderEmail
       if (order.paidAt === null && (order.cancelReason === "payment_expired" || order.cancelReason === "payment_cancelled")) {
         return [{ kind: "cancelled", reason: order.cancelReason }];
       }
-      // Staff cancels (`admin`) are session 16's.
+      // Staff cancels (session 16, owner decision 45): the wording says whether money comes back.
+      // Only a payment made BEFORE the cancel makes it a paid cancel: a payment that arrived after
+      // it got the review note instead, and once its refund is recorded (flags cleared) the order
+      // must not turn into a "dana akan dikembalikan" email (the unpaid one was due all along).
+      if (order.cancelReason === "admin") {
+        const paidBeforeCancel = order.paidAt !== null && (order.cancelledAt === null || order.paidAt <= order.cancelledAt);
+        return [{ kind: "cancelled", reason: paidBeforeCancel ? "admin_paid" : "admin_unpaid" }];
+      }
       return [];
     default:
       return [];
@@ -161,6 +171,7 @@ const orderColumns = {
   paymentStatus: orders.paymentStatus,
   paymentExpiresAt: orders.paymentExpiresAt,
   paidAt: orders.paidAt,
+  cancelledAt: orders.cancelledAt,
   cancelReason: orders.cancelReason,
   needsAttention: orders.needsAttention,
 };

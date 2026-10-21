@@ -1,7 +1,21 @@
 import "server-only";
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
-import { channels, customers, fabricColors, orderItems, orders, products, productVariants, staffUsers, thankYouCards } from "@ammari/db/schema";
-import type { ChannelId, OrderStatus } from "@ammari/db/schema";
+import {
+  channels,
+  customers,
+  fabricColors,
+  orderItems,
+  orderNotifications,
+  orders,
+  payments,
+  products,
+  productVariants,
+  shippingAreas,
+  staffUsers,
+  thankYouCards,
+  vouchers,
+} from "@ammari/db/schema";
+import type { ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
 
@@ -81,11 +95,27 @@ export interface OrderListRow {
   orderDate: Date;
   totalAmount: number;
   createdAt: Date;
+  /** Set only on web checkout orders (docs/plans/cart-checkout.md §3); NULL for manual and
+   * marketplace orders. */
+  paymentStatus: OrderPaymentStatus | null;
+  needsAttention: OrderAttentionFlag[];
 }
 
 export interface ListOrdersFilters {
   status?: OrderStatus;
+  /** "Perlu dicek": orders with at least one needs_attention flag (plan §3, the partial index
+   * `orders_needs_attention_idx`). */
+  needsAttention?: boolean;
   q?: string;
+}
+
+/** The "Perlu dicek" condition, spelled like the partial index's predicate so it can be used. */
+const NEEDS_ATTENTION = sql`cardinality(${orders.needsAttention}) > 0`;
+
+/** How many orders carry a flag (the "Perlu dicek" tab's count). */
+export async function countOrdersNeedingAttention(db: Database = defaultDb): Promise<number> {
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(orders).where(NEEDS_ATTENTION);
+  return row?.count ?? 0;
 }
 
 export async function listOrders(
@@ -96,6 +126,7 @@ export async function listOrders(
 ): Promise<{ rows: OrderListRow[]; pagination: Pagination }> {
   const conditions = [
     filters.status ? eq(orders.status, filters.status) : undefined,
+    filters.needsAttention ? NEEDS_ATTENTION : undefined,
     filters.q
       ? or(ilike(orders.orderNo, `%${filters.q}%`), ilike(orders.channelOrderNo, `%${filters.q}%`), ilike(customers.name, `%${filters.q}%`))
       : undefined,
@@ -122,6 +153,8 @@ export async function listOrders(
       orderDate: orders.orderDate,
       totalAmount: orders.totalAmount,
       createdAt: orders.createdAt,
+      paymentStatus: orders.paymentStatus,
+      needsAttention: orders.needsAttention,
     })
     .from(orders)
     .leftJoin(customers, eq(customers.id, orders.customerId))
@@ -176,6 +209,172 @@ export interface OrderDetail {
    * thank-you card's voucher on the main site (apps/web's `/claim/[token]`, docs/plans/
    * voucher-claim.md session 2). */
   cardClaimedAt: Date | null;
+  /** Web checkout data (plan §7); null for manual and marketplace orders. */
+  checkout: CheckoutOrderDetail | null;
+}
+
+export interface CheckoutPaymentAttempt {
+  id: string;
+  attempt: number;
+  providerOrderId: string;
+  /** Midtrans transaction id. */
+  providerRef: string | null;
+  status: PaymentStatus;
+  paymentType: string | null;
+  bank: string | null;
+  grossAmount: number;
+  refundedAmount: number;
+  paidAt: Date | null;
+  createdAt: Date;
+  /** The gateway's last reported `transaction_status`, raw (shown to staff as is). */
+  gatewayStatus: string | null;
+}
+
+export interface CheckoutShippingQuote {
+  courierLabel: string;
+  courierCode: string;
+  serviceCode: string;
+  weightGrams: number;
+  /** The courier cost as quoted and Ammari's subsidy: shipping expense figures, so `null` for a
+   * viewer without finance.view_profit (stripOrderDetailCost), like unit_cost. */
+  costAmount: number | null;
+  subsidyAmount: number | null;
+  /** What the buyer paid for ongkir (= orders.shipping_amount, already on the order totals). */
+  buyerAmount: number;
+  quotedAt: Date;
+  /** "Kecamatan, Kota, Provinsi 12345" from the shipping_areas row, when still there. */
+  destinationLabel: string | null;
+}
+
+export interface CheckoutAddress {
+  recipientName: string;
+  phone: string;
+  addressLine: string;
+  district: string;
+  city: string;
+  province: string;
+  postalCode: string;
+  notes: string | null;
+}
+
+export interface CheckoutOrderDetail {
+  paymentStatus: OrderPaymentStatus;
+  paymentExpiresAt: Date | null;
+  paidAt: Date | null;
+  cancelReason: string | null;
+  needsAttention: OrderAttentionFlag[];
+  contactEmail: string | null;
+  contactPhone: string | null;
+  placedWithSession: boolean | null;
+  promoOptIn: boolean | null;
+  address: CheckoutAddress | null;
+  quote: CheckoutShippingQuote | null;
+  voucher: { amount: number; status: string } | null;
+  attempts: CheckoutPaymentAttempt[];
+  emails: { kind: OrderNotificationKind; sentAt: Date | null; error: string | null }[];
+  /** Courier and resi from "Tandai dikirim". */
+  courier: string | null;
+  trackingNumber: string | null;
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** The structured address of a checkout order (snapshot version 2, plan §3); null for anything
+ * else, so the page falls back to the one-line `shipping_address`. */
+function addressFromSnapshot(snapshot: unknown): CheckoutAddress | null {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const value = snapshot as Record<string, unknown>;
+  const recipientName = text(value.recipientName);
+  const phone = text(value.phone);
+  const addressLine = text(value.addressLine);
+  const district = text(value.district);
+  const city = text(value.city);
+  const province = text(value.province);
+  const postalCode = text(value.postalCode);
+  if (!recipientName || !phone || !addressLine || !district || !city || !province || !postalCode) return null;
+  return { recipientName, phone, addressLine, district, city, province, postalCode, notes: text(value.notes) };
+}
+
+async function getCheckoutOrderDetail(
+  order: typeof orders.$inferSelect & { paymentStatus: OrderPaymentStatus },
+  db: Database,
+): Promise<CheckoutOrderDetail> {
+  const [attemptRows, emailRows, voucherRows, areaRows] = await Promise.all([
+    db
+      .select({
+        id: payments.id,
+        attempt: payments.attempt,
+        providerOrderId: payments.providerOrderId,
+        providerRef: payments.providerRef,
+        status: payments.status,
+        paymentType: payments.paymentType,
+        grossAmount: payments.grossAmount,
+        refundedAmount: payments.refundedAmount,
+        paidAt: payments.paidAt,
+        createdAt: payments.createdAt,
+        lastStatus: payments.lastStatus,
+      })
+      .from(payments)
+      .where(eq(payments.orderId, order.id))
+      .orderBy(payments.attempt),
+    db
+      .select({ kind: orderNotifications.kind, sentAt: orderNotifications.sentAt, error: orderNotifications.error })
+      .from(orderNotifications)
+      .where(eq(orderNotifications.orderId, order.id))
+      .orderBy(orderNotifications.createdAt),
+    db.select({ amount: vouchers.amount, status: vouchers.status }).from(vouchers).where(eq(vouchers.usedOrderId, order.id)).limit(1),
+    order.shippingAreaId
+      ? db.select({ label: shippingAreas.label }).from(shippingAreas).where(eq(shippingAreas.id, order.shippingAreaId)).limit(1)
+      : Promise.resolve([]),
+  ]);
+
+  const quote: CheckoutShippingQuote | null =
+    order.shippingCostAmount !== null &&
+    order.shippingSubsidyAmount !== null &&
+    order.shippingCourierLabel !== null &&
+    order.shippingCourierCode !== null &&
+    order.shippingServiceCode !== null &&
+    order.shippingWeightGrams !== null &&
+    order.shippingQuotedAt !== null
+      ? {
+          courierLabel: order.shippingCourierLabel,
+          courierCode: order.shippingCourierCode,
+          serviceCode: order.shippingServiceCode,
+          weightGrams: order.shippingWeightGrams,
+          costAmount: order.shippingCostAmount,
+          subsidyAmount: order.shippingSubsidyAmount,
+          buyerAmount: order.shippingAmount,
+          quotedAt: order.shippingQuotedAt,
+          destinationLabel: areaRows[0]?.label ?? null,
+        }
+      : null;
+
+  // A voucher restored by a cancel is no longer linked to the order; the discount still shows it.
+  const voucherRow = voucherRows[0];
+  return {
+    paymentStatus: order.paymentStatus,
+    paymentExpiresAt: order.paymentExpiresAt,
+    paidAt: order.paidAt,
+    cancelReason: order.cancelReason,
+    needsAttention: order.needsAttention,
+    contactEmail: order.contactEmail,
+    contactPhone: order.contactPhone,
+    placedWithSession: order.placedWithSession,
+    promoOptIn: order.promoOptIn,
+    address: addressFromSnapshot(order.shippingAddressSnapshot),
+    quote,
+    voucher: voucherRow ? { amount: voucherRow.amount, status: voucherRow.status } : null,
+    attempts: attemptRows.map(({ lastStatus, ...attempt }) => {
+      // jsonb: only an object carries the allowlisted fields (payments/status.ts snapshot).
+      const snapshot: Record<string, unknown> = lastStatus && typeof lastStatus === "object" && !Array.isArray(lastStatus) ? (lastStatus as Record<string, unknown>) : {};
+      return { ...attempt, bank: text(snapshot.bank), gatewayStatus: text(snapshot.transaction_status) };
+    }),
+    emails: emailRows,
+    courier: order.courier,
+    trackingNumber: order.trackingNumber,
+  };
 }
 
 export async function getOrderDetail(id: string, db: Database = defaultDb): Promise<OrderDetail | null> {
@@ -241,7 +440,11 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
     .orderBy(desc(thankYouCards.claimedAt))
     .limit(1);
 
-  return { ...order, items: itemRows, cardClaimedAt: claimedCard?.claimedAt ?? null };
+  const [full] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
+  const checkout =
+    full && full.paymentStatus !== null ? await getCheckoutOrderDetail({ ...full, paymentStatus: full.paymentStatus }, db) : null;
+
+  return { ...order, items: itemRows, cardClaimedAt: claimedCard?.claimedAt ?? null, checkout };
 }
 
 /** Cost data (unit_cost) is gated by finance.view_profit, same discipline every other cost field
@@ -249,5 +452,8 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
  * server-side, never left to the client to hide. */
 export function stripOrderDetailCost(detail: OrderDetail, canViewProfit: boolean): OrderDetail {
   if (canViewProfit) return detail;
-  return { ...detail, items: detail.items.map((item) => ({ ...item, unitCost: null })) };
+  const checkout = detail.checkout?.quote
+    ? { ...detail.checkout, quote: { ...detail.checkout.quote, costAmount: null, subsidyAmount: null } }
+    : detail.checkout;
+  return { ...detail, items: detail.items.map((item) => ({ ...item, unitCost: null })), checkout };
 }

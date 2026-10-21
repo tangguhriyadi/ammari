@@ -10,6 +10,8 @@ export interface MarkShippedDialogProps {
   orderId: string;
   orderNo: string;
   hasActiveCard: boolean;
+  /** Prefills "Kurir" with a web checkout order's quoted service (staff book exactly that one). */
+  defaultCourier?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onShipped: () => void;
@@ -19,8 +21,8 @@ export interface MarkShippedDialogProps {
  * and if this order has no active thank-you card, shipping it requires an explicit confirmation
  * (docs/plans/packing-cards.md's "nothing ships without a card" rule) rather than silently
  * letting it through. */
-export function MarkShippedDialog({ orderId, orderNo, hasActiveCard, open, onOpenChange, onShipped }: MarkShippedDialogProps) {
-  const [courier, setCourier] = useState("");
+export function MarkShippedDialog({ orderId, orderNo, hasActiveCard, defaultCourier, open, onOpenChange, onShipped }: MarkShippedDialogProps) {
+  const [courier, setCourier] = useState(defaultCourier ?? "");
   const [trackingNumber, setTrackingNumber] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();

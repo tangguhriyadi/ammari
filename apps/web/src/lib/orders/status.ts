@@ -52,8 +52,9 @@ export function customerOrderStatus(order: CustomerOrderStatusInput): CustomerOr
   }
 
   if (order.status === "cancelled") {
-    // Paid after the order had already been cancelled (plan §6.2): the money goes back.
-    if (order.paymentStatus === "paid") return { ...base, stage: "cancelled", label: "Dibatalkan", note: "Pembayaranmu kami terima setelah pesanan dibatalkan. Dananya akan kami kembalikan penuh." };
+    // Paid, then cancelled (paid after an expiry, plan §6.2, or cancelled by staff after payment,
+    // session 16): the money goes back in full either way.
+    if (order.paymentStatus === "paid") return { ...base, stage: "cancelled", label: "Dibatalkan", note: "Pembayaranmu sudah kami terima dan dananya akan kami kembalikan penuh." };
     const note = order.paymentStatus ? (REFUND_NOTES[order.paymentStatus] ?? null) : null;
     const neverPaid = order.paymentStatus === "pending" || order.paymentStatus === "expired" || order.paymentStatus === "cancelled";
     return { ...base, stage: "cancelled", label: "Dibatalkan", note, reorderable: isCheckout && neverPaid };

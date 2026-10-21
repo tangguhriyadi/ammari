@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { describe, expect, test, vi } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
-import { insertCustomer, insertOrder, insertProductVariant, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
+import { insertCustomer, insertOrder, insertProductVariant, insertThankYouCard } from "@ammari/db/test-fixtures";
 import {
   auditLog,
   cartItems,
@@ -749,15 +749,14 @@ describe("placeOrder", () => {
   test("when the order is paid, unit_cost is locked at the moving average and the holds are consumed", async () => {
     await withRollback(async (tx) => {
       const { variant } = await sellableSku(tx, { stock: 4 });
-      const staff = await insertStaffUser(tx);
       const areaId = await areaQuoting(tx, 12_000);
       const cart = await guestCart(tx, [{ sku: variant.sku, qty: 2 }]);
       const result = await placeOrder(tx, deps(), guestInput({ shippingAreaId: areaId, guestTokenHash: cart.tokenHash, expectedTotal: 2 * PRICE }));
       if (!result.ok) throw new Error(result.reason);
 
-      // The payment state machine goes through this same transition (payments/apply-status.test.ts
-      // checks it from a notification).
-      await transitionOrderStatus(result.orderId, "to_ship", staff.id, tx);
+      // The payment state machine goes through this same transition, without a staff actor
+      // (payments/notification.test.ts checks it from a notification).
+      await transitionOrderStatus(result.orderId, "to_ship", null, tx);
 
       const [item] = await tx.select().from(orderItems).where(eq(orderItems.orderId, result.orderId));
       expect(item?.unitCost).toBe(UNIT_COST);

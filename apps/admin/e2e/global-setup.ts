@@ -118,6 +118,20 @@ export const E2E_RESERVATION_HELD_SKU = "E2E-DIPESAN-M";
 export const E2E_RESERVATION_FREE_SKU = "E2E-DIPESAN-L";
 export const E2E_RESERVATION_ORDER_NO = "ORD-E2E-DIPESAN-0001";
 
+// checkout-orders.spec.ts (docs/plans/cart-checkout.md session 16): web checkout orders in every
+// state staff act on, one set per viewport (each test changes its own orders). Only web checkout
+// creates them, so they are seeded here; the staffer is on the existing `e2e_packing` role
+// (orders.view, orders.manage, packing.print_cards, finance.view_profit).
+export const E2E_CHECKOUT_ORDERS_EMAIL = "checkout-orders@e2e.ammari.test";
+export const E2E_CHECKOUT_PRODUCT_NAME = "E2E Gamis Web";
+export const E2E_CHECKOUT_SKU = "E2E-WEB-M";
+export const E2E_CHECKOUT_LAYOUTS = ["390", "1280"] as const;
+/** The seeded orders' numbers per viewport: unpaid, paid (Siap Kirim), paid while stock was short,
+ * paid and flagged as an anomaly. */
+export function e2eCheckoutOrderNo(kind: "pending" | "paid" | "short" | "flagged", layout: (typeof E2E_CHECKOUT_LAYOUTS)[number]): string {
+  return `ORD-E2E-WEB-${kind.toUpperCase()}-${layout}`;
+}
+
 // A product published before migration 0031 made "Berat kirim" a publish rule (like prod's first
 // published product): live, active, no weight. product-shipping-weight.spec.ts reads it; nothing
 // in the admin UI can create this state any more, so it is seeded here.
@@ -202,6 +216,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     stockMovements,
     orders,
     orderItems,
+    payments,
     stockReservations,
   } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
@@ -301,6 +316,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     "packing.print_cards",
   ]);
   await ensureStaffFixture(E2E_PACKING_EMAIL, "E2E Packing", E2E_PACKING_ROLE_KEY);
+  await ensureStaffFixture(E2E_CHECKOUT_ORDERS_EMAIL, "E2E Checkout Orders", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PACKING_PRINT_EMAIL, "E2E Packing Print", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PACKING_PRINT_WEBKIT_EMAIL, "E2E Packing Print WebKit", E2E_PACKING_ROLE_KEY);
   await ensureStaffFixture(E2E_PACKING_STICKERS_EMAIL, "E2E Packing Stickers", E2E_PACKING_ROLE_KEY);
@@ -430,7 +446,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       shippingCostAmount: 12_000,
       shippingSubsidyAmount: 12_000,
       shippingCourierCode: "jne",
-      shippingServiceCode: "REG",
+      shippingServiceCode: "reg",
       shippingCourierLabel: "JNE Reguler",
       shippingWeightGrams: 1_900,
       shippingDestinationId: "e2e-destination",
@@ -453,6 +469,118 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     }
   });
 
+  // Web checkout orders for checkout-orders.spec.ts (see E2E_CHECKOUT_ORDERS_EMAIL above).
+  await db.transaction(async (tx) => {
+    const [fabric] = await tx.insert(fabrics).values({ name: "E2E Web Fabric" }).returning({ id: fabrics.id });
+    if (!fabric) throw new Error("failed to seed the e2e web fabric");
+    const [color] = await tx.insert(fabricColors).values({ fabricId: fabric.id, name: "Sage" }).returning({ id: fabricColors.id });
+    if (!color) throw new Error("failed to seed the e2e web colour");
+    const [product] = await tx
+      .insert(products)
+      .values({ name: E2E_CHECKOUT_PRODUCT_NAME, code: "E2EWEB", slug: "e2e-gamis-web", fabricId: fabric.id, closure: "front_zip", sizeMode: "sized", basePrice: 259_000 })
+      .returning({ id: products.id, closure: products.closure });
+    if (!product) throw new Error("failed to seed the e2e web product");
+    await tx.insert(productVariants).values({ productId: product.id, fabricId: fabric.id, fabricColorId: color.id, closure: product.closure, sku: E2E_CHECKOUT_SKU, size: "M" });
+    await tx.insert(stockMovements).values({ sku: E2E_CHECKOUT_SKU, qty: 20, valueAmount: 2_000_000, type: "production", refType: "manual" });
+
+    const now = Date.now();
+    // Rp35.000 courier cost: Rp20.000 subsidy, Rp15.000 paid by the buyer.
+    const total = 259_000 + 15_000;
+    const base = (orderNo: string) => ({
+      channelId: "web" as const,
+      orderNo,
+      checkoutAttemptId: crypto.randomUUID(),
+      termsAcceptedAt: new Date(now),
+      promoOptIn: true,
+      placedWithSession: false,
+      orderDate: new Date(now),
+      subtotalAmount: 259_000,
+      discountAmount: 0,
+      totalAmount: total,
+      contactEmail: "pembeli-web@e2e.ammari.test",
+      contactPhone: "+6281234567890",
+      recipientName: "Siti Aminah",
+      shippingAddress: "Siti Aminah, +6281298765432, Jl. Mawar 1, Coblong, Kota Bandung, Jawa Barat 40132",
+      shippingAddressSnapshot: {
+        version: 2,
+        recipientName: "Siti Aminah",
+        phone: "+6281298765432",
+        addressLine: "Jl. Mawar 1, RT 01/RW 02, Kel. Sukamaju",
+        notes: null,
+        shippingAreaId: null,
+        providerAreaId: "e2e-destination",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Coblong",
+        subdistrict: null,
+        postalCode: "40132",
+      },
+      paymentExpiresAt: new Date(now + 60 * 60_000),
+      shippingAmount: 15_000,
+      shippingCostAmount: 35_000,
+      shippingSubsidyAmount: 20_000,
+      shippingCourierCode: "jne",
+      shippingServiceCode: "reg",
+      shippingCourierLabel: "JNE Reguler",
+      shippingWeightGrams: 900,
+      shippingDestinationId: "e2e-destination",
+      shippingQuotedAt: new Date(now),
+    });
+
+    for (const layout of E2E_CHECKOUT_LAYOUTS) {
+      const seeds = [
+        { kind: "pending" as const, status: "awaiting_payment" as const, paid: false, sold: false, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[] },
+        { kind: "paid" as const, status: "to_ship" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[] },
+        { kind: "short" as const, status: "awaiting_payment" as const, paid: true, sold: false, flags: ["stock_short_at_payment" as const] },
+        { kind: "flagged" as const, status: "to_ship" as const, paid: true, sold: true, flags: ["payment_anomaly" as const] },
+      ];
+      for (const seed of seeds) {
+        const orderNo = e2eCheckoutOrderNo(seed.kind, layout);
+        const [order] = await tx
+          .insert(orders)
+          .values({
+            ...base(orderNo),
+            status: seed.status,
+            paymentStatus: seed.paid ? "paid" : "pending",
+            paidAt: seed.paid ? new Date(now) : null,
+            needsAttention: seed.flags,
+          })
+          .returning({ id: orders.id });
+        if (!order) throw new Error(`failed to seed ${orderNo}`);
+        const [item] = await tx
+          .insert(orderItems)
+          .values({ orderId: order.id, sku: E2E_CHECKOUT_SKU, qty: 1, unitPrice: 259_000, unitCost: seed.sold ? 100_000 : 0 })
+          .returning({ id: orderItems.id });
+        if (!item) throw new Error(`failed to seed ${orderNo}'s line`);
+        if (seed.sold) {
+          await tx.insert(stockMovements).values({ sku: E2E_CHECKOUT_SKU, qty: -1, valueAmount: -100_000, type: "sale", refType: "order_item", refId: item.id });
+        }
+        await tx.insert(stockReservations).values({
+          orderId: order.id,
+          orderItemId: item.id,
+          sku: E2E_CHECKOUT_SKU,
+          qty: 1,
+          expiresAt: new Date(now + 75 * 60_000),
+          ...(seed.sold ? { status: "consumed" as const, consumedAt: new Date(now) } : seed.paid ? { status: "released" as const, releasedAt: new Date(now) } : {}),
+        });
+        await tx.insert(payments).values({
+          orderId: order.id,
+          provider: "midtrans",
+          providerOrderId: `E2E-${orderNo}-1`,
+          attempt: 1,
+          grossAmount: total,
+          status: seed.paid ? "paid" : "pending",
+          paymentType: seed.paid ? "qris" : null,
+          paidAt: seed.paid ? new Date(now) : null,
+          snapToken: "e2e-snap-token",
+          redirectUrl: "http://localhost:3000/api/test/payments/e2e",
+          expiresAt: new Date(now + 60 * 60_000),
+          lastStatus: seed.paid ? { transaction_status: "settlement", payment_type: "qris" } : null,
+        });
+      }
+    }
+  });
+
   // Clears rate-limit state left over from a previous run (repeated runs within the same
   // 5-minute window would otherwise throttle out the fixture logins below). Test-only infra
   // against a local DB — never touches anything in a real environment.
@@ -466,6 +594,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_PRODUCTION_STOCK_EMAIL,
         E2E_ORDERS_EMAIL,
         E2E_STOCK_RESERVATIONS_EMAIL,
+        E2E_CHECKOUT_ORDERS_EMAIL,
         E2E_PACKING_EMAIL,
         E2E_PACKING_PRINT_EMAIL,
         E2E_PACKING_PRINT_WEBKIT_EMAIL,

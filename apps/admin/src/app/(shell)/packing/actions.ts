@@ -7,7 +7,7 @@ import { runAction, type ActionResult } from "@/lib/action-result";
 import { ActionError } from "@/lib/errors";
 import { defaultDb } from "@/lib/db";
 import { transitionOrderStatus } from "@ammari/commerce/orders";
-import { getCardPrintStatus, mintThankYouCardsForOrders } from "@/lib/packing/queries";
+import { getCardPrintStatus, getOrdersMissingCard, mintThankYouCardsForOrders } from "@/lib/packing/queries";
 import { claimUrl, claimUrlHost, formatClaimTokenForDisplay } from "@/lib/packing/token";
 import { buildStickerSheetPdf, stickerPdfFilename, type StickerPdfCard } from "@/lib/packing/sticker-pdf";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
@@ -120,8 +120,9 @@ export async function markShippedAction(input: z.input<typeof markShippedSchema>
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     if (!parsed.data.confirmNoCard) {
-      const status = await getCardPrintStatus([parsed.data.orderId]);
-      if (status.get(parsed.data.orderId) === false) {
+      // Web checkout orders never carry a card, so they never need the confirmation.
+      const missing = await getOrdersMissingCard([parsed.data.orderId]);
+      if (missing.length > 0) {
         throw new ActionError("Pesanan ini belum punya kartu terima kasih. Konfirmasi untuk tetap mengirim.");
       }
     }
@@ -145,8 +146,7 @@ export async function bulkMarkShippedAction(input: z.input<typeof bulkMarkShippe
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     if (!parsed.data.confirmNoCard) {
-      const status = await getCardPrintStatus(parsed.data.orderIds);
-      const missing = parsed.data.orderIds.filter((id) => status.get(id) === false);
+      const missing = await getOrdersMissingCard(parsed.data.orderIds);
       if (missing.length > 0) {
         throw new ActionError("Sebagian pesanan ini belum punya kartu terima kasih. Konfirmasi untuk tetap mengirim.");
       }

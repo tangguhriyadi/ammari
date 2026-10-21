@@ -382,17 +382,42 @@ export async function expireOrderWithoutLiveTransaction(db: Database, orderId: s
     const open = attempts.filter((attempt) => OPEN.includes(attempt.status));
     if (open.some((attempt) => !confirmedEndedAttempts.includes(attempt.providerOrderId))) return result("unchanged");
 
-    if (open.length > 0) {
-      await tx
-        .update(payments)
-        .set({ status: "expired", updatedAt: sql`now()` })
-        .where(inArray(payments.id, open.map((attempt) => attempt.id)));
-    }
-    await transitionOrderStatus(order.id, "cancelled", null, tx);
-    await tx
-      .update(orders)
-      .set({ paymentStatus: "expired", cancelReason: "payment_expired", updatedAt: sql`now()` })
-      .where(and(eq(orders.id, order.id), eq(orders.status, "cancelled")));
+    await cancelUnpaidCheckoutOrder(tx, order.id, {
+      attempts: open.map((attempt) => ({ id: attempt.id, status: "expired" })),
+      paymentStatus: "expired",
+      cancelReason: "payment_expired",
+      actorStaffUserId: null,
+    });
     return result("expired", await productSlugsOf(tx, order.id));
   });
 }
+
+/** The last step every unpaid checkout order cancel shares (the sweep's local expiry above, and a
+ * staff cancel, ./staff.ts): inside the caller's transaction, which already holds the order lock
+ * and has checked that the gateway holds nothing live, the open attempts end with the given status
+ * (and the gateway's own snapshot when it gave one), and the order is cancelled through
+ * transitionOrderStatus (holds released, voucher restored) with its payment status and reason. */
+export async function cancelUnpaidCheckoutOrder(
+  tx: Tx,
+  orderId: string,
+  options: {
+    attempts: readonly { id: string; status: "expired" | "cancelled"; snapshot?: Record<string, string | null> }[];
+    paymentStatus: "expired" | "cancelled";
+    cancelReason: "payment_expired" | "admin";
+    actorStaffUserId: string | null;
+  },
+): Promise<void> {
+  for (const attempt of options.attempts) {
+    await tx
+      .update(payments)
+      .set({ status: attempt.status, ...(attempt.snapshot ? { lastStatus: attempt.snapshot } : {}), updatedAt: sql`now()` })
+      .where(eq(payments.id, attempt.id));
+  }
+  await transitionOrderStatus(orderId, "cancelled", options.actorStaffUserId, tx, { checkoutCancelByStaff: options.actorStaffUserId !== null });
+  await tx
+    .update(orders)
+    .set({ paymentStatus: options.paymentStatus, cancelReason: options.cancelReason, updatedAt: sql`now()` })
+    .where(and(eq(orders.id, orderId), eq(orders.status, "cancelled")));
+}
+
+export { PAID_LIKE as PAID_LIKE_PAYMENT_STATUSES, OPEN as OPEN_PAYMENT_STATUSES, withFlags as withAttentionFlags, productSlugsOf };

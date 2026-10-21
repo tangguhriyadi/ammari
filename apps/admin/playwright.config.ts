@@ -97,6 +97,10 @@ export default defineConfig({
     env: {
       E2E_TEST_LOGIN: "true",
       STORAGE_DRIVER: "memory",
+      // The fake payment gateway (accepted only with E2E_TEST_LOGIN in a non-production build):
+      // a staff cancel of an unpaid web order asks it, and it knows no transaction, so the order
+      // is cancelled locally (docs/plans/cart-checkout.md session 16). Nothing reaches Midtrans.
+      PAYMENT_PROVIDER: "fake",
       DATABASE_URL: e2eDatabaseUrl(),
       MAIN_SITE_URL: "http://localhost:3000",
       E2E_OTP_EXPIRES_IN_SECONDS: "8",

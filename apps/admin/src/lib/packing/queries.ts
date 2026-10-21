@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, eq, inArray, notInArray } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
 import {
   channels,
   customers,
@@ -82,6 +82,11 @@ export interface PackingQueueRow {
    * queue could shift collision handling) until the order is actually printed, at which point
    * the exact code gets persisted on its card and `stickerCodeIsPreview` becomes `false`. */
   stickerCodeIsPreview: boolean;
+  /** A web checkout order (`payment_status` set, docs/plans/cart-checkout.md §7): no thank-you
+   * card (SPEC §4.1, marketplace orders only), and staff book `shippingServiceLabel`. */
+  isCheckout: boolean;
+  /** The quoted courier service locked on a checkout order (e.g. "JNE Reguler"); null otherwise. */
+  shippingServiceLabel: string | null;
 }
 
 export interface PackingPickListItem {
@@ -144,6 +149,8 @@ export async function listPackingQueue(
       cardPrintedAt: activeCard.printedAt,
       cardClaimedAt: claimedCard.claimedAt,
       persistedStickerCode: activeCard.stickerCode,
+      paymentStatus: orders.paymentStatus,
+      shippingServiceLabel: orders.shippingCourierLabel,
     })
     .from(orders)
     .innerJoin(channels, eq(channels.id, orders.channelId))
@@ -169,12 +176,15 @@ export async function listPackingQueue(
   const previewInputs = await getStickerCodeInputsForOrders(unprintedOrderIds, db);
   const previewMap = assignStickerCodes(previewInputs, fixedEntries);
 
-  const rowsWithStickerCodes: PackingQueueRow[] = rows.map(({ persistedStickerCode, ...row }) => {
+  const rowsWithStickerCodes: PackingQueueRow[] = rows.map(({ persistedStickerCode, paymentStatus, ...row }) => {
     const isPrinted = row.cardPrintedAt !== null;
+    const isCheckout = paymentStatus !== null;
     return {
       ...row,
-      stickerCode: isPrinted ? persistedStickerCode : (previewMap.get(row.id) ?? null),
-      stickerCodeIsPreview: !isPrinted,
+      // A checkout order never gets a card, so it has no sticker code either.
+      stickerCode: isCheckout ? null : isPrinted ? persistedStickerCode : (previewMap.get(row.id) ?? null),
+      stickerCodeIsPreview: !isCheckout && !isPrinted,
+      isCheckout,
     };
   });
 
@@ -183,13 +193,13 @@ export async function listPackingQueue(
 
 /** Every `to_ship` order with NO active thank-you card — the "pending" set for the sticker-code
  * preview (docs/plans/thermal-stickers.md): these are the orders whose code could still change
- * before they're actually printed. */
+ * before they're actually printed. Web checkout orders never get a card, so they are not in it. */
 async function getUnprintedToShipOrderIds(db: Database): Promise<string[]> {
   const activeCardOrderIds = db.select({ orderId: thankYouCards.orderId }).from(thankYouCards).where(eq(thankYouCards.status, "active"));
   const rows = await db
     .select({ id: orders.id })
     .from(orders)
-    .where(and(eq(orders.status, "to_ship"), notInArray(orders.id, activeCardOrderIds)));
+    .where(and(eq(orders.status, "to_ship"), isNull(orders.paymentStatus), notInArray(orders.id, activeCardOrderIds)));
   return rows.map((r) => r.id);
 }
 
@@ -282,6 +292,18 @@ export async function getCardPrintStatus(orderIds: string[], db: Database = defa
   return new Map(orderIds.map((id) => [id, activeOrderIds.has(id)]));
 }
 
+/** The orders among `orderIds` that should carry a thank-you card but have no active one, for the
+ * "Tandai dikirim" warning. Web checkout orders never need one (SPEC §4.1). */
+export async function getOrdersMissingCard(orderIds: string[], db: Database = defaultDb): Promise<string[]> {
+  if (orderIds.length === 0) return [];
+  const [status, checkoutRows] = await Promise.all([
+    getCardPrintStatus(orderIds, db),
+    db.select({ id: orders.id }).from(orders).where(and(inArray(orders.id, orderIds), isNotNull(orders.paymentStatus))),
+  ]);
+  const checkout = new Set(checkoutRows.map((row) => row.id));
+  return orderIds.filter((id) => !checkout.has(id) && status.get(id) === false);
+}
+
 // ---------- Order summary (for the printed card's own text) ----------
 
 export interface OrderSummaryForCard {
@@ -333,6 +355,12 @@ export async function mintThankYouCard(orderId: string, actorStaffUserId: string
     if (!order) throw new ActionError("Pesanan tidak ditemukan.");
     if (order.status === "cancelled" || order.status === "returned") {
       throw new ActionError("Pesanan ini sudah dibatalkan/diretur, tidak bisa mencetak kartu.");
+    }
+    // Thank-you cards are for marketplace buyers (SPEC §4.1); a web checkout order is already on the
+    // main site (docs/plans/cart-checkout.md §7, enforced here, not only by the packing UI). Manual
+    // orders keep printing as before.
+    if (order.paymentStatus !== null) {
+      throw new ActionError(`${order.orderNo} adalah pesanan dari website dan tidak memakai kartu terima kasih.`);
     }
 
     const [existingActive] = await tx

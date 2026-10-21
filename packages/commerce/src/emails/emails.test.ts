@@ -6,6 +6,7 @@ import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant,
 import { customers, orderAccessTokens, orderItems, orderNotifications, orders, payments, stockMovements, stockReservations, storeSettings } from "@ammari/db/schema";
 import type { Tx } from "../db";
 import { hashOrderAccessToken } from "../checkout/access-token";
+import { formatRupiah } from "./format";
 import { transitionOrderStatus } from "../orders/lifecycle";
 import { applyPaymentStatus } from "../payments/apply-status";
 import { createFakePaymentProvider } from "../payments/fake";
@@ -52,7 +53,7 @@ const forOrder = (sent: Sent[], orderNo: string) => sent.filter((message) => mes
 // ---------- dueOrderEmails ----------
 
 function state(overrides: Partial<OrderEmailState>): OrderEmailState {
-  return { status: "awaiting_payment", paymentStatus: "pending", paymentExpiresAt: new Date(Date.now() + 60_000), paidAt: null, cancelReason: null, needsAttention: [], ...overrides };
+  return { status: "awaiting_payment", paymentStatus: "pending", paymentExpiresAt: new Date(Date.now() + 60_000), paidAt: null, cancelledAt: null, cancelReason: null, needsAttention: [], ...overrides };
 }
 
 describe("dueOrderEmails", () => {
@@ -79,10 +80,21 @@ describe("dueOrderEmails", () => {
       { kind: "owner_paid", variant: "after_cancel" },
     ]);
   });
-  test("expired or gateway-cancelled: `cancelled`; a staff cancel is not this session's", () => {
+  test("expired, gateway-cancelled or cancelled by staff (unpaid or paid): `cancelled`", () => {
     expect(dueOrderEmails(state({ status: "cancelled", paymentStatus: "expired", cancelReason: "payment_expired" }), now)).toEqual([{ kind: "cancelled", reason: "payment_expired" }]);
     expect(dueOrderEmails(state({ status: "cancelled", paymentStatus: "cancelled", cancelReason: "payment_cancelled" }), now)).toEqual([{ kind: "cancelled", reason: "payment_cancelled" }]);
-    expect(dueOrderEmails(state({ status: "cancelled", paymentStatus: "pending", cancelReason: "admin" }), now)).toEqual([]);
+    expect(dueOrderEmails(state({ status: "cancelled", paymentStatus: "cancelled", cancelReason: "admin" }), now)).toEqual([{ kind: "cancelled", reason: "admin_unpaid" }]);
+    const earlier = new Date(now.getTime() - 60_000);
+    expect(dueOrderEmails(state({ status: "cancelled", paymentStatus: "paid", paidAt: earlier, cancelledAt: now, cancelReason: "admin" }), now)).toEqual([{ kind: "cancelled", reason: "admin_paid" }]);
+    expect(dueOrderEmails(state({ status: "cancelled", paymentStatus: "refunded", paidAt: earlier, cancelledAt: now, cancelReason: "admin" }), now)).toEqual([{ kind: "cancelled", reason: "admin_paid" }]);
+    // Paid after the staff cancel and refunded since (flags cleared): still the unpaid cancel email,
+    // never a late "dana akan dikembalikan".
+    expect(dueOrderEmails(state({ status: "cancelled", paymentStatus: "refunded", paidAt: now, cancelledAt: earlier, cancelReason: "admin" }), now)).toEqual([{ kind: "cancelled", reason: "admin_unpaid" }]);
+    // Paid after a staff cancel: the review note, not a second cancel email.
+    expect(dueOrderEmails(state({ status: "cancelled", paymentStatus: "paid", paidAt: now, cancelReason: "admin", needsAttention: ["paid_after_cancel", "refund_due"] }), now)).toEqual([
+      { kind: "paid", variant: "review" },
+      { kind: "owner_paid", variant: "after_cancel" },
+    ]);
   });
   test("shipped: `shipped`; completed and returned: nothing; manual and marketplace orders: never", () => {
     expect(dueOrderEmails(state({ status: "shipped", paymentStatus: "paid", paidAt: now }), now)).toEqual([{ kind: "shipped" }]);
@@ -119,6 +131,8 @@ const allRendered = () => [
   renderPaidEmail(baseView, "review"),
   renderCancelledEmail({ ...baseView, reason: "payment_expired", paymentDeadline: deadline }),
   renderCancelledEmail({ ...baseView, reason: "payment_cancelled", paymentDeadline: deadline }),
+  renderCancelledEmail({ ...baseView, reason: "admin_unpaid", paymentDeadline: deadline }),
+  renderCancelledEmail({ ...baseView, reason: "admin_paid", paymentDeadline: deadline }),
   renderShippedEmail({ ...baseView, courier: "JNE", trackingNumber: "JNE123456789" }),
   renderShippedEmail({ ...baseView, courier: null, trackingNumber: null }),
   ...(["paid", "stock_short", "after_cancel"] as const).map((variant) =>
@@ -198,6 +212,24 @@ describe("templates", () => {
     expect(cancelled.html).toContain('href="https://ammari.example/orders/ORD-202612-0007?t=abc"');
     expect(cancelled.text).not.toContain("Belanja lagi");
     expect(renderCancelledEmail({ ...baseView, totals: { ...baseView.totals, discount: 0 }, reason: "payment_expired", paymentDeadline: deadline }).text).not.toContain("Voucher");
+  });
+
+  test("a staff cancel names no reason: unpaid says nothing was charged and offers Pesan lagi; paid promises the full refund by WhatsApp", () => {
+    const unpaid = renderCancelledEmail({ ...baseView, reason: "admin_unpaid", paymentDeadline: deadline });
+    expect(unpaid.subject).toBe("Pesanan ORD-202612-0007 dibatalkan");
+    expect(unpaid.text).toContain("Pesanan ORD-202612-0007 kami batalkan. Tidak ada dana yang ditarik untuk pesanan ini.");
+    expect(unpaid.text).not.toContain("batas waktu");
+    expect(unpaid.text).toContain("Voucher yang kamu pakai sudah kembali");
+    expect(unpaid.text).toContain("Pesan lagi:\nhttps://ammari.example/orders/ORD-202612-0007?t=abc");
+
+    const paid = renderCancelledEmail({ ...baseView, reason: "admin_paid", paymentDeadline: deadline });
+    expect(paid.subject).toBe("Pesanan ORD-202612-0007 dibatalkan");
+    expect(paid.text).toContain(`Dana ${formatRupiah(baseView.totals.total)} (termasuk ongkir) akan kami kembalikan penuh.`);
+    expect(paid.text).toContain("Tim kami akan menghubungi kamu lewat WhatsApp untuk proses pengembaliannya.");
+    expect(paid.text).toContain("Voucher yang kamu pakai sudah kembali");
+    expect(paid.text).not.toContain("Pesan lagi");
+    expect(paid.text).not.toContain("Tidak ada dana yang ditarik");
+    expect(paid.text).toContain("Lihat pesanan");
   });
 
   test("the shipped email shows courier and resi when known", () => {

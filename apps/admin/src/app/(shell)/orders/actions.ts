@@ -1,12 +1,15 @@
 "use server";
 
 import { z } from "zod";
-import { CHANNEL_IDS, ORDER_STATUSES } from "@ammari/db/schema";
+import { CHANNEL_IDS, ORDER_ATTENTION_FLAGS, ORDER_STATUSES } from "@ammari/db/schema";
 import type { OrderStatus } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { createOrder, transitionOrderStatus } from "@ammari/commerce/orders";
+import { REFUND_NOTE_MAX_LENGTH, cancelCheckoutOrderByStaff, clearAttentionFlag, recordManualRefund } from "@ammari/commerce/payments";
+import { defaultDb } from "@/lib/db";
+import { getAdminPaymentProvider } from "@/lib/payments/provider";
 import { createCustomer, searchCustomers, type CustomerOption } from "@/lib/customers/queries";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
 import { revalidateStorefrontForSkus, skusForOrder } from "@/lib/storefront-stock";
@@ -103,5 +106,58 @@ export async function createCustomerAction(
     const customer = await createCustomer({ name: parsed.data.name, phone: parsed.data.phone || null });
     revalidateAdmin("/orders");
     return { id: customer.id, name: customer.name, phone: customer.phone };
+  });
+}
+
+// ---------- Web checkout orders (docs/plans/cart-checkout.md §6.5, §7, session 16) ----------
+
+const orderIdSchema = z.object({ orderId: z.string().uuid() });
+
+/** "Batalkan pesanan" for a web checkout order: an unpaid one is closed at the payment gateway
+ * first, a paid one is flagged "Dana perlu dikembalikan" (@ammari/commerce/payments staff.ts). */
+export async function cancelCheckoutOrderAction(
+  input: z.input<typeof orderIdSchema>,
+): Promise<ActionResult<{ outcome: "cancelled" | "already_cancelled"; refundDue: boolean; storefrontOk: boolean }>> {
+  const session = await requirePermission("orders.manage");
+  const parsed = orderIdSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    const result = await cancelCheckoutOrderByStaff(defaultDb, getAdminPaymentProvider(), parsed.data.orderId, session.staffUser.id);
+    revalidateAdmin(...ORDER_SECTIONS);
+    // Stock came back (released hold or restored sale): the product pages show it again.
+    const storefront = result.outcome === "cancelled" ? await revalidateStorefrontForSkus(() => skusForOrder(parsed.data.orderId)) : { ok: true };
+    return { outcome: result.outcome, refundDue: result.outcome === "cancelled" && result.refundDue, storefrontOk: storefront.ok };
+  });
+}
+
+const recordRefundSchema = z.object({
+  orderId: z.string().uuid(),
+  paymentId: z.string().uuid(),
+  note: z.string().trim().min(3, "Tulis catatan pengembalian dana, misalnya bank dan tanggal transfer.").max(REFUND_NOTE_MAX_LENGTH, `Catatan maksimal ${REFUND_NOTE_MAX_LENGTH} karakter.`),
+});
+
+/** "Catat dana dikembalikan": Ammari refunded one paid attempt by hand (owner decision 43). */
+export async function recordRefundAction(input: z.input<typeof recordRefundSchema>): Promise<ActionResult<{ amount: number; settled: boolean }>> {
+  const session = await requirePermission("orders.manage");
+  const parsed = recordRefundSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    const result = await recordManualRefund(defaultDb, parsed.data, session.staffUser.id);
+    revalidateAdmin("/orders");
+    return { amount: result.amount, settled: result.settled };
+  });
+}
+
+const clearFlagSchema = z.object({ orderId: z.string().uuid(), flag: z.enum(ORDER_ATTENTION_FLAGS) });
+
+/** "Tandai beres" on one needs_attention flag (never touches another). */
+export async function clearAttentionFlagAction(input: z.input<typeof clearFlagSchema>): Promise<ActionResult> {
+  const session = await requirePermission("orders.manage");
+  const parsed = clearFlagSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    await clearAttentionFlag(defaultDb, parsed.data.orderId, parsed.data.flag, session.staffUser.id);
+    revalidateAdmin("/orders");
+    return undefined;
   });
 }

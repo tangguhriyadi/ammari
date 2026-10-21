@@ -7,6 +7,9 @@ import { ORDER_STATUS_TRANSITIONS } from "@ammari/commerce/order-status";
 import { ORDER_STATUS_BADGE_VARIANT, ORDER_STATUS_LABELS } from "@/lib/orders/status-labels";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { StatusActions } from "./_components/status-actions";
+import { refundsOwed } from "@ammari/commerce/payments";
+import { AttentionPanel, CheckoutStatusActions, type RefundableAttempt } from "./_components/checkout-actions";
+import { ContactSection, PaymentSection, ShippingSection, VoucherAndEmailSection } from "./_components/checkout-sections";
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission("orders.view");
@@ -18,6 +21,12 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   const canViewProfit = session.permissionKeys.includes("finance.view_profit");
   const canManage = session.permissionKeys.includes("orders.manage");
   const detail = stripOrderDetailCost(detailRaw, canViewProfit);
+  // Web checkout order data (docs/plans/cart-checkout.md §7, session 16); null for manual and
+  // marketplace orders, which render exactly as before.
+  const checkout = detail.checkout;
+  const refundableAttempts: RefundableAttempt[] = (checkout?.attempts ?? [])
+    .filter((attempt) => attempt.status === "paid" || attempt.status === "partially_refunded")
+    .map((attempt) => ({ paymentId: attempt.id, attempt: attempt.attempt, amount: attempt.grossAmount - attempt.refundedAmount }));
 
   const timeline = [
     { label: "Dibuat", at: detail.createdAt },
@@ -42,13 +51,36 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
         </div>
       </div>
 
-      {canManage && <StatusActions orderId={detail.id} allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]} />}
+      {checkout && (
+        <AttentionPanel
+          orderId={detail.id}
+          status={detail.status}
+          flags={checkout.needsAttention}
+          refundableAttempts={refundableAttempts}
+          refundOwed={refundsOwed(detail.status, refundableAttempts.length) > 0}
+          canManage={canManage}
+        />
+      )}
+
+      {canManage &&
+        (checkout ? (
+          <CheckoutStatusActions
+            orderId={detail.id}
+            orderNo={detail.orderNo}
+            status={detail.status}
+            paymentStatus={checkout.paymentStatus}
+            totalAmount={detail.totalAmount}
+            allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]}
+          />
+        ) : (
+          <StatusActions orderId={detail.id} allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]} />
+        ))}
 
       <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
         <Row label="Pelanggan" value={detail.customerName ?? detail.buyerUsername ?? "-"} />
         {detail.customerPhone && <Row label="No. HP" value={detail.customerPhone} />}
         {detail.channelOrderNo && <Row label="No. pesanan marketplace" value={detail.channelOrderNo} />}
-        {detail.shippingAddress && <Row label="Alamat pengiriman" value={detail.shippingAddress} />}
+        {!checkout && detail.shippingAddress && <Row label="Alamat pengiriman" value={detail.shippingAddress} />}
         {detail.notes && <Row label="Catatan" value={detail.notes} />}
         <Row label="Dicatat" value={`${formatDateTime(detail.createdAt)}${detail.createdByName ? ` · ${detail.createdByName}` : ""}`} />
       </div>
@@ -75,10 +107,22 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
 
       <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
         <Row label="Subtotal" value={formatRupiah(detail.subtotalAmount)} />
-        <Row label="Ongkos kirim" value={formatRupiah(detail.shippingAmount)} />
-        <Row label="Diskon" value={`- ${formatRupiah(detail.discountAmount)}`} />
+        <Row label={checkout ? "Ongkir (dibayar pembeli)" : "Ongkos kirim"} value={formatRupiah(detail.shippingAmount)} />
+        <Row label={checkout ? "Voucher" : "Diskon"} value={`- ${formatRupiah(detail.discountAmount)}`} />
         <Row label="Total" value={formatRupiah(detail.totalAmount)} />
       </div>
+      {checkout && (
+        <p className="text-sm text-neutral-600">Pesanan dari checkout website: item dan ongkir tidak bisa diubah.</p>
+      )}
+
+      {checkout && (
+        <>
+          <PaymentSection checkout={checkout} />
+          <ShippingSection checkout={checkout} />
+          <ContactSection checkout={checkout} fallbackAddress={detail.shippingAddress} />
+          <VoucherAndEmailSection checkout={checkout} discountAmount={detail.discountAmount} />
+        </>
+      )}
 
       <div className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold text-neutral-900">Riwayat status</h2>

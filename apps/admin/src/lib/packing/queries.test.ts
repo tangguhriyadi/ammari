@@ -1,11 +1,12 @@
 import { and, eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { withRollback } from "@ammari/db/test-utils";
-import { insertOrder, insertProductVariant, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
+import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, insertThankYouCard, shippingQuoteValues } from "@ammari/db/test-fixtures";
 import { orderItems, productImages, products, thankYouCards } from "@ammari/db/schema";
 import {
   claimDeadlineFromOrderDate,
   getCardPrintStatus,
+  getOrdersMissingCard,
   listPackingQueue,
   mintThankYouCard,
   mintThankYouCardsForOrders,
@@ -347,6 +348,40 @@ describe("mintThankYouCardsForOrders", () => {
         .from(thankYouCards)
         .where(and(eq(thankYouCards.orderId, order.id), eq(thankYouCards.status, "void")));
       expect(voidedCards).toHaveLength(1);
+    });
+  });
+});
+
+describe("web checkout orders on /packing (docs/plans/cart-checkout.md §7, session 16)", () => {
+  async function paidCheckoutOrder(tx: Parameters<Parameters<typeof withRollback>[0]>[0]) {
+    const quote = shippingQuoteValues(35_000);
+    return insertOrder(tx, { ...checkoutOrderValues(), ...quote, status: "to_ship", paymentStatus: "paid", paidAt: new Date() });
+  }
+
+  test("the queue shows the quoted service and no sticker code for a checkout order; manual orders unchanged", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const web = await paidCheckoutOrder(tx);
+      const manual = await insertOrder(tx, { channelId: "whatsapp", status: "to_ship" });
+      for (const order of [web, manual]) await tx.insert(orderItems).values({ orderId: order.id, sku: variant.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+
+      const { rows } = await listPackingQueue({}, undefined, "100", tx);
+      expect(rows.find((row) => row.id === web.id)).toMatchObject({ isCheckout: true, shippingServiceLabel: web.shippingCourierLabel, stickerCode: null, stickerCodeIsPreview: false });
+      const manualRow = rows.find((row) => row.id === manual.id);
+      expect(manualRow).toMatchObject({ isCheckout: false, shippingServiceLabel: null, stickerCodeIsPreview: true });
+      expect(manualRow?.stickerCode).not.toBeNull();
+    });
+  });
+
+  test("a card is never minted for a checkout order (server-side), and it never counts as missing a card", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const web = await paidCheckoutOrder(tx);
+      const manual = await insertOrder(tx, { channelId: "whatsapp", status: "to_ship" });
+      await expect(mintThankYouCard(web.id, staff.id, tx)).rejects.toThrow("tidak memakai kartu terima kasih");
+      expect(await getOrdersMissingCard([web.id, manual.id], tx)).toEqual([manual.id]);
+      await mintThankYouCard(manual.id, staff.id, tx);
+      expect(await getOrdersMissingCard([web.id, manual.id], tx)).toEqual([]);
     });
   });
 });

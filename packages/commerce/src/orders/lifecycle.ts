@@ -291,6 +291,30 @@ export interface TransitionOrderStatusOptions {
    * both, a per-order one may set either or both. */
   courier?: string | null;
   trackingNumber?: string | null;
+  /** Set only by `cancelCheckoutOrderByStaff` (payments/staff.ts), which ends the payment attempts
+   * and records why first. Without it a staff cancel of a checkout order is refused. */
+  checkoutCancelByStaff?: boolean;
+}
+
+export const CHECKOUT_ORDER_UNPAID_MESSAGE = "Pesanan website ini belum dibayar. Pesanan masuk Siap Kirim otomatis setelah pembayaran diterima.";
+export const CHECKOUT_ORDER_CANCEL_PATH_MESSAGE = "Pesanan website dibatalkan lewat tombol Batalkan pesanan di halaman pesanan.";
+
+/** Staff moves on a checkout order (docs/plans/cart-checkout.md §6.5, §7, session 16). `to_ship`
+ * from `awaiting_payment` is "Proses" for an order paid while stock was short, never for an
+ * unpaid one (that would sell stock nobody paid for); a cancel goes through
+ * `cancelCheckoutOrderByStaff`, which asks the gateway and records the reason and refund flag.
+ * System callers (null actor: the payment state machine, the sweep) are not limited here. */
+function assertStaffMayMoveCheckoutOrder(
+  order: typeof orders.$inferSelect,
+  toStatus: OrderStatus,
+  actorStaffUserId: string | null,
+  options: TransitionOrderStatusOptions,
+): void {
+  if (actorStaffUserId === null || order.paymentStatus === null) return;
+  if (order.status === "awaiting_payment" && toStatus === "to_ship" && order.paymentStatus !== "paid") {
+    throw new ActionError(CHECKOUT_ORDER_UNPAID_MESSAGE);
+  }
+  if (toStatus === "cancelled" && !options.checkoutCancelByStaff) throw new ActionError(CHECKOUT_ORDER_CANCEL_PATH_MESSAGE);
 }
 
 /** A checkout order's voucher goes back to its owner when the order is cancelled
@@ -342,6 +366,10 @@ export async function transitionOrderStatus(
     if (!canTransitionOrderStatus(fromStatus, toStatus)) {
       throw new ActionError(`Pesanan dengan status ini tidak bisa diubah ke status tersebut.`);
     }
+    assertStaffMayMoveCheckoutOrder(order, toStatus, actorStaffUserId, options);
+    // "Proses" of a checkout order paid while stock was short (plan §6.2): once the sale is
+    // written the flag is resolved, so it ends in the same update (every other flag stays).
+    const resolvesStockShort = fromStatus === "awaiting_payment" && toStatus === "to_ship" && order.needsAttention.includes("stock_short_at_payment");
 
     if (fromStatus === "awaiting_payment" && toStatus === "to_ship") {
       const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
@@ -374,7 +402,12 @@ export async function transitionOrderStatus(
     // updates zero rows instead of silently overwriting a status it never actually validated.
     const [updated] = await tx
       .update(orders)
-      .set({ status: toStatus, ...(timestampColumn ? { [timestampColumn]: new Date() } : {}), ...shippingFields })
+      .set({
+        status: toStatus,
+        ...(timestampColumn ? { [timestampColumn]: new Date() } : {}),
+        ...shippingFields,
+        ...(resolvesStockShort ? { needsAttention: sql`array_remove(${orders.needsAttention}, 'stock_short_at_payment')` } : {}),
+      })
       .where(and(eq(orders.id, orderId), eq(orders.status, fromStatus)))
       .returning();
     if (!updated) throw new ActionError("Status pesanan sudah berubah. Muat ulang halaman.");

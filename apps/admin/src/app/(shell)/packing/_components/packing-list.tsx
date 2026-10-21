@@ -25,7 +25,15 @@ export interface PackingListProps {
 type ReprintWarning = { orderIds: string[]; orderNos: string[]; mode: "card" | "sticker" } | null;
 type NoCardWarning = { orderIds: string[]; orderNos: string[] } | null;
 
-function CardStatusBadge({ printedAt, claimedAt }: { printedAt: Date | null; claimedAt: Date | null }) {
+function CardStatusBadge({ printedAt, claimedAt, isCheckout }: { printedAt: Date | null; claimedAt: Date | null; isCheckout: boolean }) {
+  // Web checkout orders never get a thank-you card (SPEC §4.1, docs/plans/cart-checkout.md §7).
+  if (isCheckout) {
+    return (
+      <Badge variant="neutral" className="whitespace-nowrap">
+        Tanpa kartu
+      </Badge>
+    );
+  }
   if (claimedAt) {
     return (
       <Badge variant="success" className="whitespace-nowrap">
@@ -40,6 +48,13 @@ function CardStatusBadge({ printedAt, claimedAt }: { printedAt: Date | null; cla
   ) : (
     <Badge variant="neutral">Belum</Badge>
   );
+}
+
+/** The courier service a web checkout order was quoted with: staff book exactly this one (before
+ * Phase K, by hand). */
+function ServiceLine({ label }: { label: string | null }) {
+  if (!label) return null;
+  return <span className="text-sm text-neutral-700">Kirim: {label}</span>;
 }
 
 /** `srLabel`: only needed in the mobile `CardList`, where this renders as a bare string with no
@@ -138,6 +153,12 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
     const visibleIds = new Set(rows.map((row) => row.id));
     return [...selectedIds].filter((id) => visibleIds.has(id));
   }, [selectedIds, rows]);
+  // Cards and stickers are printed only for the selected orders that take a card (web checkout
+  // orders never do; the server refuses them too). Shipping uses the whole selection.
+  const printableSelectedIds = useMemo(() => {
+    const checkoutIds = new Set(rows.filter((row) => row.isCheckout).map((row) => row.id));
+    return visibleSelectedIds.filter((id) => !checkoutIds.has(id));
+  }, [visibleSelectedIds, rows]);
 
   function toggleSelected(orderId: string) {
     setSelectedIds((prev) => {
@@ -207,12 +228,12 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
   // the reprint-warning dialog instead of minting right away, since a fresh one gets opened by
   // the dialog's own confirm click once the staffer actually proceeds.
   function handlePrintClick(mode: "card" | "sticker", onMint: (orderIds: string[]) => Promise<void>, stickerPopup: Window | null = null) {
-    if (visibleSelectedIds.length === 0) {
+    if (printableSelectedIds.length === 0) {
       stickerPopup?.close();
       return;
     }
     setError(null);
-    const orderIds = visibleSelectedIds;
+    const orderIds = printableSelectedIds;
     startTransition(async () => {
       const statusResult = await getCardPrintStatusAction(orderIds);
       if (!statusResult.ok) {
@@ -240,7 +261,8 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
         setError(statusResult.error);
         return;
       }
-      const missingCard = orderIds.filter((id) => !statusResult.data[id]);
+      const checkoutIds = new Set(rows.filter((row) => row.isCheckout).map((row) => row.id));
+      const missingCard = orderIds.filter((id) => !checkoutIds.has(id) && !statusResult.data[id]);
       if (missingCard.length > 0) {
         setNoCardWarning({ orderIds, orderNos: missingCard.map(orderNoFor) });
         return;
@@ -271,7 +293,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
             option below. Both share the exact same mint/reprint-warning flow. */}
         <Button
           loading={pending}
-          disabled={visibleSelectedIds.length === 0}
+          disabled={printableSelectedIds.length === 0}
           onClick={() => {
             // Opened HERE, synchronously, inside the real click — not inside the async
             // `mintAndDownloadStickers` this hands off to, which only runs after two awaited
@@ -280,15 +302,15 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
             handlePrintClick("sticker", (orderIds) => mintAndDownloadStickers(orderIds, popup), popup);
           }}
         >
-          {visibleSelectedIds.length > 0 ? `Cetak stiker (${visibleSelectedIds.length})` : "Cetak stiker"}
+          {printableSelectedIds.length > 0 ? `Cetak stiker (${printableSelectedIds.length})` : "Cetak stiker"}
         </Button>
         <Button
           variant="secondary"
           loading={pending}
-          disabled={visibleSelectedIds.length === 0}
+          disabled={printableSelectedIds.length === 0}
           onClick={() => handlePrintClick("card", mintAndShowCards)}
         >
-          {visibleSelectedIds.length > 0 ? `Cetak kartu (${visibleSelectedIds.length})` : "Cetak kartu"}
+          {printableSelectedIds.length > 0 ? `Cetak kartu (${printableSelectedIds.length})` : "Cetak kartu"}
         </Button>
         {canShip && (
           <Button variant="secondary" loading={pending} disabled={visibleSelectedIds.length === 0} onClick={handleBulkShipClick}>
@@ -296,6 +318,9 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
           </Button>
         )}
       </div>
+      {printableSelectedIds.length < visibleSelectedIds.length && (
+        <p className="text-sm text-neutral-600">Pesanan website tidak memakai kartu terima kasih, jadi tidak ikut dicetak.</p>
+      )}
       {error && (
         <p role="alert" className="text-base text-danger-700">
           {error}
@@ -312,11 +337,12 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                   checked={selectedIds.has(row.id)}
                   onChange={() => toggleSelected(row.id)}
                 />
-                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} />
+                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} isCheckout={row.isCheckout} />
               </div>
               <p className="text-sm text-neutral-600">
                 {formatDate(new Date(row.orderDate))} · {row.customerName ?? row.buyerUsername ?? "-"}
               </p>
+              <ServiceLine label={row.shippingServiceLabel} />
               <StickerCode code={row.stickerCode} isPreview={row.stickerCodeIsPreview} srLabel="Kode stiker" />
               <PickList items={items[row.id] ?? []} />
               {canShip && (
@@ -376,6 +402,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 <div className="flex flex-col items-start gap-1">
                   <span className="font-medium">{row.orderNo}</span>
                   <Badge variant="neutral">{row.channelName}</Badge>
+                  <ServiceLine label={row.shippingServiceLabel} />
                 </div>
               </Td>
               <Td className="text-neutral-700">
@@ -397,7 +424,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 <PickList items={items[row.id] ?? []} />
               </Td>
               <Td>
-                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} />
+                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} isCheckout={row.isCheckout} />
               </Td>
               {canShip && (
                 <Td className="whitespace-nowrap">
@@ -413,9 +440,11 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
 
       {shippingOrder && (
         <MarkShippedDialog
+          key={shippingOrder.id}
           orderId={shippingOrder.id}
           orderNo={shippingOrder.orderNo}
-          hasActiveCard={shippingOrder.cardPrintedAt !== null}
+          hasActiveCard={shippingOrder.isCheckout || shippingOrder.cardPrintedAt !== null}
+          defaultCourier={shippingOrder.shippingServiceLabel}
           open={shippingOrder !== null}
           onOpenChange={(open) => !open && setShippingOrder(null)}
           onShipped={() => router.refresh()}
