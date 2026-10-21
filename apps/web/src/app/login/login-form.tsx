@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useSyncExternalStore, useTransition } from "react";
+import { useEffect, useState, useSyncExternalStore, useTransition } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button, GoogleLogo, Input, Label } from "@ammari/ui";
@@ -12,6 +12,7 @@ import {
   useCountdown,
 } from "@ammari/ui/lib";
 import { authClient } from "@/lib/auth/client";
+import { clearLoginPrefill, readLoginPrefill } from "@/lib/auth/login-prefill";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "@ammari/auth/otp-timing";
 
 // Separate from STORAGE_KEY below (sessionStorage, cleared on login success/"Ganti email") —
@@ -117,12 +118,24 @@ function getServerSnapshot(): OtpSession | null {
   return null;
 }
 
+// An email handed over by the checkout finish page ("Masuk untuk melihat semua pesanan",
+// lib/auth/login-prefill.ts). The server snapshot is null, so hydration matches, then the client
+// snapshot (a plain string, compared by value) fills the field. It is cleared once a code is sent.
+function getServerPrefillSnapshot(): string | null {
+  return null;
+}
+
 type Step = "email" | "sent";
 
 export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: boolean; next: string }) {
   const router = useRouter();
   const restored = useSyncExternalStore(subscribeNever, getSnapshot, getServerSnapshot);
+  const prefill = useSyncExternalStore(subscribeNever, readLoginPrefill, getServerPrefillSnapshot);
   const [step, setStep] = useState<Step>(() => (restored ? "sent" : "email"));
+  // A code went out: the handed-over email has done its job.
+  useEffect(() => {
+    if (step === "sent") clearLoginPrefill();
+  }, [step]);
   const [email, setEmail] = useState(() => restored?.email ?? "");
   const [sentAt, setSentAt] = useState<number | null>(() => restored?.sentAt ?? null);
   const [sendError, setSendError] = useState<string | undefined>();
@@ -280,7 +293,7 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
         // key="send"/"verify" forces a real remount across the step transition — see
         // apps/admin's own login-form.tsx for why (an uncontrolled email input here colliding
         // with the verify form's controlled hidden input at the same tree position otherwise).
-        <form key="send" onSubmit={handleSendSubmit} className="flex w-full max-w-sm flex-col gap-4">
+        <form key={prefill ? "send-prefilled" : "send"} onSubmit={handleSendSubmit} className="flex w-full max-w-sm flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="email">Email</Label>
             <Input
@@ -289,7 +302,7 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
               type="email"
               required
               autoComplete="email"
-              defaultValue={email}
+              defaultValue={email || prefill || ""}
               placeholder="nama@email.com"
             />
           </div>

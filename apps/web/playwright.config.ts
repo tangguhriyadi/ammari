@@ -94,6 +94,11 @@ export default defineConfig({
       // (docs/plans/cart-checkout.md §13): nothing in e2e reaches the real shipping provider. The
       // fake is accepted only with E2E_TEST_LOGIN=true in a non-production build (dev:e2e).
       SHIPPING_RATE_PROVIDER: "fake",
+      // The fake payment provider (docs/plans/cart-checkout.md §12, §13): "Bayar sekarang" lands
+      // on the gated, read-only page at /api/test/payments/<id> instead of the real gateway. Same
+      // gate as the fake shipping provider.
+      PAYMENT_PROVIDER: "fake",
+      MIDTRANS_ORDER_ID_PREFIX: "E2E-",
       STORE_WHATSAPP_NUMBER: E2E_WHATSAPP_NUMBER,
     },
     timeout: 120_000,

@@ -3,8 +3,8 @@ import { PaymentProviderError, type CreatePaymentInput, type CreatedPayment, typ
 
 // FakePaymentProvider (docs/plans/cart-checkout.md §13): stands in for Midtrans Snap in unit tests
 // and e2e, selected by PAYMENT_PROVIDER=fake behind the e2e fixtures gate (./config.ts). Never
-// calls anything. The redirect URL points at a gated local "Snap" page under /api/test/ (that page
-// arrives with the checkout UI, session 10).
+// calls anything. The redirect URL points at a gated, read-only local "Snap" page under /api/test/
+// (apps/web app/api/test/payments/[providerOrderId], session 10).
 
 /** The local fake payment page, relative to the storefront origin. */
 export const FAKE_PAYMENT_PAGE_PATH = "/api/test/payments";

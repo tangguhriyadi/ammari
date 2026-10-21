@@ -2,8 +2,8 @@ import { expect, test } from "@playwright/test";
 import { CART_E2E } from "./helpers/cart-flag";
 
 // docs/plans/cart-checkout.md §4.5.1, session 8: the checkout area search route with the fake
-// provider (playwright.config.ts sets SHIPPING_RATE_PROVIDER=fake). The combobox that calls it
-// arrives with the checkout UI (session 10, with its own 390/1280 e2e); this spec only pins the
+// provider (playwright.config.ts sets SHIPPING_RATE_PROVIDER=fake). The combobox that calls it is
+// covered by checkout.spec.ts (session 10, 390/1280); this spec only pins the
 // route's contract in both flag states. Requests go through the page so the browser sends its own
 // Sec-Fetch-Site, as the combobox will.
 
