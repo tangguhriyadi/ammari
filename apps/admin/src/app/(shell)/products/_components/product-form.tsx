@@ -26,6 +26,8 @@ export interface ProductFormValues {
   description: string;
   isActive: boolean;
   highlights: ProductHighlightKey[];
+  /** Whole grams as typed, "" when not filled in yet. */
+  shippingWeightGrams: string;
 }
 
 const EMPTY_VALUES: ProductFormValues = {
@@ -39,6 +41,7 @@ const EMPTY_VALUES: ProductFormValues = {
   description: "",
   isActive: true,
   highlights: [],
+  shippingWeightGrams: "",
 };
 
 export function ProductForm({
@@ -98,6 +101,7 @@ export function ProductForm({
         description: values.description || undefined,
         isActive: values.isActive,
         highlights: values.highlights,
+        shippingWeightGrams: values.shippingWeightGrams,
       };
       const result = productId
         ? await updateProductAction(productId, common)
@@ -275,6 +279,22 @@ export function ProductForm({
           error={fieldErrors.basePrice}
           required
         />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="product-shipping-weight">Berat kirim (gram)</Label>
+        <Input
+          id="product-shipping-weight"
+          inputMode="numeric"
+          value={values.shippingWeightGrams}
+          onChange={(event) => set("shippingWeightGrams", event.target.value)}
+          placeholder="mis. 850"
+          aria-describedby="product-shipping-weight-hint"
+          error={fieldErrors.shippingWeightGrams}
+        />
+        <p id="product-shipping-weight-hint" className="text-sm text-neutral-600">
+          Berat 1 pcs yang sudah dilipat dan dibungkus plastik. Wajib diisi sebelum produk bisa ditayangkan di toko online.
+        </p>
       </div>
 
       <div className="flex flex-col gap-1.5">

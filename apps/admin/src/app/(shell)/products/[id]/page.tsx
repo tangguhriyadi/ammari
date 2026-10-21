@@ -87,6 +87,7 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
                 // Cast, not re-validated here: the DB's own CHECK constraints (migration 0018)
                 // already guarantee every stored element is one of PRODUCT_HIGHLIGHT_KEYS.
                 highlights: product.highlights as ProductHighlightKey[],
+                shippingWeightGrams: product.shippingWeightGrams === null ? "" : String(product.shippingWeightGrams),
               }}
             />
           </div>
@@ -139,6 +140,7 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
             isActive={product.isActive}
             photoCount={images.length}
             canOpenPhotos={canManageProducts}
+            hasShippingWeight={product.shippingWeightGrams !== null}
             initialValues={{
               isPublishedOnStorefront: product.isPublishedOnStorefront,
               storefrontDescriptionHtml: product.storefrontDescription ?? "",

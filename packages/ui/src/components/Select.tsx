@@ -9,7 +9,7 @@ export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 }
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
-  { id, error, className, children, ...props },
+  { id, error, className, children, "aria-describedby": describedBy, ...props },
   ref,
 ) {
   const autoId = useId();
@@ -23,7 +23,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
           ref={ref}
           id={selectId}
           aria-invalid={Boolean(error)}
-          aria-describedby={mergeDescribedBy(props["aria-describedby"], error ? errorId : undefined)}
+          aria-describedby={mergeDescribedBy(describedBy, error ? errorId : undefined)}
           className={cn(
             "min-h-11 w-full appearance-none rounded-md border border-neutral-500 bg-white px-3 pr-9 text-base text-neutral-900",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:border-brand",

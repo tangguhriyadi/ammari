@@ -23,7 +23,8 @@ async function writeFormattedDescription(page: Page): Promise<void> {
 }
 
 async function runStorefrontFlow(page: Page, label: string): Promise<void> {
-  const { productId, productName } = await createPublishablePhotoReadyProduct(page, label);
+  // No "Berat kirim" yet: the weight guard is exercised below, before the successful publish.
+  const { productId, productName } = await createPublishablePhotoReadyProduct(page, label, { shippingWeightGrams: "" });
 
   // Scoped to the Storefront section's own card throughout — the product EDIT page also has
   // the main ProductForm's own "Simpan" button (plain text, same as this section's), so every
@@ -60,7 +61,26 @@ async function runStorefrontFlow(page: Page, label: string): Promise<void> {
   await page.goto(`/products/${productId}`);
   await page.locator("#size-chart-picker").selectOption({ label: chartName });
 
-  // --- Publish toggle: now succeeds (active + size chart assigned + alt text present). ---
+  // --- No shipping weight yet: going live is refused with a pointer to the product data. ---
+  await expect(section.getByTestId("storefront-needs-shipping-weight")).toHaveText(
+    "Isi berat kirim di data produk sebelum menayangkan produk ini di toko online.",
+  );
+  await section.getByRole("switch", { name: "Tayang di toko online" }).click();
+  await section.getByRole("button", { name: "Simpan" }).click();
+  await expect(section.getByRole("alert").filter({ hasText: "Isi berat kirim di data produk" }).first()).toBeVisible();
+  await expect(section.getByRole("switch", { name: "Tayang di toko online" })).toHaveAttribute("aria-checked", "false");
+
+  // --- Fill in "Berat kirim (gram)" in the product form (saving it goes back to the list). ---
+  await page.getByLabel("Berat kirim (gram)").fill("1.250");
+  await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
+  await expect(page).toHaveURL(/\/products$/);
+  await page.goto(`/products/${productId}`);
+  await expect(page.getByLabel("Berat kirim (gram)")).toHaveValue("1250");
+  await expect(section.getByTestId("storefront-needs-shipping-weight")).toHaveCount(0);
+  // The section's own chart pick was never saved (the refused publish rolled everything back).
+  await page.locator("#size-chart-picker").selectOption({ label: chartName });
+
+  // --- Publish toggle: now succeeds (active + size chart + weight + alt text present). ---
   await section.getByRole("switch", { name: "Tayang di toko online" }).click();
   await section.getByRole("button", { name: "Simpan" }).click();
   await page.waitForLoadState("networkidle");

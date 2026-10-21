@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import sharp from "sharp";
-import { withRollback } from "@ammari/db/test-utils";
+import { withRollback, type TestTx } from "@ammari/db/test-utils";
 import { insertProductVariant, insertVariantForProduct } from "@ammari/db/test-fixtures";
 import { productImages, products } from "@ammari/db/schema";
 import { MAX_STOREFRONT_DESCRIPTION_HTML_LENGTH } from "@ammari/content-sanitize";
@@ -12,6 +12,7 @@ import { createSizeChart, type SizeChartRowInput } from "@/lib/content/size-char
 import { CUTTING_SIZES, type CuttingSize } from "@ammari/db/schema";
 import { uploadProductImage } from "./image-queries";
 import { PUBLISH_ALT_TEXT_MESSAGE, PUBLISH_REQUIRES_PHOTO_MESSAGE } from "./photo-messages";
+import { PUBLISH_REQUIRES_SHIPPING_WEIGHT_MESSAGE } from "./shipping-weight";
 import { updateProductStorefront } from "./storefront";
 
 const ACTOR_ID = null;
@@ -22,6 +23,10 @@ beforeEach(() => {
 afterEach(() => {
   __setStorageClientForTests(undefined);
 });
+
+async function setShippingWeight(tx: TestTx, productId: string, grams: number | null): Promise<void> {
+  await tx.update(products).set({ shippingWeightGrams: grams }).where(eq(products.id, productId));
+}
 
 async function jpegBuffer(): Promise<Buffer> {
   return sharp({ create: { width: 20, height: 20, channels: 3, background: { r: 10, g: 20, b: 30 } } }).jpeg().toBuffer();
@@ -89,6 +94,7 @@ describe("updateProductStorefront — publish-time guards", () => {
   test("one general photo is enough to publish, even when a color has no photo of its own", async () => {
     await withRollback(async (tx) => {
       const { product } = await insertProductVariant(tx);
+      await setShippingWeight(tx, product.id, 800);
       const chart = await createSizeChart({ name: "Chart", rows: fullSizeChartRows() }, ACTOR_ID, tx);
       await uploadProductImage({ productId: product.id, fabricColorId: null, altText: "Gamis tampak depan", fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
 
@@ -105,6 +111,7 @@ describe("updateProductStorefront — publish-time guards", () => {
   test("a photo whose alt text is empty (e.g. written by the previous release) gets the default at publish instead of blocking it", async () => {
     await withRollback(async (tx) => {
       const { product, color } = await insertProductVariant(tx);
+      await setShippingWeight(tx, product.id, 800);
       const chart = await createSizeChart({ name: "Chart", rows: fullSizeChartRows() }, ACTOR_ID, tx);
       const image = await uploadProductImage({ productId: product.id, fabricColorId: color.id, fileBuffer: await jpegBuffer() }, ACTOR_ID, tx);
       await tx.update(productImages).set({ altText: null }).where(eq(productImages.id, image.id));
@@ -128,9 +135,10 @@ describe("updateProductStorefront — publish-time guards", () => {
     }
   });
 
-  test("publishes successfully once active, size-charted, and every image has alt text", async () => {
+  test("publishes successfully once active, size-charted, weighed, and every image has alt text", async () => {
     await withRollback(async (tx) => {
       const { product, color } = await insertProductVariant(tx);
+      await setShippingWeight(tx, product.id, 800);
       const chart = await createSizeChart({ name: "Chart", rows: fullSizeChartRows() }, ACTOR_ID, tx);
       await uploadProductImage(
         { productId: product.id, fabricColorId: color.id, altText: "Gamis warna hitam tampak depan", fileBuffer: await jpegBuffer() },
@@ -154,6 +162,7 @@ describe("updateProductStorefront — publish-time guards", () => {
     await withRollback(async (tx) => {
       const { fabric, color } = await insertProductVariant(tx);
       const { product } = await insertVariantForProduct(tx, fabric.id, color.id, { sizeMode: "all_size" }, "ALLSIZE");
+      await setShippingWeight(tx, product.id, 700);
       await uploadProductImage(
         { productId: product.id, fabricColorId: color.id, altText: "Gamis All Size tampak depan", fileBuffer: await jpegBuffer() },
         ACTOR_ID,
@@ -205,6 +214,74 @@ describe("updateProductStorefront — publish-time guards", () => {
           tx,
         ),
       ).rejects.toThrow(ActionError);
+    });
+  });
+});
+
+describe("updateProductStorefront — shipping weight (docs/plans/cart-checkout.md §4.5.3)", () => {
+  /** Active, size-charted, one photo with alt text: everything publishing needs except a weight. */
+  async function photoReadyProduct(tx: TestTx) {
+    const { product, color } = await insertProductVariant(tx);
+    const chart = await createSizeChart({ name: `Chart ${product.id}`, rows: fullSizeChartRows() }, ACTOR_ID, tx);
+    await uploadProductImage(
+      { productId: product.id, fabricColorId: color.id, altText: "Gamis warna hitam tampak depan", fileBuffer: await jpegBuffer() },
+      ACTOR_ID,
+      tx,
+    );
+    return { product, chartId: chart.id };
+  }
+
+  test("going from hidden to published needs a weight, with a field error on the toggle", async () => {
+    await withRollback(async (tx) => {
+      const { product, chartId } = await photoReadyProduct(tx);
+      await expect(
+        updateProductStorefront(
+          product.id,
+          { isPublishedOnStorefront: true, storefrontDescriptionHtml: null, allsizeFitNote: null, sizeChartId: chartId },
+          ACTOR_ID,
+          tx,
+        ),
+      ).rejects.toMatchObject({ field: "isPublishedOnStorefront", message: PUBLISH_REQUIRES_SHIPPING_WEIGHT_MESSAGE });
+      const [unchanged] = await tx.select().from(products).where(eq(products.id, product.id));
+      expect(unchanged?.isPublishedOnStorefront).toBe(false);
+
+      await setShippingWeight(tx, product.id, 800);
+      const after = await updateProductStorefront(
+        product.id,
+        { isPublishedOnStorefront: true, storefrontDescriptionHtml: null, allsizeFitNote: null, sizeChartId: chartId },
+        ACTOR_ID,
+        tx,
+      );
+      expect(after.isPublishedOnStorefront).toBe(true);
+    });
+  });
+
+  test("a product published before the rule (no weight) stays published and can still be saved", async () => {
+    await withRollback(async (tx) => {
+      const { product, chartId } = await photoReadyProduct(tx);
+      await tx.update(products).set({ isPublishedOnStorefront: true, sizeChartId: chartId }).where(eq(products.id, product.id));
+
+      const after = await updateProductStorefront(
+        product.id,
+        { isPublishedOnStorefront: true, storefrontDescriptionHtml: "<p>Deskripsi baru</p>", allsizeFitNote: null, sizeChartId: chartId },
+        ACTOR_ID,
+        tx,
+      );
+      expect(after).toMatchObject({ isPublishedOnStorefront: true, shippingWeightGrams: null, storefrontDescription: "<p>Deskripsi baru</p>" });
+    });
+  });
+
+  test("hiding a product never needs a weight", async () => {
+    await withRollback(async (tx) => {
+      const { product, chartId } = await photoReadyProduct(tx);
+      await tx.update(products).set({ isPublishedOnStorefront: true, sizeChartId: chartId }).where(eq(products.id, product.id));
+      const after = await updateProductStorefront(
+        product.id,
+        { isPublishedOnStorefront: false, storefrontDescriptionHtml: null, allsizeFitNote: null, sizeChartId: chartId },
+        ACTOR_ID,
+        tx,
+      );
+      expect(after.isPublishedOnStorefront).toBe(false);
     });
   });
 });

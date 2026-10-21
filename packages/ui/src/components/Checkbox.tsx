@@ -18,7 +18,7 @@ export interface CheckboxProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Checkbox(
-  { id, label, error, hideLabel, className, ...props },
+  { id, label, error, hideLabel, className, "aria-describedby": describedBy, ...props },
   ref,
 ) {
   const autoId = useId();
@@ -35,7 +35,7 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Che
           id={checkboxId}
           type="checkbox"
           aria-invalid={Boolean(error)}
-          aria-describedby={mergeDescribedBy(props["aria-describedby"], error ? errorId : undefined)}
+          aria-describedby={mergeDescribedBy(describedBy, error ? errorId : undefined)}
           className={cn(
             "size-5 shrink-0 rounded border-neutral-500 text-brand",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2",

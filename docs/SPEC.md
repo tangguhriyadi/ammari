@@ -43,9 +43,10 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
 - Cart, checkout, online payment, web orders, transactional email, order login link, "Pesanan
   saya" and Komerce courier tracking — plan **approved** (docs/plans/cart-checkout.md; Phase C
   target ~20 Nov 2026, Phase K in the first weeks of December). Described in §3.4, §5.2, §5.3,
-  §8, §10.2 and §10.3. Built so far (plan sessions 1 to 6): the shared `@ammari/commerce`
-  package, the checkout schema, plain-field addresses, stock holds, and the cart (backend, PDP
-  "Tambah ke keranjang", header count, `/cart`); checkout, payment and the rest are not built yet.
+  §8, §10.2 and §10.3. Built so far (plan sessions 1 to 7): the shared `@ammari/commerce`
+  package, the checkout schema, plain-field addresses, stock holds, the cart (backend, PDP
+  "Tambah ke keranjang", header count, `/cart`), and the shipping-quote schema (migration 0031)
+  with the admin "Berat kirim (gram)" field; checkout, payment and the rest are not built yet.
   Everything ships dark behind `STOREFRONT_CART_ENABLED` until 1 Dec 2026. **Revised 2026-10-21:**
   free shipping is replaced by a shipping subsidy of at most Rp20.000 per order (§3.4), so Komerce
   shipping rates and destination search are now part of the checkout launch (plan sessions 7 and
@@ -329,8 +330,10 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
   variant — guaranteed at the DB level (not just the UI) via a composite FK from
   `product_variants(product_id, fabric_id, closure)` to `products(id, fabric_id, closure)` with
   `ON UPDATE RESTRICT` (closure is locked for the same reason fabric is: it's baked into every
-  SKU). `shipping_weight_grams` (planned, migration 0031): the weight of one packed piece in
-  grams, used for shipping quotes; required to publish (plan §4.5.3).
+  SKU). `shipping_weight_grams` (migration 0031, nullable, 50 to 30000): the weight of one packed piece
+  in grams, used for shipping quotes; required when a product goes from hidden to published, and
+  cannot be cleared while it is published (plan §4.5.3). Products published before 0031 stay
+  published without one and carry a "Berat kirim belum diisi" badge in the admin list.
 - `product_variants` — `sku` is the primary key; unique on `(product, fabric_color_id, size)`;
   sizes XS–XL, plus `ALLSIZE` for `size_mode = 'all_size'` products (a `sized` product may only
   have XS–XL variants, an `all_size` product only an `ALLSIZE` variant — enforced in a DB trigger
@@ -352,7 +355,8 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
   - The one hard rule is publishing: a product needs **at least one photo** (general or any
     color) to be published on the storefront, and the last photo of a published product cannot
     be deleted. Every photo also needs alt text to publish. From plan session 7 a product also
-    needs its shipping weight to be published.
+    needs its shipping weight to go from hidden to published (an already published product
+    without one stays published and can still be saved).
   - Alt text defaults to `<product name> warna <color name>` for a color photo and to
     `<product name>` for a general photo, set on upload when left empty and restored when cleared
     (still editable). A product or color rename updates alt texts that still equal the old
@@ -537,9 +541,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   `komerce_destination_id` (unique). No licensed dataset exists (checked 2026-10-20), so since
   the 2026-10-21 revision the table is **filled on demand from Komerce Search Destination** at
   checkout (each search upserts what it returns); checkout orders and saved addresses point at a
-  row through `shipping_area_id`, and the browser only ever sends that id. Migration 0031 adds
-  `subdistrict`, `label`, `last_synced_at`, makes `postal_code` nullable and swaps the
-  `(province, city, district, postal_code)` UNIQUE for the Komerce id. `@ammari/commerce/address`
+  row through `shipping_area_id`, and the browser only ever sends that id. Migration 0031 added
+  `subdistrict`, `label`, `last_synced_at`, made `postal_code` nullable and swapped the
+  `(province, city, district, postal_code)` UNIQUE for a UNIQUE on the Komerce id. `@ammari/commerce/address`
   stays the validator and snapshot builder.
 - `shipping_rate_cache` — Komerce quotes per (origin, destination, weight, service allowlist),
   reused for up to 6 hours, pruned after 7 days (migration 0031).
@@ -556,7 +560,7 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   (unique, makes double submit idempotent), consent evidence, `cancel_reason`,
   `needs_attention` (a set of flags, `text[]`: e.g. stock short at payment, paid after cancel,
   amount mismatch, refund due, payment anomaly; several can hold at once and each is cleared on
-  its own), and `placed_with_session`. Migration 0031 adds the locked shipping quote:
+  its own), and `placed_with_session`. Migration 0031 added the locked shipping quote:
   `shipping_cost_amount`, `shipping_subsidy_amount`, `shipping_courier_code`,
   `shipping_service_code`, `shipping_courier_label`, `shipping_weight_grams`,
   `shipping_destination_id`, `shipping_quoted_at` (all set or all null; when set,

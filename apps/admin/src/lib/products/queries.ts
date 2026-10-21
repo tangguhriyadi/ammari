@@ -7,6 +7,7 @@ import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from "./errors";
 import { buildImageSizeUrl, listProductIdsMissingPhotos, syncAltTextsForProductRename } from "./image-queries";
 import { todayInJakarta } from "./jakarta-date";
+import { SHIPPING_WEIGHT_REQUIRED_WHILE_PUBLISHED_MESSAGE } from "./shipping-weight";
 import { defaultDb, lockProductForUpdate, writeAuditLog, type Database } from "./db";
 
 const PRODUCT_CONSTRAINT_FIELDS = {
@@ -29,6 +30,8 @@ export interface CreateProductInput {
   /** Already validated + trimmed by the caller (actions.ts's highlightsSchema) — this layer
    * just passes it straight through to the `highlights` column, same as every other field. */
   highlights: string[];
+  /** "Berat kirim (gram)", one packed piece; optional (docs/plans/cart-checkout.md §4.5.3). */
+  shippingWeightGrams?: number | null;
 }
 
 export interface UpdateProductInput {
@@ -40,6 +43,9 @@ export interface UpdateProductInput {
   description?: string | null;
   isActive: boolean;
   highlights: string[];
+  /** `undefined` keeps the stored weight; `null` clears it, refused while the product is
+   * published (a product only goes live with a weight, storefront.ts). */
+  shippingWeightGrams?: number | null;
 }
 
 export async function listProducts(
@@ -48,11 +54,14 @@ export async function listProducts(
   rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{
-  rows: (Omit<Awaited<ReturnType<typeof queryProductsPage>>[number], "thumbnailStorageKey"> & {
+  rows: (Omit<Awaited<ReturnType<typeof queryProductsPage>>[number], "thumbnailStorageKey" | "shippingWeightGrams"> & {
     thumbnailUrl: string | null;
     /** At least one active color has no photo of its own yet — the list's non-blocking
      * "Belum ada foto" reminder badge (see image-queries.ts's listProductIdsMissingPhotos). */
     missingPhotos: boolean;
+    /** An active product without "Berat kirim": it cannot go live, and if it is already live
+     * (published before the rule) checkout refuses it. The "Berat kirim belum diisi" badge. */
+    missingShippingWeight: boolean;
   })[];
   pagination: Pagination;
 }> {
@@ -69,10 +78,11 @@ export async function listProducts(
   // Built from a plain column (storage_key), not a query — a thumbnail-less product's row is
   // excluded from the join (LEFT JOIN), not merely an empty string, so `null` here always means
   // "no thumbnail set", matching products.thumbnail_image_id's own null-ness exactly.
-  const rows = rawRows.map(({ thumbnailStorageKey, ...row }) => ({
+  const rows = rawRows.map(({ thumbnailStorageKey, shippingWeightGrams, ...row }) => ({
     ...row,
     thumbnailUrl: thumbnailStorageKey ? buildImageSizeUrl(thumbnailStorageKey, 400) : null,
     missingPhotos: missingPhotoIds.has(row.id),
+    missingShippingWeight: row.isActive && shippingWeightGrams === null,
   }));
   return { rows, pagination };
 }
@@ -87,6 +97,7 @@ function queryProductsPage(db: Database, where: ReturnType<typeof ilike> | undef
       basePrice: products.basePrice,
       isActive: products.isActive,
       highlights: products.highlights,
+      shippingWeightGrams: products.shippingWeightGrams,
       fabricName: fabrics.name,
       activeVariantCount: count(productVariants.sku),
       thumbnailStorageKey: productImages.storageKey,
@@ -192,6 +203,12 @@ export async function updateProduct(
     // guard is publishing to the storefront (storefront.ts's updateProductStorefront).
     const before = await lockProductForUpdate(tx, id);
     if (!before) throw new ActionError("Produk tidak ditemukan.");
+
+    // Mirrors "the last photo of a published product cannot be deleted": a live product keeps its
+    // weight. Clearing one it never had (published before the rule) is not a change, so allowed.
+    if (input.shippingWeightGrams === null && before.shippingWeightGrams !== null && before.isPublishedOnStorefront) {
+      throw new FieldError("shippingWeightGrams", SHIPPING_WEIGHT_REQUIRED_WHILE_PUBLISHED_MESSAGE);
+    }
 
     const fabricChanged = input.fabricId !== before.fabricId;
     const closureChanged = input.closure !== before.closure;

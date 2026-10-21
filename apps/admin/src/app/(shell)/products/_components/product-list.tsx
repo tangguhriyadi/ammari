@@ -44,9 +44,10 @@ export function ProductList({ products }: { products: Product[] }) {
                   <span className="text-sm text-neutral-600">
                     {formatRupiah(product.basePrice)} · {product.activeVariantCount} varian aktif
                   </span>
-                  {product.missingPhotos && (
-                    <div>
-                      <Badge variant="warning">Belum ada foto</Badge>
+                  {(product.missingPhotos || product.missingShippingWeight) && (
+                    <div className="flex flex-wrap gap-1">
+                      {product.missingPhotos && <Badge variant="warning">Belum ada foto</Badge>}
+                      {product.missingShippingWeight && <Badge variant="warning">Berat kirim belum diisi</Badge>}
                     </div>
                   )}
                   {product.highlights.length > 0 && (
@@ -88,6 +89,7 @@ export function ProductList({ products }: { products: Product[] }) {
                     {product.name}
                   </Link>
                   {product.missingPhotos && <Badge variant="warning">Belum ada foto</Badge>}
+                  {product.missingShippingWeight && <Badge variant="warning">Berat kirim belum diisi</Badge>}
                 </div>
               </Td>
               <Td className="text-neutral-700">{product.fabricName}</Td>

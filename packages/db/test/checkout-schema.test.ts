@@ -15,7 +15,7 @@ import {
   stockReservations,
 } from "../src/schema";
 import { withRollback, type TestTx } from "./helpers";
-import { insertCustomer, insertOrder, insertProductVariant } from "./fixtures";
+import { insertCustomer, insertOrder, insertProductVariant, shippingQuoteValues } from "./fixtures";
 
 // Constraint tests for migration 0030 (docs/plans/cart-checkout.md §3, session 2). Each
 // expected violation runs inside a savepoint (a nested drizzle transaction) so one test can
@@ -40,7 +40,8 @@ async function expectViolation(tx: TestTx, constraint: string, write: (sp: TestT
   expect(constraintOf(caught)).toBe(constraint);
 }
 
-/** The columns placeOrder always writes for a checkout order (orders_checkout_fields_check). */
+/** The columns placeOrder always writes for a checkout order (orders_checkout_fields_check, and
+ * since migration 0031 the locked shipping quote). */
 function checkoutOrderFields() {
   return {
     channelId: "web" as const,
@@ -52,7 +53,7 @@ function checkoutOrderFields() {
     termsAcceptedAt: new Date(),
     promoOptIn: false,
     placedWithSession: false,
-    shippingAmount: 0,
+    ...shippingQuoteValues(),
   };
 }
 
@@ -389,7 +390,7 @@ describe("customer_addresses", () => {
         province: area.province,
         city: area.city,
         district: area.district,
-        postalCode: area.postalCode,
+        postalCode: "40132",
       };
       await tx.insert(customerAddresses).values({ ...base, isDefault: true });
       await tx.insert(customerAddresses).values(base);
@@ -408,19 +409,18 @@ describe("customer_addresses", () => {
       await expectViolation(tx, "customer_addresses_coordinates_range_check", (sp) =>
         sp.insert(customerAddresses).values({ ...base, latitude: "-91", longitude: "107.6" }),
       );
-      // Plain-text fallback (plan D12): no area row.
+      // An address without an area row is allowed (it must be re-picked before use, plan §4.5.1).
       await tx.insert(customerAddresses).values({ ...base, shippingAreaId: null });
     });
   });
 });
 
+// Migration 0031 replaced the (province, city, district, postal_code) UNIQUE with one on
+// komerce_destination_id; shipping-schema.test.ts covers the new keys.
 describe("shipping_areas", () => {
-  test("one row per province/city/district/postal code, postal code is 5 digits", async () => {
+  test("postal code is 5 digits", async () => {
     await withRollback(async (tx) => {
       const area = await insertShippingArea(tx);
-      await expectViolation(tx, "shipping_areas_province_city_district_postal_code_key", (sp) =>
-        sp.insert(shippingAreas).values({ ...area, id: undefined }),
-      );
       await expectViolation(tx, "shipping_areas_postal_code_format_check", (sp) =>
         sp.insert(shippingAreas).values({ ...area, id: undefined, district: "Lain", postalCode: "ABCDE" }),
       );

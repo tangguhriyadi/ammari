@@ -33,10 +33,11 @@ import { orderItems, orders } from "./orders";
 // Storefront cart, checkout and online payment (docs/plans/cart-checkout.md §3, migration 0030).
 // Schema only: nothing reads or writes these tables until the later sessions of that plan.
 
-/** Province / city / kecamatan / postal code lookup (plan D12). **Empty:** session 3 found no
- * licence-clean kecamatan + kode pos dataset, so checkout uses plain-text address fields
- * (`@ammari/commerce/address`) and every `shipping_area_id` stays NULL. Phase K (K1) may fill it
- * from Komerce's destination search, with `komerce_destination_id`. */
+/** Komerce destinations (province / city / kecamatan / kelurahan / kode pos), plan D12, §4.5.1.
+ * No licence-clean dataset exists (session 3), so the table is filled on demand: every
+ * destination search (session 8) upserts what Komerce returns, keyed by
+ * `komerce_destination_id`. Checkout orders and saved addresses point here, and the browser only
+ * ever sends this table's own `id`. Public reference data, no personal data (plan §11). */
 export const shippingAreas = pgTable(
   "shipping_areas",
   {
@@ -44,21 +45,51 @@ export const shippingAreas = pgTable(
     province: text("province").notNull(),
     city: text("city").notNull(),
     district: text("district").notNull(),
-    postalCode: text("postal_code").notNull(),
-    // Lowercased, normalized "district city province postal code" for an area search. Its
-    // search index ships with whatever data fills this table (Phase K at the earliest).
+    // Kelurahan / desa (migration 0031). Nullable: a destination can be a whole kecamatan.
+    subdistrict: text("subdistrict"),
+    // Nullable since migration 0031: a few Komerce destinations carry no kode pos; the buyer then
+    // types it at checkout (plan §4.5.1).
+    postalCode: text("postal_code"),
+    // Lowercased, accent-free label, kept for a later local-first search (v1 always asks
+    // Komerce, plan §4.5.1). No search index yet.
     searchText: text("search_text").notNull(),
-    komerceDestinationId: text("komerce_destination_id"),
+    // Komerce's own display label (migration 0031). Nullable only because columns added by a
+    // migration stay nullable (CLAUDE.md expand/contract); session 8's upsert always writes it.
+    label: text("label"),
+    // UNIQUE since migration 0031 (several NULLs stay allowed, but every row written from session
+    // 8 on has one): the upsert's ON CONFLICT target. Replaces the old (province, city, district,
+    // postal_code) UNIQUE, which two kelurahan can share.
+    komerceDestinationId: text("komerce_destination_id").unique("shipping_areas_komerce_destination_id_key"),
+    // When this row was last refreshed from a Komerce search (migration 0031).
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     ...timestamps(),
   },
   (table) => [
-    unique("shipping_areas_province_city_district_postal_code_key").on(
-      table.province,
-      table.city,
-      table.district,
-      table.postalCode,
-    ),
+    // NULL (no kode pos) passes.
     check("shipping_areas_postal_code_format_check", sql`${table.postalCode} ~ '^[0-9]{5}$'`),
+  ],
+);
+
+/** Komerce Calculate results, reused for up to SHIPPING_QUOTE_CACHE_MINUTES (plan §4.5.4) and
+ * pruned after 7 days (plan §11). `result` holds only the allowlisted services and their prices,
+ * never a raw response. Written with INSERT ... ON CONFLICT DO UPDATE on the UNIQUE below. */
+export const shippingRateCache = pgTable(
+  "shipping_rate_cache",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    originId: text("origin_id").notNull(),
+    destinationId: text("destination_id").notNull(),
+    weightGrams: integer("weight_grams").notNull(),
+    // Hash of the courier service allowlist, so changing the allowlist never serves an old row.
+    servicesKey: text("services_key").notNull(),
+    result: jsonb("result").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("shipping_rate_cache_lookup_key").on(table.originId, table.destinationId, table.weightGrams, table.servicesKey),
+    // The retention prune (plan §11).
+    index("shipping_rate_cache_fetched_at_idx").on(table.fetchedAt),
+    check("shipping_rate_cache_weight_grams_check", sql`${table.weightGrams} > 0`),
   ],
 );
 
@@ -235,11 +266,15 @@ export const customerAddresses = pgTable(
     recipientName: text("recipient_name").notNull(),
     phone: text("phone").notNull(),
     addressLine: text("address_line").notNull(),
-    // NULL when the plain-text fallback is used (plan D12); the fields below are always filled.
+    // Set for every address saved from session 10's checkout (plan D12); a row without one shows
+    // "Pilih ulang kecamatan" and cannot be used until re-picked (plan §4.5.1). The names below are
+    // denormalized from the area and always filled.
     shippingAreaId: uuid("shipping_area_id").references(() => shippingAreas.id, { onDelete: "restrict" }),
     province: text("province").notNull(),
     city: text("city").notNull(),
     district: text("district").notNull(),
+    // Kelurahan (migration 0031); NULL when the area is a whole kecamatan.
+    subdistrict: text("subdistrict"),
     postalCode: text("postal_code").notNull(),
     notes: text("notes"),
     latitude: numeric("latitude", { precision: 9, scale: 6 }),

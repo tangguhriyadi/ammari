@@ -8,7 +8,7 @@ export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElemen
 }
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function Textarea(
-  { id, error, className, ...props },
+  { id, error, className, "aria-describedby": describedBy, ...props },
   ref,
 ) {
   const autoId = useId();
@@ -21,7 +21,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
         ref={ref}
         id={textareaId}
         aria-invalid={Boolean(error)}
-        aria-describedby={mergeDescribedBy(props["aria-describedby"], error ? errorId : undefined)}
+        aria-describedby={mergeDescribedBy(describedBy, error ? errorId : undefined)}
         className={cn(
           "min-h-24 w-full rounded-md border border-neutral-500 bg-white px-3 py-2 text-base text-neutral-900",
           "placeholder:text-neutral-500",

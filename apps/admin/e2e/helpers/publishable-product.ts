@@ -5,11 +5,17 @@ export async function jpegFixture(): Promise<Buffer> {
   return sharp({ create: { width: 40, height: 40, channels: 3, background: { r: 120, g: 90, b: 90 } } }).jpeg().toBuffer();
 }
 
-/** Creates a fabric+color, an ACTIVE product with one M variant on that color, and uploads one
- * photo WITH alt text to that color — everything the storefront publish guards (at least one
- * photo, every photo with alt text) need satisfied, so the product's publish toggle
- * (product-storefront-section) can actually succeed afterward. Returns the product's id/name. */
-export async function createPublishablePhotoReadyProduct(page: Page, label: string): Promise<{ productId: string; productName: string }> {
+/** Creates a fabric+color, an ACTIVE product with one M variant on that color and a shipping
+ * weight, and uploads one photo WITH alt text to that color — everything the storefront publish
+ * guards (at least one photo, every photo with alt text, "Berat kirim") need satisfied, so the
+ * product's publish toggle (product-storefront-section) can actually succeed afterward.
+ * `shippingWeightGrams: ""` leaves the weight empty, for the weight guard's own test. Returns the
+ * product's id/name. */
+export async function createPublishablePhotoReadyProduct(
+  page: Page,
+  label: string,
+  { shippingWeightGrams = "800" }: { shippingWeightGrams?: string } = {},
+): Promise<{ productId: string; productName: string }> {
   const unique = `${label}-${Date.now()}`;
 
   const fabricName = `E2E Bahan ${unique}`;
@@ -24,6 +30,7 @@ export async function createPublishablePhotoReadyProduct(page: Page, label: stri
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
   await page.getByLabel("Harga dasar").fill("269.000");
+  if (shippingWeightGrams) await page.getByLabel("Berat kirim (gram)").fill(shippingWeightGrams);
   await page.getByRole("button", { name: "Simpan", exact: true }).click();
   await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
   const productId = page.url().split("/products/")[1]!;

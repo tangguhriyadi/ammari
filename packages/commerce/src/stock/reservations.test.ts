@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase, type TestTx } from "@ammari/db/test-utils";
-import { insertOrder, insertProductVariant, insertStaffUser, insertVariantForProduct } from "@ammari/db/test-fixtures";
+import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, insertVariantForProduct } from "@ammari/db/test-fixtures";
 import {
   auditLog,
   fabricColors,
@@ -33,18 +33,7 @@ async function seedStock(tx: TestDatabase, sku: string, qty: number, unitCost = 
 /** A checkout order (orders_checkout_fields_check) with one line per entry, as placeOrder will
  * write it: awaiting_payment, payment pending, unit_cost 0. */
 async function insertCheckoutOrder(tx: TestDatabase, lines: readonly { sku: string; qty: number }[]) {
-  const order = await insertOrder(tx, {
-    channelId: "web",
-    channelOrderNo: null,
-    status: "awaiting_payment",
-    paymentStatus: "pending",
-    paymentExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
-    checkoutAttemptId: randomUUID(),
-    termsAcceptedAt: new Date(),
-    promoOptIn: false,
-    placedWithSession: false,
-    shippingAmount: 0,
-  });
+  const order = await insertOrder(tx, checkoutOrderValues());
   const items = await tx
     .insert(orderItems)
     .values(lines.map((line) => ({ orderId: order.id, sku: line.sku, qty: line.qty, unitPrice: 259_000, unitCost: 0 })))
@@ -343,7 +332,7 @@ describe("transitionOrderStatus with reservations", () => {
       const { order, items } = await insertCheckoutOrder(tx, [{ sku: variant.sku, qty: 1 }]);
       await reserveStockForOrder(tx, order.id, linesOf(items), 75);
 
-      // The checkout order's payment fields are the payment webhook's job (session 9); this only
+      // The checkout order's payment fields are the payment webhook's job (session 11); this only
       // covers the stock side of the status change.
       await transitionOrderStatus(order.id, "to_ship", staff.id, tx);
 

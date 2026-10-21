@@ -163,6 +163,27 @@ export const orders = pgTable(
     // Whether the buyer was logged in at checkout; decides whether emails carry the
     // "Masuk ke akun" link (plan §8).
     placedWithSession: boolean("placed_with_session"),
+
+    // ---- Locked shipping quote (docs/plans/cart-checkout.md §4.5, migration 0031) ----
+    // Written only by placeOrder, all eight together (orders_shipping_quote_all_or_none_check),
+    // and never changed afterwards: a later tariff change or a different booking price is
+    // Ammari's, never the buyer's. NULL on every non-checkout order. `shipping_amount` above is
+    // the buyer's share, `shipping_cost_amount - shipping_subsidy_amount`.
+    // The courier cost as quoted.
+    shippingCostAmount: bigint("shipping_cost_amount", { mode: "number" }),
+    // What Ammari covers on this order (at most the subsidy cap, a code constant in
+    // @ammari/commerce/shipping, deliberately not a CHECK so the cap can change).
+    shippingSubsidyAmount: bigint("shipping_subsidy_amount", { mode: "number" }),
+    // As Komerce names them, e.g. `jne` / `REG`.
+    shippingCourierCode: text("shipping_courier_code"),
+    shippingServiceCode: text("shipping_service_code"),
+    // Display label, e.g. "JNE Reguler".
+    shippingCourierLabel: text("shipping_courier_label"),
+    // Parcel weight sent for the quote: sum(qty x product weight) + the packaging allowance.
+    shippingWeightGrams: integer("shipping_weight_grams"),
+    // The Komerce destination id, snapshotted (a shipping_areas row can be re-synced).
+    shippingDestinationId: text("shipping_destination_id"),
+    shippingQuotedAt: timestamp("shipping_quoted_at", { withTimezone: true, mode: "date" }),
     ...timestamps(),
   },
   (table) => [
@@ -225,6 +246,24 @@ export const orders = pgTable(
     ),
     check("orders_needs_attention_allowed_check", checkArraySubset(table.needsAttention, ORDER_ATTENTION_FLAGS)),
     check("orders_needs_attention_no_duplicates_check", sql`not text_array_has_duplicates(${table.needsAttention})`),
+
+    // ---- Locked shipping quote (migration 0031) ----
+    check(
+      "orders_shipping_quote_all_or_none_check",
+      sql`num_nulls(${table.shippingCostAmount}, ${table.shippingSubsidyAmount}, ${table.shippingCourierCode}, ${table.shippingServiceCode}, ${table.shippingCourierLabel}, ${table.shippingWeightGrams}, ${table.shippingDestinationId}, ${table.shippingQuotedAt}) in (0, 8)`,
+    ),
+    // The subsidy never exceeds the cost, and the buyer's share is exactly the rest, so the
+    // existing total = subtotal + shipping - discount balance still holds. NULL (no quote) passes.
+    check(
+      "orders_shipping_quote_amounts_check",
+      sql`${table.shippingCostAmount} is null or (${table.shippingSubsidyAmount} between 0 and ${table.shippingCostAmount} and ${table.shippingAmount} = ${table.shippingCostAmount} - ${table.shippingSubsidyAmount})`,
+    ),
+    check("orders_shipping_weight_grams_check", sql`${table.shippingWeightGrams} is null or ${table.shippingWeightGrams} > 0`),
+    // Every checkout order carries a quote (no quote, no order; plan §4.5.5).
+    check(
+      "orders_checkout_shipping_quote_check",
+      sql`${table.paymentStatus} is null or ${table.shippingCostAmount} is not null`,
+    ),
   ],
 );
 

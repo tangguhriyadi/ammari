@@ -199,8 +199,29 @@ export async function insertThankYouCard(
   return card;
 }
 
-/** The columns placeOrder always writes for a checkout order (orders_checkout_fields_check):
- * awaiting_payment, payment pending, web channel, free shipping. */
+/** A locked shipping quote (migration 0031's eight orders.shipping_* columns plus the buyer's
+ * share in shipping_amount), as placeOrder writes it. Defaults to a Rp12.000 courier cost fully
+ * covered by the subsidy, so the buyer's share is 0. */
+export function shippingQuoteValues(
+  costAmount = 12_000,
+  subsidyAmount = Math.min(costAmount, 20_000),
+): Partial<typeof orders.$inferInsert> {
+  return {
+    shippingAmount: costAmount - subsidyAmount,
+    shippingCostAmount: costAmount,
+    shippingSubsidyAmount: subsidyAmount,
+    shippingCourierCode: "jne",
+    shippingServiceCode: "REG",
+    shippingCourierLabel: "JNE Reguler",
+    shippingWeightGrams: 900,
+    shippingDestinationId: "komerce-test-1",
+    shippingQuotedAt: new Date(),
+  };
+}
+
+/** The columns placeOrder always writes for a checkout order (orders_checkout_fields_check,
+ * orders_checkout_shipping_quote_check): awaiting_payment, payment pending, web channel, and a
+ * quote whose cost the subsidy covers in full. */
 export function checkoutOrderValues(): Partial<typeof orders.$inferInsert> {
   return {
     channelId: "web",
@@ -212,7 +233,7 @@ export function checkoutOrderValues(): Partial<typeof orders.$inferInsert> {
     termsAcceptedAt: new Date(),
     promoOptIn: false,
     placedWithSession: false,
-    shippingAmount: 0,
+    ...shippingQuoteValues(),
   };
 }
 

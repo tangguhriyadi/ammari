@@ -4,12 +4,13 @@ import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { testDb, withRollback, type TestTx } from "@ammari/db/test-utils";
 import { generateProductCode, generateSku, generateSlug } from "@ammari/db/catalog";
-import { auditLog, productVariants } from "@ammari/db/schema";
+import { auditLog, products, productVariants } from "@ammari/db/schema";
 import { InMemoryStorageClient } from "@ammari/storage";
 import { __setStorageClientForTests } from "@/lib/storage";
 import { FieldError } from "./errors";
 import { createFabric, createFabricColor, setFabricColorActive, updateFabricColor } from "./fabric-queries";
 import { uploadProductImage } from "./image-queries";
+import { SHIPPING_WEIGHT_REQUIRED_WHILE_PUBLISHED_MESSAGE } from "./shipping-weight";
 import {
   addVariants,
   createProduct,
@@ -618,6 +619,77 @@ describe("listProducts pagination", () => {
       expect(page1.rows).toHaveLength(20);
       expect(page2.rows).toHaveLength(1);
       expect(page1.rows[0]?.id).not.toBe(page2.rows[0]?.id);
+    });
+  });
+});
+
+describe("shipping weight (docs/plans/cart-checkout.md §4.5.3)", () => {
+  function updateInputFor(product: Awaited<ReturnType<typeof createProductFixture>>, shippingWeightGrams?: number | null) {
+    return {
+      name: product.name,
+      slug: product.slug,
+      fabricId: product.fabricId,
+      closure: product.closure,
+      basePrice: product.basePrice,
+      isActive: product.isActive,
+      highlights: [],
+      shippingWeightGrams,
+    };
+  }
+
+  test("is optional at creation, set and cleared through updateProduct", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const withWeight = await createProductFixture(tx, fabric.id, { shippingWeightGrams: 850 });
+      expect(withWeight.shippingWeightGrams).toBe(850);
+      const product = await createProductFixture(tx, fabric.id);
+      expect(product.shippingWeightGrams).toBeNull();
+
+      const weighed = await updateProduct(product.id, updateInputFor(product, 900), ACTOR_ID, tx);
+      expect(weighed.shippingWeightGrams).toBe(900);
+      // Left out of the input: kept as it is.
+      const renamed = await updateProduct(product.id, { ...updateInputFor(weighed), name: `${product.name} Baru` }, ACTOR_ID, tx);
+      expect(renamed.shippingWeightGrams).toBe(900);
+      const cleared = await updateProduct(product.id, updateInputFor(renamed, null), ACTOR_ID, tx);
+      expect(cleared.shippingWeightGrams).toBeNull();
+    });
+  });
+
+  test("cannot be cleared while the product is published; a published product without one can still be saved", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const product = await createProductFixture(tx, fabric.id, { shippingWeightGrams: 800 });
+      await tx.update(products).set({ isPublishedOnStorefront: true }).where(eq(products.id, product.id));
+
+      await expect(updateProduct(product.id, updateInputFor(product, null), ACTOR_ID, tx)).rejects.toMatchObject({
+        field: "shippingWeightGrams",
+        message: SHIPPING_WEIGHT_REQUIRED_WHILE_PUBLISHED_MESSAGE,
+      });
+      const changed = await updateProduct(product.id, updateInputFor(product, 950), ACTOR_ID, tx);
+      expect(changed.shippingWeightGrams).toBe(950);
+
+      // Published before the rule existed: no weight, and saving other fields keeps working.
+      const legacy = await createProductFixture(tx, fabric.id);
+      await tx.update(products).set({ isPublishedOnStorefront: true }).where(eq(products.id, legacy.id));
+      const saved = await updateProduct(legacy.id, { ...updateInputFor(legacy, null), basePrice: 279_000 }, ACTOR_ID, tx);
+      expect(saved).toMatchObject({ basePrice: 279_000, shippingWeightGrams: null, isPublishedOnStorefront: true });
+    });
+  });
+
+  test("listProducts flags active products without a weight", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const prefix = `Zzz-Berat-${randomUUID().slice(0, 6)}`;
+      await createProductFixture(tx, fabric.id, { name: `${prefix} A`, slug: `${prefix.toLowerCase()}-a`, shippingWeightGrams: 800 });
+      await createProductFixture(tx, fabric.id, { name: `${prefix} B`, slug: `${prefix.toLowerCase()}-b` });
+      await createProductFixture(tx, fabric.id, { name: `${prefix} C`, slug: `${prefix.toLowerCase()}-c`, isActive: false });
+
+      const { rows } = await listProducts(prefix, "1", undefined, tx);
+      expect(rows.map((row) => [row.name, row.missingShippingWeight])).toEqual([
+        [`${prefix} A`, false],
+        [`${prefix} B`, true],
+        [`${prefix} C`, false],
+      ]);
     });
   });
 });

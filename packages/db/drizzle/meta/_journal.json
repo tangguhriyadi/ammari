@@ -218,6 +218,13 @@
       "when": 1792495933643,
       "tag": "0030_checkout_core",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792539894061,
+      "tag": "0031_shipping_quote",
+      "breakpoints": true
     }
   ]
 }

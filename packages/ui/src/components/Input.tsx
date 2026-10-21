@@ -8,7 +8,7 @@ export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { id, error, className, ...props },
+  { id, error, className, "aria-describedby": describedBy, ...props },
   ref,
 ) {
   const autoId = useId();
@@ -21,7 +21,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         ref={ref}
         id={inputId}
         aria-invalid={Boolean(error)}
-        aria-describedby={mergeDescribedBy(props["aria-describedby"], error ? errorId : undefined)}
+        aria-describedby={mergeDescribedBy(describedBy, error ? errorId : undefined)}
         className={cn(
           "min-h-11 w-full rounded-md border border-neutral-500 bg-white px-3 text-base text-neutral-900",
           "placeholder:text-neutral-500",

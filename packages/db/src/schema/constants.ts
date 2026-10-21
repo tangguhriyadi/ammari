@@ -274,6 +274,13 @@ export type OrderAttentionFlag = (typeof ORDER_ATTENTION_FLAGS)[number];
 export const ORDER_NOTIFICATION_KINDS = ["created", "paid", "shipped", "delivered", "cancelled", "owner_paid"] as const;
 export type OrderNotificationKind = (typeof ORDER_NOTIFICATION_KINDS)[number];
 
+// ---------- Shipping quote (docs/plans/cart-checkout.md §4.5, migration 0031) ----------
+
+/** Bounds of products.shipping_weight_grams (one packed piece: folded, in its own plastic). Back
+ * the products_shipping_weight_grams_check CHECK and the admin form's validation. */
+export const PRODUCT_SHIPPING_WEIGHT_MIN_GRAMS = 50;
+export const PRODUCT_SHIPPING_WEIGHT_MAX_GRAMS = 30_000;
+
 export const IMPORT_BATCH_KINDS = ["orders", "income"] as const;
 export type ImportBatchKind = (typeof IMPORT_BATCH_KINDS)[number];
 

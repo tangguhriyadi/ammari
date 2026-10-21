@@ -118,6 +118,11 @@ export const E2E_RESERVATION_HELD_SKU = "E2E-DIPESAN-M";
 export const E2E_RESERVATION_FREE_SKU = "E2E-DIPESAN-L";
 export const E2E_RESERVATION_ORDER_NO = "ORD-E2E-DIPESAN-0001";
 
+// A product published before migration 0031 made "Berat kirim" a publish rule (like prod's first
+// published product): live, active, no weight. product-shipping-weight.spec.ts reads it; nothing
+// in the admin UI can create this state any more, so it is seeded here.
+export const E2E_UNWEIGHED_PUBLISHED_PRODUCT_NAME = "E2E Gamis Tanpa Berat";
+
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
 // lib/products/queries.ts. A distinct name prefix keeps this from colliding with anything a
 // test itself creates.
@@ -360,6 +365,19 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       })
       .onConflictDoNothing({ target: products.slug });
   }
+  await db
+    .insert(products)
+    .values({
+      name: E2E_UNWEIGHED_PUBLISHED_PRODUCT_NAME,
+      code: "E2ETANPABERAT",
+      slug: "e2e-gamis-tanpa-berat",
+      fabricId: paginationFabricId,
+      closure: "front_zip",
+      sizeMode: "sized",
+      basePrice: 269_000,
+      isPublishedOnStorefront: true,
+    })
+    .onConflictDoNothing({ target: products.slug });
 
   // ammari_e2e is truncated at the start of every run (ensureE2eDatabase), so these are plain
   // inserts. Shaped like what web checkout writes (orders_checkout_fields_check): 5 physical pcs,
@@ -405,9 +423,18 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       placedWithSession: false,
       orderDate: new Date(now),
       subtotalAmount: 518_000,
-      shippingAmount: 0,
       discountAmount: 0,
       totalAmount: 518_000,
+      // The locked quote every checkout order carries (migration 0031): fully subsidized.
+      shippingAmount: 0,
+      shippingCostAmount: 12_000,
+      shippingSubsidyAmount: 12_000,
+      shippingCourierCode: "jne",
+      shippingServiceCode: "REG",
+      shippingCourierLabel: "JNE Reguler",
+      shippingWeightGrams: 1_900,
+      shippingDestinationId: "e2e-destination",
+      shippingQuotedAt: new Date(now),
     });
     for (const hold of [
       { orderNo: E2E_RESERVATION_ORDER_NO, expiresAt: new Date(now + 75 * 60_000) },

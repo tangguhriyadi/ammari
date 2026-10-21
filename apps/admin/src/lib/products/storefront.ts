@@ -5,6 +5,7 @@ import { ContentTooLargeError, sanitizeStorefrontDescriptionHtml } from "@ammari
 import { ActionError, FieldError, isPostgresErrorCode } from "@/lib/errors";
 import { countProductImages, fillMissingAltTexts, hasImagesMissingAltText } from "./image-queries";
 import { PUBLISH_ALT_TEXT_MESSAGE, PUBLISH_REQUIRES_PHOTO_MESSAGE } from "./photo-messages";
+import { PUBLISH_REQUIRES_SHIPPING_WEIGHT_MESSAGE } from "./shipping-weight";
 import { defaultDb, lockProductForUpdate, writeAuditLog, type Database } from "./db";
 
 // ---------- Product storefront fields (docs/plans/storefront-cms.md) ----------
@@ -45,7 +46,8 @@ export async function updateProductStorefront(
     const before = await lockProductForUpdate(tx, id);
     if (!before) throw new ActionError("Produk tidak ditemukan.");
 
-    // Every one of these is ALSO a real DB guarantee or a pre-existing invariant somewhere else
+    // Every one of these (except the shipping weight, an app-level rule only) is ALSO a real DB
+    // guarantee or a pre-existing invariant somewhere else
     // (the is_active CHECK, the size_chart_id FK, the at-least-one-photo rule that
     // deleteProductImage also upholds, the alt-text gap) — these checks exist purely to turn "publish rejected" into a friendly Indonesian
     // message pointing at the right field, the same "pre-check + friendly catch on the race"
@@ -62,6 +64,13 @@ export async function updateProductStorefront(
       // to delete a published product's last photo; both run under the same product lock.
       if ((await countProductImages(id, tx)) === 0) {
         throw new FieldError("isPublishedOnStorefront", PUBLISH_REQUIRES_PHOTO_MESSAGE);
+      }
+      // Shipping quotes need the weight of one packed piece (docs/plans/cart-checkout.md §4.5.3).
+      // Only on the hidden -> published step, never on a re-save: products published before the
+      // rule stay live and editable without one (the product list badges them, checkout refuses
+      // them). updateProduct keeps a live product from losing its weight, under the same lock.
+      if (!before.isPublishedOnStorefront && before.shippingWeightGrams === null) {
+        throw new FieldError("isPublishedOnStorefront", PUBLISH_REQUIRES_SHIPPING_WEIGHT_MESSAGE);
       }
       // Every photo normally already has an alt text (the default is set on upload, migration
       // 0028 backfilled older rows); this fill catches any blank a previous release wrote during

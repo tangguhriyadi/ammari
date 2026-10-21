@@ -31,6 +31,8 @@ import {
   PURCHASE_STATUSES,
   PRODUCT_CLOSURES,
   PRODUCT_HIGHLIGHT_KEYS,
+  PRODUCT_SHIPPING_WEIGHT_MAX_GRAMS,
+  PRODUCT_SHIPPING_WEIGHT_MIN_GRAMS,
   PRODUCTION_BATCH_STATUSES,
   PRODUCTION_RECEIPT_STATUSES,
   RAW_MATERIAL_MOVEMENT_REF_TYPES,
@@ -196,6 +198,12 @@ export const products = pgTable(
     // exist mid-setup in admin before it has a chart assigned; "must have a chart before
     // publishing" is an app-level check at publish time, not a CHECK constraint here.
     sizeChartId: uuid("size_chart_id").references(() => sizeCharts.id, { onDelete: "restrict" }),
+    // Weight of one packed piece (folded, in its own plastic), for shipping quotes
+    // (docs/plans/cart-checkout.md §4.5.3, migration 0031). Nullable: products published before
+    // 0031 have none and stay published. Required by the admin only when a product goes from
+    // hidden to published (lib/products/storefront.ts); checkout refuses an order with a line
+    // whose product has none.
+    shippingWeightGrams: integer("shipping_weight_grams"),
     ...timestamps(),
   },
   (table) => [
@@ -233,6 +241,10 @@ export const products = pgTable(
     check(
       "products_is_published_on_storefront_active_check",
       sql`(not ${table.isPublishedOnStorefront}) or ${table.isActive}`,
+    ),
+    check(
+      "products_shipping_weight_grams_check",
+      sql`${table.shippingWeightGrams} is null or ${table.shippingWeightGrams} between ${sql.raw(String(PRODUCT_SHIPPING_WEIGHT_MIN_GRAMS))} and ${sql.raw(String(PRODUCT_SHIPPING_WEIGHT_MAX_GRAMS))}`,
     ),
     // Referenced by product_variants' composite FK below (product_id, fabric_id, closure) ->
     // (id, fabric_id, closure) — this is what makes "a product's fabric OR closure can't change

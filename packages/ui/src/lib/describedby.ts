@@ -5,6 +5,8 @@ export function mergeDescribedBy(
   callerDescribedBy: string | undefined,
   errorId: string | undefined,
 ): string | undefined {
-  const ids = [callerDescribedBy, errorId].filter((id): id is string => Boolean(id));
+  // Taken out of the props by each field component, so its `{...props}` spread can never put the
+  // caller's value back over the merged one. Deduplicated: some callers already list the error id.
+  const ids = [...new Set([...(callerDescribedBy?.split(/\s+/) ?? []), errorId].filter((id): id is string => Boolean(id)))];
   return ids.length > 0 ? ids.join(" ") : undefined;
 }

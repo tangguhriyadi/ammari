@@ -7,6 +7,7 @@ import { generateProductCode, generateSlug } from "@ammari/db/catalog";
 import { MAX_STOREFRONT_DESCRIPTION_HTML_LENGTH } from "@ammari/content-sanitize";
 import { requireAnyPermission, requirePermission } from "@/lib/auth/require-permission";
 import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
+import { shippingWeightString } from "@/lib/products/shipping-weight";
 import { runAction, type ActionResult } from "@/lib/products/action-result";
 import * as productQueries from "@/lib/products/queries";
 import * as imageQueries from "@/lib/products/image-queries";
@@ -84,6 +85,10 @@ const createProductSchema = z.object({
   description: z.string().trim().optional(),
   isActive: z.boolean(),
   highlights: highlightsSchema,
+  // "Berat kirim (gram)": "" is not filled in yet (null); left out (a form from before this field
+  // existed) keeps the stored value. Required only to publish (lib/products/storefront.ts), never
+  // to save.
+  shippingWeightGrams: shippingWeightString.optional(),
 });
 
 const updateProductSchema = createProductSchema.omit({ code: true, sizeMode: true });
@@ -107,6 +112,7 @@ export async function createProductAction(
         description: parsed.data.description || null,
         isActive: parsed.data.isActive,
         highlights: parsed.data.highlights,
+        shippingWeightGrams: parsed.data.shippingWeightGrams,
       },
       session.staffUser.id,
     );
@@ -134,6 +140,7 @@ export async function updateProductAction(
         description: parsed.data.description || null,
         isActive: parsed.data.isActive,
         highlights: parsed.data.highlights,
+        shippingWeightGrams: parsed.data.shippingWeightGrams,
       },
       session.staffUser.id,
     );

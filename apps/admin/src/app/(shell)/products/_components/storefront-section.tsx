@@ -48,6 +48,7 @@ export function StorefrontSection({
   isActive,
   photoCount,
   canOpenPhotos,
+  hasShippingWeight,
   initialValues,
   sizeCharts,
 }: {
@@ -62,6 +63,9 @@ export function StorefrontSection({
   /** Whether the Foto section is on this page for this session (it renders only with
    * products.manage) — the "Buka bagian Foto" jump is hidden when there is nothing to jump to. */
   canOpenPhotos: boolean;
+  /** Whether the product's saved "Berat kirim" is set, for up-front guidance only; the server
+   * refuses going live without one regardless (updateProductStorefront). */
+  hasShippingWeight: boolean;
   initialValues: StorefrontSectionValues;
   sizeCharts: SizeChartOption[];
 }) {
@@ -126,6 +130,13 @@ export function StorefrontSection({
         <p className="flex flex-wrap items-center gap-x-2 text-sm text-neutral-600" data-testid="storefront-needs-photo">
           Unggah minimal satu foto di bagian Foto sebelum menayangkan produk ini di toko online.
           {canOpenPhotos && <PhotoSectionLink />}
+        </p>
+      )}
+      {!hasShippingWeight && (
+        <p className="text-sm text-neutral-600" data-testid="storefront-needs-shipping-weight">
+          {initialValues.isPublishedOnStorefront
+            ? "Berat kirim belum diisi. Produk tetap tayang, tetapi ongkirnya belum bisa dihitung saat checkout. Isi berat kirim di data produk."
+            : "Isi berat kirim di data produk sebelum menayangkan produk ini di toko online."}
         </p>
       )}
 
