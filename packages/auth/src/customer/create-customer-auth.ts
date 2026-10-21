@@ -7,7 +7,7 @@ import * as schema from "@ammari/db/schema";
 import type { EmailSender } from "../email-sender";
 import { recordEmailThrottleAttempt } from "../shared/email-throttle";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "../shared/otp-timing";
-import { type Database, loadOrCreateCustomerForEmail } from "./customer-data";
+import { CUSTOMER_PLACEHOLDER_NAME, type Database, loadOrCreateCustomerForEmail } from "./customer-data";
 import { orderLoginLink } from "./order-login-link-plugin";
 
 // 6 digits / 5 attempts: CLAUDE.md's OTP rules — same hardening as staff. Expiry comes from
@@ -157,7 +157,7 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
             if (!user.email) return false;
             const identity = await loadOrCreateCustomerForEmail(db, {
               email: user.email,
-              name: user.name || "Pelanggan Ammari",
+              name: user.name || CUSTOMER_PLACEHOLDER_NAME,
               emailVerified: Boolean(user.emailVerified),
             });
             if (!identity) return false;

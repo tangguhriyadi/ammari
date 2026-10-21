@@ -459,7 +459,7 @@ describe("cancel paths restore the voucher (plan §6.4)", () => {
 
       const returned = await checkoutOrder(tx, { voucher: {} });
       await handlePaymentNotification(tx, provider, gatewaySays(returned.providerOrderId, "settlement", returned.total));
-      await transitionOrderStatus(returned.orderId, "shipped", staff.id, tx);
+      await transitionOrderStatus(returned.orderId, "shipped", staff.id, tx, { courier: "JNE", trackingNumber: "JNE0001234" });
       await transitionOrderStatus(returned.orderId, "returned", staff.id, tx);
       expect((await tx.select().from(vouchers).where(eq(vouchers.id, returned.voucherId!)))[0]).toMatchObject({ status: "used", usedOrderId: returned.orderId });
     });

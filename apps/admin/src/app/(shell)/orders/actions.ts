@@ -6,7 +6,7 @@ import type { OrderStatus } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/action-result";
-import { createOrder, transitionOrderStatus } from "@ammari/commerce/orders";
+import { createOrder, transitionOrderStatus, updateShipmentDetails } from "@ammari/commerce/orders";
 import { REFUND_NOTE_MAX_LENGTH, cancelCheckoutOrderByStaff, clearAttentionFlag, recordManualRefund } from "@ammari/commerce/payments";
 import { defaultDb } from "@/lib/db";
 import { getAdminPaymentProvider } from "@/lib/payments/provider";
@@ -159,5 +159,25 @@ export async function clearAttentionFlagAction(input: z.input<typeof clearFlagSc
     await clearAttentionFlag(defaultDb, parsed.data.orderId, parsed.data.flag, session.staffUser.id);
     revalidateAdmin("/orders");
     return undefined;
+  });
+}
+
+const shipmentDetailsSchema = z.object({
+  orderId: z.string().uuid(),
+  courier: z.string().max(200),
+  trackingNumber: z.string().max(200),
+});
+
+/** "Tambah resi" / "Ubah resi" on a shipped order (2026-10-21 sandbox run). The rules (both required
+ * on a web checkout order, the resi's shape) and the audit row are in updateShipmentDetails; a web
+ * order still waiting for its "sudah dikirim" email gets it from the next cron email pass. */
+export async function updateShipmentDetailsAction(input: z.input<typeof shipmentDetailsSchema>): Promise<ActionResult<{ changed: boolean }>> {
+  const session = await requirePermission("orders.manage");
+  const parsed = shipmentDetailsSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    const result = await updateShipmentDetails(parsed.data.orderId, { courier: parsed.data.courier, trackingNumber: parsed.data.trackingNumber }, session.staffUser.id);
+    if (result.changed) revalidateAdmin("/orders");
+    return result;
   });
 }

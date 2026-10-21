@@ -35,6 +35,18 @@ export function SoldOutButton({ className, ...props }: Omit<ComponentProps<"butt
   );
 }
 
+/** The outlined button twin of `OutlineLink` (PDP "Tambah ke keranjang" next to "Beli sekarang"). */
+export function OutlineButton({ className, disabled, ...props }: ComponentProps<"button">) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      className={cn(BASE, "border border-ink bg-bg text-ink hover:bg-surface disabled:border-line-strong disabled:text-ink-muted disabled:hover:bg-bg", className)}
+      {...props}
+    />
+  );
+}
+
 export function OutlineLink({ className, ...props }: ComponentProps<typeof Link>) {
   return <Link {...props} className={cn(BASE, "border border-ink bg-bg text-ink hover:bg-surface", className)} />;
 }

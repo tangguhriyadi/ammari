@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { reopenPaymentPageAction } from "@/lib/checkout/payment-actions";
 import { goToPaymentPage } from "@/lib/checkout/navigate";
+import { failedCallMessage } from "@/lib/stale-deployment";
 
 // "Buka halaman pembayaran" (docs/plans/cart-checkout.md §4.4, session 10 note): shown when a
 // pending order has no payment page (the gateway was down when the order was placed). The server
@@ -39,7 +40,7 @@ export function ReopenPaymentButton({ orderNo }: { orderNo: string }) {
         else fail(NOT_OPENED_MESSAGE);
       } catch (error) {
         console.warn("[checkout] payment page retry did not answer", error instanceof Error ? error.name : typeof error);
-        fail(LOST_MESSAGE);
+        fail(failedCallMessage(error, LOST_MESSAGE));
       }
     });
   }

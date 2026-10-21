@@ -10,6 +10,7 @@ import { StatusActions } from "./_components/status-actions";
 import { refundsOwed } from "@ammari/commerce/payments";
 import { AttentionPanel, CheckoutStatusActions, type RefundableAttempt } from "./_components/checkout-actions";
 import { ContactSection, PaymentSection, ShippingSection, VoucherAndEmailSection } from "./_components/checkout-sections";
+import { ShipmentDetailsSection } from "./_components/shipment-details-section";
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission("orders.view");
@@ -70,6 +71,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             status={detail.status}
             paymentStatus={checkout.paymentStatus}
             totalAmount={detail.totalAmount}
+            quotedCourierLabel={checkout.quote?.courierLabel ?? null}
             allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]}
           />
         ) : (
@@ -84,6 +86,17 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
         {detail.notes && <Row label="Catatan" value={detail.notes} />}
         <Row label="Dicatat" value={`${formatDateTime(detail.createdAt)}${detail.createdByName ? ` · ${detail.createdByName}` : ""}`} />
       </div>
+
+      {(detail.status === "shipped" || detail.status === "completed") && (
+        <ShipmentDetailsSection
+          orderId={detail.id}
+          orderNo={detail.orderNo}
+          courier={detail.courier}
+          trackingNumber={detail.trackingNumber}
+          isCheckout={checkout !== null}
+          canManage={canManage}
+        />
+      )}
 
       <div className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">Item</h2>

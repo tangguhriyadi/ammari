@@ -13,6 +13,19 @@ export interface PickedArea {
   hasPostalCode: boolean;
 }
 
+/** The logged-in buyer's saved address (lib/checkout/queries.ts loadSavedCheckoutAddress), shown
+ * as a summary card with "Ganti alamat" and used to prefill the form. */
+export interface SavedCheckoutAddress {
+  recipientName: string;
+  /** "+62...", as saved. */
+  phone: string;
+  addressLine: string;
+  notes: string;
+  postalCode: string;
+  /** Null when the saved row has no usable area: the buyer picks it again. */
+  area: PickedArea | null;
+}
+
 /** A usable voucher in the logged-in dropdown (lib/checkout/queries.ts lists them, best first). */
 export interface CheckoutVoucherOption {
   id: string;

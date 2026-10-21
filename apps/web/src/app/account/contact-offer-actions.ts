@@ -19,10 +19,20 @@ export async function answerContactOfferAction(_prev: ContactOfferState, formDat
 
   const save = formData.get("decision") === "save";
   const seenPhone = formData.get("seenPhone");
+  const seenName = formData.get("seenName");
   const result = await answerContactOffer(
     customer.id,
     save
-      ? { kind: "save", promo: formData.get("promo") === "on", seen: { orderNo: String(formData.get("seenOrderNo") ?? ""), phone: typeof seenPhone === "string" && seenPhone !== "" ? seenPhone : null } }
+      ? {
+          kind: "save",
+          promo: formData.get("promo") === "on",
+          useName: formData.get("useName") === "on",
+          seen: {
+            orderNo: String(formData.get("seenOrderNo") ?? ""),
+            phone: typeof seenPhone === "string" && seenPhone !== "" ? seenPhone : null,
+            name: typeof seenName === "string" && seenName !== "" ? seenName : null,
+          },
+        }
       : { kind: "skip" },
   );
   if (!result.ok) return { error: result.message };

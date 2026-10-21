@@ -248,7 +248,7 @@ describe("transitionOrderStatus for staff on checkout orders", () => {
       const paid = await paidOrder(tx);
       expect((await rejection(inSavepoint(tx, (sp) => transitionOrderStatus(paid.orderId, "cancelled", staff.id, sp)))).message).toBe(CHECKOUT_ORDER_CANCEL_PATH_MESSAGE);
       // Shipping on is unchanged.
-      await transitionOrderStatus(paid.orderId, "shipped", staff.id, tx, { courier: "JNE", trackingNumber: "JNE1" });
+      await transitionOrderStatus(paid.orderId, "shipped", staff.id, tx, { courier: "JNE", trackingNumber: "JNE0001234" });
       expect((await orderRow(tx, paid.orderId)).status).toBe("shipped");
     });
   });
@@ -451,7 +451,7 @@ describe("cancelCheckoutOrderByStaff", () => {
       expect(await audits(tx, fixture.orderId, "cancel_checkout_order")).toHaveLength(1);
 
       const shipped = await paidOrder(tx);
-      await transitionOrderStatus(shipped.orderId, "shipped", staff.id, tx);
+      await transitionOrderStatus(shipped.orderId, "shipped", staff.id, tx, { courier: "JNE", trackingNumber: "JNE0001234" });
       expect((await rejection(cancelCheckoutOrderByStaff(tx, stubGateway(), shipped.orderId, staff.id))).message).toBe(STAFF_CANCEL_MESSAGES.notCancellable);
     });
   });

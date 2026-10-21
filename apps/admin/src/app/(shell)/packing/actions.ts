@@ -7,7 +7,7 @@ import { runAction, type ActionResult } from "@/lib/action-result";
 import { ActionError } from "@/lib/errors";
 import { defaultDb } from "@/lib/db";
 import { transitionOrderStatus } from "@ammari/commerce/orders";
-import { getCardPrintStatus, getOrdersMissingCard, mintThankYouCardsForOrders } from "@/lib/packing/queries";
+import { getCardPrintStatus, getCheckoutOrderNos, getOrdersMissingCard, mintThankYouCardsForOrders } from "@/lib/packing/queries";
 import { claimUrl, claimUrlHost, formatClaimTokenForDisplay } from "@/lib/packing/token";
 import { buildStickerSheetPdf, stickerPdfFilename, type StickerPdfCard } from "@/lib/packing/sticker-pdf";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
@@ -107,10 +107,12 @@ export async function printStickerSheetsAction(orderIds: string[]): Promise<Acti
   });
 }
 
+// Bounded here; the real rules (both required on a web checkout order, the resi's shape) run in
+// transitionOrderStatus under the order's row lock (@ammari/commerce/shipment-details).
 const markShippedSchema = z.object({
   orderId: z.string().uuid(),
-  courier: z.string().trim().optional(),
-  trackingNumber: z.string().trim().optional(),
+  courier: z.string().max(200).optional(),
+  trackingNumber: z.string().max(200).optional(),
   confirmNoCard: z.boolean(),
 });
 
@@ -150,6 +152,13 @@ export async function bulkMarkShippedAction(input: z.input<typeof bulkMarkShippe
       if (missing.length > 0) {
         throw new ActionError("Sebagian pesanan ini belum punya kartu terima kasih. Konfirmasi untuk tetap mengirim.");
       }
+    }
+    // Bulk has no resi field: a web checkout order is shipped one by one with its courier and resi
+    // (2026-10-21 sandbox run). Refused before anything ships, so a mixed selection changes nothing
+    // (transitionOrderStatus would refuse that order anyway, but only after the ones before it).
+    const checkoutOrderNos = await getCheckoutOrderNos(parsed.data.orderIds);
+    if (checkoutOrderNos.length > 0) {
+      throw new ActionError(`${checkoutOrderNos.join(", ")} pesanan website: perlu nomor resi. Tandai dikirim satu per satu.`);
     }
     // Sequential — transitionOrderStatus is its own transaction per order; nothing here needs
     // (or would benefit from) a single cross-order transaction.

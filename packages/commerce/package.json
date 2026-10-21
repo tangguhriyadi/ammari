@@ -18,6 +18,7 @@
     "./order-status": "./src/orders/status.ts",
     "./orders": "./src/orders/index.ts",
     "./payments": "./src/payments/index.ts",
+    "./shipment-details": "./src/orders/shipment-details.ts",
     "./shipping": "./src/shipping/index.ts",
     "./shipping-rules": "./src/shipping/rules.ts",
     "./stock": "./src/stock/index.ts",

@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   cartItems,
   carts,
+  customerAddresses,
   customers,
   fabricColors,
   orderAccessTokens,
@@ -414,6 +415,49 @@ async function updateSessionCustomer(tx: Tx, customerId: string, contactPhone: s
   }
 }
 
+/** A session customer's address for the next checkout (owner, 2026-10-21: "saved address", plan
+ * §4.3): the order's address becomes the customer's default address, replaced in place by one
+ * INSERT ... ON CONFLICT on the partial UNIQUE (customer_id) WHERE is_default, so the default
+ * switches atomically and two orders at once just apply one after the other. Never for a guest
+ * (the email is unverified, D9). Inside the order transaction, so a refused or rolled-back order
+ * saves nothing; under a savepoint, so an address the table refuses (a CHECK) never fails the order. */
+async function saveSessionCustomerAddress(tx: Tx, customerId: string, address: ShippingAddress): Promise<void> {
+  const fields = {
+    recipientName: address.recipientName,
+    phone: address.phone,
+    addressLine: address.addressLine,
+    notes: address.notes,
+    shippingAreaId: address.shippingAreaId,
+    province: address.province,
+    city: address.city,
+    district: address.district,
+    subdistrict: address.subdistrict,
+    postalCode: address.postalCode,
+    // Checkout has no map pin: coordinates of an earlier address never stay on a new one.
+    latitude: null,
+    longitude: null,
+  };
+  try {
+    await tx.transaction(async (savepoint) => {
+      await savepoint
+        .insert(customerAddresses)
+        .values({ customerId, ...fields, isDefault: true })
+        .onConflictDoUpdate({
+          target: customerAddresses.customerId,
+          targetWhere: sql`${customerAddresses.isDefault}`,
+          set: { ...fields, updatedAt: sql`now()` },
+        });
+    });
+  } catch (error) {
+    // Data the table refuses (a CHECK, a length, a vanished area: 22xxx and 23xxx) only costs the
+    // prefill; anything else (the connection, a deadlock) still fails the order as before.
+    const cause = (error instanceof Error && error.cause !== undefined ? error.cause : error) as { code?: unknown; constraint_name?: unknown } | null;
+    const code = typeof cause?.code === "string" ? cause.code : "";
+    if (!code.startsWith("22") && !code.startsWith("23")) throw error;
+    console.warn("[checkout] the order's address was not saved to the account; the order goes on", { customerId, code, constraint: cause?.constraint_name ?? null });
+  }
+}
+
 /** A guest: link to the customer with this email, or create one (plan §5 step 4, insert-first like
  * loadOrCreateCustomerForEmail, so two concurrent first orders for one email resolve to the same
  * row). The email is unverified here (D9), so the customer row gets nothing a stranger could have
@@ -643,6 +687,10 @@ async function placeInTransaction(tx: Tx, ctx: Context): Promise<PlacedOrder | {
 
   await tx.delete(cartItems).where(eq(cartItems.cartId, ctx.cartId));
   await tx.update(carts).set({ lastActivityAt: sql`now()`, updatedAt: sql`now()` }).where(eq(carts.id, ctx.cartId));
+
+  // Logged-in buyers get this address prefilled next time (never a guest, D9). Last, so the row lock
+  // it takes is held as briefly as possible.
+  if (input.customer) await saveSessionCustomerAddress(tx, input.customer.id, value.address);
 
   // No contact or address in the audit row (plan §11 anonymizes those on the order itself).
   await writeAuditLog(tx, {

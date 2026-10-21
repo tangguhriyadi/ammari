@@ -181,7 +181,7 @@ describe("finish page actions", () => {
       expect(await checkPaymentStatusAction(fixture.orderNo)).toEqual({ changed: false });
       expect((await orderStatus(tx, fixture.orderId))?.paymentStatus).toBe("pending");
 
-      jar.set("ammari_checkout_order", fixture.token);
+      jar.set("ammari_checkout_order_v2", fixture.token);
       expect(await checkPaymentStatusAction(fixture.orderNo)).toEqual({ changed: true });
       expect(await orderStatus(tx, fixture.orderId)).toEqual({ status: "to_ship", paymentStatus: "paid" });
       expect(revalidatePath).toHaveBeenCalledWith(`/products/${fixture.slug}`);
@@ -198,7 +198,7 @@ describe("finish page actions", () => {
       expect(await reopenPaymentPageAction(fixture.orderNo)).toMatchObject({ ok: false });
       expect(await reopenPaymentPageAction("../etc")).toMatchObject({ ok: false });
 
-      jar.set("ammari_checkout_order", fixture.token);
+      jar.set("ammari_checkout_order_v2", fixture.token);
       const result = await reopenPaymentPageAction(fixture.orderNo);
       expect(result).toEqual({ ok: true, redirectUrl: expect.stringMatching(new RegExp(`/api/test/payments/E2E-${fixture.orderNo}-2$`)) });
       const attempts = await tx.select({ attempt: payments.attempt }).from(payments).where(eq(payments.orderId, fixture.orderId));

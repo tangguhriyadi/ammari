@@ -121,12 +121,7 @@ export function ShippingSection({ checkout }: { checkout: CheckoutOrderDetail })
       ) : (
         <p className="text-base text-neutral-600">Tidak ada data ongkir.</p>
       )}
-      {(checkout.courier || checkout.trackingNumber) && (
-        <>
-          {checkout.courier && <DetailRow label="Kurir" value={checkout.courier} />}
-          {checkout.trackingNumber && <DetailRow label="No. resi" value={checkout.trackingNumber} />}
-        </>
-      )}
+      {/* Courier and resi: the "Resi" section, with "Tambah resi" / "Ubah resi". */}
     </Section>
   );
 }

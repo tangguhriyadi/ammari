@@ -40,7 +40,7 @@ export interface OrderEmailAddress {
 
 export interface CustomerOrderEmailView {
   orderNo: string;
-  /** The buyer's name for "Halo ...", or null for a plain "Halo,". */
+  /** The buyer's first name for "Halo Kak ...,", or null for a plain "Halo Kak,". */
   greetingName: string | null;
   lines: OrderEmailLine[];
   totals: OrderEmailTotals;
@@ -263,7 +263,7 @@ function render(subject: string, preheader: string, blocks: Block[], footer: str
 // ---------- shared pieces ----------
 
 function greeting(view: CustomerOrderEmailView): Block {
-  return { kind: "paragraph", text: view.greetingName ? `Halo ${view.greetingName},` : "Halo," };
+  return { kind: "paragraph", text: view.greetingName ? `Halo Kak ${view.greetingName},` : "Halo Kak," };
 }
 
 function orderBlocks(view: CustomerOrderEmailView): Block[] {

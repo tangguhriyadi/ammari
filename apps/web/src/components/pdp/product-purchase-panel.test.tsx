@@ -6,9 +6,13 @@ import { buildProductView } from "@/lib/content/product-view";
 import { ProductPurchasePanel } from "./product-purchase-panel";
 import { OPEN_ACCORDION_EVENT, type OpenAccordionDetail } from "./size-guide";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }), usePathname: () => "/products/haura" }));
+const routerPush = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn(), push: routerPush }), usePathname: () => "/products/haura" }));
 const addToCartAction = vi.fn();
-vi.mock("@/lib/cart/actions", () => ({ addToCartAction: (input: unknown) => addToCartAction(input) }));
+const buyNowAction = vi.fn();
+vi.mock("@/lib/cart/actions", () => ({ addToCartAction: (input: unknown) => addToCartAction(input), buyNowAction: (input: unknown) => buyNowAction(input) }));
+// The pending-order notice's read (components/pdp/pending-order-notice.tsx): no order unless a test says so.
+const pendingOrderBody = vi.fn<() => unknown>(() => ({ order: null }));
 
 const colors = [
   { id: "sage", name: "Sage", hex: "#9CAF88" },
@@ -59,6 +63,10 @@ const mixed: StorefrontProduct["variants"] = [
 
 beforeEach(() => {
   addToCartAction.mockReset();
+  buyNowAction.mockReset();
+  routerPush.mockReset();
+  pendingOrderBody.mockImplementation(() => ({ order: null }));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(pendingOrderBody()), { status: 200, headers: { "content-type": "application/json" } })));
   // jsdom has no Element.scrollTo (the gallery effect resets its scroll position).
   Element.prototype.scrollTo = vi.fn() as unknown as Element["scrollTo"];
   window.history.replaceState(null, "", "/products/haura");
@@ -268,6 +276,79 @@ describe("Tambah ke keranjang (cart on)", () => {
     renderPanel(mixed);
     fireEvent.click(screen.getByRole("button", { name: "M" }));
     expect(screen.queryByRole("button", { name: /Tambah ke keranjang/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Beli sekarang|Pilih ukuran/ })).toBeNull();
+    // Exactly as before: the solid primary WhatsApp button.
+    expect(screen.getByRole("link", { name: "Tanya via WhatsApp" })).toHaveClass("bg-brand", "min-h-[52px]");
     expect(addToCartAction).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("Beli sekarang (cart on, owner request 2026-10-21)", () => {
+  test("button order: Beli sekarang (primary), Tambah ke keranjang (outlined), then a small WhatsApp text link", () => {
+    renderPanel(mixed, { cartEnabled: true });
+    expect(screen.getByRole("button", { name: "Pilih ukuran" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "M" }));
+    const buy = screen.getByRole("button", { name: "Beli sekarang" });
+    const add = screen.getByRole("button", { name: "Tambah ke keranjang" });
+    const whatsapp = screen.getByRole("link", { name: "Tanya via WhatsApp" });
+    expect(buy).toHaveClass("bg-brand", "text-white");
+    expect(add).toHaveClass("border", "border-ink", "bg-bg");
+    expect(whatsapp).toHaveClass("underline");
+    expect(whatsapp).not.toHaveClass("min-h-[52px]");
+    expect(buy.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(add.compareDocumentPosition(whatsapp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("puts the selected size in the cart and goes to /checkout", async () => {
+    buyNowAction.mockResolvedValue({ ok: true, pieceCount: 2, mergeTrimmed: false });
+    renderPanel(mixed, { cartEnabled: true });
+    fireEvent.click(screen.getByRole("button", { name: "M" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Beli sekarang" })));
+    expect(buyNowAction).toHaveBeenCalledWith({ sku: "SAGE-M" });
+    expect(addToCartAction).not.toHaveBeenCalled();
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith("/checkout"));
+    // On its way: further taps do nothing.
+    fireEvent.click(screen.getByRole("button", { name: "Memproses" }));
+    expect(buyNowAction).toHaveBeenCalledTimes(1);
+  });
+
+  test("a refusal stays on the page with the server's message", async () => {
+    buyNowAction.mockResolvedValue({ ok: false, message: "Stok tidak cukup untuk jumlah ini." });
+    renderPanel(mixed, { cartEnabled: true });
+    fireEvent.click(screen.getByRole("button", { name: "M" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Beli sekarang" })));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Stok tidak cukup untuk jumlah ini.");
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  test("a page from the previous build says so instead of a blank page", async () => {
+    buyNowAction.mockRejectedValue(Object.assign(new Error('Server Action "x" was not found on the server.'), { name: "UnrecognizedActionError" }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    renderPanel(mixed, { cartEnabled: true });
+    fireEvent.click(screen.getByRole("button", { name: "M" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Beli sekarang" })));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Halaman sudah diperbarui. Coba lagi.");
+    consoleError.mockRestore();
+  });
+});
+
+describe("the visitor's own order waiting for payment (cart on)", () => {
+  const order = { orderNo: "ORD-202610-0001", payBy: "21 Oktober 2026, 14.30 WIB", paymentUrl: "https://pay.example/snap/abc", productIds: ["p1"] };
+
+  test("shown when this product is in it, with both ways back to the payment", async () => {
+    pendingOrderBody.mockImplementation(() => ({ order }));
+    renderPanel(mixed, { cartEnabled: true });
+    expect(await screen.findByText("Kamu punya pesanan ORD-202610-0001 yang menunggu pembayaran")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Lanjutkan pembayaran" })).toHaveAttribute("href", "https://pay.example/snap/abc");
+    expect(screen.getByRole("button", { name: "Ganti metode pembayaran" })).toBeInTheDocument();
+  });
+
+  test("not shown for an order of other products", async () => {
+    pendingOrderBody.mockImplementation(() => ({ order: { ...order, productIds: ["p2"] } }));
+    renderPanel(mixed, { cartEnabled: true });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/checkout/pending-order", expect.anything()));
+    await act(async () => {});
+    expect(screen.queryByText(/menunggu pembayaran/)).toBeNull();
   });
 });

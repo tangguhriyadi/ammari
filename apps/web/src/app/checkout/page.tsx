@@ -4,11 +4,14 @@ import { notFound } from "next/navigation";
 import { getCustomerSession } from "@/lib/auth/customer-session";
 import { isCartEnabled } from "@/lib/cart-flag";
 import { loadCartView } from "@/lib/cart/queries";
-import { listUsableVouchers } from "@/lib/checkout/queries";
+import { listUsableVouchers, loadSavedCheckoutAddress } from "@/lib/checkout/queries";
+import { loadPendingCheckoutOrder } from "@/lib/checkout/pending-order";
+import { PendingOrderBanner } from "@/components/checkout/pending-order-banner";
 import { buildImageUrl, getStoragePublicBaseUrl } from "@/lib/storage/public-url";
 import { getWhatsappNumber } from "@/lib/store-settings";
 import { Container } from "@/components/container";
 import { CheckoutForm } from "@/components/checkout/checkout-form";
+import { CUSTOMER_PLACEHOLDER_NAME } from "@ammari/auth/customer";
 
 // The checkout page (docs/plans/cart-checkout.md §4.3, docs/design/storefront.md §7,
 // mockup-checkout.png). force-dynamic for the same reason as /cart: with the flag off this page
@@ -29,16 +32,24 @@ export default async function CheckoutPage() {
   if (!isCartEnabled()) notFound();
 
   const session = await getCustomerSession();
-  const [cart, vouchers, whatsappNumber] = await Promise.all([
+  const [cart, vouchers, whatsappNumber, pendingOrder, savedAddress] = await Promise.all([
     loadCartView(),
     session ? listUsableVouchers(session.id) : Promise.resolve([]),
     getWhatsappNumber(),
+    loadPendingCheckoutOrder(),
+    // Never for a guest (an unverified email must not reveal anyone's address).
+    session ? loadSavedCheckoutAddress(session.id) : Promise.resolve(null),
   ]);
   const storageBaseUrl = getStoragePublicBaseUrl();
 
   return (
     <Container className="py-6 md:py-10">
       <h1 className="font-serif text-[30px] font-normal text-ink">Checkout</h1>
+      {pendingOrder && (
+        <div className="mt-6 md:max-w-[640px]">
+          <PendingOrderBanner orderNo={pendingOrder.orderNo} payBy={pendingOrder.payBy} paymentUrl={pendingOrder.paymentUrl} />
+        </div>
+      )}
       <CheckoutForm
         // One per page load: a double submit of this page answers with the same order (plan §5).
         checkoutAttemptId={randomUUID()}
@@ -55,7 +66,17 @@ export default async function CheckoutPage() {
           pieceCount: cart.pieceCount,
           canCheckout: cart.canCheckout,
         }}
-        customer={session ? { email: session.email, phone: session.phone, name: session.name } : null}
+        customer={
+          session
+            ? {
+                email: session.email,
+                phone: session.phone,
+                // The placeholder an email login gives is never offered as the recipient.
+                name: session.name === CUSTOMER_PLACEHOLDER_NAME ? "" : session.name,
+              }
+            : null
+        }
+        savedAddress={savedAddress}
         vouchers={vouchers}
         whatsappNumber={whatsappNumber}
       />

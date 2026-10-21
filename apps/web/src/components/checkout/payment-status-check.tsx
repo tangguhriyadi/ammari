@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { checkPaymentStatusAction } from "@/lib/checkout/payment-actions";
+import { isStaleDeploymentError, scheduleStaleReload } from "@/lib/stale-deployment";
 
 // The finish page's one status check (docs/plans/cart-checkout.md §4.4) for an order that still
 // shows as pending: once per page load, the server asks the gateway (never trusting the redirect's
@@ -24,6 +25,8 @@ export function PaymentStatusCheck({ orderNo }: { orderNo: string }) {
       })
       .catch((error: unknown) => {
         console.warn("[checkout] payment status check did not answer", error instanceof Error ? error.name : typeof error);
+        // A page from the previous build: reload it, so the check runs against the new one.
+        if (isStaleDeploymentError(error)) scheduleStaleReload();
       })
       .finally(() => setChecking(false));
   }, [orderNo, router]);

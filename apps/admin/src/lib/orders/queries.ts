@@ -203,6 +203,9 @@ export interface OrderDetail {
   totalAmount: number;
   shippingAddress: string | null;
   notes: string | null;
+  /** Entered by staff at "Tandai dikirim" or "Tambah resi" (any channel). */
+  courier: string | null;
+  trackingNumber: string | null;
   createdByName: string | null;
   createdAt: Date;
   items: OrderItemRow[];
@@ -402,6 +405,8 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
       totalAmount: orders.totalAmount,
       shippingAddress: orders.shippingAddress,
       notes: orders.notes,
+      courier: orders.courier,
+      trackingNumber: orders.trackingNumber,
       createdByName: staffUsers.name,
       createdAt: orders.createdAt,
     })

@@ -1,5 +1,6 @@
 export {
   addCartItem,
+  ensureCartItem,
   addLinesToCart,
   getCartPieceCount,
   getCartView,

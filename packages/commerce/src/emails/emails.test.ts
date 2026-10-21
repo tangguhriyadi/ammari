@@ -7,7 +7,7 @@ import { customers, orderAccessTokens, orderItems, orderNotifications, orders, p
 import type { Tx } from "../db";
 import { hashOrderAccessToken } from "../checkout/access-token";
 import { formatRupiah } from "./format";
-import { transitionOrderStatus } from "../orders/lifecycle";
+import { transitionOrderStatus, updateShipmentDetails } from "../orders/lifecycle";
 import { applyPaymentStatus } from "../payments/apply-status";
 import { createFakePaymentProvider } from "../payments/fake";
 import { PaymentProviderError, type PaymentProvider, type PaymentStatusReport } from "../payments/provider";
@@ -15,7 +15,7 @@ import { parsePaymentStatusBody } from "../payments/status";
 import { sweepExpiredPayments } from "../payments/sweep";
 import { adjustStock } from "../stock/ledger";
 import { reserveStockForOrder } from "../stock/reservations";
-import { dispatchOrderEmails, dispatchPendingOrderEmails, dueOrderEmails, type LoginLinkIssueOutcome, type OrderEmailDeps, type OrderEmailState } from "./dispatch";
+import { dispatchOrderEmails, dispatchPendingOrderEmails, dueOrderEmails, greetingName, type LoginLinkIssueOutcome, type OrderEmailDeps, type OrderEmailState } from "./dispatch";
 import { renderCancelledEmail, renderCreatedEmail, renderOwnerPaidEmail, renderPaidEmail, renderShippedEmail, type CustomerOrderEmailView } from "./templates";
 import { deriveOrderEmailAccessToken, deriveOrderEmailLoginToken } from "./token";
 
@@ -53,7 +53,7 @@ const forOrder = (sent: Sent[], orderNo: string) => sent.filter((message) => mes
 // ---------- dueOrderEmails ----------
 
 function state(overrides: Partial<OrderEmailState>): OrderEmailState {
-  return { status: "awaiting_payment", paymentStatus: "pending", paymentExpiresAt: new Date(Date.now() + 60_000), paidAt: null, cancelledAt: null, cancelReason: null, needsAttention: [], ...overrides };
+  return { status: "awaiting_payment", paymentStatus: "pending", paymentExpiresAt: new Date(Date.now() + 60_000), paidAt: null, cancelledAt: null, cancelReason: null, needsAttention: [], trackingNumber: null, ...overrides };
 }
 
 describe("dueOrderEmails", () => {
@@ -96,12 +96,34 @@ describe("dueOrderEmails", () => {
       { kind: "owner_paid", variant: "after_cancel" },
     ]);
   });
-  test("shipped: `shipped`; completed and returned: nothing; manual and marketplace orders: never", () => {
-    expect(dueOrderEmails(state({ status: "shipped", paymentStatus: "paid", paidAt: now }), now)).toEqual([{ kind: "shipped" }]);
+  test("shipped: `shipped` once it has a resi; completed and returned: nothing; manual and marketplace orders: never", () => {
+    expect(dueOrderEmails(state({ status: "shipped", paymentStatus: "paid", paidAt: now, trackingNumber: "JP1234567890" }), now)).toEqual([{ kind: "shipped" }]);
+    // Never "sudah dikirim" without a resi to track (2026-10-21 sandbox run).
+    expect(dueOrderEmails(state({ status: "shipped", paymentStatus: "paid", paidAt: now }), now)).toEqual([]);
+    expect(dueOrderEmails(state({ status: "shipped", paymentStatus: "paid", paidAt: now, trackingNumber: "  " }), now)).toEqual([]);
     expect(dueOrderEmails(state({ status: "completed", paymentStatus: "paid", paidAt: now }), now)).toEqual([]);
     expect(dueOrderEmails(state({ status: "returned", paymentStatus: "paid", paidAt: now }), now)).toEqual([]);
     expect(dueOrderEmails(state({ status: "shipped", paymentStatus: null }), now)).toEqual([]);
     expect(dueOrderEmails(state({ status: "to_ship", paymentStatus: null, paidAt: null }), now)).toEqual([]);
+  });
+});
+
+// ---------- greeting ----------
+
+describe("greetingName (\"Halo Kak <first name>,\", owner request 2026-10-21)", () => {
+  test("the first word of the recipient name, capitalised normally", () => {
+    expect(greetingName("Muhammad Tangguh Riyadi")).toBe("Muhammad");
+    expect(greetingName("  muhammad   tangguh ")).toBe("Muhammad");
+    expect(greetingName("SITI AMINAH")).toBe("Siti");
+    expect(greetingName("rina")).toBe("Rina");
+    expect(greetingName("nur-aini Putri")).toBe("Nur-Aini");
+    expect(greetingName("Dewi, Bandung")).toBe("Dewi");
+    expect(greetingName("Ölga")).toBe("Ölga");
+  });
+  test("left out (\"Halo Kak,\") for links, 5+ digits, and a first word that is not a plain name", () => {
+    for (const name of [null, "", "   ", "Klik www.hadiah.example", "Transfer ke BCA 8830123456", "a@b.co", "https://x.example Rina", "Rina2 Wati", "<b>Rina</b>", "123 Rina", "-Rina"]) {
+      expect(greetingName(name)).toBeNull();
+    }
   });
 });
 
@@ -195,13 +217,25 @@ describe("templates", () => {
     expect(withLogo.text).toBe(without.text);
   });
 
+  test("every buyer email greets \"Halo Kak <name>,\" or \"Halo Kak,\" in both parts", () => {
+    const buyerEmails = allRendered().slice(0, -3);
+    expect(buyerEmails).toHaveLength(10);
+    for (const email of buyerEmails) {
+      expect(email.text).toContain("Halo Kak Siti <Aminah>,");
+      expect(email.html).toContain("Halo Kak Siti &lt;Aminah&gt;,");
+    }
+    const anonymous = renderShippedEmail({ ...baseView, greetingName: null, courier: "JNE", trackingNumber: "JNE123456789" });
+    expect(anonymous.text).toContain("Halo Kak,\n");
+    expect(anonymous.html).toContain("Halo Kak,");
+  });
+
   test("HTML escapes every value and has the mobile viewport; the text part has no markup", () => {
     const email = renderPaidEmail(baseView, "confirmed");
-    expect(email.html).toContain("Halo Siti &lt;Aminah&gt;,");
+    expect(email.html).toContain("Halo Kak Siti &lt;Aminah&gt;,");
     expect(email.html).toContain("Khimar Syar&#39;i");
     expect(email.html).not.toContain("<Aminah>");
     expect(email.html).toContain('name="viewport"');
-    expect(email.text).toContain("Halo Siti <Aminah>,");
+    expect(email.text).toContain("Halo Kak Siti <Aminah>,");
     expect(email.text).not.toMatch(/<(table|tr|td|a |p>|div|br)/i);
   });
 
@@ -461,6 +495,29 @@ describe("dispatchOrderEmails", () => {
     });
   });
 
+  test("a shipped order without a resi gets no email until staff add the resi, then exactly one", async () => {
+    await withRollback(async (tx) => {
+      const { deps, sent } = recorder();
+      await setSupportEmail(tx, "pemilik@example.test");
+      const placed = await placedOrder(tx);
+      await applyPaymentStatus(tx, report(placed, "settlement"));
+      await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
+      // Shipped before the resi rule (or by any path that skipped it): no "sudah dikirim" yet.
+      await tx.update(orders).set({ status: "shipped", shippedAt: new Date(), courier: "J&T Reguler", trackingNumber: null }).where(eq(orders.id, placed.orderId));
+      await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
+      await dispatchPendingOrderEmails(tx, deps);
+      const shippedEmails = () => forOrder(sent, placed.orderNo).filter((message) => message.subject.includes("sudah dikirim"));
+      expect(shippedEmails()).toHaveLength(0);
+      const staff = await insertStaffUser(tx);
+      await updateShipmentDetails(placed.orderId, { courier: "J&T Reguler", trackingNumber: "jp 1234 5678 90" }, staff.id, tx);
+      await dispatchPendingOrderEmails(tx, deps);
+      await dispatchPendingOrderEmails(tx, deps);
+      expect(shippedEmails()).toHaveLength(1);
+      expect(shippedEmails()[0]!.body).toContain("Kurir: J&T Reguler\nNomor resi: JP1234567890");
+      expect(shippedEmails()[0]!.html).toContain("JP1234567890");
+    });
+  });
+
   test("shipped by staff: courier and resi; found by the cron pass (no hook in admin)", async () => {
     await withRollback(async (tx) => {
       const { deps, sent } = recorder();
@@ -485,17 +542,19 @@ describe("dispatchOrderEmails", () => {
       const placed = await placedOrder(tx);
       const [order] = await tx.select({ customerId: orders.customerId }).from(orders).where(eq(orders.id, placed.orderId));
       await tx.update(customers).set({ name: "Pelanggan Ammari" }).where(eq(customers.id, order!.customerId!));
-      await tx.update(orders).set({ recipientName: "Rina" }).where(eq(orders.id, placed.orderId));
+      await tx.update(orders).set({ recipientName: "rina WATI" }).where(eq(orders.id, placed.orderId));
       await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
-      expect(sent[0]!.body).toContain("Halo Rina,\n");
-      expect(sent[0]!.html).toContain("Halo Rina,");
+      // The first word of the recipient name, capitalised normally (owner request 2026-10-21).
+      expect(sent[0]!.body).toContain("Halo Kak Rina,\n");
+      expect(sent[0]!.html).toContain("Halo Kak Rina,");
+      expect(sent[0]!.body).not.toContain("WATI");
       expect(sent[0]!.body).not.toContain("Pelanggan Ammari");
       // The logo is the storefront's own public file on the site origin.
       expect(sent[0]!.html).toContain('src="https://ammari.example/logos/ammari-primary.png"');
       await applyPaymentStatus(tx, report(placed, "settlement"));
       await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
       const owner = forOrder(sent, placed.orderNo).find((message) => message.to === "pemilik@example.test")!;
-      expect(owner.body).toContain("Nama: Rina");
+      expect(owner.body).toContain("Nama: rina WATI");
       // The customers row is left as it was (an unverified guest never renames it).
       const [after] = await tx.select({ name: customers.name }).from(customers).where(eq(customers.id, order!.customerId!));
       expect(after!.name).toBe("Pelanggan Ammari");
@@ -512,14 +571,14 @@ describe("dispatchOrderEmails", () => {
         .set({ recipientName: "Klik www.hadiah.example sekarang", shippingAddressSnapshot: { version: 2, recipientName: "Siti\nPalsu: baris", phone: "+6281299990000", addressLine: "Jl. Melati 5\r\nKlik link", district: "Kecamatan E2E", city: "Kota Contoh", province: "Provinsi Contoh", postalCode: "40111" } })
         .where(eq(orders.id, placed.orderId));
       await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
-      expect(sent[0]!.body).toContain("Halo,\n");
+      expect(sent[0]!.body).toContain("Halo Kak,\n");
       expect(sent[0]!.body).not.toContain("hadiah");
       // A number in the name (an account number as a payment lure) is left out too.
       await tx.update(orders).set({ recipientName: "Transfer ke BCA 8830123456" }).where(eq(orders.id, placed.orderId));
       await applyPaymentStatus(tx, report(placed, "settlement"));
       await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
       const paid = forOrder(sent, placed.orderNo).find((message) => message.subject.startsWith("Pembayaran"))!;
-      expect(paid.body).toContain("Halo,\n");
+      expect(paid.body).toContain("Halo Kak,\n");
       expect(paid.body).not.toContain("8830123456");
       expect(paid.body).toContain("Penerima: Siti Palsu: baris");
       expect(paid.body).toContain("Alamat: Jl. Melati 5 Klik link, Kecamatan E2E");

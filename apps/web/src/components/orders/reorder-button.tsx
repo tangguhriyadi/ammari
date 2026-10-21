@@ -7,6 +7,7 @@ import { reorderAction, type ReorderActionResult } from "@/lib/orders/reorder-ac
 import { REORDER_ALL_ADDED, REORDER_NONE_ADDED, REORDER_SOME_ADDED } from "@/lib/orders/reorder-messages";
 import { PrimaryButton } from "@/components/buttons";
 import { CART_MAX_PIECES } from "@ammari/commerce/cart-limits";
+import { failedCallMessage } from "@/lib/stale-deployment";
 
 // "Pesan lagi" (docs/plans/cart-checkout.md §4.4, §9.1): on a cancelled, never-paid checkout order,
 // puts its lines back into the cart (what fits; the server decides) and announces the new cart
@@ -49,7 +50,7 @@ export function ReorderButton({ orderNo, className }: { orderNo: string; classNa
         }
       } catch (callError) {
         console.warn("[orders] reorder did not answer", callError instanceof Error ? callError.name : typeof callError);
-        fail(CART_CALL_FAILED_MESSAGE);
+        fail(failedCallMessage(callError, CART_CALL_FAILED_MESSAGE));
       }
     });
   }

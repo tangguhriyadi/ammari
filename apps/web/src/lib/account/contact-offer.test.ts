@@ -6,7 +6,12 @@ import { customers } from "@ammari/db/schema";
 import { CONTACT_OFFER_CHANGED, CONTACT_OFFER_GONE, CONTACT_OFFER_PHONE_TAKEN, answerContactOffer, loadContactOffer, type ContactOffer } from "./contact-offer";
 
 /** "Simpan" on the offer as shown. */
-const save = (offer: ContactOffer | null, promo: boolean) => ({ kind: "save" as const, promo, seen: { orderNo: offer?.orderNo ?? "", phone: offer?.phone ?? null } });
+const save = (offer: ContactOffer | null, promo: boolean, useName = false) => ({
+  kind: "save" as const,
+  promo,
+  useName,
+  seen: { orderNo: offer?.orderNo ?? "", phone: offer?.phone ?? null, name: offer?.name ?? null },
+});
 
 // docs/plans/cart-checkout.md §9.3 (owner decision 2026-10-21, session 14): after a login, /account
 // offers the WhatsApp number and promo choice a guest order recorded; nothing is copied unasked.
@@ -21,7 +26,7 @@ async function guestCustomer(tx: TestTx) {
 
 /** A checkout order of the customer, typed with the account's own email unless `contactEmail` says
  * otherwise. */
-async function guestOrder(tx: TestTx, customerId: string, values: { contactPhone?: string | null; promoOptIn?: boolean; placedWithSession?: boolean; createdAt?: Date; contactEmail?: string } = {}) {
+async function guestOrder(tx: TestTx, customerId: string, values: { contactPhone?: string | null; promoOptIn?: boolean; placedWithSession?: boolean; createdAt?: Date; contactEmail?: string; recipientName?: string } = {}) {
   const [account] = await tx.select({ email: customers.email }).from(customers).where(eq(customers.id, customerId));
   return insertOrder(tx, {
     ...checkoutOrderValues(),
@@ -30,6 +35,7 @@ async function guestOrder(tx: TestTx, customerId: string, values: { contactPhone
     contactEmail: values.contactEmail ?? account?.email ?? "tamu@example.test",
     contactPhone: values.contactPhone === undefined ? phone() : values.contactPhone,
     promoOptIn: values.promoOptIn ?? false,
+    recipientName: values.recipientName ?? "Rina Wati",
     placedWithSession: values.placedWithSession ?? false,
     subtotalAmount: 259_000,
     shippingAmount: 0,
@@ -47,7 +53,7 @@ describe("loadContactOffer", () => {
       const customer = await guestCustomer(tx);
       await guestOrder(tx, customer.id, { createdAt: new Date(Date.now() - 60_000) });
       const newest = await guestOrder(tx, customer.id, { promoOptIn: true });
-      expect(await loadContactOffer(customer.id, tx)).toEqual({ orderNo: newest.orderNo, orderDate: newest.orderDate, phone: newest.contactPhone, promo: true });
+      expect(await loadContactOffer(customer.id, tx)).toEqual({ orderNo: newest.orderNo, orderDate: newest.orderDate, phone: newest.contactPhone, promo: true, name: null });
     });
   });
 
@@ -82,6 +88,44 @@ describe("loadContactOffer", () => {
       const full = await insertCustomer(tx, { promoConsentAt: new Date() });
       await guestOrder(tx, full.id, { promoOptIn: true });
       expect(await loadContactOffer(full.id, tx)).toBeNull();
+    });
+  });
+});
+
+describe("the recipient name in the offer (2026-10-21 sandbox run)", () => {
+  test("offered only while the account has the placeholder name, even when number and promo are settled", async () => {
+    await withRollback(async (tx) => {
+      const named = await guestCustomer(tx);
+      await guestOrder(tx, named.id, { recipientName: "Siti Aminah" });
+      expect((await loadContactOffer(named.id, tx))?.name).toBeNull();
+
+      const placeholder = await insertCustomer(tx, { name: "Pelanggan Ammari", promoConsentAt: new Date(), emailVerifiedAt: new Date() });
+      const order = await guestOrder(tx, placeholder.id, { recipientName: "  Siti   Aminah " });
+      expect(await loadContactOffer(placeholder.id, tx)).toEqual({ orderNo: order.orderNo, orderDate: order.orderDate, phone: null, promo: false, name: "Siti Aminah" });
+    });
+  });
+
+  test("saved only when ticked, and never over a name the buyer set meanwhile", async () => {
+    await withRollback(async (tx) => {
+      const customer = await insertCustomer(tx, { name: "Pelanggan Ammari", phone: null, promoConsentAt: null, emailVerifiedAt: new Date() });
+      await guestOrder(tx, customer.id, { recipientName: "Siti Aminah" });
+      expect(await answerContactOffer(customer.id, save(await loadContactOffer(customer.id, tx), false, false), tx)).toEqual({ ok: true });
+      const [unticked] = await tx.select({ name: customers.name }).from(customers).where(eq(customers.id, customer.id));
+      expect(unticked?.name).toBe("Pelanggan Ammari");
+
+      await guestOrder(tx, customer.id, { recipientName: "Siti Aminah", createdAt: new Date(Date.now() + 1_000) });
+      expect(await answerContactOffer(customer.id, save(await loadContactOffer(customer.id, tx), false, true), tx)).toEqual({ ok: true });
+      const [ticked] = await tx.select({ name: customers.name }).from(customers).where(eq(customers.id, customer.id));
+      expect(ticked?.name).toBe("Siti Aminah");
+
+      // Another tab renamed the account after this card was rendered: the change is refused as "changed".
+      await tx.update(customers).set({ name: "Pelanggan Ammari" }).where(eq(customers.id, customer.id));
+      await guestOrder(tx, customer.id, { recipientName: "Rina Wati", createdAt: new Date(Date.now() + 2_000) });
+      const shown = await loadContactOffer(customer.id, tx);
+      await tx.update(customers).set({ name: "Nama Sendiri" }).where(eq(customers.id, customer.id));
+      expect(await answerContactOffer(customer.id, save(shown, false, true), tx)).toEqual({ ok: false, message: CONTACT_OFFER_GONE });
+      const [kept] = await tx.select({ name: customers.name }).from(customers).where(eq(customers.id, customer.id));
+      expect(kept?.name).toBe("Nama Sendiri");
     });
   });
 });

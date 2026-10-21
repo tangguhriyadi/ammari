@@ -2,7 +2,7 @@
 
 import { refresh } from "next/cache";
 import { z } from "zod";
-import { addCartItem, removeCartItem, setCartItemQty, type CartWriteResult } from "@ammari/commerce/cart";
+import { addCartItem, ensureCartItem, removeCartItem, setCartItemQty, type CartWriteResult } from "@ammari/commerce/cart";
 import { CART_MAX_QTY_PER_LINE, CART_REFUSAL_MESSAGES } from "@ammari/commerce/cart-limits";
 import { isCartEnabled } from "@/lib/cart-flag";
 import { recordClaimAttemptAndCount } from "@/lib/claim/throttle";
@@ -75,6 +75,15 @@ export async function addToCartAction(input: { sku: string; qty: number }): Prom
   const parsed = lineInput.safeParse(input);
   if (!parsed.success) return { ok: false, message: CART_INVALID_INPUT_MESSAGE };
   return runCartAction((identity) => addCartItem(defaultDb, identity, parsed.data.sku, parsed.data.qty), true);
+}
+
+/** "Beli sekarang" (PDP, flag on): makes sure the cart holds the selected size (one piece, never a
+ * second on a repeat tap); the page then opens /checkout with the whole cart (owner decision
+ * 2026-10-21: the buyer sees every line there before paying). */
+export async function buyNowAction(input: { sku: string }): Promise<CartActionResult> {
+  const parsed = removeInput.safeParse(input);
+  if (!parsed.success) return { ok: false, message: CART_INVALID_INPUT_MESSAGE };
+  return runCartAction((identity) => ensureCartItem(defaultDb, identity, parsed.data.sku), true);
 }
 
 /** `/cart` writes answer with a fresh render of the page in the same response (`refresh()`), so

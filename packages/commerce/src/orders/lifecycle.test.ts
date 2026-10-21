@@ -1,9 +1,9 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
-import { insertProductVariant, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
-import { fabricColors, fabrics, orderItems, orders, products, productVariants, stockMovements, thankYouCards } from "@ammari/db/schema";
-import { createOrder, transitionOrderStatus, updateOrderItems } from "./lifecycle";
+import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
+import { auditLog, fabricColors, fabrics, orderItems, orders, products, productVariants, stockMovements, thankYouCards } from "@ammari/db/schema";
+import { createOrder, transitionOrderStatus, updateOrderItems, updateShipmentDetails } from "./lifecycle";
 import { generateOrderNumber } from "./order-number";
 
 /** Each line's locked `unit_cost`, read straight from order_items (the admin read model,
@@ -675,6 +675,79 @@ describe("updateOrderItems", () => {
       await expect(updateOrderItems(order.id, [{ sku: variant.sku, qty: 2, unitPrice: 259_000 }], staff.id, tx)).rejects.toThrow(
         /menunggu bayar/,
       );
+    });
+  });
+});
+
+// ---------- Courier and resi (2026-10-21 sandbox run) ----------
+
+/** A paid web checkout order waiting in the packing queue (no lines: shipping writes no stock). */
+async function paidCheckoutOrder(tx: TestDatabase, overrides: Partial<typeof orders.$inferInsert> = {}) {
+  return insertOrder(tx, { ...checkoutOrderValues(), status: "to_ship", paymentStatus: "paid", paidAt: new Date(), ...overrides });
+}
+
+describe("shipping a web checkout order needs a courier and a resi", () => {
+  test("refused without a resi or a courier (bulk ship, empty dialog); nothing changes", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const order = await paidCheckoutOrder(tx);
+      await expect(transitionOrderStatus(order.id, "shipped", staff.id, tx)).rejects.toThrow("Isi kurir. Isi nomor resi.");
+      await expect(transitionOrderStatus(order.id, "shipped", staff.id, tx, { courier: "J&T Reguler", trackingNumber: "  " })).rejects.toThrow("Isi nomor resi.");
+      await expect(transitionOrderStatus(order.id, "shipped", staff.id, tx, { courier: "J&T Reguler", trackingNumber: "JP1<script>" })).rejects.toThrow("Nomor resi hanya huruf");
+      const [after] = await tx.select({ status: orders.status, shippedAt: orders.shippedAt }).from(orders).where(eq(orders.id, order.id));
+      expect(after).toEqual({ status: "to_ship", shippedAt: null });
+    });
+  });
+
+  test("ships with both; the resi is stored as couriers print it (spaces dropped, upper case)", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const order = await paidCheckoutOrder(tx);
+      const updated = await transitionOrderStatus(order.id, "shipped", staff.id, tx, { courier: " J&T Reguler ", trackingNumber: "jp 1234 5678 90" });
+      expect(updated.status).toBe("shipped");
+      expect(updated.courier).toBe("J&T Reguler");
+      expect(updated.trackingNumber).toBe("JP1234567890");
+    });
+  });
+});
+
+describe("updateShipmentDetails (\"Tambah resi\" / \"Ubah resi\")", () => {
+  test("adds the resi to a checkout order shipped without one, audit logged with old and new values", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const order = await paidCheckoutOrder(tx, { status: "shipped", shippedAt: new Date(), courier: "J&T Reguler" });
+      expect(await updateShipmentDetails(order.id, { courier: "J&T Reguler", trackingNumber: "JP1234567890" }, staff.id, tx)).toEqual({ changed: true });
+      const [after] = await tx.select({ courier: orders.courier, trackingNumber: orders.trackingNumber, status: orders.status }).from(orders).where(eq(orders.id, order.id));
+      expect(after).toEqual({ courier: "J&T Reguler", trackingNumber: "JP1234567890", status: "shipped" });
+      const audits = await tx.select().from(auditLog).where(and(eq(auditLog.entityId, order.id), eq(auditLog.action, "update_shipment_details")));
+      expect(audits).toHaveLength(1);
+      expect(audits[0]!.actorStaffUserId).toBe(staff.id);
+      expect(audits[0]!.before).toEqual({ courier: "J&T Reguler", trackingNumber: null });
+      expect(audits[0]!.after).toEqual({ courier: "J&T Reguler", trackingNumber: "JP1234567890" });
+      // The same values again: no write, no second audit row.
+      expect(await updateShipmentDetails(order.id, { courier: "J&T Reguler", trackingNumber: "jp1234567890" }, staff.id, tx)).toEqual({ changed: false });
+      expect(await tx.select().from(auditLog).where(and(eq(auditLog.entityId, order.id), eq(auditLog.action, "update_shipment_details")))).toHaveLength(1);
+    });
+  });
+
+  test("refused before the order ships, and without a resi on a checkout order", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const waiting = await paidCheckoutOrder(tx);
+      await expect(updateShipmentDetails(waiting.id, { courier: "JNE", trackingNumber: "JNE00012345" }, staff.id, tx)).rejects.toThrow("setelah pesanan dikirim");
+      const shipped = await paidCheckoutOrder(tx, { status: "shipped", shippedAt: new Date(), courier: "JNE", trackingNumber: "JNE00012345" });
+      await expect(updateShipmentDetails(shipped.id, { courier: "JNE", trackingNumber: "" }, staff.id, tx)).rejects.toThrow("Isi nomor resi.");
+    });
+  });
+
+  test("a manual order keeps both optional and free text", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const order = await insertOrder(tx, { channelId: "whatsapp", channelOrderNo: null, status: "shipped", shippedAt: new Date() });
+      expect(await updateShipmentDetails(order.id, { courier: "Kurir toko", trackingNumber: "antar sendiri" }, staff.id, tx)).toEqual({ changed: true });
+      expect(await updateShipmentDetails(order.id, { courier: "", trackingNumber: "" }, staff.id, tx)).toEqual({ changed: true });
+      const [after] = await tx.select({ courier: orders.courier, trackingNumber: orders.trackingNumber }).from(orders).where(eq(orders.id, order.id));
+      expect(after).toEqual({ courier: null, trackingNumber: null });
     });
   });
 });

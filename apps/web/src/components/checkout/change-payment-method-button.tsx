@@ -4,6 +4,7 @@ import { useId, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { changePaymentMethodAction } from "@/lib/checkout/payment-actions";
 import { goToPaymentPage } from "@/lib/checkout/navigate";
+import { failedCallMessage } from "@/lib/stale-deployment";
 
 // "Ganti metode pembayaran" (owner request after the 2026-10-21 sandbox run): the payment page
 // stays locked to the method the buyer picked there (e.g. GoPay QR). The server ends that attempt
@@ -49,7 +50,7 @@ export function ChangePaymentMethodButton({ orderNo }: { orderNo: string }) {
         }
       } catch (error) {
         console.warn("[checkout] payment method change did not answer", error instanceof Error ? error.name : typeof error);
-        fail(LOST_MESSAGE);
+        fail(failedCallMessage(error, LOST_MESSAGE));
       }
     });
   }

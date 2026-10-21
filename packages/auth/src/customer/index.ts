@@ -1,6 +1,6 @@
 export { createCustomerAuth } from "./create-customer-auth";
 export type { CreateCustomerAuthOptions, GoogleProviderOverrides, CustomerAuth } from "./create-customer-auth";
-export { loadOrCreateCustomerForEmail, getCustomerOtpResendState } from "./customer-data";
+export { CUSTOMER_PLACEHOLDER_NAME, loadOrCreateCustomerForEmail, getCustomerOtpResendState } from "./customer-data";
 export type { CustomerIdentity, OtpResendState } from "./customer-data";
 export {
   LOGIN_LINK_MAX_PER_DAY,

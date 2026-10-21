@@ -4,10 +4,12 @@ import { notFound } from "next/navigation";
 import { CART_MAX_PIECES, CART_REFUSAL_MESSAGES } from "@ammari/commerce/cart-limits";
 import { isCartEnabled } from "@/lib/cart-flag";
 import { loadCartView } from "@/lib/cart/queries";
+import { loadPendingCheckoutOrder } from "@/lib/checkout/pending-order";
 import { buildImageUrl, getStoragePublicBaseUrl } from "@/lib/storage/public-url";
 import { Container } from "@/components/container";
 import { PrimaryButton, PrimaryLink } from "@/components/buttons";
 import { CartLineItem } from "@/components/cart/cart-line-item";
+import { PendingOrderBanner } from "@/components/checkout/pending-order-banner";
 import { CartLiveRegion } from "@/components/cart/cart-live-region";
 import { CartPieceCount, CartSubtotal, OptimisticCartProvider } from "@/components/cart/optimistic-cart";
 import { CART_HEADING_ID } from "@/lib/cart/count-event";
@@ -31,7 +33,7 @@ const COLLECTION_HREF = "/#koleksi";
 export default async function CartPage() {
   if (!isCartEnabled()) notFound();
 
-  const cart = await loadCartView();
+  const [cart, pendingOrder] = await Promise.all([loadCartView(), loadPendingCheckoutOrder()]);
   const storageBaseUrl = getStoragePublicBaseUrl();
   const atPieceCap = cart.pieceCount >= CART_MAX_PIECES;
   const showCapNote = atPieceCap || cart.mergeTrimmed;
@@ -54,6 +56,12 @@ export default async function CartPage() {
         </div>
 
         <CartLiveRegion />
+
+        {pendingOrder && (
+          <div className="mt-6">
+            <PendingOrderBanner orderNo={pendingOrder.orderNo} payBy={pendingOrder.payBy} paymentUrl={pendingOrder.paymentUrl} />
+          </div>
+        )}
 
         {cart.lines.length === 0 ? (
           <div className="flex flex-col items-start gap-6 py-10">

@@ -78,6 +78,48 @@ for (const layout of E2E_CHECKOUT_LAYOUTS) {
       await expect(dialog).toBeHidden();
     });
 
+    test("a web order needs courier and resi to ship: bulk skips it, the dialog requires both, the order page shows them", async ({ page }) => {
+      await page.goto("/packing?channel=web&perPage=100");
+      const row = page.locator(viewport.rowTag).filter({ hasText: orderNo("ship") });
+      await expect(row).toBeVisible();
+      // Selected alone, bulk "Tandai dikirim" has nothing it may ship (it has no resi field).
+      await row.getByRole("checkbox").check();
+      await expect(page.getByRole("button", { name: /^Tandai dikirim/ }).first()).toBeDisabled();
+      await expect(page.getByText("Pesanan website juga perlu nomor resi")).toBeVisible();
+      await row.getByRole("checkbox").uncheck();
+
+      await row.getByRole("button", { name: "Tandai dikirim" }).click();
+      const dialog = page.getByRole("dialog", { name: `Tandai dikirim: ${orderNo("ship")}` });
+      await expect(dialog.getByLabel("Kurir")).toHaveValue("JNE Reguler");
+      await dialog.getByRole("button", { name: "Tandai dikirim" }).click();
+      await expect(dialog.getByText("Isi nomor resi.")).toBeVisible();
+      await dialog.getByLabel("No. resi").fill("cgk 0123 4567 89");
+      await dialog.getByRole("button", { name: "Tandai dikirim" }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.locator(viewport.rowTag).filter({ hasText: orderNo("ship") })).toHaveCount(0);
+
+      await openOrder(page, orderNo("ship"));
+      const resi = page.getByRole("region", { name: "Resi" });
+      await expect(resi.getByText("JNE Reguler")).toBeVisible();
+      await expect(resi.getByText("CGK0123456789")).toBeVisible();
+      await expect(resi.getByRole("button", { name: "Ubah resi" })).toBeVisible();
+    });
+
+    test("an order shipped without a resi says so, and staff can add it (the audit row is covered by lifecycle.test.ts)", async ({ page }) => {
+      await openOrder(page, orderNo("noresi"));
+      const resi = page.getByRole("region", { name: "Resi" });
+      await expect(resi.getByText("Belum ada nomor resi.", { exact: false })).toBeVisible();
+      await resi.getByRole("button", { name: "Tambah resi" }).click();
+      const dialog = page.getByRole("dialog", { name: `Tambah resi: ${orderNo("noresi")}` });
+      await expect(dialog.getByLabel("Kurir")).toHaveValue("J&T Reguler");
+      await dialog.getByLabel("No. resi").fill("JP1234567890");
+      await dialog.getByRole("button", { name: "Simpan" }).click();
+      await expect(dialog).toBeHidden();
+      await expect(resi.getByText("JP1234567890")).toBeVisible();
+      await expect(resi.getByText("Belum ada nomor resi.", { exact: false })).toHaveCount(0);
+      await expect(resi.getByRole("button", { name: "Ubah resi" })).toBeVisible();
+    });
+
     test("a paid order: payment, locked quote and contact sections; cancel flags the refund, then the refund is recorded", async ({ page }) => {
       await openOrder(page, orderNo("paid"));
       const payment = page.getByRole("region", { name: "Pembayaran" });

@@ -297,3 +297,58 @@ describe("CheckoutForm", () => {
     expect(screen.queryByRole("button", { name: "Bayar sekarang" })).toBeNull();
   });
 });
+describe("CheckoutForm with a saved address (owner request 2026-10-21)", () => {
+  const saved = {
+    recipientName: "Siti Aminah",
+    phone: "+6281234567890",
+    addressLine: "Jl. Melati No. 5, Kel. Sukamaju",
+    notes: "Pagar hijau",
+    postalCode: "",
+    area: JAUH,
+  };
+  const customer = { email: "siti@example.test", phone: "+6281211112222", name: "Siti" };
+
+  test("a summary card, a fresh quote for its area on arrival, and the order placed with it", async () => {
+    quoteShippingAction.mockResolvedValue(JAUH_QUOTE);
+    placeOrderAction.mockResolvedValue({ ok: true, orderNo: "ORD-202610-0001", redirectUrl: "https://pay.example/x" });
+    const user = userEvent.setup();
+    render(<CheckoutForm {...props({ customer, savedAddress: saved })} />);
+
+    const card = screen.getByTestId("saved-address");
+    expect(card).toHaveTextContent("Siti Aminah");
+    expect(card).toHaveTextContent(JAUH.label);
+    expect(card).toHaveTextContent("Catatan untuk kurir: Pagar hijau");
+    expect(screen.queryByLabelText("Nama penerima")).toBeNull();
+    await waitFor(() => expect(quoteShippingAction).toHaveBeenCalledWith({ shippingAreaId: JAUH.id }));
+    await screen.findByTestId("shipping-buyer-amount");
+
+    await user.click(screen.getByLabelText(/Saya setuju dengan/));
+    await user.click(screen.getByRole("button", { name: "Bayar sekarang" }));
+    await waitFor(() => expect(placeOrderAction).toHaveBeenCalled());
+    expect(placeOrderAction.mock.calls[0]![0]).toMatchObject({
+      address: { recipientName: "Siti Aminah", phone: "+6281234567890", addressLine: "Jl. Melati No. 5, Kel. Sukamaju", notes: "Pagar hijau" },
+      shippingAreaId: JAUH.id,
+    });
+  });
+
+  test("\"Ganti alamat\" opens the normal form prefilled; \"Pakai alamat tersimpan\" brings the card back", async () => {
+    quoteShippingAction.mockResolvedValue(JAUH_QUOTE);
+    const user = userEvent.setup();
+    render(<CheckoutForm {...props({ customer, savedAddress: saved })} />);
+    await user.click(screen.getByRole("button", { name: "Ganti alamat" }));
+    expect(screen.getByLabelText("Nama penerima")).toHaveValue("Siti Aminah");
+    expect(screen.getByLabelText("Alamat lengkap")).toHaveValue("Jl. Melati No. 5, Kel. Sukamaju");
+    expect(screen.getByTestId("picked-area")).toHaveTextContent(JAUH.label);
+    await user.clear(screen.getByLabelText("Nama penerima"));
+    await user.type(screen.getByLabelText("Nama penerima"), "Rina");
+    await user.click(screen.getByRole("button", { name: "Pakai alamat tersimpan" }));
+    expect(screen.getByTestId("saved-address")).toHaveTextContent("Siti Aminah");
+  });
+
+  test("no saved address: the recipient starts from the account name, never a card", () => {
+    render(<CheckoutForm {...props({ customer })} />);
+    expect(screen.queryByTestId("saved-address")).toBeNull();
+    expect(screen.getByLabelText("Nama penerima")).toHaveValue("Siti");
+    expect(quoteShippingAction).not.toHaveBeenCalled();
+  });
+});

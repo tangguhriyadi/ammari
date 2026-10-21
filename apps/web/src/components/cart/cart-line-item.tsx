@@ -11,6 +11,7 @@ import { announceCartCount, announceCartStatus, CART_CALL_FAILED_MESSAGE, CART_H
 import { formatPriceIdr } from "@/lib/format";
 import { ProductImage } from "@/components/product-image";
 import { useOptimisticCart, type OptimisticCartUpdate } from "./optimistic-cart";
+import { failedCallMessage } from "@/lib/stale-deployment";
 
 export interface CartLineItemProps {
   line: CartLine;
@@ -63,7 +64,7 @@ export function CartLineItem({ line: serverLine, imageUrl, canAddPieces }: CartL
         // it would replace the whole page with the error screen.
         console.error("[cart] cart line call failed", callError);
         settle();
-        rollBack(CART_CALL_FAILED_MESSAGE);
+        rollBack(failedCallMessage(callError, CART_CALL_FAILED_MESSAGE));
         return;
       }
       const last = settle();

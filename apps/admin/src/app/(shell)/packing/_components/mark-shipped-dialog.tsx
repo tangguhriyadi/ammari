@@ -1,15 +1,14 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Dialog, Input, Label } from "@ammari/ui";
+import { ShipmentDetailsDialog } from "@/components/orders/shipment-details-dialog";
 import { markShippedAction } from "../actions";
-
-const COURIER_SUGGESTIONS = ["JNE", "J&T", "SiCepat", "AnterAja", "Ninja Xpress", "ID Express", "POS Indonesia", "Lion Parcel"];
 
 export interface MarkShippedDialogProps {
   orderId: string;
   orderNo: string;
   hasActiveCard: boolean;
+  /** A web checkout order: courier and resi are required (2026-10-21 sandbox run). */
+  isCheckout: boolean;
   /** Prefills "Kurir" with a web checkout order's quoted service (staff book exactly that one). */
   defaultCourier?: string | null;
   open: boolean;
@@ -17,69 +16,26 @@ export interface MarkShippedDialogProps {
   onShipped: () => void;
 }
 
-/** Per-order "Tandai dikirim" — courier/resi are both optional (the owner's own requirement),
- * and if this order has no active thank-you card, shipping it requires an explicit confirmation
- * (docs/plans/packing-cards.md's "nothing ships without a card" rule) rather than silently
- * letting it through. */
-export function MarkShippedDialog({ orderId, orderNo, hasActiveCard, defaultCourier, open, onOpenChange, onShipped }: MarkShippedDialogProps) {
-  const [courier, setCourier] = useState(defaultCourier ?? "");
-  const [trackingNumber, setTrackingNumber] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
-
-  function handleConfirm() {
-    setError(null);
-    startTransition(async () => {
-      const result = await markShippedAction({
-        orderId,
-        courier: courier || undefined,
-        trackingNumber: trackingNumber || undefined,
-        confirmNoCard: !hasActiveCard,
-      });
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      onOpenChange(false);
-      onShipped();
-    });
-  }
-
+/** Per-order "Tandai dikirim". Courier and resi are optional for manual and marketplace orders (the
+ * owner's own requirement) and required for a web checkout order, whose buyer gets them by email.
+ * An order without an active thank-you card needs an explicit confirmation
+ * (docs/plans/packing-cards.md's "nothing ships without a card" rule) rather than silently letting
+ * it through; web checkout orders never carry a card. */
+export function MarkShippedDialog({ orderId, orderNo, hasActiveCard, isCheckout, defaultCourier, open, onOpenChange, onShipped }: MarkShippedDialogProps) {
   return (
-    <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
+    <ShipmentDetailsDialog
       title={`Tandai dikirim: ${orderNo}`}
-      description={
-        hasActiveCard
-          ? undefined
-          : "Pesanan ini belum punya kartu terima kasih. Lanjutkan hanya jika memang tidak perlu kartu."
-      }
+      description={hasActiveCard ? undefined : "Pesanan ini belum punya kartu terima kasih. Lanjutkan hanya jika memang tidak perlu kartu."}
       confirmLabel="Tandai dikirim"
       confirmVariant={hasActiveCard ? "primary" : "danger"}
-      onConfirm={handleConfirm}
-      loading={pending}
-    >
-      <div className="flex flex-col gap-4">
-        <div>
-          <Label htmlFor="ship-courier">Kurir</Label>
-          <Input id="ship-courier" list="courier-suggestions" value={courier} onChange={(event) => setCourier(event.target.value)} placeholder="Opsional" />
-          <datalist id="courier-suggestions">
-            {COURIER_SUGGESTIONS.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-        </div>
-        <div>
-          <Label htmlFor="ship-tracking">No. resi</Label>
-          <Input id="ship-tracking" value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} placeholder="Opsional" />
-        </div>
-        {error && (
-          <p role="alert" className="text-base text-danger-700">
-            {error}
-          </p>
-        )}
-      </div>
-    </Dialog>
+      checkoutOrder={isCheckout}
+      defaultCourier={defaultCourier}
+      open={open}
+      onOpenChange={onOpenChange}
+      submit={({ courier, trackingNumber }) =>
+        markShippedAction({ orderId, courier: courier || undefined, trackingNumber: trackingNumber || undefined, confirmNoCard: !hasActiveCard })
+      }
+      onDone={onShipped}
+    />
   );
 }

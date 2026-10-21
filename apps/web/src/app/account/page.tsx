@@ -7,6 +7,8 @@ import { loadContactOffer } from "@/lib/account/contact-offer";
 import { isCartEnabled } from "@/lib/cart-flag";
 import { listCustomerOrders } from "@/lib/orders/queries";
 import { OrderList } from "@/components/orders/order-list";
+import { CUSTOMER_PLACEHOLDER_NAME } from "@ammari/auth/customer";
+import { AccountName } from "./account-name";
 import { ContactOfferCard } from "./contact-offer-card";
 import { LogoutButton } from "./logout-button";
 import { ProfileBanner } from "./profile-banner";
@@ -36,7 +38,7 @@ export default async function AccountPage() {
     <div className="mx-auto flex max-w-md flex-col gap-6 px-4 py-8">
       <h1 className="font-serif text-2xl font-light text-brand">Akun Saya</h1>
       <div className="flex flex-col gap-1">
-        <p className="text-base font-medium text-neutral-900">{customer.name}</p>
+        <AccountName name={customer.name} isPlaceholder={customer.name === CUSTOMER_PLACEHOLDER_NAME} />
         {customer.email && <p className="text-sm text-neutral-700">{customer.email}</p>}
       </div>
 

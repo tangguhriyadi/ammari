@@ -33,7 +33,9 @@ web orders on /packing; see the session table and decisions 43 to 45). **Session
 2026-10-21** (launch readiness: runbooks `docs/launch/checkout-dev.md` and `checkout-prod.md`, legal
 drafts, `DEPLOY_ENV` allowlist for shipping, env examples, deploy tooling; see the session table).
 Phase C code is complete; next are the owner's dev sandbox run, the prod deploy and the 1 Dec
-launch (runbooks), then Phase K.
+launch (runbooks), then Phase K. **Sandbox fixes round 2 done 2026-10-21** (resi required for web
+orders, "menunggu pembayaran" reminder, saved address, "Beli sekarang", stale deploys, account name,
+"Halo Kak"; see "Sandbox fixes, round 2" after the session table).
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
@@ -381,7 +383,8 @@ renamed or dropped. No contract migration is needed.
    Biteship, kept as a fallback), alamat lengkap with the hint "Jalan, nomor rumah, RT/RW,
    kelurahan" (Biteship areas stop at kecamatan, owner decision 2026-10-21), catatan untuk kurir
    (optional). Logged in
-   with saved address: summary card with "Ubah" / "Ganti alamat" and "Perbarui alamat tersimpan".
+   with saved address: summary card with "Ganti alamat" (as built, round 2: one default address,
+   replaced by every logged-in order, so no separate "Perbarui alamat tersimpan").
    No map pin. Province select and free-typed city/kecamatan/kode pos (session 3) are gone.
 3. **Pengiriman.** One fixed row, no choice and no delivery estimate (decisions 12, 18): before an
    area is chosen "Pilih alamat dulu untuk menghitung ongkir."; after, the chosen service
@@ -743,7 +746,9 @@ used_order_id = NULL, used_at = NULL WHERE used_order_id = $order AND status = '
 - **`/packing`:** paid web orders enter the `to_ship` queue showing the quoted service ("JNE
   Reguler"). Thank-you cards stay marketplace only (verify and enforce server-side). Before Phase
   K: staff book that service by hand, then manual "Tandai dikirim" (courier prefilled from the
-  order) with the resi sends the "Pesanan dikirim" email. After Phase K: "Buat pengiriman" books Biteship and prints
+  order) with the resi sends the "Pesanan dikirim" email. Since round 2 the courier and resi are
+  required for a web order (server-side), bulk "Tandai dikirim" skips web orders, and the order page
+  has "Tambah resi" / "Ubah resi". After Phase K: "Buat pengiriman" books Biteship and prints
   the label; the manual path stays as fallback.
 - **`/stock`:** read-only "Dipesan" figure from active reservations, reservation rows on
   `/stock/[sku]`, and a note on the count page that reserved pieces are still counted.
@@ -759,7 +764,7 @@ used_order_id = NULL, used_at = NULL WHERE used_order_id = $order AND status = '
 |---|---|---|
 | `created` | order created | order no, lines, subtotal, ongkir (buyer's share, with "subsidi ongkir Rp20.000" when it applied), voucher, total, "Lanjutkan pembayaran" link, deadline in WIB, **"Lihat pesanan"** link; guest orders (`placed_with_session = false`) also **"Masuk ke akun"** |
 | `paid` | to `to_ship` | "Pembayaran diterima", lines, address, next steps, "Lihat pesanan"; guest orders also a fresh "Masuk ke akun" (supersedes the earlier one) |
-| `shipped` | manual "Tandai dikirim" or Biteship picked-up/in-transit | courier, resi, "Lihat pesanan" (tracking shows there) |
+| `shipped` | manual "Tandai dikirim" or Biteship picked-up/in-transit, **only once the order has a resi** (round 2) | courier, resi, "Lihat pesanan" (tracking shows there) |
 | `delivered` | Biteship delivered (Phase K) | "Pesanan sudah sampai", returns/exchange info link |
 | `cancelled` | expire/cancel | reason in plain words, voucher restored note, "Pesan lagi" (button to the order page's token link, session 15; was "Belanja lagi" to the homepage) |
 | `owner_paid` | paid (decision 11) | to `store_settings.support_email`: order no, lines, total, link to admin order |
@@ -767,6 +772,9 @@ used_order_id = NULL, used_at = NULL WHERE used_order_id = $order AND status = '
 Each customer email mints its own `order_access_tokens` row. Magic links are rate limited and
 skipped silently when the limit is hit (§9.3). Idempotent via `order_notifications`, sent with
 `after()`, failures recorded and never thrown into a webhook. Never the gateway name.
+
+**Round 2 (2026-10-21):** every buyer email greets "Halo Kak <first name>," (first word of the
+recipient name, capitalised normally, letters only), "Halo Kak," when the name is left out.
 
 **2026-10-21 sandbox fixes:** the greeting uses the order's recipient name ("Halo Rina,"), never the
 linked customer row's (an unverified guest never renames it, so it can be the placeholder
@@ -1119,6 +1127,70 @@ written before then (e.g. `packages/commerce/src/cart/cart.ts` "placeOrder in se
 `stock/reservations.ts` "session 9" for the payment webhook) use the old numbers; the session
 notes below are already renumbered. Schedule risk: two more sessions inside the ~20 Nov target;
 sessions 7 and 8 are small; if session 10 is not done by ~10 Nov, raise it with the owner then.
+
+### Sandbox fixes, round 2 (2026-10-21, owner's dev sandbox run with the flag on)
+
+No migration. All behind the cart flag except the resi rule, the greeting, the account name and the
+stale-deploy handling.
+
+1. **Resi (bug).** Root cause: bulk "Tandai dikirim (N)" on /packing shipped a web order with no
+   dialog at all (and the per-order dialog marked the resi "Opsional", the server accepted both; the
+   email then fell back to the quoted service label, hence "Kurir J&T Reguler" only). Now
+   `@ammari/commerce/shipment-details` `parseShipmentDetails`: a web checkout order needs courier and
+   resi (`[A-Z0-9-]{6,40}`, spaces dropped, upper-cased), checked in `transitionOrderStatus` before
+   any side effect; manual and marketplace orders keep both optional (free text, capped at 60 / 100).
+   Bulk refuses web orders before anything ships and the UI leaves them out of the count;
+   `updateShipmentDetails` (order row lock, audit `update_shipment_details` with old/new values only)
+   backs "Tambah resi" / "Ubah resi" in the order page's new "Resi" section (shipped or completed,
+   any channel); the order page's "Dikirim" for a web order opens the same dialog
+   (`apps/admin/src/components/orders/shipment-details-dialog.tsx`). `dueOrderEmails` sends
+   `shipped` only once the order has a resi; an unsent `shipped` row of a resi-less shipped order is
+   never superseded, and the cron pass logs `waitingForResi`. An already-sent email is not resent
+   after a correction (the order page shows the current resi). Manual and marketplace orders were not
+   affected by the bug (resi optional by the owner's own rule, and they get no emails).
+2. **"Menunggu pembayaran" reminder.** `lib/checkout/pending-order.ts`: the visitor's newest payable
+   checkout order (status awaiting_payment, payment pending, inside its window) through the session
+   visibility rule or the checkout cookie's token only. Shown on /cart and /checkout (server-rendered)
+   and on the product pages of its items (client fetch of `GET /api/checkout/pending-order`,
+   `private, no-store`, flag-off 404, since PDPs are ISR) with "Lanjutkan pembayaran", "Ganti metode
+   pembayaran" and "Lihat detail pesanan". No stock counts. The checkout cookie is now
+   `ammari_checkout_order_v2` on path `/` (was `ammari_checkout_order` on `/checkout`): the reminder
+   and its "Ganti metode pembayaran" need it outside /checkout; a new name because a same-name cookie
+   on the old path would shadow the new token (security review). The old name is still read as a
+   fallback (it expires within 7 days).
+3. **Saved address.** `placeOrder` saves the order's address as the session customer's single default
+   `customer_addresses` row (one `INSERT ... ON CONFLICT (customer_id) WHERE is_default DO UPDATE`,
+   last step of the order transaction, under a savepoint that drops only 22xxx/23xxx data errors;
+   never for a guest). `/checkout` (session only) shows it as a card with "Ganti alamat" (normal
+   form, prefilled; "Pakai alamat tersimpan" goes back) and quotes its area afresh on arrival;
+   placeOrder quotes again as always. Follow-up: a way for the buyer to delete the saved address
+   (the privacy draft lists deletion of saved addresses as a right; today only by request).
+4. **"Beli sekarang"** (flag on): primary "Beli sekarang", outlined "Tambah ke keranjang", small text
+   link "Tanya via WhatsApp". Decision: it checks out the **whole cart** (simpler and safe: the buyer
+   sees every line on /checkout before paying, no second cart or checkout mode). `ensureCartItem`
+   adds one piece only when the cart lacks the SKU, so a repeat tap never stacks a second piece.
+   Flag off: unchanged (WhatsApp primary).
+5. **Stale deploys.** `lib/stale-deployment.ts`: an `UnrecognizedActionError` (Next's reply to an
+   action id the new build does not know) or a lost chunk shows "Halaman sudah diperbarui. Coba
+   lagi." and reloads once (30 s loop guard; a manual-reload message after that). New `app/error.tsx`
+   and `app/global-error.tsx` (there was no root boundary: that was the blank page), the segment
+   boundaries and every call site with its own catch. Next 16's `deploymentId` / `NEXT_DEPLOYMENT_ID`
+   (docs: `next-config-js/deploymentId`) adds `?dpl=` to assets and turns navigations across a
+   version change into full reloads, but it does not keep an old build's server actions working on a
+   single replaced container (Next does not route by deployment), so it complements this handling,
+   not replaces it. Not wired yet: it needs `ARG NEXT_DEPLOYMENT_ID` in `apps/web/Dockerfile` and the
+   commit SHA as a build arg in both deploy workflows (owner's call).
+6. **Account name.** /account shows the name with "Ubah nama" ("Isi nama" while it is the
+   placeholder `CUSTOMER_PLACEHOLDER_NAME`, now exported by `@ammari/auth/customer`); the contact offer
+   also offers the guest order's recipient name while the account has the placeholder (ticked by
+   default, saved only with "Simpan", never over a name set meanwhile). Checkout never prefills the
+   placeholder as the recipient.
+7. **Greeting:** see §8 "Round 2".
+
+Tests: commerce (lifecycle, emails, cart, placeOrder), web (pending order, saved address, name,
+stale deployment, PDP, checkout form, contact offer), e2e `apps/web/e2e/checkout-return.spec.ts`,
+`account.spec.ts`, `apps/admin/e2e/checkout-orders.spec.ts` (two new seeded orders `ship`,
+`noresi`).
 
 Notes from session 17 for later sessions:
 - **Owner, before 1 Mar 2027:** the privacy policy draft promises the 90-day anonymization of

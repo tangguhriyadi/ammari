@@ -117,6 +117,8 @@ export interface OrderEmailState {
   cancelledAt: Date | null;
   cancelReason: OrderCancelReason | null;
   needsAttention: OrderAttentionFlag[];
+  /** The "sudah dikirim" email waits for it (a resi added later on the admin order page). */
+  trackingNumber: string | null;
 }
 
 /** The emails a checkout order needs in its current state (plan §8; owner decisions 2026-10-21,
@@ -133,7 +135,10 @@ export function dueOrderEmails(order: OrderEmailState, now: Date): DueOrderEmail
     case "to_ship":
       return order.paidAt !== null ? [{ kind: "paid", variant: "confirmed" }, { kind: "owner_paid", variant: "paid" }] : [];
     case "shipped":
-      return [{ kind: "shipped" }];
+      // Never "sudah dikirim" without a resi to track (owner, 2026-10-21 sandbox run). Staff must
+      // enter one to ship a checkout order; an order that shipped without one (before that rule)
+      // gets the email once staff add it on the order page.
+      return order.trackingNumber?.trim() ? [{ kind: "shipped" }] : [];
     case "cancelled":
       if (paidAfterCancel) return [{ kind: "paid", variant: "review" }, { kind: "owner_paid", variant: "after_cancel" }];
       if (order.paidAt === null && (order.cancelReason === "payment_expired" || order.cancelReason === "payment_cancelled")) {
@@ -174,6 +179,7 @@ const orderColumns = {
   cancelledAt: orders.cancelledAt,
   cancelReason: orders.cancelReason,
   needsAttention: orders.needsAttention,
+  trackingNumber: orders.trackingNumber,
 };
 
 interface ClaimedNotification {
@@ -328,15 +334,22 @@ function text(value: unknown): string | null {
   return line === "" ? null : line.slice(0, 500);
 }
 
-/** The buyer's name for "Halo ...": the order's recipient name. A guest checkout sets it from the
- * form before the email is verified, so someone ordering with another person's address could put
- * words in our greeting: a name that looks like a link or an address, or carries a number (an
- * account or phone number as a payment lure, e.g. "Transfer ke BCA 8830123456"), is left out. */
-function greetingName(name: string | null): string | null {
+/** The buyer's first name for "Halo Kak ...," (owner request 2026-10-21): the first word of the
+ * order's recipient name, capitalised normally ("muhammad tangguh" and "MUHAMMAD" both give
+ * "Muhammad"). A guest checkout sets the name from the form before the email is verified, so
+ * someone ordering with another person's address could put words in our greeting: a name that
+ * looks like a link or an address, or carries a number (an account or phone number as a payment
+ * lure, e.g. "Transfer ke BCA 8830123456"), is left out whole, and so is a first word that is not
+ * a plain name (letters, with an inner hyphen or apostrophe). The greeting is then "Halo Kak,". */
+export function greetingName(name: string | null): string | null {
   const line = text(name);
   if (!line || line.length > 60 || /(https?:|www\.|@|\.[a-z]{2,}(\/|\b))/i.test(line)) return null;
   if ((line.match(/\d/g) ?? []).length >= 5) return null;
-  return line;
+  const first = line.split(" ")[0]!.replace(/[.,;:!?]+$/u, "");
+  if (first.length === 0 || first.length > 30 || !/^\p{L}[\p{L}\p{M}]*(?:['\u2019-]\p{L}[\p{L}\p{M}]*)*$/u.test(first)) return null;
+  return first
+    .toLocaleLowerCase("id-ID")
+    .replace(/(^|['\u2019-])(\p{L})/gu, (_match, separator: string, letter: string) => separator + letter.toLocaleUpperCase("id-ID"));
 }
 
 /** The stored payment page, only as an http(s) URL. */
@@ -525,8 +538,11 @@ async function recordFailure(db: Database, notificationId: string, reason: strin
 /** Marks the order's unsent, still-retryable rows whose kind is no longer due as superseded (e.g. a
  * failed `created` email of an order that has been paid since), so they are neither retried nor
  * reported as lost. */
-async function supersedeStaleRows(db: Database, orderId: string, orderNo: string, due: readonly DueOrderEmail[]): Promise<number> {
-  const dueKinds = due.map((email) => email.kind);
+async function supersedeStaleRows(db: Database, order: { id: string; orderNo: string; status: OrderStatus }, due: readonly DueOrderEmail[]): Promise<number> {
+  const { id: orderId, orderNo } = order;
+  // A shipped order without a resi has not moved on: its "sudah dikirim" email is only waiting for
+  // the resi, so an unsent row of it stays retryable.
+  const dueKinds: OrderNotificationKind[] = [...due.map((email) => email.kind), ...(order.status === "shipped" ? (["shipped"] as const) : [])];
   const rows = await db
     .update(orderNotifications)
     .set({ error: SUPERSEDED })
@@ -555,7 +571,7 @@ export async function dispatchOrderEmails(db: Database, deps: OrderEmailDeps, re
       .limit(1);
     if (!state) return { orderNo: label, results: [] };
     const due = dueOrderEmails(state, options.now ?? new Date());
-    await supersedeStaleRows(db, state.id, state.orderNo, due);
+    await supersedeStaleRows(db, state, due);
     const results: OrderEmailDispatch["results"] = [];
     let loaded: LoadedOrder | null = null;
     for (const email of due) {
@@ -597,6 +613,9 @@ export interface PendingEmailSummary {
   /** Unsent rows whose retries ran out in the last hour (each one an email nobody got; reported for
    * about an hour of runs). */
   abandoned: number;
+  /** Shipped checkout orders changed in the scan window that still have no resi: their "sudah
+   * dikirim" email waits until staff add one on the admin order page. */
+  waitingForResi: number;
   truncated: boolean;
 }
 
@@ -639,11 +658,12 @@ export async function dispatchPendingOrderEmails(
   const leaseStart = now.getTime() - NOTIFICATION_LEASE_MINUTES * 60_000;
   const retryStart = now.getTime() - NOTIFICATION_RETRY_HOURS * 3_600_000;
   const terminal = (error: string | null) => error === SUPERSEDED || (error?.startsWith(PERMANENT_PREFIX) ?? false);
-  const summary: PendingEmailSummary = { orders: 0, sent: 0, failed: 0, permanent: 0, noRecipient: 0, abandoned: 0, truncated: false };
+  const summary: PendingEmailSummary = { orders: 0, sent: 0, failed: 0, permanent: 0, noRecipient: 0, abandoned: 0, waitingForResi: 0, truncated: false };
 
   const fresh: typeof candidates = [];
   const retries: typeof candidates = [];
   for (const candidate of candidates) {
+    if (candidate.status === "shipped" && !candidate.trackingNumber?.trim()) summary.waitingForResi += 1;
     const due = dueOrderEmails(candidate, now);
     const existing = byOrder.get(candidate.id) ?? [];
     const dueKinds = new Set<OrderNotificationKind>(due.map((email) => email.kind));
@@ -651,7 +671,8 @@ export async function dispatchPendingOrderEmails(
     summary.abandoned += existing.filter(
       (row) => row.sentAt === null && !terminal(row.error) && dueKinds.has(row.kind) && row.createdAt.getTime() <= retryStart && row.createdAt.getTime() > retryStart - 3_600_000,
     ).length;
-    const stale = existing.some((row) => row.sentAt === null && !terminal(row.error) && !dueKinds.has(row.kind));
+    const waitingForResi = (kind: OrderNotificationKind) => kind === "shipped" && candidate.status === "shipped";
+    const stale = existing.some((row) => row.sentAt === null && !terminal(row.error) && !dueKinds.has(row.kind) && !waitingForResi(row.kind));
     let isFresh = false;
     let isRetry = false;
     for (const email of due) {
@@ -680,5 +701,8 @@ export async function dispatchPendingOrderEmails(
     }
   }
   if (summary.truncated) console.warn("[emails] email pass did not reach every order; the rest go out on the next run", { orders: summary.orders, limit });
+  if (summary.waitingForResi > 0) {
+    console.warn("[emails] shipped web orders without a resi: their buyers get no \"sudah dikirim\" email until staff add one", { orders: summary.waitingForResi });
+  }
   return summary;
 }

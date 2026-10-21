@@ -207,8 +207,8 @@ describe("placeOrderAction", () => {
     const order = await orderFor(body.checkoutAttemptId);
     expect(order).toMatchObject({ orderNo: result.orderNo, status: "awaiting_payment", placedWithSession: false, shippingCostAmount: 12_000, shippingAmount: 0 });
 
-    const cookie = setCookies.get("ammari_checkout_order");
-    expect(cookie?.options).toMatchObject({ httpOnly: true, sameSite: "lax", path: "/checkout" });
+    const cookie = setCookies.get("ammari_checkout_order_v2");
+    expect(cookie?.options).toMatchObject({ httpOnly: true, sameSite: "lax", path: "/" });
     const [token] = await testDb.select().from(orderAccessTokens).where(eq(orderAccessTokens.orderId, order!.id));
     expect(token?.tokenHash).toBe(hashOrderAccessToken(cookie!.value));
 
@@ -229,7 +229,7 @@ describe("placeOrderAction", () => {
     expect(result.fieldErrors.map((error) => error.field)).toEqual(["contactEmail", "contactPhone", "termsAccepted"]);
     expect(await orderFor(body.checkoutAttemptId)).toBeUndefined();
     expect(revalidatePath).not.toHaveBeenCalled();
-    expect(setCookies.has("ammari_checkout_order")).toBe(false);
+    expect(setCookies.has("ammari_checkout_order_v2")).toBe(false);
     expect(scheduleOrderEmails).not.toHaveBeenCalled();
   });
 
@@ -295,7 +295,7 @@ describe("placeOrderAction", () => {
     if (!first.ok) throw new Error(first.message);
     // The browser sends the cookie back on the checkout page (path /checkout).
     expect(await placeOrderAction(body)).toEqual(first);
-    jar.delete("ammari_checkout_order");
+    jar.delete("ammari_checkout_order_v2");
     expect(await placeOrderAction(body)).toEqual({ ...first, redirectUrl: null });
   });
 

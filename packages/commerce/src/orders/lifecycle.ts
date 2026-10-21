@@ -9,6 +9,7 @@ import { consumeReservationsForOrder, releaseReservationsForOrder } from "../sto
 import { ActionError, FieldError, isPostgresConstraintViolation, mapUniqueViolation } from "../errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "../db";
 import { generateOrderNumber } from "./order-number";
+import { parseShipmentDetails, type ShipmentDetails } from "./shipment-details";
 import { canTransitionOrderStatus, ORDER_STATUS_TIMESTAMP_COLUMN, STOCK_NOT_YET_DECREMENTED_STATUSES } from "./status";
 // One-directional (thank-you-cards.ts never imports anything from here) — a cancelled/returned
 // order voiding its own active card is this function's job; the rest of the card lifecycle
@@ -317,6 +318,14 @@ function assertStaffMayMoveCheckoutOrder(
   if (toStatus === "cancelled" && !options.checkoutCancelByStaff) throw new ActionError(CHECKOUT_ORDER_CANCEL_PATH_MESSAGE);
 }
 
+/** The courier and resi to store with a shipped order, or an ActionError naming what is missing
+ * (both are required on a checkout order, shipment-details.ts). */
+function shipmentDetailsOrThrow(input: { courier?: string | null; trackingNumber?: string | null }, checkoutOrder: boolean): ShipmentDetails {
+  const parsed = parseShipmentDetails(input, { checkoutOrder });
+  if (!parsed.ok) throw new ActionError(parsed.errors.map((error) => error.message).join(" "));
+  return parsed.value;
+}
+
 /** A checkout order's voucher goes back to its owner when the order is cancelled
  * (docs/plans/cart-checkout.md §6.4, owner decision 8): `active` again while it has not expired,
  * otherwise `expired`. One conditional UPDATE, so a replayed cancel restores nothing twice. Never
@@ -367,6 +376,7 @@ export async function transitionOrderStatus(
       throw new ActionError(`Pesanan dengan status ini tidak bisa diubah ke status tersebut.`);
     }
     assertStaffMayMoveCheckoutOrder(order, toStatus, actorStaffUserId, options);
+    const shipment = toStatus === "shipped" ? shipmentDetailsOrThrow(options, order.paymentStatus !== null) : null;
     // "Proses" of a checkout order paid while stock was short (plan §6.2): once the sale is
     // written the flag is resolved, so it ends in the same update (every other flag stays).
     const resolvesStockShort = fromStatus === "awaiting_payment" && toStatus === "to_ship" && order.needsAttention.includes("stock_short_at_payment");
@@ -394,9 +404,9 @@ export async function transitionOrderStatus(
     const timestampColumn = (ORDER_STATUS_TIMESTAMP_COLUMN as Record<string, string>)[toStatus];
     // courier/trackingNumber are only ever meaningful alongside the shipped transition itself —
     // never set (or overwritten) by any other transition, even if a caller passed them by
-    // mistake on e.g. a "completed" transition.
-    const shippingFields =
-      toStatus === "shipped" ? { courier: options.courier ?? null, trackingNumber: options.trackingNumber ?? null } : {};
+    // mistake on e.g. a "completed" transition. A checkout order never ships without both
+    // (shipment-details.ts); checked before any side effect, so a refusal changes nothing.
+    const shippingFields = shipment ?? {};
     // WHERE status = fromStatus, not just id — a second concurrent caller that somehow still
     // reached this point with a stale fromStatus (defense in depth beyond the row lock above)
     // updates zero rows instead of silently overwriting a status it never actually validated.
@@ -421,5 +431,49 @@ export async function transitionOrderStatus(
       after: updated,
     });
     return updated;
+  });
+}
+
+// ---------- Courier and resi after shipping ----------
+
+/** Statuses in which the courier and resi may still be added or corrected. */
+const SHIPMENT_DETAILS_EDITABLE_STATUSES: readonly OrderStatus[] = ["shipped", "completed"];
+
+export const SHIPMENT_DETAILS_NOT_SHIPPED_MESSAGE = "Kurir dan nomor resi bisa diubah setelah pesanan dikirim.";
+
+/** "Tambah resi" / "Ubah resi" on the admin order page: adds or corrects the courier and resi of an
+ * order that has already shipped (owner, 2026-10-21: an order shipped without a resi must still get
+ * one). Under the order's row lock, the same rules as "Tandai dikirim" (both required on a checkout
+ * order), audit logged with the old and new values only. Returns whether anything changed. A
+ * checkout order still waiting for its "sudah dikirim" email gets it once a resi is set: the cron
+ * email pass (emails/dispatch.ts) only sends that email when the order has a resi. */
+export async function updateShipmentDetails(
+  orderId: string,
+  input: { courier?: string | null; trackingNumber?: string | null },
+  actorStaffUserId: string,
+  db: Database = defaultDb,
+): Promise<{ changed: boolean }> {
+  return db.transaction(async (tx) => {
+    const [order] = await tx
+      .select({ id: orders.id, status: orders.status, paymentStatus: orders.paymentStatus, courier: orders.courier, trackingNumber: orders.trackingNumber })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .for("update")
+      .limit(1);
+    if (!order) throw new ActionError("Pesanan tidak ditemukan.");
+    if (!SHIPMENT_DETAILS_EDITABLE_STATUSES.includes(order.status)) throw new ActionError(SHIPMENT_DETAILS_NOT_SHIPPED_MESSAGE);
+    const next = shipmentDetailsOrThrow(input, order.paymentStatus !== null);
+    if (next.courier === order.courier && next.trackingNumber === order.trackingNumber) return { changed: false };
+
+    await tx.update(orders).set({ courier: next.courier, trackingNumber: next.trackingNumber }).where(eq(orders.id, orderId));
+    await writeAuditLog(tx, {
+      actorStaffUserId,
+      action: "update_shipment_details",
+      entityType: "order",
+      entityId: orderId,
+      before: { courier: order.courier, trackingNumber: order.trackingNumber },
+      after: next,
+    });
+    return { changed: true };
   });
 }

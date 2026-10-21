@@ -354,6 +354,30 @@ export async function addCartItem(db: Database, identity: CartIdentity, sku: str
   });
 }
 
+/** "Beli sekarang" (PDP, owner request 2026-10-21): makes sure the cart holds `sku`, then the buyer
+ * goes straight to checkout with the whole cart. A line already there is left as it is (a second
+ * tap, or a buyer who added it before, never stacks another piece the buyer did not ask for); it is
+ * still checked for sale and stock so checkout does not open on a line it would refuse. A new line
+ * is added with one piece under the same rules as addCartItem. */
+export async function ensureCartItem(db: Database, identity: CartIdentity, sku: string): Promise<CartWriteResult> {
+  return runCartWrite(db, identity, true, async (tx, cartId) => {
+    if (!cartId) throw new Error("cart was not created");
+    const sale = await skuForSale(tx, sku);
+    if (!sale?.purchasable) throw new CartRefused("not_available");
+
+    const current = await lineQty(tx, cartId, sku);
+    if (current !== null) {
+      const refusal = stockRefusal(sale.sellable, current);
+      if (refusal) throw new CartRefused(refusal);
+      return;
+    }
+    if ((await cartPieceCountById(tx, cartId)) + 1 > CART_MAX_PIECES) throw new CartRefused("cart_limit");
+    const refusal = stockRefusal(sale.sellable, 1);
+    if (refusal) throw new CartRefused(refusal);
+    await tx.insert(cartItems).values({ cartId, sku, qty: 1 }).onConflictDoNothing({ target: [cartItems.cartId, cartItems.sku] });
+  });
+}
+
 /** One line of an `addLinesToCart` call. `reason` is set whenever less than `requested` went in. */
 export interface CartLinesAddLine {
   sku: string;

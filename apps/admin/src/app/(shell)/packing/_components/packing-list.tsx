@@ -159,6 +159,10 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
     const checkoutIds = new Set(rows.filter((row) => row.isCheckout).map((row) => row.id));
     return visibleSelectedIds.filter((id) => !checkoutIds.has(id));
   }, [visibleSelectedIds, rows]);
+  // Bulk "Tandai dikirim" has no resi field, so it ships only the selected manual and marketplace
+  // orders: a web checkout order needs its own courier and resi (2026-10-21 sandbox run; the
+  // server refuses it in bulk too). Same split as printing.
+  const bulkShippableIds = printableSelectedIds;
 
   function toggleSelected(orderId: string) {
     setSelectedIds((prev) => {
@@ -252,17 +256,16 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
   }
 
   function handleBulkShipClick() {
-    if (visibleSelectedIds.length === 0) return;
+    if (bulkShippableIds.length === 0) return;
     setError(null);
-    const orderIds = visibleSelectedIds;
+    const orderIds = bulkShippableIds;
     startTransition(async () => {
       const statusResult = await getCardPrintStatusAction(orderIds);
       if (!statusResult.ok) {
         setError(statusResult.error);
         return;
       }
-      const checkoutIds = new Set(rows.filter((row) => row.isCheckout).map((row) => row.id));
-      const missingCard = orderIds.filter((id) => !checkoutIds.has(id) && !statusResult.data[id]);
+      const missingCard = orderIds.filter((id) => !statusResult.data[id]);
       if (missingCard.length > 0) {
         setNoCardWarning({ orderIds, orderNos: missingCard.map(orderNoFor) });
         return;
@@ -313,13 +316,16 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
           {printableSelectedIds.length > 0 ? `Cetak kartu (${printableSelectedIds.length})` : "Cetak kartu"}
         </Button>
         {canShip && (
-          <Button variant="secondary" loading={pending} disabled={visibleSelectedIds.length === 0} onClick={handleBulkShipClick}>
-            {visibleSelectedIds.length > 0 ? `Tandai dikirim (${visibleSelectedIds.length})` : "Tandai dikirim"}
+          <Button variant="secondary" loading={pending} disabled={bulkShippableIds.length === 0} onClick={handleBulkShipClick}>
+            {bulkShippableIds.length > 0 ? `Tandai dikirim (${bulkShippableIds.length})` : "Tandai dikirim"}
           </Button>
         )}
       </div>
       {printableSelectedIds.length < visibleSelectedIds.length && (
-        <p className="text-sm text-neutral-600">Pesanan website tidak memakai kartu terima kasih, jadi tidak ikut dicetak.</p>
+        <p className="text-sm text-neutral-600">
+          Pesanan website tidak memakai kartu terima kasih, jadi tidak ikut dicetak. Pesanan website juga perlu nomor resi: tandai dikirim satu per
+          satu lewat tombol di barisnya.
+        </p>
       )}
       {error && (
         <p role="alert" className="text-base text-danger-700">
@@ -444,6 +450,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
           orderId={shippingOrder.id}
           orderNo={shippingOrder.orderNo}
           hasActiveCard={shippingOrder.isCheckout || shippingOrder.cardPrintedAt !== null}
+          isCheckout={shippingOrder.isCheckout}
           defaultCourier={shippingOrder.shippingServiceLabel}
           open={shippingOrder !== null}
           onOpenChange={(open) => !open && setShippingOrder(null)}

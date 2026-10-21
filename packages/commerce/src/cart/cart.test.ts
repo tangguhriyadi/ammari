@@ -8,6 +8,7 @@ import { CART_MAX_PIECES, CART_MAX_QTY_PER_LINE } from "./limits";
 import { generateCartToken, hashCartToken, isWellFormedCartToken } from "./token";
 import {
   addCartItem,
+  ensureCartItem,
   addLinesToCart,
   getCartPieceCount,
   getCartView,
@@ -79,6 +80,47 @@ describe("cart token", () => {
     for (const value of ["", "abc", `${generateCartToken()}x`, "a".repeat(42) + "=", "a".repeat(42) + "+", " ".repeat(43)]) {
       expect(isWellFormedCartToken(value)).toBe(false);
     }
+  });
+});
+
+describe("ensureCartItem (\"Beli sekarang\")", () => {
+  test("adds one piece of a SKU the cart does not hold, and never stacks another on a repeat", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await sellableVariant(tx);
+      const identity = guest();
+      const cartId = await expectAdded(await ensureCartItem(tx, identity, variant.sku));
+      expect(await linesOf(tx, cartId)).toEqual({ [variant.sku]: 1 });
+      expect(await ensureCartItem(tx, identity, variant.sku)).toMatchObject({ ok: true, cartId, pieceCount: 1 });
+      await addCartItem(tx, identity, variant.sku, 2);
+      expect(await ensureCartItem(tx, identity, variant.sku)).toMatchObject({ ok: true, cartId, pieceCount: 3 });
+      expect(await linesOf(tx, cartId)).toEqual({ [variant.sku]: 3 });
+    });
+  });
+
+  test("refuses what checkout would refuse: not for sale, sold out, a held line above stock, a full cart", async () => {
+    await withRollback(async (tx) => {
+      const unpublished = await insertProductVariant(tx);
+      await seedStock(tx, unpublished.variant.sku, 5);
+      expect(await ensureCartItem(tx, guest(), unpublished.variant.sku)).toEqual({ ok: false, reason: "not_available" });
+
+      const soldOut = await sellableVariant(tx, 0);
+      expect(await ensureCartItem(tx, guest(), soldOut.variant.sku)).toEqual({ ok: false, reason: "sold_out" });
+
+      const { variant } = await sellableVariant(tx, 3);
+      const identity = guest();
+      await addCartItem(tx, identity, variant.sku, 3);
+      // Another buyer's order now holds two of the three pieces.
+      await insertStockReservation(tx, { sku: variant.sku, qty: 2 });
+      expect(await ensureCartItem(tx, identity, variant.sku)).toEqual({ ok: false, reason: "insufficient_stock" });
+
+      const full = guest();
+      const many = await sellableVariant(tx, 30);
+      await addCartItem(tx, full, many.variant.sku, CART_MAX_QTY_PER_LINE);
+      const more = await sellableVariant(tx, 30);
+      await addCartItem(tx, full, more.variant.sku, CART_MAX_PIECES - CART_MAX_QTY_PER_LINE);
+      const another = await sellableVariant(tx, 30);
+      expect(await ensureCartItem(tx, full, another.variant.sku)).toEqual({ ok: false, reason: "cart_limit" });
+    });
   });
 });
 

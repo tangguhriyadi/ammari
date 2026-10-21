@@ -18,8 +18,10 @@ import {
   type CheckoutFieldIssue,
   type CheckoutVoucherOption,
   type PickedArea,
+  type SavedCheckoutAddress,
 } from "@/lib/checkout/form";
 import { goToPaymentPage } from "@/lib/checkout/navigate";
+import { failedCallMessage } from "@/lib/stale-deployment";
 import { CHECKOUT_CALL_LOST_MESSAGE, SHIPPING_QUOTE_PENDING_MESSAGE } from "@/lib/checkout/messages";
 import { quoteShippingAction } from "@/lib/checkout/quote-actions";
 import type { QuoteShippingActionResult } from "@/lib/checkout/quote-types";
@@ -60,7 +62,12 @@ export interface CheckoutFormProps {
   /** Usable vouchers, best first (logged in only). */
   vouchers: CheckoutVoucherOption[];
   whatsappNumber: string | null;
+  /** The logged-in buyer's saved address (their last order's), or null (guests always). */
+  savedAddress?: SavedCheckoutAddress | null;
 }
+
+/** The address fields: a problem with one of them opens the form under a saved-address card. */
+const ADDRESS_FIELDS = new Set(["recipientName", "phone", "shippingAreaId", "postalCode", "addressLine", "notes"]);
 
 const COLLECTION_HREF = "/#koleksi";
 const CART_HREF = "/cart";
@@ -82,7 +89,7 @@ function issueFor(issues: CheckoutFieldIssue[], field: string): string | undefin
  * the buyer is asked to retry by hand (a cart changing again and again in another tab). */
 const MAX_AUTO_REQUOTES = 2;
 
-export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, whatsappNumber }: CheckoutFormProps) {
+export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, whatsappNumber, savedAddress = null }: CheckoutFormProps) {
   const router = useRouter();
   // `data-hydrated` on the form: e2e waits for it before typing (input typed into server HTML
   // before React takes over is not seen by the controlled fields).
@@ -90,12 +97,15 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
   const [attemptId] = useState(checkoutAttemptId);
   const [contactEmail, setContactEmail] = useState("");
   const [contactPhone, setContactPhone] = useState(customer?.phone ?? "");
-  const [recipientName, setRecipientName] = useState(customer?.name ?? "");
-  const [phone, setPhone] = useState(customer?.phone ?? "");
-  const [area, setArea] = useState<PickedArea | null>(null);
-  const [postalCode, setPostalCode] = useState("");
-  const [addressLine, setAddressLine] = useState("");
-  const [notes, setNotes] = useState("");
+  const [recipientName, setRecipientName] = useState(savedAddress?.recipientName ?? customer?.name ?? "");
+  const [phone, setPhone] = useState(savedAddress?.phone ?? customer?.phone ?? "");
+  const [area, setArea] = useState<PickedArea | null>(savedAddress?.area ?? null);
+  const [postalCode, setPostalCode] = useState(savedAddress?.postalCode ?? "");
+  const [addressLine, setAddressLine] = useState(savedAddress?.addressLine ?? "");
+  const [notes, setNotes] = useState(savedAddress?.notes ?? "");
+  // A logged-in buyer with a usable saved address sees it as a summary card; "Ganti alamat" opens
+  // the normal form, prefilled (owner request 2026-10-21, plan §4.3).
+  const [usingSavedAddress, setUsingSavedAddress] = useState(savedAddress?.area != null);
   const [voucherChoice, setVoucherChoice] = useState<string | null>(vouchers[0]?.id ?? null);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [promoOptIn, setPromoOptIn] = useState(false);
@@ -142,7 +152,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
       } catch (callError) {
         // The call itself failed (offline, a 5xx, a deploy changed the action ids).
         console.error("[checkout] shipping quote call failed", callError);
-        result = { ok: false, kind: "retry", message: PLACE_ORDER_MESSAGES.shipping_unavailable };
+        result = { ok: false, kind: "retry", message: failedCallMessage(callError, PLACE_ORDER_MESSAGES.shipping_unavailable) };
       }
       // A newer pick (or "Ganti") superseded this request.
       if (sequence !== quoteSequence.current) return;
@@ -177,6 +187,37 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
     // requestQuote only reads refs and setters; the cart is the trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cartKey]);
+
+  // The saved address's area is quoted afresh on arrival, like a pick (the quote is never stored
+  // with the address; placeOrder computes it again anyway). Once per page load.
+  const quotedSavedArea = useRef(false);
+  useEffect(() => {
+    if (quotedSavedArea.current || !savedAddress?.area) return;
+    quotedSavedArea.current = true;
+    requestQuote(savedAddress.area.id);
+    // Once per page load; requestQuote only reads refs and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function restoreSavedAddress() {
+    if (!savedAddress?.area) return;
+    setRecipientName(savedAddress.recipientName);
+    setPhone(savedAddress.phone);
+    setAddressLine(savedAddress.addressLine);
+    setNotes(savedAddress.notes);
+    setIssues((current) => current.filter((issue) => !ADDRESS_FIELDS.has(issue.field)));
+    if (area?.id !== savedAddress.area.id) handleAreaChange(savedAddress.area);
+    setPostalCode(savedAddress.postalCode);
+    setUsingSavedAddress(true);
+    // The button that was pressed is gone: focus goes to the card's own "Ganti alamat".
+    requestAnimationFrame(() => document.getElementById("saved-address-change")?.focus());
+  }
+
+  function changeSavedAddress() {
+    setUsingSavedAddress(false);
+    // The card is gone: focus goes to the first field of the form that replaced it.
+    requestAnimationFrame(() => document.getElementById("recipientName")?.focus());
+  }
 
   function handleAreaChange(next: PickedArea | null) {
     setArea(next);
@@ -239,6 +280,8 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
     );
     const shipping = shippingProblem();
     if (shipping) found.push({ field: "shipping", message: shipping });
+    // A saved address that no longer passes (a rule changed since): open the form so the fields show.
+    if (found.some((issue) => ADDRESS_FIELDS.has(issue.field))) setUsingSavedAddress(false);
     if (found.length > 0 || !area || quote.status !== "ok") {
       showProblems("Periksa lagi data berikut:", found);
       return;
@@ -263,7 +306,9 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
         // The answer was lost, not necessarily the order: pressing again repeats the same attempt
         // id, which answers with the order if it was placed (plan §5), never a second one.
         console.error("[checkout] place order call failed", { attempt: attemptId, error: callError instanceof Error ? callError.name : typeof callError });
-        showProblems(CHECKOUT_CALL_LOST_MESSAGE, []);
+        // A page from the previous build: the action never ran, so nothing was ordered; the page
+        // reloads itself (lib/stale-deployment.ts).
+        showProblems(failedCallMessage(callError, CHECKOUT_CALL_LOST_MESSAGE), []);
         return;
       }
 
@@ -283,6 +328,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
       }
 
       showProblems(result.message, result.fieldErrors);
+      if (result.fieldErrors.some((issue) => ADDRESS_FIELDS.has(issue.field))) setUsingSavedAddress(false);
       // The buyer picked another area while this submit ran: its own quote stands.
       if (latest.current.areaId !== submittedAreaId) return;
       const shippingKind =
@@ -459,59 +505,87 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
           <SectionHeading id="checkout-address" number={2}>
             Alamat pengiriman
           </SectionHeading>
-          <TextField
-            id="recipientName"
-            label="Nama penerima"
-            autoComplete="shipping name"
-            value={recipientName}
-            onChange={(event) => setRecipientName(event.target.value)}
-            maxLength={100}
-            error={issueFor(issues, "recipientName")}
-          />
-          <TextField
-            id="phone"
-            label="Nomor HP penerima"
-            type="tel"
-            inputMode="tel"
-            autoComplete="shipping tel"
-            value={phone}
-            onChange={(event) => setPhone(event.target.value)}
-            maxLength={40}
-            error={issueFor(issues, "phone")}
-          />
-          <AreaCombobox id="shippingAreaId" value={area} onChange={handleAreaChange} error={issueFor(issues, "shippingAreaId")} />
-          {area && !area.hasPostalCode && (
+          {usingSavedAddress && area ? (
+            <div className="flex flex-col gap-3 bg-surface px-4 py-4" data-testid="saved-address">
+              <div className="flex flex-col gap-1 text-sm text-ink">
+                <p className="font-medium">{recipientName}</p>
+                <p className="text-ink-muted">{phone}</p>
+                <p>{addressLine}</p>
+                <p>
+                  {area.label}
+                  {!area.hasPostalCode && postalCode ? ` ${postalCode}` : ""}
+                </p>
+                {notes.trim() && <p className="text-xs text-ink-muted">Catatan untuk kurir: {notes}</p>}
+              </div>
+              <div className="flex items-center justify-between gap-4 text-xs text-ink-muted">
+                <span>Alamat dari pesanan terakhirmu.</span>
+                <button id="saved-address-change" type="button" onClick={changeSavedAddress} className="min-h-11 text-ink underline underline-offset-4">
+                  Ganti alamat
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {savedAddress?.area && (
+                <button type="button" onClick={restoreSavedAddress} className="min-h-11 self-start text-xs text-ink underline underline-offset-4">
+                  Pakai alamat tersimpan
+                </button>
+              )}
             <TextField
-              id="postalCode"
-              label="Kode pos"
-              inputMode="numeric"
-              autoComplete="shipping postal-code"
-              value={postalCode}
-              onChange={(event) => setPostalCode(event.target.value)}
-              maxLength={10}
-              error={issueFor(issues, "postalCode")}
+              id="recipientName"
+              label="Nama penerima"
+              autoComplete="shipping name"
+              value={recipientName}
+              onChange={(event) => setRecipientName(event.target.value)}
+              maxLength={100}
+              error={issueFor(issues, "recipientName")}
             />
+            <TextField
+              id="phone"
+              label="Nomor HP penerima"
+              type="tel"
+              inputMode="tel"
+              autoComplete="shipping tel"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              maxLength={40}
+              error={issueFor(issues, "phone")}
+            />
+            <AreaCombobox id="shippingAreaId" value={area} onChange={handleAreaChange} error={issueFor(issues, "shippingAreaId")} />
+            {area && !area.hasPostalCode && (
+              <TextField
+                id="postalCode"
+                label="Kode pos"
+                inputMode="numeric"
+                autoComplete="shipping postal-code"
+                value={postalCode}
+                onChange={(event) => setPostalCode(event.target.value)}
+                maxLength={10}
+                error={issueFor(issues, "postalCode")}
+              />
+            )}
+            <TextAreaField
+              id="addressLine"
+              label="Alamat lengkap"
+              hint="Jalan, nomor rumah, RT/RW, kelurahan"
+              autoComplete="shipping street-address"
+              rows={3}
+              value={addressLine}
+              onChange={(event) => setAddressLine(event.target.value)}
+              maxLength={500}
+              error={issueFor(issues, "addressLine")}
+            />
+            <TextField
+              id="notes"
+              label="Catatan untuk kurir"
+              optional
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              maxLength={200}
+              error={issueFor(issues, "notes")}
+            />
+            </>
           )}
-          <TextAreaField
-            id="addressLine"
-            label="Alamat lengkap"
-            hint="Jalan, nomor rumah, RT/RW, kelurahan"
-            autoComplete="shipping street-address"
-            rows={3}
-            value={addressLine}
-            onChange={(event) => setAddressLine(event.target.value)}
-            maxLength={500}
-            error={issueFor(issues, "addressLine")}
-          />
-          <TextField
-            id="notes"
-            label="Catatan untuk kurir"
-            optional
-            value={notes}
-            onChange={(event) => setNotes(event.target.value)}
-            maxLength={200}
-            error={issueFor(issues, "notes")}
-          />
         </section>
 
         {/* 3 · Pengiriman */}

@@ -7,6 +7,7 @@ import {
   auditLog,
   cartItems,
   carts,
+  customerAddresses,
   customers,
   fabricColors,
   fabrics,
@@ -382,6 +383,69 @@ describe("placeOrder", () => {
       const [after] = await tx.select().from(customers).where(eq(customers.id, customer.id));
       expect(after).toMatchObject({ phone: null, name: customer.name, pdpConsentAt: customer.pdpConsentAt });
       expect((await tx.select().from(orders).where(eq(orders.id, result.orderId)))[0]?.contactPhone).toBe(other.phone);
+    });
+  });
+
+  test("a logged-in buyer's address becomes the account's one default address, replaced in place by the next order (2026-10-21)", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await sellableSku(tx);
+      const customer = await insertCustomer(tx, { phone: null });
+      const firstArea = await areaQuoting(tx, 12_000);
+      await customerCart(tx, customer.id, [{ sku: variant.sku, qty: 1 }]);
+      const first = await placeOrder(tx, deps(), {
+        ...guestInput({ shippingAreaId: firstArea, guestTokenHash: null, expectedTotal: PRICE }),
+        customer: { id: customer.id, email: customer.email },
+      });
+      if (!first.ok) throw new Error(first.reason);
+      const saved = await tx.select().from(customerAddresses).where(eq(customerAddresses.customerId, customer.id));
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({
+        isDefault: true,
+        recipientName: "Siti Aminah",
+        phone: "+6281234567890",
+        addressLine: "Jl. Melati No. 5, RT 01/RW 02, Kel. Sukamaju",
+        notes: "Pagar hijau",
+        shippingAreaId: firstArea,
+        district: "Kecamatan Uji",
+        city: "Kota Uji",
+        province: "Provinsi Uji",
+        postalCode: "40111",
+      });
+
+      const secondArea = await areaQuoting(tx, 12_000);
+      await customerCart(tx, customer.id, [{ sku: variant.sku, qty: 1 }]);
+      const second = await placeOrder(tx, deps(), {
+        ...guestInput({ shippingAreaId: secondArea, guestTokenHash: null, expectedTotal: PRICE }),
+        customer: { id: customer.id, email: customer.email },
+        address: { recipientName: "Rina Wati", phone: "0813 1111 2222", addressLine: "Jl. Mawar 9", notes: "" },
+      });
+      if (!second.ok) throw new Error(second.reason);
+      const after = await tx.select().from(customerAddresses).where(eq(customerAddresses.customerId, customer.id));
+      expect(after).toHaveLength(1);
+      expect(after[0]).toMatchObject({ id: saved[0]!.id, isDefault: true, recipientName: "Rina Wati", phone: "+6281311112222", addressLine: "Jl. Mawar 9", notes: null, shippingAreaId: secondArea });
+    });
+  });
+
+  test("a guest's address is never saved, not even to the customer the email links to; a refused order saves nothing", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await sellableSku(tx);
+      const existing = await insertCustomer(tx);
+      const { tokenHash } = await guestCart(tx, [{ sku: variant.sku, qty: 1 }]);
+      const areaId = await areaQuoting(tx, 12_000);
+      const guest = await placeOrder(tx, deps(), {
+        ...guestInput({ shippingAreaId: areaId, guestTokenHash: tokenHash, expectedTotal: PRICE }),
+        contact: { email: existing.email!, phone: "0812 7777 0000" },
+      });
+      if (!guest.ok) throw new Error(guest.reason);
+      expect(await tx.select().from(customerAddresses).where(eq(customerAddresses.customerId, existing.id))).toHaveLength(0);
+
+      await customerCart(tx, existing.id, [{ sku: variant.sku, qty: 1 }]);
+      const refused = await placeOrder(tx, deps(), {
+        ...guestInput({ shippingAreaId: areaId, guestTokenHash: null, expectedTotal: PRICE + 1 }),
+        customer: { id: existing.id, email: existing.email },
+      });
+      expect(refused).toMatchObject({ ok: false, reason: "total_changed" });
+      expect(await tx.select().from(customerAddresses).where(eq(customerAddresses.customerId, existing.id))).toHaveLength(0);
     });
   });
 

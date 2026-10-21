@@ -2,6 +2,8 @@ export {
   createOrder,
   transitionOrderStatus,
   updateOrderItems,
+  updateShipmentDetails,
+  SHIPMENT_DETAILS_NOT_SHIPPED_MESSAGE,
   CHECKOUT_ORDER_CANCEL_PATH_MESSAGE,
   CHECKOUT_ORDER_UNPAID_MESSAGE,
   type CreateOrderInput,

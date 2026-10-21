@@ -1,10 +1,11 @@
 import "server-only";
 import { and, asc, desc, eq, gt, isNotNull, sql } from "drizzle-orm";
-import { fabricColors, orderItems, orders, payments, products, productVariants, vouchers } from "@ammari/db/schema";
+import { customerAddresses, fabricColors, orderItems, orders, payments, products, productVariants, shippingAreas, vouchers } from "@ammari/db/schema";
+import { formatShippingAreaLabel } from "@ammari/commerce/shipping-rules";
 import { findAccessibleOrder, ORDER_NO_PATTERN } from "@/lib/orders/access";
 import { defaultDb, type Database } from "@/lib/db";
 import { formatJakartaDate, formatJakartaDateTime } from "@/lib/format";
-import type { CheckoutVoucherOption } from "./form";
+import type { CheckoutVoucherOption, SavedCheckoutAddress } from "./form";
 
 // Reads for the checkout and finish pages (docs/plans/cart-checkout.md §4.3, §4.4).
 // Customer-facing: no cost column is ever selected (order_items.unit_cost stays out), and nothing
@@ -20,6 +21,50 @@ export async function listUsableVouchers(customerId: string, db: Database = defa
     .where(and(eq(vouchers.customerId, customerId), eq(vouchers.status, "active"), gt(vouchers.expiresAt, sql`now()`)))
     .orderBy(desc(vouchers.amount), asc(vouchers.expiresAt), asc(vouchers.id));
   return rows.map((row) => ({ id: row.id, amount: row.amount, expiresOn: formatJakartaDate(row.expiresAt) }));
+}
+
+/** The session customer's saved address (the default one placeOrder keeps, owner request
+ * 2026-10-21), for the checkout's summary card and prefill. `area` is null when the row has no
+ * area (none exist; a future import could): the buyer picks it again. The quote is never read from
+ * here: the form asks for a fresh one for the area, and placeOrder computes it again. */
+export async function loadSavedCheckoutAddress(customerId: string, db: Database = defaultDb): Promise<SavedCheckoutAddress | null> {
+  const [row] = await db
+    .select({
+      recipientName: customerAddresses.recipientName,
+      phone: customerAddresses.phone,
+      addressLine: customerAddresses.addressLine,
+      notes: customerAddresses.notes,
+      postalCode: customerAddresses.postalCode,
+      areaId: shippingAreas.id,
+      province: shippingAreas.province,
+      city: shippingAreas.city,
+      district: shippingAreas.district,
+      subdistrict: shippingAreas.subdistrict,
+      areaPostalCode: shippingAreas.postalCode,
+      areaLabel: shippingAreas.label,
+    })
+    .from(customerAddresses)
+    .leftJoin(shippingAreas, eq(shippingAreas.id, customerAddresses.shippingAreaId))
+    .where(and(eq(customerAddresses.customerId, customerId), eq(customerAddresses.isDefault, true)))
+    .limit(1);
+  if (!row) return null;
+  const area =
+    row.areaId && row.province && row.city && row.district
+      ? {
+          id: row.areaId,
+          label: row.areaLabel ?? formatShippingAreaLabel({ province: row.province, city: row.city, district: row.district, subdistrict: row.subdistrict, postalCode: row.areaPostalCode }),
+          hasPostalCode: row.areaPostalCode !== null,
+        }
+      : null;
+  return {
+    recipientName: row.recipientName,
+    phone: row.phone,
+    addressLine: row.addressLine,
+    notes: row.notes ?? "",
+    // Only a kode pos the buyer typed (an area without one); otherwise the area carries it.
+    postalCode: area && !area.hasPostalCode ? row.postalCode : "",
+    area,
+  };
 }
 
 /** `paid`: a verified notification (or the page's status check) marked it paid. `pending`: still inside the payment window.

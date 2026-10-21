@@ -9,6 +9,8 @@ import { ATTENTION_FLAG_COPY } from "@/lib/orders/checkout-labels";
 import { ORDER_STATUS_LABELS } from "@/lib/orders/status-labels";
 import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
 import type { ActionResult } from "@/lib/action-result";
+import { ShipmentDetailsDialog } from "@/components/orders/shipment-details-dialog";
+import { markShippedAction } from "../../../packing/actions";
 import { cancelCheckoutOrderAction, clearAttentionFlagAction, recordRefundAction, transitionOrderStatusAction } from "../../actions";
 
 // Staff actions on a web checkout order (docs/plans/cart-checkout.md §6.5, §7, session 16). Every
@@ -54,15 +56,19 @@ export interface CheckoutStatusActionsProps {
   status: OrderStatus;
   paymentStatus: OrderPaymentStatus;
   totalAmount: number;
+  /** Prefills "Kurir" in the "Dikirim" dialog (staff book exactly the quoted service). */
+  quotedCourierLabel: string | null;
   /** ORDER_STATUS_TRANSITIONS for the current status. */
   allowedTransitions: OrderStatus[];
 }
 
-export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus, totalAmount, allowedTransitions }: CheckoutStatusActionsProps) {
+export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus, totalAmount, quotedCourierLabel, allowedTransitions }: CheckoutStatusActionsProps) {
   const router = useRouter();
   const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  // "Dikirim" asks for the courier and resi first (required on a web order, 2026-10-21 sandbox run).
+  const [shipping, setShipping] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const unpaid = paymentStatus === "pending";
@@ -109,7 +115,13 @@ export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus,
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-2">
         {transitions.map((toStatus) => (
-          <Button key={toStatus} type="button" variant={toStatus === "returned" ? "danger" : "secondary"} loading={pending} onClick={() => transition(toStatus)}>
+          <Button
+            key={toStatus}
+            type="button"
+            variant={toStatus === "returned" ? "danger" : "secondary"}
+            loading={pending}
+            onClick={() => (toStatus === "shipped" ? setShipping(true) : transition(toStatus))}
+          >
             {status === "awaiting_payment" && toStatus === "to_ship" ? "Proses" : ORDER_STATUS_LABELS[toStatus]}
           </Button>
         ))}
@@ -120,6 +132,21 @@ export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus,
         )}
       </div>
       <ErrorLine message={error} />
+      {shipping && (
+        <ShipmentDetailsDialog
+          title={`Tandai dikirim: ${orderNo}`}
+          confirmLabel="Tandai dikirim"
+          checkoutOrder
+          defaultCourier={quotedCourierLabel}
+          open={shipping}
+          onOpenChange={setShipping}
+          submit={({ courier, trackingNumber }) => markShippedAction({ orderId, courier, trackingNumber, confirmNoCard: true })}
+          onDone={() => {
+            toast.success("Pesanan ditandai dikirim. Pembeli mendapat email dengan nomor resi.");
+            router.refresh();
+          }}
+        />
+      )}
       <Dialog
         open={confirmCancel}
         onOpenChange={setConfirmCancel}

@@ -52,6 +52,10 @@ export async function getCustomerOtpResendState(db: Database, email: string): Pr
   return { cooldownRemainingSeconds, hasActiveCode: Boolean(activeCode) };
 }
 
+/** The name a customer account gets when its login carried none (email OTP): shown on /account
+ * until the buyer sets their own (2026-10-21 sandbox run), never used as a greeting or a recipient. */
+export const CUSTOMER_PLACEHOLDER_NAME = "Pelanggan Ammari";
+
 export interface CustomerIdentity {
   id: string;
   name: string;

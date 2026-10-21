@@ -116,3 +116,15 @@ export async function customerContact(customer: LinkCustomer): Promise<{ phone: 
     return row;
   });
 }
+
+/** Sets the customer's name (e.g. the "Pelanggan Ammari" placeholder an email login gives). */
+export async function setCustomerName(customerId: string, name: string): Promise<void> {
+  await withSql((sql) => sql`update customers set name = ${name} where id = ${customerId}`);
+}
+
+export async function customerNameOf(customerId: string): Promise<string | null> {
+  return withSql(async (sql) => {
+    const [row] = await sql<{ name: string }[]>`select name from customers where id = ${customerId}`;
+    return row?.name ?? null;
+  });
+}

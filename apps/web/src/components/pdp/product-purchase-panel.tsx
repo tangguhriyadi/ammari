@@ -9,13 +9,15 @@ import { getGalleryForColor, type ProductView } from "@/lib/content/product-view
 import { buildImageUrl } from "@/lib/storage/public-url";
 import { formatPriceIdr } from "@/lib/format";
 import { buildProductWhatsappMessage, buildWhatsappUrl } from "@/lib/whatsapp";
-import { addToCartAction } from "@/lib/cart/actions";
+import { addToCartAction, buyNowAction } from "@/lib/cart/actions";
 import { announceCartCount, CART_CALL_FAILED_MESSAGE, liveRegionText } from "@/lib/cart/count-event";
 import { CART_REFUSAL_MESSAGES } from "@ammari/commerce/cart-limits";
-import { PrimaryButton, PrimaryLink, OutlineLink, SoldOutButton } from "@/components/buttons";
+import { OutlineButton, PrimaryButton, PrimaryLink, SoldOutButton } from "@/components/buttons";
+import { PendingOrderNotice } from "@/components/pdp/pending-order-notice";
 import { OPEN_ACCORDION_EVENT, SIZE_CHART_HEADING_ID, SIZE_GUIDE_ACCORDION_ID, type OpenAccordionDetail } from "@/components/pdp/size-guide";
 import { ProductImage } from "@/components/product-image";
 import { Curtain } from "@/components/curtain";
+import { failedCallMessage } from "@/lib/stale-deployment";
 
 export interface ProductPurchasePanelProps {
   view: ProductView;
@@ -60,6 +62,23 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
   // status region; the sequence makes a repeat of the same text announce again.
   const [announcement, setAnnouncement] = useState({ text: "", sequence: 0 });
   const [isAdding, startAdding] = useTransition();
+  const [isBuying, startBuying] = useTransition();
+  // Stays true once the browser is on its way to /checkout, so a second tap does nothing.
+  const [leavingForCheckout, setLeavingForCheckout] = useState(false);
+  const cartBusy = isAdding || isBuying || leavingForCheckout;
+  // Back on this page (the back button, the bfcache) or a navigation that never happened: the
+  // buttons work again.
+  useEffect(() => {
+    if (!leavingForCheckout) return;
+    const reset = () => setLeavingForCheckout(false);
+    const timer = window.setTimeout(reset, 10_000);
+    const onPageShow = (event: PageTransitionEvent) => event.persisted && reset();
+    window.addEventListener("pageshow", onPageShow);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [leavingForCheckout]);
   // The colour/size the buyer has selected right now, read when an add resolves: if they moved on
   // meanwhile, the box must not name a variant other than the one on screen.
   const selectionRef = useRef("");
@@ -127,7 +146,7 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
   // that rejects outright (offline, a 5xx, a deploy) is caught here: thrown inside a transition
   // it would otherwise replace the whole page with the error screen.
   function handleAddToCart() {
-    if (!selectedSku || isAdding) return;
+    if (!selectedSku || cartBusy) return;
     const label = selectionLabel;
     startAdding(async () => {
       let result: Awaited<ReturnType<typeof addToCartAction>>;
@@ -136,7 +155,7 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
       } catch (error) {
         console.error("[cart] add to cart call failed", error);
         setShowAdded(false);
-        setCartMessage({ text: CART_CALL_FAILED_MESSAGE, isError: true });
+        setCartMessage({ text: failedCallMessage(error, CART_CALL_FAILED_MESSAGE), isError: true });
         return;
       }
       if (!result.ok) {
@@ -156,6 +175,33 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
         setShowAdded(true);
         setCartMessage(trimmedNote ? { text: trimmedNote, isError: false } : null);
       }
+    });
+  }
+
+  // "Beli sekarang" (flag on, owner request 2026-10-21): the selected size goes into the cart (one
+  // piece, never a second one when it is already there) and the buyer goes straight to /checkout,
+  // which checks out the whole cart: every line is shown there before paying, and nothing else
+  // about the cart changes (owner decision: the simpler, safe option over a one-item checkout).
+  function handleBuyNow() {
+    if (!selectedSku || cartBusy) return;
+    startBuying(async () => {
+      let result: Awaited<ReturnType<typeof buyNowAction>>;
+      try {
+        result = await buyNowAction({ sku: selectedSku });
+      } catch (error) {
+        console.error("[cart] buy now call failed", error);
+        setShowAdded(false);
+        setCartMessage({ text: failedCallMessage(error, CART_CALL_FAILED_MESSAGE), isError: true });
+        return;
+      }
+      if (!result.ok) {
+        setShowAdded(false);
+        setCartMessage({ text: result.message, isError: true });
+        return;
+      }
+      announceCartCount(result.pieceCount);
+      setLeavingForCheckout(true);
+      router.push("/checkout");
     });
   }
 
@@ -277,19 +323,30 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
         )}
 
         <div className="flex flex-col gap-3">
+          {/* The visitor's own order waiting for payment, when it holds this product (fetched
+              after load: this page is shared and cached). */}
+          {cartEnabled && <PendingOrderNotice productId={view.id} />}
           {soldOut && <SoldOutButton />}
           {cartEnabled && !soldOut && (
             <>
-              {/* While a call is in flight the button stays focusable (aria-disabled, not disabled)
-                  and says so; further taps are ignored by the handler. */}
+              {/* While a call is in flight the buttons stay focusable (aria-disabled, not disabled)
+                  and say so; further taps are ignored by the handlers. */}
               <PrimaryButton
                 disabled={needsSizeChoice}
-                aria-disabled={isAdding || undefined}
+                aria-disabled={cartBusy || undefined}
+                onClick={handleBuyNow}
+                className={cn((isBuying || leavingForCheckout) && "cursor-wait opacity-80")}
+              >
+                {needsSizeChoice ? "Pilih ukuran" : isBuying || leavingForCheckout ? "Memproses" : "Beli sekarang"}
+              </PrimaryButton>
+              <OutlineButton
+                disabled={needsSizeChoice}
+                aria-disabled={cartBusy || undefined}
                 onClick={handleAddToCart}
                 className={cn(isAdding && "cursor-wait opacity-80")}
               >
-                {needsSizeChoice ? "Pilih ukuran" : isAdding ? "Menambahkan" : "Tambah ke keranjang"}
-              </PrimaryButton>
+                {isAdding ? "Menambahkan" : "Tambah ke keranjang"}
+              </OutlineButton>
               <Curtain open={showAdded} contentClassName="flex items-center bg-surface pl-4 text-xs text-ink">
                 <p>
                   Masuk keranjang: {addedLabel} ·{" "}
@@ -311,14 +368,19 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
                 ))}
             </>
           )}
-          {/* The WhatsApp link is the main CTA only while the cart is off; sold out, that slot is
-              the SOLD OUT button above, and with the cart on it stays as the secondary action. */}
+          {/* With the cart off the WhatsApp button is the main CTA (sold out, that slot is the
+              SOLD OUT button above); with it on, a small text link under the buttons. */}
           {whatsappHref &&
             (cartEnabled ? (
-              <OutlineLink href={whatsappHref} target="_blank" rel="noopener noreferrer">
+              <a
+                href={whatsappHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mx-auto inline-flex min-h-11 items-center gap-2 text-xs text-ink underline underline-offset-4"
+              >
                 <MessageCircle className="size-4" strokeWidth={1.4} aria-hidden="true" />
                 Tanya via WhatsApp
-              </OutlineLink>
+              </a>
             ) : (
               !soldOut && (
                 <PrimaryLink href={whatsappHref} target="_blank" rel="noopener noreferrer">

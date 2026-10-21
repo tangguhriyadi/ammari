@@ -305,6 +305,18 @@ export async function getOrdersMissingCard(orderIds: string[], db: Database = de
   return orderIds.filter((id) => !checkout.has(id) && status.get(id) === false);
 }
 
+/** The order numbers of the web checkout orders among `orderIds` (bulk "Tandai dikirim" refuses
+ * them: they ship one by one with a resi). */
+export async function getCheckoutOrderNos(orderIds: string[], db: Database = defaultDb): Promise<string[]> {
+  if (orderIds.length === 0) return [];
+  const rows = await db
+    .select({ orderNo: orders.orderNo })
+    .from(orders)
+    .where(and(inArray(orders.id, orderIds), isNotNull(orders.paymentStatus)))
+    .orderBy(orders.orderNo);
+  return rows.map((row) => row.orderNo);
+}
+
 // ---------- Order summary (for the printed card's own text) ----------
 
 export interface OrderSummaryForCard {
