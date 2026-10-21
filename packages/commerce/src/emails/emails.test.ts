@@ -121,6 +121,7 @@ const baseView: CustomerOrderEmailView = {
   loginUrl: null,
   siteHost: "ammari.example",
   whatsappNumber: "6288808541442",
+  logoUrl: "https://ammari.example/logos/ammari-primary.png",
 };
 const deadline = new Date("2026-12-01T07:30:00Z");
 
@@ -146,6 +147,7 @@ const allRendered = () => [
       buyer: { name: "Siti", email: "siti@example.test", phone: "+6281234567890" },
       address: baseView.address,
       adminOrderUrl: "https://admin.ammari.example/orders/x",
+      logoUrl: null,
     }),
   ),
 ];
@@ -165,19 +167,32 @@ describe("templates", () => {
     expect(email.subject).toBe("Pesanan ORD-202612-0007 menunggu pembayaran");
     expect(email.text).toContain("1 Desember 2026, 14.30 WIB");
     expect(email.text).toContain("Haura Dress\nBeige, M x 2: Rp518.000");
-    expect(email.text).toContain("Ongkir: Rp75.000\n(Ongkir Rp95.000, subsidi Ammari -Rp20.000.)");
+    expect(email.text).toContain("Subtotal: Rp647.000\nOngkir kurir: Rp95.000\nSubsidi ongkir Ammari: -Rp20.000\nOngkir: Rp75.000\nVoucher: -Rp20.000");
     expect(email.text).toContain("Voucher: -Rp20.000");
     expect(email.text).toContain("Total: Rp702.000");
     expect(email.text).toContain("Lanjutkan pembayaran:\nhttps://pay.example/x");
     expect(email.text).toContain("Lihat pesanan:\nhttps://ammari.example/orders/ORD-202612-0007?t=abc");
-    expect(email.html).toContain("Ongkir Rp95.000, subsidi Ammari -Rp20.000.");
+    // The courier cost struck through, the subsidy highlighted.
+    expect(email.html).toMatch(/Ongkir kurir<\/td><td[^>]*><s style="[^"]*">Rp95\.000<\/s>/);
+    expect(email.html).toMatch(/<td style="[^"]*background-color:#F6F3F1;[^"]*">Subsidi ongkir Ammari<\/td><td[^>]*>-Rp20\.000<\/td>/);
   });
 
   test("a fully subsidized ongkir says so; no subsidy line without a quote", () => {
     const covered = renderPaidEmail({ ...baseView, totals: { ...baseView.totals, shipping: 0, shippingCost: 18_000, shippingSubsidy: 18_000 } }, "confirmed");
-    expect(covered.text).toContain("Ongkir: Rp0\n(Ongkir Rp18.000, ditanggung penuh subsidi Ammari.)");
+    expect(covered.text).toContain("Ongkir kurir: Rp18.000\nSubsidi ongkir Ammari: -Rp18.000\nGratis ongkir: Rp0");
     const none = renderPaidEmail({ ...baseView, totals: { ...baseView.totals, shippingCost: null, shippingSubsidy: null } }, "confirmed");
-    expect(none.text).not.toContain("subsidi");
+    expect(none.text).not.toMatch(/subsidi|Ongkir kurir/i);
+    expect(none.text).toContain("Ongkir: Rp75.000");
+  });
+
+  test("the header shows the logo mark (absolute https, sized, alt Ammari) next to AMMARI; text part unchanged; no URL keeps the text wordmark", () => {
+    const withLogo = renderPaidEmail(baseView, "confirmed");
+    expect(withLogo.html).toContain('<img src="https://ammari.example/logos/ammari-primary.png" width="24" height="28" alt="Ammari"');
+    expect(withLogo.html).toMatch(/alt="Ammari"[^>]*><\/td><td style="[^"]*">AMMARI<\/td>/);
+    const without = renderPaidEmail({ ...baseView, logoUrl: null }, "confirmed");
+    expect(without.html).not.toContain("<img");
+    expect(without.html).toContain(">AMMARI</td>");
+    expect(withLogo.text).toBe(without.text);
   });
 
   test("HTML escapes every value and has the mobile viewport; the text part has no markup", () => {
@@ -463,23 +478,49 @@ describe("dispatchOrderEmails", () => {
     });
   });
 
-  test("customer-typed text: a link-like name is left out of the greeting; line breaks never reach the text part", async () => {
+  test("greets with the name typed at checkout, never the linked customer's placeholder name (guest checkout)", async () => {
     await withRollback(async (tx) => {
       const { deps, sent } = recorder();
       await setSupportEmail(tx, "pemilik@example.test");
       const placed = await placedOrder(tx);
       const [order] = await tx.select({ customerId: orders.customerId }).from(orders).where(eq(orders.id, placed.orderId));
-      await tx.update(customers).set({ name: "Klik www.hadiah.example sekarang" }).where(eq(customers.id, order!.customerId!));
+      await tx.update(customers).set({ name: "Pelanggan Ammari" }).where(eq(customers.id, order!.customerId!));
+      await tx.update(orders).set({ recipientName: "Rina" }).where(eq(orders.id, placed.orderId));
+      await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
+      expect(sent[0]!.body).toContain("Halo Rina,\n");
+      expect(sent[0]!.html).toContain("Halo Rina,");
+      expect(sent[0]!.body).not.toContain("Pelanggan Ammari");
+      // The logo is the storefront's own public file on the site origin.
+      expect(sent[0]!.html).toContain('src="https://ammari.example/logos/ammari-primary.png"');
+      await applyPaymentStatus(tx, report(placed, "settlement"));
+      await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
+      const owner = forOrder(sent, placed.orderNo).find((message) => message.to === "pemilik@example.test")!;
+      expect(owner.body).toContain("Nama: Rina");
+      // The customers row is left as it was (an unverified guest never renames it).
+      const [after] = await tx.select({ name: customers.name }).from(customers).where(eq(customers.id, order!.customerId!));
+      expect(after!.name).toBe("Pelanggan Ammari");
+    });
+  });
+
+  test("customer-typed text: a link-like name is left out of the greeting; line breaks never reach the text part", async () => {
+    await withRollback(async (tx) => {
+      const { deps, sent } = recorder();
+      await setSupportEmail(tx, "pemilik@example.test");
+      const placed = await placedOrder(tx);
       await tx
         .update(orders)
-        .set({ shippingAddressSnapshot: { version: 2, recipientName: "Siti\nPalsu: baris", phone: "+6281299990000", addressLine: "Jl. Melati 5\r\nKlik link", district: "Kecamatan E2E", city: "Kota Contoh", province: "Provinsi Contoh", postalCode: "40111" } })
+        .set({ recipientName: "Klik www.hadiah.example sekarang", shippingAddressSnapshot: { version: 2, recipientName: "Siti\nPalsu: baris", phone: "+6281299990000", addressLine: "Jl. Melati 5\r\nKlik link", district: "Kecamatan E2E", city: "Kota Contoh", province: "Provinsi Contoh", postalCode: "40111" } })
         .where(eq(orders.id, placed.orderId));
       await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
       expect(sent[0]!.body).toContain("Halo,\n");
       expect(sent[0]!.body).not.toContain("hadiah");
+      // A number in the name (an account number as a payment lure) is left out too.
+      await tx.update(orders).set({ recipientName: "Transfer ke BCA 8830123456" }).where(eq(orders.id, placed.orderId));
       await applyPaymentStatus(tx, report(placed, "settlement"));
       await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
       const paid = forOrder(sent, placed.orderNo).find((message) => message.subject.startsWith("Pembayaran"))!;
+      expect(paid.body).toContain("Halo,\n");
+      expect(paid.body).not.toContain("8830123456");
       expect(paid.body).toContain("Penerima: Siti Palsu: baris");
       expect(paid.body).toContain("Alamat: Jl. Melati 5 Klik link, Kecamatan E2E");
     });

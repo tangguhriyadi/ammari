@@ -2,47 +2,59 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Minus, Plus, X } from "lucide-react";
 import { cn } from "@ammari/ui";
 import type { CartLine } from "@ammari/commerce/cart";
-import { CART_LINE_STATUS_MESSAGES, CART_MAX_QTY_PER_LINE } from "@ammari/commerce/cart-limits";
+import { CART_LINE_STATUS_MESSAGES, CART_MAX_PIECES, CART_MAX_QTY_PER_LINE } from "@ammari/commerce/cart-limits";
 import { removeCartItemAction, updateCartItemQtyAction, type CartActionResult } from "@/lib/cart/actions";
 import { announceCartCount, announceCartStatus, CART_CALL_FAILED_MESSAGE, CART_HEADING_ID } from "@/lib/cart/count-event";
 import { formatPriceIdr } from "@/lib/format";
 import { ProductImage } from "@/components/product-image";
+import { useOptimisticCart, type OptimisticCartUpdate } from "./optimistic-cart";
 
 export interface CartLineItemProps {
   line: CartLine;
   /** Resolved on the server (the storage base URL is not a public env var). */
   imageUrl: string | null;
-  /** The cart is below the 20-piece cap, so a "+" can still succeed. */
+  /** The cart is below the 20-piece cap, so a "+" can still succeed (outside the optimistic
+   * provider; inside it the optimistic piece count decides). */
   canAddPieces: boolean;
 }
 
 /** One `/cart` line (docs/plans/cart-checkout.md §4.2, docs/design/storefront.md §7). A line that
  * can still be bought has the 1 to 10 stepper and ×; a sold-out or no longer available line shows
  * only its state and "Hapus". Every change goes through a server action, which re-checks stock
- * and the caps; on success the page re-renders from the server (fresh prices and states) and the
- * header count updates. Never shows a stock number.
+ * and the caps and answers with a fresh render of the page. Never shows a stock number.
  *
- * The line stays pending until that re-render has landed (the refresh runs inside the same
- * transition), so a quick second tap can never send a quantity computed from the old one. Pending
- * and boundary states use `aria-disabled` plus a guard instead of `disabled`, so a keyboard user's
- * focus stays on the button they are pressing. */
-export function CartLineItem({ line, imageUrl, canAddPieces }: CartLineItemProps) {
-  const router = useRouter();
+ * Optimistic (./optimistic-cart.tsx): the quantity, line total, subtotal and header count change
+ * on the tap; a refusal rolls them back and shows the server's message. Stepper taps are not
+ * blocked while one is in flight: each sends the absolute quantity computed from what the buyer
+ * sees, and Next runs server actions one at a time in order, so the last tap wins. Boundary states
+ * use `aria-disabled` plus a guard instead of `disabled`, so a keyboard user's focus stays on the
+ * button they are pressing. */
+export function CartLineItem({ line: serverLine, imageUrl, canAddPieces }: CartLineItemProps) {
+  const cart = useOptimisticCart();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
+  const optimisticLine = cart ? cart.lines.find((candidate) => candidate.sku === serverLine.sku) : serverLine;
+  // Removed on the tap: hidden until the server's render drops it (or a refusal brings it back).
+  // It stays mounted all along, so a refusal's message lands on the returning row.
+  const line = optimisticLine ?? serverLine;
   const buyable = line.status === "ok" || line.status === "insufficient";
   const variantLabel = `${line.colorName} · ${line.sizeLabel}`;
   const itemName = `${line.productName}, ${line.colorName}, ${line.sizeLabel}`;
 
-  function run(action: () => Promise<CartActionResult>, done: string, onDone?: () => void) {
-    if (isPending) return;
+  function run(update: OptimisticCartUpdate, action: () => Promise<CartActionResult>, done: string, onApplied?: () => void) {
     setError(null);
+    const before = line.qty;
     startTransition(async () => {
+      cart?.apply(update);
+      if (cart) {
+        cart.beginWrite();
+        announceCartCount(cart.pieceCount - before + (update.qty ?? 0));
+      }
+      onApplied?.();
       let result: CartActionResult;
       try {
         result = await action();
@@ -50,29 +62,50 @@ export function CartLineItem({ line, imageUrl, canAddPieces }: CartLineItemProps
         // A rejected call (offline, a 5xx, a deploy), not a refusal: thrown inside the transition
         // it would replace the whole page with the error screen.
         console.error("[cart] cart line call failed", callError);
-        setError(CART_CALL_FAILED_MESSAGE);
+        settle();
+        rollBack(CART_CALL_FAILED_MESSAGE);
         return;
       }
+      const last = settle();
       if (!result.ok) {
-        setError(result.message);
+        rollBack(result.message);
         return;
       }
-      announceCartCount(result.pieceCount);
+      // While a later tap is still on its way, the badge keeps showing that tap's count.
+      if (last) announceCartCount(result.pieceCount);
       announceCartStatus(done);
-      startTransition(() => router.refresh());
-      onDone?.();
     });
   }
 
-  // The removed row unmounts, so focus goes to the page heading instead of falling to <body>.
-  const remove = () =>
-    run(() => removeCartItemAction({ sku: line.sku }), `${itemName} dihapus dari keranjang.`, () => document.getElementById(CART_HEADING_ID)?.focus());
-  const setQty = (qty: number) => run(() => updateCartItemQtyAction({ sku: line.sku, qty }), `Jumlah ${itemName} menjadi ${qty}.`);
+  /** True when no other cart write of this page is still on its way. */
+  function settle(): boolean {
+    return cart ? cart.endWrite() : true;
+  }
+
+  // The optimistic values end with the transition (a refusal brings no new render); the header
+  // count goes back to the latest count the server rendered.
+  function rollBack(message: string) {
+    setError(message);
+    if (cart) announceCartCount(cart.serverPieceCount());
+  }
+
+  // The removed row disappears at once, so focus goes to the page heading instead of falling to
+  // <body>.
+  const remove = () => {
+    if (isPending) return;
+    run({ sku: line.sku, qty: null }, () => removeCartItemAction({ sku: line.sku }), `${itemName} dihapus dari keranjang.`, () =>
+      document.getElementById(CART_HEADING_ID)?.focus(),
+    );
+  };
+  const setQty = (qty: number) => run({ sku: line.sku, qty }, () => updateCartItemQtyAction({ sku: line.sku, qty }), `Jumlah ${itemName} menjadi ${qty}.`);
 
   // Raising is refused at the cap and while the line already asks for more than is left; lowering
   // is always allowed (down to 1; × removes).
-  const canIncrease = line.status === "ok" && line.qty < CART_MAX_QTY_PER_LINE && canAddPieces;
+  const roomForPieces = cart ? cart.pieceCount < CART_MAX_PIECES : canAddPieces;
+  const canIncrease = line.status === "ok" && line.qty < CART_MAX_QTY_PER_LINE && roomForPieces;
   const canDecrease = line.qty > 1;
+
+  if (!optimisticLine) return null;
 
   return (
     <li className="flex gap-4 border-b border-line py-4 first:pt-0" aria-busy={isPending || undefined} data-testid="cart-line">
@@ -116,7 +149,7 @@ export function CartLineItem({ line, imageUrl, canAddPieces }: CartLineItemProps
               <button
                 type="button"
                 onClick={() => canDecrease && setQty(line.qty - 1)}
-                aria-disabled={isPending || !canDecrease || undefined}
+                aria-disabled={!canDecrease || undefined}
                 aria-label={`Kurangi jumlah ${itemName}`}
                 className={cn("flex size-11 items-center justify-center", canDecrease ? "text-ink" : "cursor-default text-line-strong")}
               >
@@ -129,7 +162,7 @@ export function CartLineItem({ line, imageUrl, canAddPieces }: CartLineItemProps
               <button
                 type="button"
                 onClick={() => canIncrease && setQty(line.qty + 1)}
-                aria-disabled={isPending || !canIncrease || undefined}
+                aria-disabled={!canIncrease || undefined}
                 aria-label={`Tambah jumlah ${itemName}`}
                 className={cn("flex size-11 items-center justify-center", canIncrease ? "text-ink" : "cursor-default text-line-strong")}
               >

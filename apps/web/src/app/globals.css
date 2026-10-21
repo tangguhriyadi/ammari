@@ -36,6 +36,8 @@
   --color-disabled: #8a7f7f;
   --color-error: #8c1d18;
   --color-error-border: #b3261e;
+  /* Header cart count badge (white text, 6.5:1); the only filled red on the storefront. */
+  --color-badge: #b3261e;
 
   /* Footer sits on --color-brand — its own text/divider/chip tones (docs/design/storefront.md
    * §3 "Footer (on --color-brand)"), distinct from the page-level neutral scale above. */

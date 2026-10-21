@@ -26,7 +26,6 @@ export {
   renderOwnerPaidEmail,
   renderPaidEmail,
   renderShippedEmail,
-  subsidyNote,
   type CancelledEmailReason,
   type RenderedEmail,
 } from "./templates";

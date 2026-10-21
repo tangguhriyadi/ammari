@@ -696,6 +696,27 @@ and every 24 hours, straight to `http://web:3000` (prod's floating alias of the 
 `internal` network, secret from `env/cron.env`; runbooks `docs/deploy.md` "Internal cron service"
 and `docs/deploy-prod.md` §3.4).
 
+### 6.3a "Ganti metode pembayaran" (added 2026-10-21 after the owner's sandbox run)
+
+The payment page stays locked to the method the buyer picked there (seen live: GoPay QR, closed,
+"Lanjutkan pembayaran" reopened the same QR page). The finish page and `/orders/<no>` (session only,
+like "Buka halaman pembayaran"; the finish page also accepts the checkout cookie, never the emailed
+view cookie) show "Ganti metode pembayaran" under "Lanjutkan pembayaran" while the order is payable.
+`changePaymentMethod` (`payments/attempts.ts`): (1) under the order lock it reserves the next attempt
+(no page yet), so it is the latest attempt and no earlier attempt's end can cancel the order;
+(2) outside any transaction every earlier open attempt (newest first) is asked at the gateway, a
+pending one is expired (Midtrans Expire), and each answer goes through the state machine; a
+settlement pays the order and ends the change ("paid", no new page); an attempt still pending or a
+gateway that cannot be asked refuses it (the reservation is removed again, except after an expiry
+whose answer was lost: then it stays, so the gateway's later expiry cannot cancel the order);
+(3) under the order lock again everything is re-checked and the new page is requested for the rest
+of the same window (12 s gateway budget, page in-flight window now measured from
+`payments.updated_at`). At most 5 attempts per order; `payment_method_change` 5 per 10 minutes per
+IP, counted before the ownership lookup. An earlier attempt with no transaction has nothing to expire:
+a payment still started on its old page later is a second payment the state machine flags
+`refund_due`. Tests: `notification.test.ts` ("changePaymentMethod" plus committed races with a
+settlement of the old attempt and two taps at once), `reorder-actions.test.ts`, `e2e/checkout.spec.ts`.
+
 ### 6.4 Voucher reversal
 
 On any `-> cancelled` of a web order, same transaction:
@@ -746,6 +767,16 @@ used_order_id = NULL, used_at = NULL WHERE used_order_id = $order AND status = '
 Each customer email mints its own `order_access_tokens` row. Magic links are rate limited and
 skipped silently when the limit is hit (§9.3). Idempotent via `order_notifications`, sent with
 `after()`, failures recorded and never thrown into a webhook. Never the gateway name.
+
+**2026-10-21 sandbox fixes:** the greeting uses the order's recipient name ("Halo Rina,"), never the
+linked customer row's (an unverified guest never renames it, so it can be the placeholder
+"Pelanggan Ammari"); a name that looks like a link or carries 5 or more digits is left out. The header
+shows the storefront's own logo (`<siteOrigin>/logos/ammari-primary.png`, https only, 24x28,
+alt "Ammari") next to "AMMARI". Totals show "Ongkir kurir" struck through, a highlighted "Subsidi
+ongkir Ammari -Rp20.000" and "Ongkir" (or "Gratis ongkir Rp0"), as rows in the text part too. A
+template change alters the payload: a send whose answer was lost before a deploy and retried after it
+gets Resend's 409 and is recorded as permanent, so deploy when `order_notifications` has no failed
+unsent rows. Admin shows the order's recipient name as "Pelanggan" for checkout orders.
 
 **As built (session 13).** `@ammari/commerce/emails`: pure templates (`templates.ts`, table-based
 inline-styled HTML in one 560px column plus a plain-text part, "Rp259.000", WIB, no em dash, never

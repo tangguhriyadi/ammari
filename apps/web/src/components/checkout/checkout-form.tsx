@@ -28,6 +28,7 @@ import { formatPriceIdr } from "@/lib/format";
 import { buildWhatsappUrl } from "@/lib/whatsapp";
 import { AreaCombobox } from "./area-combobox";
 import { SectionHeading, TextAreaField, TextField } from "./fields";
+import { ShippingCostRows } from "@/components/shipping-cost-rows";
 import { ShippingSection, type QuoteState } from "./shipping-section";
 
 // The checkout page's form (docs/plans/cart-checkout.md §4.3, §4.4, §4.5; docs/design/storefront.md
@@ -551,10 +552,13 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
             <dt>Subtotal</dt>
             <dd data-testid="summary-subtotal">{formatPriceIdr(cart.subtotal)}</dd>
           </div>
-          <div className="flex items-center justify-between gap-4">
-            <dt>Ongkir</dt>
-            <dd data-testid="summary-shipping">{buyerShipping === null ? "-" : formatPriceIdr(buyerShipping)}</dd>
-          </div>
+          <ShippingCostRows
+            buyerAmount={buyerShipping}
+            costAmount={quote.status === "ok" ? quote.quote.costAmount : null}
+            subsidyAmount={quote.status === "ok" ? quote.quote.subsidyAmount : null}
+            testIdPrefix="summary"
+            onSurface
+          />
           {totals.discount > 0 && (
             <div className="flex items-center justify-between gap-4">
               <dt>Voucher</dt>

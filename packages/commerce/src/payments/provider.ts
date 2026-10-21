@@ -115,7 +115,8 @@ export interface PaymentProvider {
    * when the gateway cannot be asked. */
   getPaymentStatus(providerOrderId: string, options?: GetPaymentStatusOptions): Promise<PaymentStatusReport | null>;
   /** Asks the gateway to end a still pending attempt (Midtrans `POST /v2/{order_id}/expire`), for
-   * the expiry sweep only (./sweep.ts). Returns the gateway's answer as a status report, or null
+   * the expiry sweep (./sweep.ts), a staff cancel (./staff.ts) and the buyer's "Ganti metode
+   * pembayaran" (./attempts.ts) only. Returns the gateway's answer as a status report, or null
    * when it refused because there is nothing to expire (no transaction yet, or the transaction is
    * no longer pending): the caller then fetches the status again. Throws PaymentProviderError when
    * the gateway cannot be asked. Never decides anything itself: the report goes through the state

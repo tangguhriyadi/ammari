@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ShoppingBag } from "lucide-react";
 import { CART_COUNT_EVENT, CART_COUNT_PATH, type CartCountDetail } from "@/lib/cart/count-event";
 
 /** The header's cart icon (docs/design/storefront.md §4, rendered only while the cart flag is on).
@@ -71,18 +70,46 @@ export function CartLink() {
       aria-label={count > 0 ? `Keranjang, ${count} barang` : "Keranjang"}
       className="relative flex size-11 items-center justify-center text-ink hover:text-ink-muted"
     >
-      <ShoppingBag className="size-5" strokeWidth={1.4} aria-hidden="true" />
+      <BagIcon />
       {count > 0 && (
         <span
           data-testid="cart-count"
           aria-hidden="true"
-          // Just right of the 20px bag, which sits centred in the 44px box (x 12 to 32); anchored
-          // on its left edge so a two-digit count grows outward, away from the icon.
-          className="absolute top-2 left-[31px] text-[10px] leading-none font-medium tabular-nums"
+          // A notification badge on the bag's upper right corner: the 20px bag sits centred in the
+          // 44px box (x 12 to 32, y 12 to 32), the badge's centre near (31, 13). Anchored on its
+          // left edge so "9+" grows outward, away from the icon.
+          className="absolute top-[6px] left-[24px] flex h-4 min-w-4 items-center justify-center rounded-full bg-badge px-1 text-[10px] leading-none font-medium text-white tabular-nums"
         >
-          {count}
+          {badgeLabel(count)}
         </span>
       )}
     </Link>
+  );
+}
+
+/** The badge shows at most "9+"; the accessible name keeps the exact count. */
+export function badgeLabel(count: number): string {
+  return count > 9 ? "9+" : String(count);
+}
+
+/** A plain shopping bag: body with the handle above it, nothing inside (owner choice 2026-10-21,
+ * replacing lucide's ShoppingBag whose inner curve read as a smile). Drawn like a lucide icon
+ * (24 grid, round joins) with the account icon's 1.4 stroke. */
+function BagIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-5"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect x="4.5" y="8" width="15" height="13" />
+      <path d="M8.5 8V6.5a3.5 3.5 0 0 1 7 0V8" />
+    </svg>
   );
 }

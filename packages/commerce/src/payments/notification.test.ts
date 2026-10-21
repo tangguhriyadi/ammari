@@ -23,10 +23,10 @@ import type { Tx } from "../db";
 import { adjustStock } from "../stock/ledger";
 import { transitionOrderStatus } from "../orders/lifecycle";
 import { reserveStockForOrder } from "../stock/reservations";
-import { reopenPaymentPage } from "./attempts";
+import { changePaymentMethod, reopenPaymentPage } from "./attempts";
 import { createFakePaymentProvider } from "./fake";
 import { handlePaymentNotification } from "./notification";
-import type { PaymentProvider, PaymentStatusReport } from "./provider";
+import { PaymentProviderError, type PaymentProvider, type PaymentStatusReport } from "./provider";
 import { midtransSignature, parsePaymentStatusBody, verifyMidtransSignature } from "./status";
 import { cancelCheckoutOrderByStaff } from "./staff";
 import { syncLatestPaymentStatus } from "./sync";
@@ -55,10 +55,7 @@ const provider: PaymentProvider = {
     statusCalls.push(providerOrderId);
     const queued = gatewayQueue.get(providerOrderId)?.shift();
     const body = queued ?? gateway.get(providerOrderId);
-    if (body === "down") {
-      const { PaymentProviderError } = await import("./provider");
-      throw new PaymentProviderError("unavailable", "stub gateway down");
-    }
+    if (body === "down") throw new PaymentProviderError("unavailable", "stub gateway down");
     return body ? parsePaymentStatusBody(body) : null;
   },
   verifyNotificationSignature: (fields) => verifyMidtransSignature(fields, KEY),
@@ -177,7 +174,7 @@ async function checkoutOrder(
       status: "created",
       // Without a page: an attempt whose page request ended a minute ago (not still in flight).
       ...(options.withPage === false
-        ? { createdAt: new Date(Date.now() - 60_000) }
+        ? { createdAt: new Date(Date.now() - 60_000), updatedAt: new Date(Date.now() - 60_000) }
         : { snapToken: "snap-token", redirectUrl: "https://app.sandbox.midtrans.com/snap/v4/redirection/snap-token" }),
       expiresAt: order.paymentExpiresAt,
     })
@@ -512,7 +509,7 @@ describe("reopenPaymentPage (finish page retry)", () => {
   test("busy while the previous attempt's page request may still be answered (no second payable page)", async () => {
     await withRollback(async (tx) => {
       const fixture = await checkoutOrder(tx, { withPage: false });
-      await tx.update(payments).set({ createdAt: sql`now()` }).where(eq(payments.id, fixture.paymentId));
+      await tx.update(payments).set({ createdAt: sql`now()`, updatedAt: sql`now()` }).where(eq(payments.id, fixture.paymentId));
       const runtime = { provider, orderIdPrefix: "TEST-", paymentExpiryMinutes: 60, stockHoldMinutes: 75 };
       expect(await reopenPaymentPage(tx, runtime, { orderId: fixture.orderId, finishUrl: () => "http://localhost:3000/x" })).toEqual({ ok: false, reason: "busy" });
       expect(await tx.select().from(payments).where(eq(payments.orderId, fixture.orderId))).toHaveLength(1);
@@ -526,6 +523,205 @@ describe("reopenPaymentPage (finish page retry)", () => {
       const result = await reopenPaymentPage(tx, { provider: failing, orderIdPrefix: "TEST-", paymentExpiryMinutes: 60, stockHoldMinutes: 75 }, { orderId: fixture.orderId, finishUrl: () => "http://localhost:3000/x" });
       expect(result).toEqual({ ok: false, reason: "unavailable" });
       expect(await tx.select({ attempt: payments.attempt, redirectUrl: payments.redirectUrl }).from(payments).where(eq(payments.orderId, fixture.orderId))).toHaveLength(2);
+    });
+  });
+});
+
+describe("changePaymentMethod (\"Ganti metode pembayaran\")", () => {
+  const expireCalls: string[] = [];
+  /** The stub gateway with Midtrans Expire: only a pending transaction can be expired; anything else
+   * is refused (404/412), answered as null like the real adapter. */
+  const expiring: PaymentProvider = {
+    ...provider,
+    async expirePayment(providerOrderId: string): Promise<PaymentStatusReport | null> {
+      expireCalls.push(providerOrderId);
+      const body = gateway.get(providerOrderId);
+      if (body === "down") throw new PaymentProviderError("unavailable", "stub gateway down");
+      if (!body || body.transaction_status !== "pending") return null;
+      const expired = { ...body, transaction_status: "expire", status_code: "407" };
+      gateway.set(providerOrderId, expired);
+      return parsePaymentStatusBody(expired);
+    },
+  };
+  const finishUrl = (orderNo: string) => `http://localhost:3000/checkout/finish?order=${orderNo}`;
+  function runtimeWith(overrides: Partial<PaymentProvider> = {}) {
+    const createPayment = vi.fn(expiring.createPayment);
+    return { createPayment, runtime: { provider: { ...expiring, createPayment, ...overrides }, orderIdPrefix: "TEST-", paymentExpiryMinutes: 60, stockHoldMinutes: 75 } };
+  }
+  async function attemptRows(db: TestDatabase, orderId: string) {
+    return db
+      .select({ attempt: payments.attempt, status: payments.status, redirectUrl: payments.redirectUrl })
+      .from(payments)
+      .where(eq(payments.orderId, orderId))
+      .orderBy(payments.attempt);
+  }
+
+  test("a GoPay QR attempt left pending: expired at the gateway first, then a new attempt for the rest of the same window; its late expiry never cancels the order", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await checkoutOrder(tx);
+      gatewaySays(fixture.providerOrderId, "pending", fixture.total, { payment_type: "gopay" });
+      await tx.update(orders).set({ paymentExpiresAt: sql`now() + interval '30 minutes 20 seconds'` }).where(eq(orders.id, fixture.orderId));
+      const { runtime, createPayment } = runtimeWith();
+      expireCalls.length = 0;
+
+      const result = await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl });
+
+      expect(result).toEqual({
+        ok: true,
+        redirectUrl: `http://localhost:3000/api/test/payments/TEST-${fixture.orderNo}-2`,
+        // The earlier attempt's end, applied (the caller follows up on it).
+        applied: [{ outcome: "expired", orderNo: fixture.orderNo, productSlugs: [] }],
+      });
+      expect(expireCalls).toEqual([fixture.providerOrderId]);
+      // Expired before the new page was asked for; the new page has every method again.
+      expect(createPayment).toHaveBeenCalledTimes(1);
+      expect(createPayment.mock.calls[0]?.[0]).toMatchObject({ providerOrderId: `TEST-${fixture.orderNo}-2`, grossAmount: fixture.total, expiryMinutes: 30, finishUrl: finishUrl(fixture.orderNo) });
+      expect(await attemptRows(tx, fixture.orderId)).toEqual([
+        { attempt: 1, status: "expired", redirectUrl: expect.any(String) },
+        { attempt: 2, status: "created", redirectUrl: `http://localhost:3000/api/test/payments/TEST-${fixture.orderNo}-2` },
+      ]);
+      const order = await orderRow(tx, fixture.orderId);
+      expect(order).toMatchObject({ status: "awaiting_payment", paymentStatus: "pending" });
+      expect((await holds(tx, fixture.orderId)).map((hold) => hold.status)).toEqual(["active"]);
+
+      // The gateway's own expire notification for attempt 1 arrives late: the order stays payable.
+      const late = await handlePaymentNotification(tx, provider, notification(statusBody(fixture.providerOrderId, "expire", fixture.total)));
+      expect(late).toMatchObject({ httpStatus: 200 });
+      expect(await orderRow(tx, fixture.orderId)).toMatchObject({ status: "awaiting_payment", paymentStatus: "pending" });
+      // "Lanjutkan pembayaran" now reopens the new page; paying it sells once.
+      expect(await reopenPaymentPage(tx, runtime, { orderId: fixture.orderId, finishUrl })).toEqual({ ok: true, redirectUrl: result.ok ? result.redirectUrl : null });
+      await handlePaymentNotification(tx, provider, gatewaySays(`TEST-${fixture.orderNo}-2`, "settlement", fixture.total));
+      expect(await orderRow(tx, fixture.orderId)).toMatchObject({ status: "to_ship", paymentStatus: "paid", needsAttention: [] });
+      expect(await sales(tx, fixture.sku)).toHaveLength(1);
+    });
+  });
+
+  test("an attempt with no transaction yet needs no expiry; the new attempt opens", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await checkoutOrder(tx);
+      gateway.delete(fixture.providerOrderId);
+      const { runtime } = runtimeWith();
+      expireCalls.length = 0;
+      const result = await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl });
+      expect(result).toMatchObject({ ok: true });
+      expect(expireCalls).toEqual([]);
+      expect((await attemptRows(tx, fixture.orderId)).map((row) => row.attempt)).toEqual([1, 2]);
+    });
+  });
+
+  test("the earlier attempt was paid meanwhile: the order is paid once, no new attempt or page", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await checkoutOrder(tx);
+      gatewaySays(fixture.providerOrderId, "settlement", fixture.total);
+      const { runtime, createPayment } = runtimeWith();
+      const result = await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl });
+      expect(result).toMatchObject({ ok: false, reason: "paid", applied: [{ outcome: "paid", orderNo: fixture.orderNo }] });
+      expect(createPayment).not.toHaveBeenCalled();
+      expect(await attemptRows(tx, fixture.orderId)).toEqual([{ attempt: 1, status: "paid", redirectUrl: expect.any(String) }]);
+      expect(await orderRow(tx, fixture.orderId)).toMatchObject({ status: "to_ship", paymentStatus: "paid", needsAttention: [] });
+      expect(await sales(tx, fixture.sku)).toHaveLength(1);
+    });
+  });
+
+  test("paid between the status check and the expiry (the gateway refuses the expire): paid once, never a second page", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await checkoutOrder(tx);
+      // The first status says pending; by the time we expire it, the buyer has paid.
+      gatewayQueue.set(fixture.providerOrderId, [statusBody(fixture.providerOrderId, "pending", fixture.total)]);
+      gateway.set(fixture.providerOrderId, statusBody(fixture.providerOrderId, "settlement", fixture.total));
+      const { runtime, createPayment } = runtimeWith();
+      expect(await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl })).toMatchObject({ ok: false, reason: "paid" });
+      expect(createPayment).not.toHaveBeenCalled();
+      expect((await attemptRows(tx, fixture.orderId)).map((row) => [row.attempt, row.status])).toEqual([[1, "paid"]]);
+      expect(await orderRow(tx, fixture.orderId)).toMatchObject({ status: "to_ship", paymentStatus: "paid", needsAttention: [] });
+    });
+  });
+
+  test("a gateway that cannot be asked, or an attempt still pending after the expire: refused, the order exactly as before", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await checkoutOrder(tx);
+      gateway.set(fixture.providerOrderId, "down");
+      const { runtime, createPayment } = runtimeWith();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl })).toMatchObject({ ok: false, reason: "unavailable" });
+      expect(await attemptRows(tx, fixture.orderId)).toEqual([{ attempt: 1, status: "created", redirectUrl: expect.any(String) }]);
+
+      // Midtrans refused the expire and still reports it pending.
+      gatewaySays(fixture.providerOrderId, "pending", fixture.total);
+      const stubborn = runtimeWith({ expirePayment: async () => null });
+      expect(await changePaymentMethod(tx, stubborn.runtime, { orderId: fixture.orderId, finishUrl })).toMatchObject({ ok: false, reason: "busy" });
+      expect(await attemptRows(tx, fixture.orderId)).toEqual([{ attempt: 1, status: "pending", redirectUrl: expect.any(String) }]);
+      expect(createPayment).not.toHaveBeenCalled();
+      expect(stubborn.createPayment).not.toHaveBeenCalled();
+      expect(await orderRow(tx, fixture.orderId)).toMatchObject({ status: "awaiting_payment", paymentStatus: "pending" });
+      warn.mockRestore();
+    });
+  });
+
+  test("an expiry whose answer was lost (timeout): refused, but the reservation stays the latest attempt, so the gateway's later expiry never cancels the order", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await checkoutOrder(tx);
+      gatewaySays(fixture.providerOrderId, "pending", fixture.total);
+      const { runtime, createPayment } = runtimeWith({
+        async expirePayment(providerOrderId: string) {
+          // The gateway ends it, but the answer never reaches us.
+          gateway.set(providerOrderId, statusBody(providerOrderId, "expire", fixture.total));
+          throw new PaymentProviderError("unavailable", "stub gateway timed out");
+        },
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl })).toMatchObject({ ok: false, reason: "unavailable" });
+      expect(createPayment).not.toHaveBeenCalled();
+      expect((await attemptRows(tx, fixture.orderId)).map((row) => [row.attempt, row.status, row.redirectUrl])).toEqual([
+        [1, "created", expect.any(String)],
+        [2, "created", null],
+      ]);
+      await handlePaymentNotification(tx, provider, notification(statusBody(fixture.providerOrderId, "expire", fixture.total)));
+      expect(await orderRow(tx, fixture.orderId)).toMatchObject({ status: "awaiting_payment", paymentStatus: "pending" });
+      warn.mockRestore();
+    });
+  });
+
+  test("refused when the order is no longer payable, at the attempt cap, or while a page is being prepared", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await checkoutOrder(tx);
+      gateway.delete(fixture.providerOrderId);
+      const { runtime } = runtimeWith();
+
+      await tx.update(orders).set({ paymentExpiresAt: sql`now() + interval '1 minute'` }).where(eq(orders.id, fixture.orderId));
+      expect(await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl })).toEqual({ ok: false, reason: "closed" });
+      await tx.update(orders).set({ paymentExpiresAt: sql`now() + interval '40 minutes'` }).where(eq(orders.id, fixture.orderId));
+
+      // A page request for the latest attempt may still be answered.
+      await tx.update(payments).set({ snapToken: null, redirectUrl: null, updatedAt: sql`now()` }).where(eq(payments.id, fixture.paymentId));
+      expect(await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl })).toEqual({ ok: false, reason: "busy" });
+      await tx.update(payments).set({ updatedAt: sql`now() - interval '1 minute'` }).where(eq(payments.id, fixture.paymentId));
+
+      // Attempts 2 to 5 exist (ended): the cap.
+      for (const attempt of [2, 3, 4, 5]) {
+        await tx.insert(payments).values({ orderId: fixture.orderId, provider: "midtrans", providerOrderId: `TEST-${fixture.orderNo}-${attempt}`, attempt, grossAmount: fixture.total, status: "expired" });
+      }
+      expect(await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl })).toEqual({ ok: false, reason: "limit" });
+
+      await tx.update(orders).set({ status: "cancelled", paymentStatus: "expired", cancelReason: "payment_expired" }).where(eq(orders.id, fixture.orderId));
+      expect(await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl })).toEqual({ ok: false, reason: "closed" });
+    });
+  });
+
+  test("a gateway page failure leaves the new attempt without a page (unavailable); the earlier one stays ended", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await checkoutOrder(tx);
+      gatewaySays(fixture.providerOrderId, "pending", fixture.total);
+      const failing = createFakePaymentProvider({ baseUrl: "http://localhost:3000", failWith: "unavailable" }).createPayment;
+      const { runtime } = runtimeWith({ createPayment: failing });
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(await changePaymentMethod(tx, runtime, { orderId: fixture.orderId, finishUrl })).toMatchObject({ ok: false, reason: "unavailable" });
+      expect((await attemptRows(tx, fixture.orderId)).map((row) => [row.attempt, row.status, row.redirectUrl])).toEqual([
+        [1, "expired", expect.any(String)],
+        [2, "created", null],
+      ]);
+      expect(await orderRow(tx, fixture.orderId)).toMatchObject({ status: "awaiting_payment", paymentStatus: "pending" });
+      error.mockRestore();
     });
   });
 });
@@ -642,7 +838,14 @@ describe("refunds, chargebacks and duplicate payments", () => {
 
 describe("concurrency", () => {
   test("two notifications for the same order arriving at once sell once", async () => {
-    const fixture = await checkoutOrder(testDb, { stock: 3 });
+    // Every committed fixture is cleaned up, also when an assertion fails half way.
+    const created: CheckoutFixture[] = [];
+    const committedOrder = async (options: Parameters<typeof checkoutOrder>[1]) => {
+      const made = await checkoutOrder(testDb, options);
+      created.push(made);
+      return made;
+    };
+    const fixture = await committedOrder({ stock: 3 });
     try {
       const body = gatewaySays(fixture.providerOrderId, "settlement", fixture.total);
       const [first, second] = await Promise.all([handlePaymentNotification(testDb, provider, body), handlePaymentNotification(testDb, provider, body)]);
@@ -651,7 +854,7 @@ describe("concurrency", () => {
       expect(await orderRow(testDb, fixture.orderId)).toMatchObject({ status: "to_ship", paymentStatus: "paid" });
 
       // A settlement and an expire racing: the fetched status (settlement) wins either way.
-      const other = await checkoutOrder(testDb, { stock: 3 });
+      const other = await committedOrder({ stock: 3 });
       const settle = gatewaySays(other.providerOrderId, "settlement", other.total);
       const expire = notification(statusBody(other.providerOrderId, "expire", other.total));
       await Promise.all([handlePaymentNotification(testDb, provider, settle), handlePaymentNotification(testDb, provider, expire)]);
@@ -659,7 +862,7 @@ describe("concurrency", () => {
 
       // A real interleave: the first call is told "expire", the second "settlement" (the buyer paid
       // at the last second). Never a mixed state: either sold, or cancelled + paid_after_cancel.
-      const raced = await checkoutOrder(testDb, { stock: 3 });
+      const raced = await committedOrder({ stock: 3 });
       gatewayQueue.set(raced.providerOrderId, [statusBody(raced.providerOrderId, "expire", raced.total), statusBody(raced.providerOrderId, "settlement", raced.total)]);
       gateway.set(raced.providerOrderId, statusBody(raced.providerOrderId, "settlement", raced.total));
       const any = notification(statusBody(raced.providerOrderId, "pending", raced.total));
@@ -675,7 +878,7 @@ describe("concurrency", () => {
       }
 
       // Two "Buka halaman pembayaran" taps at once: one new attempt, never two payable pages.
-      const pageless = await checkoutOrder(testDb, { withPage: false });
+      const pageless = await committedOrder({ withPage: false });
       const runtime = { provider, orderIdPrefix: "TEST-", paymentExpiryMinutes: 60, stockHoldMinutes: 75 };
       const reopen = () => reopenPaymentPage(testDb, runtime, { orderId: pageless.orderId, finishUrl: () => "http://localhost:3000/x" });
       const results = await Promise.all([reopen(), reopen()]);
@@ -686,10 +889,58 @@ describe("concurrency", () => {
       const attempts = await testDb.select({ attempt: payments.attempt }).from(payments).where(eq(payments.orderId, pageless.orderId));
       expect(attempts).toHaveLength(2);
 
-      await cleanUp([fixture, other, raced, pageless]);
-    } catch (error) {
-      await cleanUp([fixture]).catch(() => undefined);
-      throw error;
+      // "Ganti metode pembayaran" racing a settlement of the earlier attempt (the buyer paid the old
+      // GoPay QR at the last second): paid exactly once, never a second payable page.
+      const changing = await committedOrder({ stock: 3 });
+      gatewayQueue.set(changing.providerOrderId, [statusBody(changing.providerOrderId, "pending", changing.total)]);
+      gateway.set(changing.providerOrderId, statusBody(changing.providerOrderId, "settlement", changing.total));
+      const createPayment = vi.fn(provider.createPayment);
+      const expiringRuntime = {
+        provider: { ...provider, createPayment, expirePayment: async () => null },
+        orderIdPrefix: "TEST-",
+        paymentExpiryMinutes: 60,
+        stockHoldMinutes: 75,
+      };
+      const quietWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const [changed] = await Promise.all([
+        changePaymentMethod(testDb, expiringRuntime, { orderId: changing.orderId, finishUrl: () => "http://localhost:3000/x" }),
+        handlePaymentNotification(testDb, provider, notification(statusBody(changing.providerOrderId, "settlement", changing.total))),
+      ]);
+      expect(changed).toMatchObject({ ok: false });
+      expect(createPayment).not.toHaveBeenCalled();
+      expect(await orderRow(testDb, changing.orderId)).toMatchObject({ status: "to_ship", paymentStatus: "paid", needsAttention: [] });
+      expect(await sales(testDb, changing.sku)).toHaveLength(1);
+      expect((await testDb.select({ attempt: payments.attempt, status: payments.status }).from(payments).where(eq(payments.orderId, changing.orderId)))).toEqual([{ attempt: 1, status: "paid" }]);
+
+      // Two "Ganti metode pembayaran" taps at once: one new attempt and page, the other is told it is being prepared.
+      const twice = await committedOrder({ stock: 3 });
+      gateway.set(twice.providerOrderId, statusBody(twice.providerOrderId, "pending", twice.total));
+      const twiceRuntime = {
+        provider: {
+          ...provider,
+          async expirePayment(id: string) {
+            const expired = statusBody(id, "expire", twice.total);
+            gateway.set(id, expired);
+            return parsePaymentStatusBody(expired);
+          },
+        },
+        orderIdPrefix: "TEST-",
+        paymentExpiryMinutes: 60,
+        stockHoldMinutes: 75,
+      };
+      const change = () => changePaymentMethod(testDb, twiceRuntime, { orderId: twice.orderId, finishUrl: () => "http://localhost:3000/x" });
+      const both = await Promise.all([change(), change()]);
+      expect(both.filter((result) => result.ok)).toHaveLength(1);
+      expect(both.find((result) => !result.ok)).toEqual({ ok: false, reason: "busy" });
+      const twiceAttempts = await testDb.select({ attempt: payments.attempt, status: payments.status }).from(payments).where(eq(payments.orderId, twice.orderId)).orderBy(payments.attempt);
+      expect(twiceAttempts).toEqual([
+        { attempt: 1, status: "expired" },
+        { attempt: 2, status: "created" },
+      ]);
+      quietWarn.mockRestore();
+
+    } finally {
+      await cleanUp(created);
     }
   });
 });

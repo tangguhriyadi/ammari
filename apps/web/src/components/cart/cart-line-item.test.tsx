@@ -4,9 +4,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { CartLine } from "@ammari/commerce/cart";
 import { CART_COUNT_EVENT, CART_STATUS_EVENT } from "@/lib/cart/count-event";
 import { CartLineItem } from "./cart-line-item";
-
-const refresh = vi.fn();
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
+import { CartPieceCount, CartSubtotal, OptimisticCartProvider } from "./optimistic-cart";
 const updateCartItemQtyAction = vi.fn();
 const removeCartItemAction = vi.fn();
 vi.mock("@/lib/cart/actions", () => ({
@@ -45,8 +43,25 @@ function listen(eventName: string) {
   return { received, stop: () => window.removeEventListener(eventName, listener) };
 }
 
+function renderCart(lines: CartLine[]) {
+  return render(
+    <OptimisticCartProvider lines={lines}>
+      <ul>
+        {lines.map((line) => (
+          <CartLineItem key={line.sku} line={line} imageUrl={null} canAddPieces />
+        ))}
+      </ul>
+      <p data-testid="subtotal">
+        <CartSubtotal fallback={0} />
+      </p>
+      <p data-testid="pieces">
+        <CartPieceCount fallback={0} />
+      </p>
+    </OptimisticCartProvider>,
+  );
+}
+
 beforeEach(() => {
-  refresh.mockReset();
   updateCartItemQtyAction.mockReset();
   removeCartItemAction.mockReset();
 });
@@ -60,7 +75,7 @@ describe("CartLineItem", () => {
     expect(screen.getByTestId("cart-line-qty")).toHaveTextContent("Jumlah 2");
   });
 
-  test("'+' sets qty + 1, then announces the count and status and refreshes the page", async () => {
+  test("'+' sets qty + 1, then announces the count and status", async () => {
     updateCartItemQtyAction.mockResolvedValue({ ok: true, pieceCount: 3, mergeTrimmed: false });
     const counts = listen(CART_COUNT_EVENT);
     const statuses = listen(CART_STATUS_EVENT);
@@ -69,32 +84,86 @@ describe("CartLineItem", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Tambah jumlah Haura, Sage, M" })));
 
     expect(updateCartItemQtyAction).toHaveBeenCalledWith({ sku: "SAGE-M", qty: 3 });
-    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
-    expect(counts.received).toEqual([{ pieceCount: 3 }]);
+    await waitFor(() => expect(counts.received).toEqual([{ pieceCount: 3 }]));
     expect(statuses.received).toEqual(["Jumlah Haura, Sage, M menjadi 3."]);
     counts.stop();
     statuses.stop();
   });
 
-  test("a second tap while the first is in flight sends nothing", async () => {
-    let resolveFirst: (value: unknown) => void = () => {};
-    updateCartItemQtyAction.mockReturnValueOnce(new Promise((resolve) => (resolveFirst = resolve)));
-    renderLine(cartLine());
-    const plus = screen.getByRole("button", { name: "Tambah jumlah Haura, Sage, M" });
+  test("optimistic: '+' changes quantity, line total, subtotal, piece count and the header at once", async () => {
+    let resolveCall: (value: unknown) => void = () => {};
+    updateCartItemQtyAction.mockReturnValueOnce(new Promise((resolve) => (resolveCall = resolve)));
+    const counts = listen(CART_COUNT_EVENT);
+    renderCart([cartLine(), cartLine({ sku: "SAGE-L", sizeLabel: "L", qty: 1, lineTotal: 269_000 })]);
+    expect(screen.getByTestId("subtotal")).toHaveTextContent("Rp807.000");
 
-    fireEvent.click(plus);
-    expect(plus).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(plus);
-    expect(updateCartItemQtyAction).toHaveBeenCalledTimes(1);
-    await act(async () => resolveFirst({ ok: true, pieceCount: 3, mergeTrimmed: false }));
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Tambah jumlah Haura, Sage, M" })));
+
+    // Before the server has answered.
+    expect(screen.getAllByTestId("cart-line-qty")[0]).toHaveTextContent("Jumlah 3");
+    expect(screen.getByText("Rp807.000", { selector: "p" })).toBeInTheDocument();
+    expect(screen.getByTestId("subtotal")).toHaveTextContent("Rp1.076.000");
+    expect(screen.getByTestId("pieces")).toHaveTextContent("4 barang");
+    expect(counts.received).toEqual([{ pieceCount: 4 }]);
+    await act(async () => resolveCall({ ok: true, pieceCount: 4, mergeTrimmed: false }));
+    expect(counts.received).toEqual([{ pieceCount: 4 }, { pieceCount: 4 }]);
+    counts.stop();
   });
 
-  test("a refusal shows the server's message and does not refresh", async () => {
+  test("optimistic: a second tap while the first is in flight sends the next quantity", async () => {
+    const resolvers: ((value: unknown) => void)[] = [];
+    updateCartItemQtyAction.mockImplementation(() => new Promise((resolve) => resolvers.push(resolve)));
+    renderCart([cartLine()]);
+    const plus = screen.getByRole("button", { name: "Tambah jumlah Haura, Sage, M" });
+
+    act(() => fireEvent.click(plus));
+    act(() => fireEvent.click(plus));
+    expect(updateCartItemQtyAction.mock.calls.map(([input]) => input)).toEqual([
+      { sku: "SAGE-M", qty: 3 },
+      { sku: "SAGE-M", qty: 4 },
+    ]);
+    expect(screen.getByTestId("cart-line-qty")).toHaveTextContent("Jumlah 4");
+    await act(async () => resolvers.forEach((resolve) => resolve({ ok: true, pieceCount: 4, mergeTrimmed: false })));
+  });
+
+  test("optimistic: a refusal rolls everything back and shows the server's message", async () => {
+    let resolveCall: (value: unknown) => void = () => {};
+    updateCartItemQtyAction.mockReturnValueOnce(new Promise((resolve) => (resolveCall = resolve)));
+    const counts = listen(CART_COUNT_EVENT);
+    renderCart([cartLine()]);
+
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Tambah jumlah Haura, Sage, M" })));
+    expect(screen.getByTestId("cart-line-qty")).toHaveTextContent("Jumlah 3");
+
+    await act(async () => resolveCall({ ok: false, message: "Stok tidak cukup untuk jumlah ini" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Stok tidak cukup untuk jumlah ini");
+    expect(screen.getByTestId("cart-line-qty")).toHaveTextContent("Jumlah 2");
+    expect(screen.getByTestId("subtotal")).toHaveTextContent("Rp538.000");
+    expect(screen.getByTestId("pieces")).toHaveTextContent("2 barang");
+    expect(counts.received).toEqual([{ pieceCount: 3 }, { pieceCount: 2 }]);
+    counts.stop();
+  });
+
+  test("optimistic: × hides the line at once; a refused removal brings it back with the message", async () => {
+    let resolveCall: (value: unknown) => void = () => {};
+    removeCartItemAction.mockReturnValueOnce(new Promise((resolve) => (resolveCall = resolve)));
+    renderCart([cartLine()]);
+
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Hapus Haura, Sage, M" })));
+    expect(screen.queryByTestId("cart-line")).toBeNull();
+    expect(screen.getByTestId("subtotal")).toHaveTextContent("Rp0");
+
+    await act(async () => resolveCall({ ok: false, message: "Terjadi kesalahan. Coba lagi." }));
+    expect(screen.getByTestId("cart-line")).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Terjadi kesalahan. Coba lagi.");
+    expect(screen.getByTestId("subtotal")).toHaveTextContent("Rp538.000");
+  });
+
+  test("a refusal shows the server's message", async () => {
     updateCartItemQtyAction.mockResolvedValue({ ok: false, message: "Stok tidak cukup untuk jumlah ini" });
     renderLine(cartLine());
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Tambah jumlah Haura, Sage, M" })));
     expect(await screen.findByRole("alert")).toHaveTextContent("Stok tidak cukup untuk jumlah ini");
-    expect(refresh).not.toHaveBeenCalled();
   });
 
   test("a call that rejects shows a retry message instead of crashing the page", async () => {
@@ -103,7 +172,6 @@ describe("CartLineItem", () => {
     renderLine(cartLine());
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Hapus Haura, Sage, M" })));
     expect(await screen.findByRole("alert")).toHaveTextContent("Terjadi kesalahan. Coba lagi.");
-    expect(refresh).not.toHaveBeenCalled();
     consoleError.mockRestore();
   });
 

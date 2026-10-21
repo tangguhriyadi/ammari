@@ -9,9 +9,10 @@ import { customerOrderStatus, type CustomerOrderStatus } from "./status";
 import { visibleToCustomerSql } from "./access";
 
 // Reads for "Pesanan saya" (`/orders`, `/orders/[orderNo]`, the /account list; docs/plans/
-// cart-checkout.md §9.1). Customer-facing: no cost column is ever selected (order_items.unit_cost,
-// shipping cost and subsidy stay out), nothing returns a stock number, and who may see which
-// order is decided by ./access.ts before anything here runs.
+// cart-checkout.md §9.1). Customer-facing: no cost column is ever selected (order_items.unit_cost
+// stays out; the locked ongkir quote's courier cost and subsidy are the buyer's own checkout figures
+// and are shown since the 2026-10-21 sandbox run), nothing returns a stock number, and who may see
+// which order is decided by ./access.ts before anything here runs.
 
 export const ORDERS_PAGE_SIZE = 10;
 
@@ -126,8 +127,17 @@ function linesAddUp(orderNo: string, items: readonly { qty: number; unitPrice: n
 
 export interface CustomerOrderDetail extends CustomerOrderRow {
   lines: (CustomerOrderItem & { sku: string; lineTotal: number | null })[];
-  /** Checkout orders only. `shipping` is the buyer's share of ongkir as paid. */
-  totals: { subtotal: number; shipping: number; discount: number; total: number; courierLabel: string | null } | null;
+  /** Checkout orders only. `shipping` is the buyer's share of ongkir as paid; `shippingCost` and
+   * `shippingSubsidy` the locked quote (courier cost, Ammari's subsidy). */
+  totals: {
+    subtotal: number;
+    shipping: number;
+    shippingCost: number | null;
+    shippingSubsidy: number | null;
+    discount: number;
+    total: number;
+    courierLabel: string | null;
+  } | null;
   /** The one-line address on the order (recipient, phone, street, area). */
   address: string | null;
   /** Milestones with a time, oldest first ("Dipesan", "Dibayar", ...), in WIB. */
@@ -147,6 +157,8 @@ export async function loadCustomerOrderDetail(orderId: string, db: Database = de
       ...listColumns,
       subtotal: orders.subtotalAmount,
       shipping: orders.shippingAmount,
+      shippingCost: orders.shippingCostAmount,
+      shippingSubsidy: orders.shippingSubsidyAmount,
       discount: orders.discountAmount,
       courierLabel: orders.shippingCourierLabel,
       address: orders.shippingAddress,
@@ -198,7 +210,17 @@ export async function loadCustomerOrderDetail(orderId: string, db: Database = de
   return {
     ...row,
     lines: items.map(({ unitPrice, ...item }) => ({ ...item, lineTotal: row.isCheckout ? item.qty * unitPrice : null })),
-    totals: row.isCheckout ? { subtotal: order.subtotal, shipping: order.shipping, discount: order.discount, total: order.total, courierLabel: order.courierLabel } : null,
+    totals: row.isCheckout
+      ? {
+          subtotal: order.subtotal,
+          shipping: order.shipping,
+          shippingCost: order.shippingCost,
+          shippingSubsidy: order.shippingSubsidy,
+          discount: order.discount,
+          total: order.total,
+          courierLabel: order.courierLabel,
+        }
+      : null,
     address: order.address,
     timeline: milestones.filter((entry): entry is [string, Date] => entry[1] !== null).sort((a, b) => a[1].getTime() - b[1].getTime()).map(([label, at]) => ({ label, at: formatJakartaDateTime(at) })),
     shipment: { courier: order.courier ?? (order.trackingNumber ? order.courierLabel : null), trackingNumber: order.trackingNumber },

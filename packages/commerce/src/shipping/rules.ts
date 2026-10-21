@@ -61,6 +61,41 @@ export function splitShippingCost(costAmount: number): ShippingCostSplit {
   return { costAmount, subsidyAmount, buyerAmount: costAmount - subsidyAmount };
 }
 
+/** The buyer-facing wording of the ongkir rows (owner request after the 2026-10-21 sandbox run: the
+ * subsidy must be clearly visible). Shared by checkout, the finish page, the order page and the
+ * emails, so every place says the same. */
+export const SHIPPING_DISPLAY_LABELS = {
+  /** The courier cost as quoted, shown struck through. */
+  courierCost: "Ongkir kurir",
+  /** Ammari's share, shown highlighted as a negative amount. */
+  subsidy: "Subsidi ongkir Ammari",
+  /** What the buyer pays for shipping. */
+  buyer: "Ongkir",
+  /** The buyer's row when the subsidy covers everything. */
+  free: "Gratis ongkir",
+} as const;
+
+export interface ShippingDisplay {
+  /** Set only when a subsidy applied: the courier cost and the subsidy rows are then shown. */
+  subsidy: { courierCost: number; amount: number } | null;
+  /** "Ongkir", or "Gratis ongkir" when the buyer pays nothing for shipping. */
+  buyerLabel: string;
+  buyerAmount: number;
+}
+
+/** The ongkir rows for an order or a quote: the buyer's share, plus the struck-through courier cost
+ * and the subsidy whenever the locked quote has a subsidy above 0. Without a quote (a manual
+ * order) only the buyer's row. */
+export function shippingDisplay(amounts: { buyerAmount: number; costAmount: number | null; subsidyAmount: number | null }): ShippingDisplay {
+  const subsidy =
+    amounts.costAmount !== null && amounts.subsidyAmount !== null && amounts.subsidyAmount > 0 ? { courierCost: amounts.costAmount, amount: amounts.subsidyAmount } : null;
+  return {
+    subsidy,
+    buyerLabel: amounts.buyerAmount === 0 && subsidy ? SHIPPING_DISPLAY_LABELS.free : SHIPPING_DISPLAY_LABELS.buyer,
+    buyerAmount: amounts.buyerAmount,
+  };
+}
+
 export interface WeightLine {
   sku: string;
   qty: number;

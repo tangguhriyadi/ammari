@@ -46,6 +46,9 @@ export interface FinishOrderView {
   lines: FinishOrderLine[];
   subtotal: number;
   shipping: number;
+  /** The locked quote: courier cost and Ammari's subsidy (shown struck through and highlighted). */
+  shippingCost: number | null;
+  shippingSubsidy: number | null;
   discount: number;
   total: number;
   courierLabel: string | null;
@@ -118,6 +121,8 @@ export async function loadFinishOrder(
       contactEmail: orders.contactEmail,
       subtotal: orders.subtotalAmount,
       shipping: orders.shippingAmount,
+      shippingCost: orders.shippingCostAmount,
+      shippingSubsidy: orders.shippingSubsidyAmount,
       discount: orders.discountAmount,
       total: orders.totalAmount,
       courierLabel: orders.shippingCourierLabel,
@@ -181,6 +186,8 @@ export async function loadFinishOrder(
     })),
     subtotal: order.subtotal,
     shipping: order.shipping,
+    shippingCost: order.shippingCost,
+    shippingSubsidy: order.shippingSubsidy,
     discount: order.discount,
     total: order.total,
     courierLabel: order.courierLabel,

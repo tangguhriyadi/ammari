@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { withRollback } from "@ammari/db/test-utils";
-import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
+import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
 import { orderNotifications, orders, payments, stockMovements, type OrderAttentionFlag } from "@ammari/db/schema";
 import { createOrder } from "@ammari/commerce/orders";
 import { eq } from "drizzle-orm";
@@ -109,6 +109,20 @@ describe("web checkout orders (docs/plans/cart-checkout.md §7, session 16)", ()
       });
       expect(stripOrderDetailCost(detail!, false).checkout?.quote).toMatchObject({ costAmount: null, subsidyAmount: null, buyerAmount: 15_000 });
       expect(stripOrderDetailCost(detail!, true).checkout?.quote).toMatchObject({ costAmount: 35_000, subsidyAmount: 20_000 });
+    });
+  });
+
+  test("Pelanggan is the order's recipient name for a checkout order, never the linked customer's placeholder; other orders keep the customer's name", async () => {
+    await withRollback(async (tx) => {
+      const customer = await insertCustomer(tx, { name: "Pelanggan Ammari" });
+      const checkout = await checkoutOrder(tx);
+      await tx.update(orders).set({ customerId: customer.id }).where(eq(orders.id, checkout.id));
+      const manual = await insertOrder(tx, { channelId: "whatsapp", status: "to_ship", customerId: customer.id });
+
+      expect((await getOrderDetail(checkout.id, tx))?.customerName).toBe("Siti Aminah");
+      expect((await getOrderDetail(manual.id, tx))?.customerName).toBe("Pelanggan Ammari");
+      const { rows } = await listOrders({ q: "Siti Aminah" }, undefined, "100", tx);
+      expect(rows.find((row) => row.id === checkout.id)?.customerName).toBe("Siti Aminah");
     });
   });
 

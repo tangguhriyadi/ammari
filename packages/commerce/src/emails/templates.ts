@@ -1,3 +1,4 @@
+import { SHIPPING_DISPLAY_LABELS, shippingDisplay } from "../shipping/rules";
 import { escapeHtml, formatRupiah, formatWib } from "./format";
 
 // Order email templates (docs/plans/cart-checkout.md §8). Pure: a view in, `{ subject, text, html }`
@@ -54,6 +55,8 @@ export interface CustomerOrderEmailView {
   /** The storefront host, e.g. "ammari.id", for the footer. */
   siteHost: string;
   whatsappNumber: string | null;
+  /** The logo mark next to "AMMARI" in the header: an absolute https URL, or null for text only. */
+  logoUrl: string | null;
 }
 
 export interface CreatedEmailView extends CustomerOrderEmailView {
@@ -88,6 +91,7 @@ export interface OwnerPaidEmailView {
   address: OrderEmailAddress | null;
   /** The admin order page, or null when ADMIN_SITE_URL is not set. */
   adminOrderUrl: string | null;
+  logoUrl: string | null;
 }
 
 export interface RenderedEmail {
@@ -109,27 +113,30 @@ type Block =
   | { kind: "details"; title: string; rows: { label: string; value: string }[] }
   | { kind: "divider" };
 
-const COLOR = { brand: "#695A5A", text: "#000000", muted: "#6B6161", line: "#E7E2E2", page: "#F6F4F4", white: "#FFFFFF" };
+const COLOR = { brand: "#695A5A", text: "#000000", muted: "#6B6161", line: "#E7E2E2", page: "#F6F4F4", white: "#FFFFFF", highlight: "#F6F3F1" };
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
 function lineLabel(line: OrderEmailLine): string {
   return `${line.colorName}, ${line.sizeLabel} x ${line.qty}`;
 }
 
-/** "Ongkir Rp95.000, subsidi Ammari -Rp20.000." or "Ongkir Rp18.000, ditanggung penuh subsidi
- * Ammari." (the checkout's wording, plan §4.3), or null without a subsidy. */
-export function subsidyNote(totals: OrderEmailTotals): string | null {
-  if (totals.shippingCost === null || totals.shippingSubsidy === null || totals.shippingSubsidy <= 0) return null;
-  if (totals.shipping === 0) return `Ongkir ${formatRupiah(totals.shippingCost)}, ditanggung penuh subsidi Ammari.`;
-  return `Ongkir ${formatRupiah(totals.shippingCost)}, subsidi Ammari -${formatRupiah(totals.shippingSubsidy)}.`;
-}
+/** `struck`: the courier cost (shown struck through); `highlight`: the subsidy (owner request after
+ * the 2026-10-21 sandbox run: the subsidy must be clearly visible, same rows as the storefront). */
+type TotalRow = { label: string; value: string; style?: "strong" | "struck" | "highlight" };
 
-function totalRows(totals: OrderEmailTotals): { label: string; value: string; strong?: boolean }[] {
+function totalRows(totals: OrderEmailTotals): TotalRow[] {
+  const shipping = shippingDisplay({ buyerAmount: totals.shipping, costAmount: totals.shippingCost, subsidyAmount: totals.shippingSubsidy });
   return [
     { label: "Subtotal", value: formatRupiah(totals.subtotal) },
-    { label: "Ongkir", value: formatRupiah(totals.shipping) },
+    ...(shipping.subsidy
+      ? [
+          { label: SHIPPING_DISPLAY_LABELS.courierCost, value: formatRupiah(shipping.subsidy.courierCost), style: "struck" as const },
+          { label: SHIPPING_DISPLAY_LABELS.subsidy, value: `-${formatRupiah(shipping.subsidy.amount)}`, style: "highlight" as const },
+        ]
+      : []),
+    { label: shipping.buyerLabel, value: formatRupiah(shipping.buyerAmount) },
     ...(totals.discount > 0 ? [{ label: "Voucher", value: `-${formatRupiah(totals.discount)}` }] : []),
-    { label: "Total", value: formatRupiah(totals.total), strong: true },
+    { label: "Total", value: formatRupiah(totals.total), style: "strong" as const },
   ];
 }
 
@@ -145,11 +152,10 @@ function blockText(block: Block): string {
       return `${block.label}:\n${block.url}`;
     case "lines":
       return block.lines.map((line) => `${line.productName}\n${lineLabel(line)}: ${formatRupiah(line.lineTotal)}`).join("\n\n");
-    case "totals": {
-      const rows = totalRows(block.totals).map((row) => `${row.label}: ${row.value}`);
-      const note = subsidyNote(block.totals);
-      return [...rows.slice(0, 2), ...(note ? [`(${note})`] : []), ...rows.slice(2)].join("\n");
-    }
+    case "totals":
+      return totalRows(block.totals)
+        .map((row) => `${row.label}: ${row.value}`)
+        .join("\n");
     case "details":
       return [block.title, ...block.rows.map((row) => `${row.label}: ${row.value}`)].join("\n");
     case "divider":
@@ -186,18 +192,22 @@ function blockHtml(block: Block): string {
       return cell("padding:0 0 8px;", `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>`);
     }
     case "totals": {
-      const note = subsidyNote(block.totals);
       const rows = totalRows(block.totals)
         .map((row) => {
-          const weight = row.strong ? "font-weight:600;" : "";
-          const line =
-            `<tr><td style="padding:4px 0;${text}${weight}">${escapeHtml(row.label)}</td>` +
-            `<td style="padding:4px 0 4px 12px;${text}${weight}text-align:right;white-space:nowrap;">${escapeHtml(row.value)}</td></tr>`;
-          const noteRow =
-            row.label === "Ongkir" && note
-              ? `<tr><td colspan="2" style="padding:0 0 4px;font-family:${FONT};font-size:13px;line-height:1.5;color:${COLOR.muted};">${escapeHtml(note)}</td></tr>`
-              : "";
-          return line + noteRow;
+          if (row.style === "highlight") {
+            const highlight = `font-family:${FONT};font-size:15px;line-height:1.6;color:${COLOR.brand};font-weight:600;background-color:${COLOR.highlight};`;
+            return (
+              `<tr><td style="padding:6px 8px;${highlight}">${escapeHtml(row.label)}</td>` +
+              `<td style="padding:6px 8px 6px 12px;${highlight}text-align:right;white-space:nowrap;">${escapeHtml(row.value)}</td></tr>`
+            );
+          }
+          const weight = row.style === "strong" ? "font-weight:600;" : "";
+          const value = row.style === "struck" ? `<s style="color:${COLOR.muted};">${escapeHtml(row.value)}</s>` : escapeHtml(row.value);
+          const label = row.style === "struck" ? `color:${COLOR.muted};` : "";
+          return (
+            `<tr><td style="padding:4px 0;${text}${weight}${label}">${escapeHtml(row.label)}</td>` +
+            `<td style="padding:4px 0 4px 12px;${text}${weight}text-align:right;white-space:nowrap;">${value}</td></tr>`
+          );
         })
         .join("");
       return cell("padding:0 0 24px;", `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>`);
@@ -220,7 +230,20 @@ function blockHtml(block: Block): string {
   }
 }
 
-function render(subject: string, preheader: string, blocks: Block[], footer: string): RenderedEmail {
+/** "AMMARI" in the header, with the logo mark to its left when there is a public URL for it (the
+ * storefront's own `/logos/ammari-primary.png`, 94x112, shown 24x28). */
+function headerHtml(logoUrl: string | null): string {
+  const wordmark = `font-family:${FONT};font-size:18px;letter-spacing:4px;font-weight:600;color:${COLOR.brand};`;
+  if (!logoUrl) return `<tr><td style="padding:28px 24px 8px;${wordmark}">AMMARI</td></tr>`;
+  return (
+    `<tr><td style="padding:28px 24px 8px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>` +
+    `<td style="padding:0 8px 0 0;vertical-align:middle;"><img src="${escapeHtml(logoUrl)}" width="24" height="28" alt="Ammari" style="display:block;width:24px;height:28px;border:0;outline:none;text-decoration:none;"></td>` +
+    `<td style="vertical-align:middle;${wordmark}">AMMARI</td>` +
+    `</tr></table></td></tr>`
+  );
+}
+
+function render(subject: string, preheader: string, blocks: Block[], footer: string, logoUrl: string | null): RenderedEmail {
   const text = [...blocks.map(blockText), "", footer].join("\n\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
   const html =
     `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
@@ -230,7 +253,7 @@ function render(subject: string, preheader: string, blocks: Block[], footer: str
     `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${escapeHtml(preheader)}</div>` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${COLOR.page};"><tr><td align="center" style="padding:24px 12px;">` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background-color:${COLOR.white};border-radius:6px;">` +
-    `<tr><td style="padding:28px 24px 8px;font-family:${FONT};font-size:18px;letter-spacing:4px;font-weight:600;color:${COLOR.brand};">AMMARI</td></tr>` +
+    headerHtml(logoUrl) +
     `<tr><td style="padding:16px 24px 8px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${blocks.map(blockHtml).join("")}</table></td></tr>` +
     `<tr><td style="padding:16px 24px 28px;border-top:1px solid ${COLOR.line};font-family:${FONT};font-size:12px;line-height:1.6;color:${COLOR.muted};">${escapeHtml(footer).replace(/\n/g, "<br>")}</td></tr>` +
     `</table></td></tr></table></body></html>`;
@@ -298,7 +321,7 @@ export function renderCreatedEmail(view: CreatedEmailView): RenderedEmail {
     ...accessBlocks(view, false),
     ...contactLine(view.whatsappNumber),
   ];
-  return render(`Pesanan ${view.orderNo} menunggu pembayaran`, `Selesaikan pembayaran sebelum ${deadline}.`, blocks, customerFooter(view));
+  return render(`Pesanan ${view.orderNo} menunggu pembayaran`, `Selesaikan pembayaran sebelum ${deadline}.`, blocks, customerFooter(view), view.logoUrl);
 }
 
 /** `paid`: "confirmed" when the order moved to Diproses; "review" when the payment arrived but the
@@ -317,7 +340,7 @@ export function renderPaidEmail(view: CustomerOrderEmailView, variant: "confirme
       ...accessBlocks(view, false),
       ...contactLine(view.whatsappNumber),
     ];
-    return render(subject, "Tim kami akan segera menghubungi kamu.", blocks, customerFooter(view));
+    return render(subject, "Tim kami akan segera menghubungi kamu.", blocks, customerFooter(view), view.logoUrl);
   }
   const blocks: Block[] = [
     { kind: "heading", text: "Pembayaran sudah kami terima" },
@@ -330,7 +353,7 @@ export function renderPaidEmail(view: CustomerOrderEmailView, variant: "confirme
     ...addressBlock(view),
     ...contactLine(view.whatsappNumber),
   ];
-  return render(subject, "Pesanan kamu sedang kami siapkan.", blocks, customerFooter(view));
+  return render(subject, "Pesanan kamu sedang kami siapkan.", blocks, customerFooter(view), view.logoUrl);
 }
 
 /** `cancelled`: the payment window ended (gateway expiry or the sweep), the payment was cancelled at
@@ -352,7 +375,7 @@ export function renderCancelledEmail(view: CancelledEmailView): RenderedEmail {
       ...orderBlocks(view),
       ...contactLine(view.whatsappNumber),
     ];
-    return render(`Pesanan ${view.orderNo} dibatalkan`, "Dana pesanan ini akan kami kembalikan penuh.", blocks, customerFooter(view));
+    return render(`Pesanan ${view.orderNo} dibatalkan`, "Dana pesanan ini akan kami kembalikan penuh.", blocks, customerFooter(view), view.logoUrl);
   }
   const why =
     view.reason === "admin_unpaid"
@@ -375,7 +398,7 @@ export function renderCancelledEmail(view: CancelledEmailView): RenderedEmail {
     ...contactLine(view.whatsappNumber),
   ];
   const preheader = view.reason === "admin_unpaid" ? "Tidak ada dana yang ditarik untuk pesanan ini." : "Pembayaran belum kami terima sampai batas waktu.";
-  return render(`Pesanan ${view.orderNo} dibatalkan`, preheader, blocks, customerFooter(view));
+  return render(`Pesanan ${view.orderNo} dibatalkan`, preheader, blocks, customerFooter(view), view.logoUrl);
 }
 
 /** `shipped`: staff marked the order sent ("Tandai dikirim"; Phase K: the courier picked it up). */
@@ -400,7 +423,7 @@ export function renderShippedEmail(view: ShippedEmailView): RenderedEmail {
     ...addressBlock({ ...view, courierLabel: null }),
     ...contactLine(view.whatsappNumber),
   ];
-  return render(`Pesanan ${view.orderNo} sudah dikirim`, view.trackingNumber ? `Nomor resi: ${view.trackingNumber}` : "Pesanan kamu sedang dalam perjalanan.", blocks, customerFooter(view));
+  return render(`Pesanan ${view.orderNo} sudah dikirim`, view.trackingNumber ? `Nomor resi: ${view.trackingNumber}` : "Pesanan kamu sedang dalam perjalanan.", blocks, customerFooter(view), view.logoUrl);
 }
 
 // ---------- owner email ----------
@@ -449,5 +472,5 @@ export function renderOwnerPaidEmail(view: OwnerPaidEmailView): RenderedEmail {
         ]
       : []),
   ];
-  return render(head.subject, head.heading, blocks, "Ammari admin\nEmail ini berisi data pembeli. Jangan diteruskan.");
+  return render(head.subject, head.heading, blocks, "Ammari admin\nEmail ini berisi data pembeli. Jangan diteruskan.", view.logoUrl);
 }

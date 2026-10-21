@@ -10,6 +10,7 @@ import {
   parcelWeightGrams,
   pickCheapestService,
   shippingAreaSearchText,
+  shippingDisplay,
   splitShippingCost,
 } from "./rules";
 
@@ -43,6 +44,29 @@ describe("splitShippingCost", () => {
       expect(() => splitShippingCost(cost)).toThrow(RangeError);
     },
   );
+});
+
+describe("shippingDisplay", () => {
+  test("a partial subsidy: the courier cost, the subsidy and what the buyer pays", () => {
+    expect(shippingDisplay({ buyerAmount: 15_000, costAmount: 35_000, subsidyAmount: 20_000 })).toEqual({
+      subsidy: { courierCost: 35_000, amount: 20_000 },
+      buyerLabel: "Ongkir",
+      buyerAmount: 15_000,
+    });
+  });
+
+  test("fully covered: Gratis ongkir", () => {
+    expect(shippingDisplay({ buyerAmount: 0, costAmount: 18_000, subsidyAmount: 18_000 })).toEqual({
+      subsidy: { courierCost: 18_000, amount: 18_000 },
+      buyerLabel: "Gratis ongkir",
+      buyerAmount: 0,
+    });
+  });
+
+  test("no quote (a manual order) or no subsidy: only the buyer's row", () => {
+    expect(shippingDisplay({ buyerAmount: 10_000, costAmount: null, subsidyAmount: null })).toEqual({ subsidy: null, buyerLabel: "Ongkir", buyerAmount: 10_000 });
+    expect(shippingDisplay({ buyerAmount: 0, costAmount: 0, subsidyAmount: 0 })).toEqual({ subsidy: null, buyerLabel: "Ongkir", buyerAmount: 0 });
+  });
 });
 
 describe("parcelWeightGrams", () => {

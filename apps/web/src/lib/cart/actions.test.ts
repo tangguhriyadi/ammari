@@ -42,6 +42,8 @@ vi.mock("@/lib/auth/customer-session", () => ({
   getCustomerSession: async () => (sessionCustomerId ? { id: sessionCustomerId } : null),
 }));
 vi.mock("@/lib/db", async () => ({ defaultDb: (await import("@ammari/db/test-utils")).testDb }));
+const refresh = vi.fn();
+vi.mock("next/cache", () => ({ refresh: () => refresh() }));
 
 const { addToCartAction, removeCartItemAction, updateCartItemQtyAction } = await import("./actions");
 const { loadCartPieceCount, loadCartView } = await import("./queries");
@@ -175,8 +177,12 @@ describe("cart actions", () => {
   test("update and remove change the guest's lines", async () => {
     const sku = await sellableSku();
     await addToCartAction({ sku, qty: 1 });
+    refresh.mockClear();
     expect(await updateCartItemQtyAction({ sku, qty: 4 })).toEqual({ ok: true, pieceCount: 4, mergeTrimmed: false });
+    // The /cart page's fresh render rides on the action's answer (optimistic stepper).
+    expect(refresh).toHaveBeenCalledTimes(1);
     expect(await removeCartItemAction({ sku })).toEqual({ ok: true, pieceCount: 0, mergeTrimmed: false });
+    expect(refresh).toHaveBeenCalledTimes(2);
     expect(await loadCartPieceCount()).toBe(0);
   });
 
@@ -244,7 +250,10 @@ describe("cart actions", () => {
     createdCustomerIds.push(customer.id);
     sessionCustomerId = customer.id;
     expect(await removeCartItemAction({ sku })).toEqual({ ok: true, pieceCount: 0, mergeTrimmed: false });
+    refresh.mockClear();
     expect(await updateCartItemQtyAction({ sku, qty: 2 })).toEqual({ ok: false, message: "Barang ini sudah tidak ada di keranjang." });
+    // A refusal changed nothing: no render is sent with it.
+    expect(refresh).not.toHaveBeenCalled();
     expect(await testDb.select().from(carts).where(eq(carts.customerId, customer.id))).toHaveLength(0);
   });
 

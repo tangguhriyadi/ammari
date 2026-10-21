@@ -68,6 +68,11 @@ test.describe("cart flag on", () => {
       await expect(page.getByRole("link", { name: "Lihat", exact: true }).locator("xpath=..")).toHaveText("Masuk keranjang: Beige E2E, S · Lihat");
       await expect(page.getByRole("status").filter({ hasText: "Masuk keranjang" })).toHaveText("Masuk keranjang: Beige E2E, S. 1 barang di keranjang.");
       await expect(cartLink(page)).toHaveAccessibleName("Keranjang, 1 barang");
+      // The count as a notification badge: a filled red circle with a white number.
+      const badge = cartLink(page).getByTestId("cart-count");
+      await expect(badge).toHaveText("1");
+      await expect(badge).toHaveCSS("background-color", "rgb(179, 38, 30)");
+      await expect(badge).toHaveCSS("color", "rgb(255, 255, 255)");
       // WhatsApp stays as the outlined secondary action.
       await expect(page.getByRole("link", { name: /Tanya via WhatsApp/ })).toBeVisible();
 
@@ -85,10 +90,15 @@ test.describe("cart flag on", () => {
       await expect(page.getByRole("link", { name: "Lanjut ke checkout" })).toHaveAttribute("href", "/checkout");
       await expect(page.getByRole("link", { name: "Lanjut belanja" })).toHaveAttribute("href", "/#koleksi");
 
+      // Optimistic: quantity, line total, subtotal and the header count change on the tap, and the
+      // server's answer keeps them.
       await flowy.getByRole("button", { name: /^Tambah jumlah/ }).click();
       await expect(flowy.getByTestId("cart-line-qty")).toHaveText("Jumlah 2");
+      await expect(flowy).toContainText("Rp538.000");
       await expect(page.getByTestId("cart-subtotal")).toHaveText("Rp538.000");
+      await expect(page.getByText("2 barang", { exact: true })).toBeVisible();
       await expect(cartLink(page)).toHaveAccessibleName("Keranjang, 2 barang");
+      await expect(cartLink(page).getByTestId("cart-count")).toHaveText("2");
 
       await flowy.getByRole("button", { name: /^Hapus/ }).click();
       await expect(page.getByText("Keranjangmu masih kosong.")).toBeVisible();
@@ -173,6 +183,8 @@ test.describe("cart flag on", () => {
       await expect(page.getByRole("button", { name: /^Kurangi jumlah/ }).first()).not.toHaveAttribute("aria-disabled", "true");
       await expect(page.getByRole("link", { name: "Lanjut ke checkout" })).toHaveAttribute("href", "/checkout");
       await expect(cartLink(page)).toHaveAccessibleName("Keranjang, 20 barang");
+      // Above 9 the badge says "9+"; the exact count stays in the accessible name.
+      await expect(cartLink(page).getByTestId("cart-count")).toHaveText("9+");
     });
 
     test(`empty cart: message and a primary button back to the collection (${viewport.name})`, async ({ page }) => {

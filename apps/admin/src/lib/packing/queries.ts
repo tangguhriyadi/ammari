@@ -12,6 +12,7 @@ import {
   thankYouCards,
 } from "@ammari/db/schema";
 import type { ChannelId, Size } from "@ammari/db/schema";
+import { orderBuyerNameSql } from "@/lib/orders/buyer-name";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { buildImageSizeUrl } from "@/lib/products/image-queries";
 import { ActionError } from "@/lib/errors";
@@ -143,7 +144,7 @@ export async function listPackingQueue(
       orderNo: orders.orderNo,
       channelId: orders.channelId,
       channelName: channels.name,
-      customerName: customers.name,
+      customerName: orderBuyerNameSql(),
       buyerUsername: orders.buyerUsername,
       orderDate: orders.orderDate,
       cardPrintedAt: activeCard.printedAt,
@@ -318,7 +319,7 @@ export async function getOrderSummaryForCard(orderId: string, db: Database = def
     .select({
       orderId: orders.id,
       orderNo: orders.orderNo,
-      customerName: customers.name,
+      customerName: orderBuyerNameSql(),
       buyerUsername: orders.buyerUsername,
     })
     .from(orders)

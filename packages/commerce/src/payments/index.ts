@@ -42,7 +42,15 @@ export {
   type NotificationHandled,
   type NotificationResult,
 } from "./notification";
-export { MAX_PAYMENT_ATTEMPTS, PAYMENT_PAGE_TIMEOUT_MS, reopenPaymentPage, type ReopenPaymentPageResult } from "./attempts";
+export {
+  CHANGE_PAYMENT_GATEWAY_BUDGET_MS,
+  MAX_PAYMENT_ATTEMPTS,
+  PAYMENT_PAGE_TIMEOUT_MS,
+  changePaymentMethod,
+  reopenPaymentPage,
+  type ChangePaymentMethodResult,
+  type ReopenPaymentPageResult,
+} from "./attempts";
 export { syncLatestPaymentStatus, type SyncPaymentResult } from "./sync";
 export { SWEEP_BATCH_SIZE, SWEEP_TIME_BUDGET_MS, sweepExpiredPayments, type SweepOptions, type SweepOrderResult, type SweepSummary } from "./sweep";
 export {

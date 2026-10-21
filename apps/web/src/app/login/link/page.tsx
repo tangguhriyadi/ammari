@@ -43,7 +43,8 @@ export default async function LoginLinkPage({ searchParams }: { searchParams: Pr
   if (state.kind === "confirm" && customer?.id === state.link.customerId) {
     return (
       <Shell title="Kamu sudah masuk">
-        <p className="text-sm text-neutral-700">Kamu sudah masuk ke akun ini. Link di email tetap bisa dipakai sampai kedaluwarsa.</p>
+        {/* Neutral on purpose: says nothing about whether the emailed link still works (owner, 2026-10-21). */}
+        <p className="text-sm text-neutral-700">Kamu sudah masuk ke akun ini, jadi tidak perlu memakai link dari email.</p>
         <Link href={LOGIN_LINK_SUCCESS_PATH} className={linkButton}>
           Lihat pesanan saya
         </Link>

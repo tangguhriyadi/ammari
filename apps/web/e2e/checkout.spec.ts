@@ -119,7 +119,13 @@ test.describe("checkout, flag on", () => {
       await pickArea(page, "e2e jauh", /Kecamatan E2E Jauh, Kabupaten E2E, Provinsi E2E Timur 99111/);
       await expect(page.getByTestId("shipping-row")).toContainText("POS Kilat Khusus");
       await expect(page.getByTestId("shipping-buyer-amount")).toHaveText("Rp75.000");
-      await expect(page.getByTestId("shipping-subsidy-line")).toHaveText("Ongkir Rp95.000, subsidi Ammari -Rp20.000.");
+      // The subsidy in plain sight: courier cost struck through, "Subsidi ongkir Ammari" highlighted.
+      await expect(page.getByTestId("shipping-courier-cost")).toHaveText("Rp95.000");
+      await expect(page.getByTestId("shipping-courier-cost").locator("s")).toHaveCSS("text-decoration-line", "line-through");
+      await expect(page.getByTestId("shipping-subsidy")).toHaveText("-Rp20.000");
+      await expect(page.getByTestId("shipping-row")).toContainText("Subsidi ongkir Ammari");
+      await expect(page.getByTestId("summary-courier-cost")).toHaveText("Rp95.000");
+      await expect(page.getByTestId("summary-subsidy")).toHaveText("-Rp20.000");
       await expect(page.getByTestId("shipping-row")).toContainText("Nomor resi dikirim lewat email setelah pesanan dikirim.");
       await expect(page.getByTestId("summary-subtotal")).toHaveText("Rp250.000");
       await expect(page.getByTestId("summary-shipping")).toHaveText("Rp75.000");
@@ -143,6 +149,8 @@ test.describe("checkout, flag on", () => {
       await expect(page.getByTestId("finish-heading")).toHaveText("Menunggu pembayaran");
       await expect(page.getByText(/Selesaikan pembayaran sebelum .+ WIB\./)).toBeVisible();
       await expect(page.getByRole("link", { name: "Lanjutkan pembayaran" })).toHaveAttribute("href", /\/api\/test\/payments\//);
+      await expect(page.getByTestId("finish-courier-cost")).toHaveText("Rp95.000");
+      await expect(page.getByTestId("finish-subsidy")).toHaveText("-Rp20.000");
       await expect(page.getByTestId("finish-shipping")).toHaveText("Rp75.000");
       await expect(page.getByTestId("finish-total")).toHaveText("Rp325.000");
       // The order emptied the cart: the header count is gone.
@@ -185,6 +193,37 @@ test.describe("checkout, flag on", () => {
       await expect(page).toHaveURL(/\/checkout\/finish\?order=ORD-/);
       await expect(page.getByTestId("finish-heading")).toHaveText("Pembayaran berhasil");
       await expect(page.getByRole("link", { name: "Lanjutkan pembayaran" })).toHaveCount(0);
+      expect(await orderPaymentStateFor(email)).toEqual({ status: "to_ship", paymentStatus: "paid", sales: 1, activeHolds: 0 });
+    });
+
+    test(`"Ganti metode pembayaran" opens a new payment page for the same order; paying it sells once (${viewport.name})`, async ({ page, context, baseURL }, testInfo) => {
+      await page.setViewportSize(viewport);
+      const product = await seedCheckoutProduct({ label: `Ganti ${viewport.name}` });
+      await seedGuestCart(context, baseURL!, [{ sku: product.sku, qty: 1 }]);
+      const email = uniqueEmail("ganti", testInfo);
+
+      await openCheckout(page);
+      await fillGuestForm(page, email);
+      await pickArea(page, "40111", /Kecamatan E2E Murah, Kota E2E, Provinsi E2E 40111/);
+      await page.getByLabel(/Saya setuju dengan/).check();
+      await payButton(page).click();
+      await expect(page).toHaveURL(/\/api\/test\/payments\/E2E-ORD-\d{6}-\d{4,}-1$/);
+
+      // Back without paying: the finish page offers both the same page and a new one.
+      await page.getByRole("link", { name: "Kembali ke toko" }).click();
+      await expect(page.getByTestId("finish-heading")).toHaveText("Menunggu pembayaran");
+      await expect(page.getByRole("link", { name: "Lanjutkan pembayaran" })).toHaveAttribute("href", /-1$/);
+      await expect(page.getByText("Pembayaran yang belum selesai dengan metode sebelumnya dibatalkan, lalu kamu bisa memilih metode lain.")).toBeVisible();
+      await page.getByRole("button", { name: "Ganti metode pembayaran" }).click();
+      await expect(page).toHaveURL(/\/api\/test\/payments\/E2E-ORD-\d{6}-\d{4,}-2$/);
+
+      // "Lanjutkan pembayaran" now leads to the new page.
+      await page.getByRole("link", { name: "Kembali ke toko" }).click();
+      await expect(page.getByRole("link", { name: "Lanjutkan pembayaran" })).toHaveAttribute("href", /-2$/);
+      await page.getByRole("link", { name: "Lanjutkan pembayaran" }).click();
+      await page.getByTestId("fake-payment-pay").click();
+      await expect(page.getByTestId("finish-heading")).toHaveText("Pembayaran berhasil");
+      await expect(page.getByRole("button", { name: "Ganti metode pembayaran" })).toHaveCount(0);
       expect(await orderPaymentStateFor(email)).toEqual({ status: "to_ship", paymentStatus: "paid", sales: 1, activeHolds: 0 });
     });
 
@@ -236,7 +275,9 @@ test.describe("checkout, flag on", () => {
       await pickArea(page, "40111", /Kecamatan E2E Murah, Kota E2E, Provinsi E2E 40111/);
       await expect(page.getByTestId("shipping-row")).toContainText("JNE Reguler");
       await expect(page.getByTestId("shipping-buyer-amount")).toHaveText("Rp0");
-      await expect(page.getByTestId("shipping-subsidy-line")).toHaveText("Ongkir Rp12.000, ditanggung penuh subsidi Ammari.");
+      await expect(page.getByTestId("shipping-courier-cost")).toHaveText("Rp12.000");
+      await expect(page.getByTestId("shipping-subsidy")).toHaveText("-Rp12.000");
+      await expect(page.getByTestId("shipping-row")).toContainText("Gratis ongkir");
       await expect(page.getByTestId("summary-shipping")).toHaveText("Rp0");
       await expect(page.getByTestId("summary-total")).toHaveText("Rp500.000");
 

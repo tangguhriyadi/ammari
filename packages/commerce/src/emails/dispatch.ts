@@ -328,12 +328,14 @@ function text(value: unknown): string | null {
   return line === "" ? null : line.slice(0, 500);
 }
 
-/** The buyer's name for "Halo ...". A guest checkout sets the name from the form before the email is
- * verified, so someone ordering with another person's address could put words in our greeting: a
- * name that looks like a link or an address is left out. */
+/** The buyer's name for "Halo ...": the order's recipient name. A guest checkout sets it from the
+ * form before the email is verified, so someone ordering with another person's address could put
+ * words in our greeting: a name that looks like a link or an address, or carries a number (an
+ * account or phone number as a payment lure, e.g. "Transfer ke BCA 8830123456"), is left out. */
 function greetingName(name: string | null): string | null {
   const line = text(name);
   if (!line || line.length > 60 || /(https?:|www\.|@|\.[a-z]{2,}(\/|\b))/i.test(line)) return null;
+  if ((line.match(/\d/g) ?? []).length >= 5) return null;
   return line;
 }
 
@@ -356,6 +358,23 @@ function addressOf(order: LoadedOrder, withNotes: boolean): OrderEmailAddress | 
   const parts = [addressLine, text(snap.subdistrict), text(snap.district), text(snap.city), [province, postalCode].filter(Boolean).join(" ") || null].filter((part): part is string => part !== null);
   const notes = withNotes ? text(snap.notes) : null;
   return { recipientName, phone, addressText: `${parts.join(", ")}${notes ? `. Catatan: ${notes}` : ""}` };
+}
+
+/** The storefront's own logo file (docs/design/storefront.md §9, the same PNG the header shows),
+ * which is public wherever the storefront is. Only over https: a local `http://localhost` origin
+ * is not reachable from a mail client, so those emails keep the text wordmark. */
+export const EMAIL_LOGO_PATH = "/logos/ammari-primary.png";
+
+function emailLogoUrl(origin: string): string | null {
+  try {
+    const url = new URL(EMAIL_LOGO_PATH, origin);
+    if (url.protocol === "https:") return url.href;
+    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") console.warn("[emails] site origin is not https; emails go out without the logo", { origin: url.origin });
+    return null;
+  } catch {
+    console.warn("[emails] site origin is not a URL; emails go out without the logo");
+    return null;
+  }
 }
 
 function siteHost(origin: string): string {
@@ -406,9 +425,10 @@ async function prepare(db: Database, deps: OrderEmailDeps, order: LoadedOrder, d
         totals: order.totals,
         courierLabel: order.courierLabel,
         paidAt: order.paidAt,
-        buyer: { name: text(order.customerName), email: order.contactEmail, phone: order.contactPhone },
+        buyer: { name: text(order.recipientName) ?? text(order.customerName), email: order.contactEmail, phone: order.contactPhone },
         address: addressOf(order, true),
         adminOrderUrl: deps.adminOrigin ? `${deps.adminOrigin}/orders/${order.id}` : null,
+        logoUrl: emailLogoUrl(deps.siteOrigin),
       }),
     };
   }
@@ -424,7 +444,9 @@ async function prepare(db: Database, deps: OrderEmailDeps, order: LoadedOrder, d
 
   const view: CustomerOrderEmailView = {
     orderNo: order.orderNo,
-    greetingName: greetingName(order.customerName),
+    // The name typed at checkout (owner request after the 2026-10-21 sandbox run), never the linked
+    // customer row's: an unverified guest checkout never renames it, so it can be a placeholder.
+    greetingName: greetingName(order.recipientName),
     lines: order.lines,
     totals: order.totals,
     courierLabel: order.courierLabel,
@@ -433,6 +455,7 @@ async function prepare(db: Database, deps: OrderEmailDeps, order: LoadedOrder, d
     loginUrl: await loginUrlFor(deps, order, due, claim),
     siteHost: siteHost(deps.siteOrigin),
     whatsappNumber: order.whatsappNumber,
+    logoUrl: emailLogoUrl(deps.siteOrigin),
   };
   switch (due.kind) {
     case "created":

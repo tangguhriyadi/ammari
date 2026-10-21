@@ -78,13 +78,14 @@ for (const viewport of [
       await list.getByRole("link", { name: new RegExp(shipped.orderNo) }).click();
       await expect(page).toHaveURL(new RegExp(`/orders/${shipped.orderNo}$`));
       await expect(page.getByTestId("order-status")).toHaveText("Dikirim");
+      await expect(page.getByTestId("order-courier-cost")).toHaveText("Rp95.000");
+      await expect(page.getByTestId("order-subsidy")).toHaveText("-Rp20.000");
       await expect(page.getByTestId("order-shipping")).toHaveText("Rp75.000");
       await expect(page.getByTestId("order-total")).toHaveText("Rp325.000");
       await expect(page.getByTestId("order-tracking")).toContainText("JNE0001E2E");
       await expect(page.getByText("Jl. Melati 2", { exact: false })).toBeVisible();
-      // No cost data and no subsidy figure anywhere on the page.
+      // No cost data anywhere on the page (the ongkir quote is the buyer's own figure and is shown).
       await expect(page.getByText("111.111", { exact: false })).toHaveCount(0);
-      await expect(page.getByText("Rp95.000")).toHaveCount(0);
 
       // The order typed with another email is not this account's to see.
       await page.goto(`/orders/${strangerEmail.orderNo}`);

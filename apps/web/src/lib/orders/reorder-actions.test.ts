@@ -39,8 +39,8 @@ vi.mock("@/lib/db", async () => ({ defaultDb: (await import("@ammari/db/test-uti
 const { reorderAction } = await import("./reorder-actions");
 const { GET } = await import("@/app/api/orders/[orderNo]/view/route");
 const { ORDER_VIEW_LIMIT } = await import("./limits");
-const { reopenPaymentPageAction } = await import("@/lib/checkout/payment-actions");
-const { PAYMENT_RETRY_CLOSED_MESSAGE } = await import("@/lib/checkout/messages");
+const { changePaymentMethodAction, reopenPaymentPageAction } = await import("@/lib/checkout/payment-actions");
+const { PAYMENT_CHANGE_LIMIT, PAYMENT_RETRY_CLOSED_MESSAGE, PAYMENT_RETRY_RATE_LIMITED_MESSAGE } = await import("@/lib/checkout/messages");
 
 const created = { orderIds: [] as string[], customerIds: [] as string[], skus: [] as string[], productIds: [] as string[], colorIds: [] as string[], fabricIds: [] as string[] };
 const usedIps = new Set<string>();
@@ -264,5 +264,42 @@ describe("payment actions and the emailed view cookie (plan §9.2)", () => {
     jar.set("ammari_checkout_order", token);
     // Past the ownership check (no payment provider is configured in this test run).
     expect(await reopenPaymentPageAction(order.orderNo)).not.toEqual({ ok: false, message: PAYMENT_RETRY_CLOSED_MESSAGE });
+  });
+
+  test("Ganti metode pembayaran: never with the view cookie; the checkout cookie or the session gets past the ownership check", async () => {
+    const { variant } = await sellableVariant(5);
+    const customer = await insertCustomer(testDb);
+    created.customerIds.push(customer.id);
+    const { order, token } = await orderWith([{ sku: variant.sku, qty: 1 }], {
+      status: "awaiting_payment",
+      paymentStatus: "pending",
+      cancelReason: null,
+      cancelledAt: null,
+      customerId: customer.id,
+      placedWithSession: true,
+    });
+    const closed = { ok: false, message: PAYMENT_RETRY_CLOSED_MESSAGE, refresh: false };
+    jar.set("ammari_order_view", token);
+    expect(await changePaymentMethodAction(order.orderNo)).toEqual(closed);
+
+    jar.clear();
+    jar.set("ammari_checkout_order", token);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await changePaymentMethodAction(order.orderNo)).not.toEqual(closed);
+    jar.clear();
+    sessionCustomerId = customer.id;
+    expect(await changePaymentMethodAction(order.orderNo)).not.toEqual(closed);
+    // A stranger's session and malformed numbers are refused alike.
+    sessionCustomerId = null;
+    expect(await changePaymentMethodAction(order.orderNo)).toEqual(closed);
+    expect(await changePaymentMethodAction("../x")).toEqual(closed);
+    warn.mockRestore();
+  });
+
+  test(`Ganti metode pembayaran: over ${PAYMENT_CHANGE_LIMIT} per IP in 10 minutes, refused before any lookup; flag off, refused`, async () => {
+    await testDb.insert(claimRateLimits).values(Array.from({ length: PAYMENT_CHANGE_LIMIT }, () => ({ ip: clientIp, action: "payment_method_change" })));
+    expect(await changePaymentMethodAction("ORD-209910-00000001")).toEqual({ ok: false, message: PAYMENT_RETRY_RATE_LIMITED_MESSAGE, refresh: false });
+    delete process.env.STOREFRONT_CART_ENABLED;
+    expect(await changePaymentMethodAction("ORD-209910-00000001")).toMatchObject({ ok: false, refresh: false });
   });
 });

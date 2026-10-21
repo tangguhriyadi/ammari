@@ -32,6 +32,20 @@ describe("CartLink", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/cart/count", expect.objectContaining({ cache: "no-store" }));
   });
 
+  test("above 9 the badge shows 9+ while the accessible name keeps the exact count; 0 hides it", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise<Response>(() => {})));
+    render(<CartLink />);
+
+    act(() => announceCartCount(9));
+    expect(screen.getByTestId("cart-count")).toHaveTextContent(/^9$/);
+    act(() => announceCartCount(12));
+    expect(screen.getByTestId("cart-count")).toHaveTextContent(/^9\+$/);
+    expect(screen.getByRole("link", { name: "Keranjang, 12 barang" })).toBeInTheDocument();
+    act(() => announceCartCount(0));
+    expect(screen.queryByTestId("cart-count")).toBeNull();
+    expect(screen.getByRole("link", { name: "Keranjang" })).toBeInTheDocument();
+  });
+
   test("a failed fetch shows the bag without a number and is logged", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "unavailable" }, 500)));
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});

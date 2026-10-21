@@ -41,3 +41,10 @@ export const PAYMENT_RETRY_BUSY_MESSAGE = "Halaman pembayaran sedang disiapkan. 
 export const PAYMENT_RETRY_CLOSED_MESSAGE = "Pesanan ini sudah tidak bisa dibayar. Muat ulang halaman untuk melihat statusnya.";
 export const PAYMENT_RETRY_LIMIT_MESSAGE = "Terlalu banyak percobaan. Hubungi kami lewat WhatsApp untuk menyelesaikan pesanan ini.";
 export const PAYMENT_RETRY_RATE_LIMITED_MESSAGE = "Terlalu banyak percobaan. Coba lagi beberapa menit lagi.";
+
+/** "Ganti metode pembayaran" (owner request after the 2026-10-21 sandbox run): per IP, counted
+ * before the ownership lookup. Each change is also a new gateway order (at most 5 per order). */
+export const PAYMENT_CHANGE_WINDOW_SECONDS = 600;
+export const PAYMENT_CHANGE_LIMIT = 5;
+export const PAYMENT_CHANGE_PAID_MESSAGE = "Pembayaranmu ternyata sudah masuk. Halaman ini kami perbarui.";
+export const PAYMENT_CHANGE_BUSY_MESSAGE = "Pembayaran dengan metode sebelumnya belum bisa dihentikan. Coba lagi sebentar lagi, atau lanjutkan dengan metode itu.";

@@ -6,9 +6,11 @@ import { formatPriceIdr } from "@/lib/format";
 import { loadCustomerOrderDetail } from "@/lib/orders/queries";
 import { loadOrderPageAccess } from "@/lib/orders/visitor-access";
 import { Container } from "@/components/container";
+import { ChangePaymentMethodButton } from "@/components/checkout/change-payment-method-button";
 import { PaymentStatusCheck } from "@/components/checkout/payment-status-check";
 import { ReopenPaymentButton } from "@/components/checkout/reopen-payment-button";
 import { ReorderButton } from "@/components/orders/reorder-button";
+import { ShippingCostRows } from "@/components/shipping-cost-rows";
 
 // One order (docs/plans/cart-checkout.md §9.1, §9.2; docs/design/storefront.md §7): lines, totals,
 // address, status timeline, "Lanjutkan pembayaran" while payable, "Pesan lagi" when cancelled
@@ -93,13 +95,17 @@ export default async function OrderPage({
 
       {order.status.payable &&
         (order.paymentUrl ? (
-          // The payment page's own URL, as stored by the server when the payment was created.
-          <a
-            href={order.paymentUrl}
-            className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-xs font-medium tracking-[0.2em] text-ink uppercase"
-          >
-            Lanjutkan pembayaran
-          </a>
+          <div className="flex flex-col gap-3">
+            {/* The payment page's own URL, as stored by the server when the payment was created. */}
+            <a
+              href={order.paymentUrl}
+              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-xs font-medium tracking-[0.2em] text-ink uppercase"
+            >
+              Lanjutkan pembayaran
+            </a>
+            {/* A new payment attempt needs the buyer's session (plan §9.2: the emailed link only views). */}
+            {cartEnabled && viaSession && <ChangePaymentMethodButton orderNo={order.orderNo} />}
+          </div>
         ) : cartEnabled && viaSession ? (
           <ReopenPaymentButton orderNo={order.orderNo} />
         ) : (
@@ -173,10 +179,14 @@ export default async function OrderPage({
               <dt>Subtotal</dt>
               <dd>{formatPriceIdr(order.totals.subtotal)}</dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt>Ongkir{order.totals.courierLabel ? ` (${order.totals.courierLabel})` : ""}</dt>
-              <dd data-testid="order-shipping">{formatPriceIdr(order.totals.shipping)}</dd>
-            </div>
+            <ShippingCostRows
+              buyerAmount={order.totals.shipping}
+              costAmount={order.totals.shippingCost}
+              subsidyAmount={order.totals.shippingSubsidy}
+              courierLabel={order.totals.courierLabel}
+              testIdPrefix="order"
+              onSurface
+            />
             {order.totals.discount > 0 && (
               <div className="flex justify-between gap-4">
                 <dt>Voucher</dt>

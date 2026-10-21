@@ -8,9 +8,11 @@ import { formatPriceIdr } from "@/lib/format";
 import { Container } from "@/components/container";
 import { OutlineLink, PrimaryLink } from "@/components/buttons";
 import { LoginPrefillLink } from "@/components/checkout/login-prefill-link";
+import { ChangePaymentMethodButton } from "@/components/checkout/change-payment-method-button";
 import { PaymentStatusCheck } from "@/components/checkout/payment-status-check";
 import { ReopenPaymentButton } from "@/components/checkout/reopen-payment-button";
 import { ReorderButton } from "@/components/orders/reorder-button";
+import { ShippingCostRows } from "@/components/shipping-cost-rows";
 import { LOGIN_FOR_ORDERS_HREF } from "@/lib/auth/login-prefill";
 
 // Where the payment page sends the buyer back (docs/plans/cart-checkout.md §4.4,
@@ -95,13 +97,16 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
 
       {view.state === "pending" &&
         (view.paymentUrl ? (
-          // The payment page's own URL, as stored by the server when the order was placed.
-          <a
-            href={view.paymentUrl}
-            className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-xs font-medium tracking-[0.2em] text-ink uppercase"
-          >
-            Lanjutkan pembayaran
-          </a>
+          <div className="flex flex-col gap-3">
+            {/* The payment page's own URL, as stored by the server when the order was placed. */}
+            <a
+              href={view.paymentUrl}
+              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-xs font-medium tracking-[0.2em] text-ink uppercase"
+            >
+              Lanjutkan pembayaran
+            </a>
+            <ChangePaymentMethodButton orderNo={view.orderNo} />
+          </div>
         ) : (
           <ReopenPaymentButton orderNo={view.orderNo} />
         ))}
@@ -126,10 +131,14 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
             <dt>Subtotal</dt>
             <dd>{formatPriceIdr(view.subtotal)}</dd>
           </div>
-          <div className="flex justify-between gap-4">
-            <dt>Ongkir{view.courierLabel ? ` (${view.courierLabel})` : ""}</dt>
-            <dd data-testid="finish-shipping">{formatPriceIdr(view.shipping)}</dd>
-          </div>
+          <ShippingCostRows
+            buyerAmount={view.shipping}
+            costAmount={view.shippingCost}
+            subsidyAmount={view.shippingSubsidy}
+            courierLabel={view.courierLabel}
+            testIdPrefix="finish"
+            onSurface
+          />
           {view.discount > 0 && (
             <div className="flex justify-between gap-4">
               <dt>Voucher</dt>

@@ -102,7 +102,13 @@ describe("CheckoutForm", () => {
     expect(fetch).toHaveBeenCalledWith("/api/shipping/areas?q=jauh", expect.objectContaining({ cache: "no-store" }));
     expect(quoteShippingAction).toHaveBeenCalledWith({ shippingAreaId: JAUH.id });
     expect(await screen.findByTestId("shipping-buyer-amount")).toHaveTextContent("Rp75.000");
-    expect(screen.getByTestId("shipping-subsidy-line")).toHaveTextContent("Ongkir Rp95.000, subsidi Ammari -Rp20.000.");
+    // Section 3 and the summary both show the courier cost struck through and the subsidy.
+    expect(screen.getByTestId("shipping-courier-cost")).toHaveTextContent("Rp95.000");
+    expect(screen.getByTestId("shipping-courier-cost").querySelector("s")).not.toBeNull();
+    expect(screen.getByTestId("shipping-subsidy")).toHaveTextContent("-Rp20.000");
+    expect(screen.getByTestId("shipping-row")).toHaveTextContent("Subsidi ongkir Ammari");
+    expect(screen.getByTestId("summary-courier-cost")).toHaveTextContent("Rp95.000");
+    expect(screen.getByTestId("summary-subsidy")).toHaveTextContent("-Rp20.000");
     expect(screen.getByTestId("summary-shipping")).toHaveTextContent("Rp75.000");
     expect(screen.getByTestId("summary-total")).toHaveTextContent("Rp325.000");
     expect(refresh).not.toHaveBeenCalled();

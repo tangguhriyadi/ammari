@@ -1,5 +1,6 @@
 "use server";
 
+import { refresh } from "next/cache";
 import { z } from "zod";
 import { addCartItem, removeCartItem, setCartItemQty, type CartWriteResult } from "@ammari/commerce/cart";
 import { CART_MAX_QTY_PER_LINE, CART_REFUSAL_MESSAGES } from "@ammari/commerce/cart-limits";
@@ -76,16 +77,25 @@ export async function addToCartAction(input: { sku: string; qty: number }): Prom
   return runCartAction((identity) => addCartItem(defaultDb, identity, parsed.data.sku, parsed.data.qty), true);
 }
 
+/** `/cart` writes answer with a fresh render of the page in the same response (`refresh()`), so
+ * the optimistic values on the page (components/cart/optimistic-cart.tsx) are replaced by the
+ * server's in the same transition, without a second round trip. A refusal changes nothing, so it
+ * sends no render. */
+function refreshedOnSuccess(result: CartActionResult): CartActionResult {
+  if (result.ok) refresh();
+  return result;
+}
+
 /** The `/cart` stepper: sets the line to `qty`. */
 export async function updateCartItemQtyAction(input: { sku: string; qty: number }): Promise<CartActionResult> {
   const parsed = lineInput.safeParse(input);
   if (!parsed.success) return { ok: false, message: CART_INVALID_INPUT_MESSAGE };
-  return runCartAction((identity) => setCartItemQty(defaultDb, identity, parsed.data.sku, parsed.data.qty), false);
+  return refreshedOnSuccess(await runCartAction((identity) => setCartItemQty(defaultDb, identity, parsed.data.sku, parsed.data.qty), false));
 }
 
 /** The `/cart` "Hapus" / ×. */
 export async function removeCartItemAction(input: { sku: string }): Promise<CartActionResult> {
   const parsed = removeInput.safeParse(input);
   if (!parsed.success) return { ok: false, message: CART_INVALID_INPUT_MESSAGE };
-  return runCartAction((identity) => removeCartItem(defaultDb, identity, parsed.data.sku), false);
+  return refreshedOnSuccess(await runCartAction((identity) => removeCartItem(defaultDb, identity, parsed.data.sku), false));
 }

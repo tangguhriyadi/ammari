@@ -84,7 +84,7 @@ async function checkoutOrder(tx: TestTx, options: { withPage?: boolean } = {}) {
     grossAmount: 259_000,
     status: "created",
     // Without a page: a request that ended a minute ago (not still in flight).
-    ...(options.withPage === false ? { createdAt: new Date(Date.now() - 60_000) } : { snapToken: "fake-token", redirectUrl: `http://localhost:3100/api/test/payments/${providerOrderId}` }),
+    ...(options.withPage === false ? { createdAt: new Date(Date.now() - 60_000), updatedAt: new Date(Date.now() - 60_000) } : { snapToken: "fake-token", redirectUrl: `http://localhost:3100/api/test/payments/${providerOrderId}` }),
   });
   const token = generateOrderAccessToken();
   await tx.insert(orderAccessTokens).values({ orderId: order.id, tokenHash: hashOrderAccessToken(token), expiresAt: sql`now() + interval '120 days'` });

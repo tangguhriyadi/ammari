@@ -233,7 +233,8 @@ describe("Pesanan saya reads", () => {
     expect(detail).toMatchObject({
       orderNo: order.orderNo,
       status: { label: "Menunggu pembayaran", payable: true },
-      totals: { subtotal: 259_000, shipping: 75_000, discount: 0, total: 334_000, courierLabel: "JNE Reguler" },
+      // The locked ongkir quote is the buyer's own checkout figure (shown since 2026-10-21).
+      totals: { subtotal: 259_000, shipping: 75_000, shippingCost: 95_000, shippingSubsidy: 20_000, discount: 0, total: 334_000, courierLabel: "JNE Reguler" },
       lines: [{ qty: 1, lineTotal: 259_000 }],
       address: expect.stringContaining("Jl. Mawar 1"),
       shipment: { courier: null, trackingNumber: null },
@@ -241,7 +242,7 @@ describe("Pesanan saya reads", () => {
     });
     expect(detail?.payBy).toMatch(/ WIB$/);
     expect(detail?.timeline.map((entry) => entry.label)).toEqual(["Dipesan"]);
-    expect(JSON.stringify(detail)).not.toMatch(/7654321|unitCost|95000|shippingCost|subsidy|unitPrice/i);
+    expect(JSON.stringify(detail)).not.toMatch(/7654321|unitCost|unitPrice/i);
   });
 
   test("a shipped marketplace order: courier and resi, no prices", async () => {

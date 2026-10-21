@@ -18,6 +18,7 @@ import {
 import type { ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
+import { orderBuyerNameSql } from "./buyer-name";
 
 // Read-only, admin-screen queries (channel list, SKU picker, order list/detail). The order WRITE
 // path (createOrder, updateOrderItems, transitionOrderStatus, generateOrderNumber) lives in
@@ -128,7 +129,7 @@ export async function listOrders(
     filters.status ? eq(orders.status, filters.status) : undefined,
     filters.needsAttention ? NEEDS_ATTENTION : undefined,
     filters.q
-      ? or(ilike(orders.orderNo, `%${filters.q}%`), ilike(orders.channelOrderNo, `%${filters.q}%`), ilike(customers.name, `%${filters.q}%`))
+      ? or(ilike(orders.orderNo, `%${filters.q}%`), ilike(orders.channelOrderNo, `%${filters.q}%`), ilike(customers.name, `%${filters.q}%`), ilike(orders.recipientName, `%${filters.q}%`))
       : undefined,
   ].filter((c) => c !== undefined);
   const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -148,7 +149,7 @@ export async function listOrders(
       channelName: channels.name,
       channelOrderNo: orders.channelOrderNo,
       status: orders.status,
-      customerName: customers.name,
+      customerName: orderBuyerNameSql(),
       buyerUsername: orders.buyerUsername,
       orderDate: orders.orderDate,
       totalAmount: orders.totalAmount,
@@ -387,7 +388,7 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
       channelOrderNo: orders.channelOrderNo,
       status: orders.status,
       customerId: orders.customerId,
-      customerName: customers.name,
+      customerName: orderBuyerNameSql(),
       customerPhone: customers.phone,
       buyerUsername: orders.buyerUsername,
       orderDate: orders.orderDate,
