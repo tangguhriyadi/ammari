@@ -155,7 +155,7 @@ describe("logging in with a link (POST /api/auth/order-login-link/consume)", () 
 
     const response = await auth.handler(consumeRequest(token, { ip: "203.0.113.7" }));
     expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe("/account");
+    expect(response.headers.get("location")).toBe("/orders");
     expect(response.headers.get("set-cookie")).toContain("ammari_customer.session_token=");
 
     const [authUser] = await testDb.select().from(customerAuthUsers).where(eq(customerAuthUsers.email, buyer.email!.toLowerCase()));
@@ -196,7 +196,7 @@ describe("logging in with a link (POST /api/auth/order-login-link/consume)", () 
     expect(await findLiveCustomerLoginLink(testDb, token)).not.toBeNull();
 
     const retried = await auth.handler(consumeRequest(token));
-    expect(retried.headers.get("location")).toBe("/account");
+    expect(retried.headers.get("location")).toBe("/orders");
     expect(await sessionCount()).toBe(1);
     createSession.mockRestore();
     errors.mockRestore();
@@ -209,7 +209,7 @@ describe("logging in with a link (POST /api/auth/order-login-link/consume)", () 
     const { auth } = buildCustomerAuth();
 
     const response = await auth.handler(consumeRequest(token));
-    expect(response.headers.get("location")).toBe("/account");
+    expect(response.headers.get("location")).toBe("/orders");
     const [authUser] = await testDb.select().from(customerAuthUsers).where(eq(customerAuthUsers.customerId, buyer.id));
     expect(authUser?.emailVerified).toBe(true);
     expect(await sessionCount()).toBe(1);

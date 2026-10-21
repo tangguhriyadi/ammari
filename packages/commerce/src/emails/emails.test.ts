@@ -107,7 +107,6 @@ const baseView: CustomerOrderEmailView = {
   address: { recipientName: "Siti Aminah", phone: "+6281234567890", addressText: "Jl. Melati No. 5 RT 01/02, Kelurahan Contoh, Kecamatan E2E, Kota Contoh, Provinsi Contoh 40111" },
   orderUrl: "https://ammari.example/orders/ORD-202612-0007?t=abc",
   loginUrl: null,
-  shopUrl: "https://ammari.example/",
   siteHost: "ammari.example",
   whatsappNumber: "6288808541442",
 };
@@ -194,6 +193,10 @@ describe("templates", () => {
     const cancelled = renderCancelledEmail({ ...baseView, reason: "payment_expired", paymentDeadline: deadline });
     expect(cancelled.subject).toBe("Pesanan ORD-202612-0007 dibatalkan");
     expect(cancelled.text).toContain("Voucher yang kamu pakai sudah kembali");
+    // "Pesan lagi" opens the order page, which has the refill button (session 15).
+    expect(cancelled.text).toContain("Pesan lagi:\nhttps://ammari.example/orders/ORD-202612-0007?t=abc");
+    expect(cancelled.html).toContain('href="https://ammari.example/orders/ORD-202612-0007?t=abc"');
+    expect(cancelled.text).not.toContain("Belanja lagi");
     expect(renderCancelledEmail({ ...baseView, totals: { ...baseView.totals, discount: 0 }, reason: "payment_expired", paymentDeadline: deadline }).text).not.toContain("Voucher");
   });
 

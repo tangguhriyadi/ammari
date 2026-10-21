@@ -1,8 +1,12 @@
+import Link from "next/link";
 import { Badge, EmptyState } from "@ammari/ui";
 import { formatDate, formatRupiah } from "@ammari/ui/lib";
 import { requireConsentedSession } from "@/lib/auth/require-customer";
 import { listMyOrders, listMyVouchers } from "@/lib/account/queries";
 import { loadContactOffer } from "@/lib/account/contact-offer";
+import { isCartEnabled } from "@/lib/cart-flag";
+import { listCustomerOrders } from "@/lib/orders/queries";
+import { OrderList } from "@/components/orders/order-list";
 import { ContactOfferCard } from "./contact-offer-card";
 import { LogoutButton } from "./logout-button";
 import { ProfileBanner } from "./profile-banner";
@@ -14,9 +18,19 @@ const VOUCHER_STATUS_LABELS: Record<string, string> = {
   void: "Dibatalkan",
 };
 
+/** With the cart flag on, the account page shows the newest orders with status and total and links
+ * to "Pesanan saya" (docs/plans/cart-checkout.md §9.1); with it off, the list stays as it was. */
+const ACCOUNT_ORDER_PREVIEW = 5;
+
 export default async function AccountPage() {
   const customer = await requireConsentedSession("/account");
-  const [myOrders, myVouchers, contactOffer] = await Promise.all([listMyOrders(customer.id), listMyVouchers(customer.id), loadContactOffer(customer.id)]);
+  const cartEnabled = isCartEnabled();
+  const [myOrders, orderPage, myVouchers, contactOffer] = await Promise.all([
+    cartEnabled ? Promise.resolve([]) : listMyOrders(customer.id),
+    cartEnabled ? listCustomerOrders(customer.id, 1, undefined, ACCOUNT_ORDER_PREVIEW) : Promise.resolve(null),
+    listMyVouchers(customer.id),
+    loadContactOffer(customer.id),
+  ]);
 
   return (
     <div className="mx-auto flex max-w-md flex-col gap-6 px-4 py-8">
@@ -51,7 +65,18 @@ export default async function AccountPage() {
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">Pesanan saya</h2>
-        {myOrders.length === 0 ? (
+        {orderPage ? (
+          orderPage.rows.length === 0 ? (
+            <EmptyState title="Belum ada pesanan" description="Pesanan yang tertaut ke akunmu akan muncul di sini." />
+          ) : (
+            <>
+              <OrderList rows={orderPage.rows} compact />
+              <Link href="/orders" className="inline-flex min-h-[44px] items-center self-start text-sm font-medium text-brand underline underline-offset-4">
+                Lihat semua pesanan
+              </Link>
+            </>
+          )
+        ) : myOrders.length === 0 ? (
           <EmptyState title="Belum ada pesanan" description="Pesanan yang tertaut ke akunmu akan muncul di sini." />
         ) : (
           <ul className="flex flex-col gap-2">

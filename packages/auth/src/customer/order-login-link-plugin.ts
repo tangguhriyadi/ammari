@@ -31,7 +31,7 @@ const CONSUME_RATE_LIMIT_MAX = 10;
 
 export interface OrderLoginLinkOptions {
   db: Database;
-  /** Where a successful login lands, e.g. "/account". */
+  /** Where a successful login lands, e.g. "/orders". */
   successPath: string;
   /** The confirm page; failures land on `<pagePath>?status=<reason>`. */
   pagePath: string;

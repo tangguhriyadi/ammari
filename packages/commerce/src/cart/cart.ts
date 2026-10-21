@@ -297,7 +297,7 @@ async function skuForSale(tx: Tx, sku: string): Promise<{ purchasable: boolean; 
   return { purchasable: row.productActive && row.published && row.variantActive, sellable: Number(row.sellable) };
 }
 
-function stockRefusal(sellable: number, wantedQty: number): CartRefusal | null {
+function stockRefusal(sellable: number, wantedQty: number): "sold_out" | "insufficient_stock" | null {
   if (sellable <= 0) return "sold_out";
   if (sellable < wantedQty) return "insufficient_stock";
   return null;
@@ -352,6 +352,97 @@ export async function addCartItem(db: Database, identity: CartIdentity, sku: str
       .values({ cartId, sku, qty: nextQty })
       .onConflictDoUpdate({ target: [cartItems.cartId, cartItems.sku], set: { qty: nextQty } });
   });
+}
+
+/** One line of an `addLinesToCart` call. `reason` is set whenever less than `requested` went in. */
+export interface CartLinesAddLine {
+  sku: string;
+  requested: number;
+  added: number;
+  reason: Exclude<CartRefusal, "not_in_cart"> | null;
+}
+
+export interface CartLinesAddResult {
+  cartId: string | null;
+  pieceCount: number;
+  clearGuestCookie: boolean;
+  mergeTrimmed: boolean;
+  /** One per distinct SKU, in the order given. */
+  lines: CartLinesAddLine[];
+}
+
+/** Rolls back a refill that added nothing, so it never creates an empty cart or touches one. */
+class NothingAdded extends Error {
+  constructor(public readonly lines: CartLinesAddLine[]) {
+    super("nothing added");
+    this.name = "NothingAdded";
+  }
+}
+
+/** "Pesan lagi" (plan §4.4, §9.1): puts the lines of a past order back into the cart, adding what
+ * fits on top of what the cart holds, in one transaction under the cart row lock (the same rules
+ * as addCartItem, line by line). The 10-per-line and 20-piece caps may cut a line down; a line
+ * with less sellable stock than it asks for is skipped whole, never cut down to what is left, so
+ * the quantity that lands in the cart never reveals a stock count (plan §4.2). A refill that adds
+ * nothing writes nothing. */
+export async function addLinesToCart(db: Database, identity: CartIdentity, lines: readonly { sku: string; qty: number }[]): Promise<CartLinesAddResult> {
+  const wanted = new Map<string, number>();
+  for (const line of lines) wanted.set(line.sku, (wanted.get(line.sku) ?? 0) + line.qty);
+
+  const { customerId, guestTokenHash } = identity;
+  // The merge commits on its own, like every other cart write.
+  const merge = customerId && guestTokenHash ? await mergeIfGuestCartExists(db, customerId, guestTokenHash) : null;
+  const writeIdentity: CartIdentity = customerId ? { customerId, guestTokenHash: null } : identity;
+  const outcome = { clearGuestCookie: merge !== null, mergeTrimmed: merge?.trimmed ?? false };
+
+  try {
+    return await db.transaction(async (tx) => {
+      const { cartId } = await lockCartForWrite(tx, writeIdentity, true);
+      if (!cartId) throw new Error("cart was not created");
+      let pieces = await cartPieceCountById(tx, cartId);
+      const results: CartLinesAddLine[] = [];
+      for (const [sku, requested] of wanted) {
+        const skip = (reason: CartLinesAddLine["reason"]) => results.push({ sku, requested, added: 0, reason });
+        if (!Number.isInteger(requested) || requested < 1) {
+          skip("invalid_qty");
+          continue;
+        }
+        const sale = await skuForSale(tx, sku);
+        if (!sale?.purchasable) {
+          skip("not_available");
+          continue;
+        }
+        const current = (await lineQty(tx, cartId, sku)) ?? 0;
+        const byLine = CART_MAX_QTY_PER_LINE - current;
+        const byCart = CART_MAX_PIECES - pieces;
+        const added = Math.max(0, Math.min(requested, byLine, byCart));
+        const capReason = added < requested ? (byLine <= byCart ? "line_limit" : "cart_limit") : null;
+        // A line the caps leave no room for says so, whatever its stock.
+        if (added === 0) {
+          skip(capReason);
+          continue;
+        }
+        // Stock is checked on what would really go in; short stock skips the line whole.
+        const refusal = stockRefusal(sale.sellable, current + added);
+        if (refusal) {
+          skip(refusal);
+          continue;
+        }
+        await tx
+          .insert(cartItems)
+          .values({ cartId, sku, qty: current + added })
+          .onConflictDoUpdate({ target: [cartItems.cartId, cartItems.sku], set: { qty: current + added } });
+        pieces += added;
+        results.push({ sku, requested, added, reason: capReason });
+      }
+      if (!results.some((line) => line.added > 0)) throw new NothingAdded(results);
+      return { cartId, pieceCount: pieces, ...outcome, lines: results };
+    });
+  } catch (error) {
+    if (!(error instanceof NothingAdded)) throw error;
+    const cartId = (await resolveCart(db, writeIdentity)).cartId;
+    return { cartId, pieceCount: cartId ? await cartPieceCountById(db, cartId) : 0, ...outcome, lines: error.lines };
+  }
 }
 
 /** The cart stepper: sets the line to `qty`. A line whose product is no longer for sale can only

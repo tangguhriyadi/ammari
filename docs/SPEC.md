@@ -891,8 +891,12 @@ separate links:
 - **"Lihat pesanan"** — view-only access to that one order: 32 random bytes, only the sha256
   stored, URL `/orders/<orderNo>?t=<token>` (moved into an httpOnly cookie scoped to that order
   and removed from the URL on first open). Valid 120 days from the email that issued it; no other
-  orders, vouchers or account data; the only action is re-opening the stored payment link. Rate
-  limited. After expiry the page offers email-OTP login.
+  orders, vouchers or account data; the only actions are re-opening the stored payment link and,
+  on a cancelled unpaid order, "Pesan lagi" (which only fills the visitor's own cart). The token
+  request renders nothing (`Referrer-Policy: no-referrer`); the token-free page sends `same-origin`.
+  Rate limited. An expired, wrong or unknown link reads the same as an order the visitor may not
+  see, with an email-OTP login. "Pesanan saya" shows a guest order linked by email only while its
+  contact email is the account's current, verified email (owner decision 2026-10-21).
 - **"Masuk ke akun"** — a one-time login link, implemented as a **small custom Better Auth
   plugin** on the customer instance (the stock `magic-link` plugin in 1.7.7 logs in on GET, does
   not invalidate older links and has public issuance, so it is not used). Rules: issued
@@ -912,7 +916,7 @@ separate links:
   now() RETURNING`; it then re-checks the customer's email still matches, marks the email
   verified (the click proves ownership), and creates the session through Better Auth with the
   same cookie and hooks as OTP and Google logins. Every consume is written to `audit_log` (no
-  staff actor). After login the user lands on `/account` (`/orders` once it exists), the guest
+  staff actor). After login the user lands on "Pesanan saya" (`/orders`), the guest
   cart merges, and the `/consent` gate still applies. A login that fails before a session exists
   gives the link back.
 - **Contact details from guest orders** (owner decision 2026-10-21): a guest checkout records the

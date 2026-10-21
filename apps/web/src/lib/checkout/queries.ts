@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, gt, isNotNull, sql } from "drizzle-orm";
-import { fabricColors, orderAccessTokens, orderItems, orders, payments, products, productVariants, vouchers } from "@ammari/db/schema";
-import { hashOrderAccessToken, isWellFormedOrderAccessToken } from "@ammari/commerce/checkout";
+import { fabricColors, orderItems, orders, payments, products, productVariants, vouchers } from "@ammari/db/schema";
+import { findAccessibleOrder, ORDER_NO_PATTERN } from "@/lib/orders/access";
 import { defaultDb, type Database } from "@/lib/db";
 import { formatJakartaDate, formatJakartaDateTime } from "@/lib/format";
 import type { CheckoutVoucherOption } from "./form";
@@ -54,8 +54,6 @@ export interface FinishOrderView {
   paymentUrl: string | null;
 }
 
-const ORDER_NO_PATTERN = /^ORD-[0-9]{6}-[0-9]{4,}$/;
-
 function sizeLabel(size: string): string {
   return size === "ALLSIZE" ? "All Size" : size;
 }
@@ -72,46 +70,29 @@ function finishState(order: { orderNo: string; status: string; paymentStatus: st
   return "failed";
 }
 
-/** Who may see a checkout order here: the session customer who placed it while logged in, or the
- * browser holding the checkout's order access cookie (its token's sha256 matches an unexpired
- * `order_access_tokens` row of this order). A guest order that only got linked to a customer by
- * its unverified email is not shown to that customer's session (session 15 decides how
- * "Pesanan saya" treats those). Shared by the finish page and its payment actions. */
-async function ownsCheckoutOrder(
-  db: Database,
-  order: { id: string; customerId: string | null; placedWithSession: boolean | null },
-  params: { sessionCustomerId: string | null; accessToken: string | null },
-): Promise<boolean> {
-  if (params.sessionCustomerId !== null && order.placedWithSession === true && order.customerId === params.sessionCustomerId) return true;
-  if (!params.accessToken || !isWellFormedOrderAccessToken(params.accessToken)) return false;
-  const [match] = await db
-    .select({ id: orderAccessTokens.id })
-    .from(orderAccessTokens)
-    .where(
-      and(
-        eq(orderAccessTokens.orderId, order.id),
-        eq(orderAccessTokens.tokenHash, hashOrderAccessToken(params.accessToken)),
-        sql`${orderAccessTokens.expiresAt} > now()`,
-      ),
-    )
-    .limit(1);
-  return match !== undefined;
+/** Who may see a checkout order here: the shared storefront rule (lib/orders/access.ts): the
+ * session it belongs to (placed while logged in, or a guest order whose contact email is still the
+ * account's email, owner decision 2026-10-21, session 15), or a browser holding one of the order's
+ * unexpired access tokens (the checkout's cookie on the finish page, the "Lihat pesanan" cookie on
+ * the order page). Shared by the finish page and its payment actions. */
+async function ownsCheckoutOrder(db: Database, orderNo: string, params: { sessionCustomerId: string | null; accessTokens: readonly (string | null)[] }): Promise<boolean> {
+  return (await findAccessibleOrder({ orderNo, sessionCustomerId: params.sessionCustomerId, accessTokens: params.accessTokens }, db)) !== null;
 }
 
 /** The id of the checkout order `orderNo` when the visitor may act on it (the finish page's status
  * check and retry), otherwise null for every case alike. */
 export async function findOwnedCheckoutOrderId(
-  params: { orderNo: string; sessionCustomerId: string | null; accessToken: string | null },
+  params: { orderNo: string; sessionCustomerId: string | null; accessTokens: readonly (string | null)[] },
   db: Database = defaultDb,
 ): Promise<string | null> {
   if (!ORDER_NO_PATTERN.test(params.orderNo)) return null;
   const [order] = await db
-    .select({ id: orders.id, customerId: orders.customerId, placedWithSession: orders.placedWithSession })
+    .select({ id: orders.id })
     .from(orders)
     .where(and(eq(orders.orderNo, params.orderNo), isNotNull(orders.paymentStatus)))
     .limit(1);
   if (!order) return null;
-  return (await ownsCheckoutOrder(db, order, params)) ? order.id : null;
+  return (await ownsCheckoutOrder(db, params.orderNo, params)) ? order.id : null;
 }
 
 /** The finish page's order (plan §4.4), or null for anything the visitor may not see: not a
@@ -120,7 +101,7 @@ export async function findOwnedCheckoutOrderId(
  * order number exists. The state comes from our own database; the page's status check
  * (lib/checkout/payment-actions.ts) asks the gateway and refreshes it. */
 export async function loadFinishOrder(
-  params: { orderNo: string; sessionCustomerId: string | null; accessToken: string | null },
+  params: { orderNo: string; sessionCustomerId: string | null; accessTokens: readonly (string | null)[] },
   db: Database = defaultDb,
 ): Promise<FinishOrderView | null> {
   if (!ORDER_NO_PATTERN.test(params.orderNo)) return null;
@@ -132,7 +113,6 @@ export async function loadFinishOrder(
       status: orders.status,
       paymentStatus: orders.paymentStatus,
       paymentExpiresAt: orders.paymentExpiresAt,
-      customerId: orders.customerId,
       placedWithSession: orders.placedWithSession,
       contactEmail: orders.contactEmail,
       subtotal: orders.subtotalAmount,
@@ -146,7 +126,7 @@ export async function loadFinishOrder(
     .where(and(eq(orders.orderNo, params.orderNo), isNotNull(orders.paymentStatus)))
     .limit(1);
   if (!order) return null;
-  if (!(await ownsCheckoutOrder(db, order, params))) return null;
+  if (!(await ownsCheckoutOrder(db, order.orderNo, params))) return null;
 
   const state = finishState(order);
 

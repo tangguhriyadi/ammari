@@ -7,11 +7,11 @@ export type Database = typeof defaultDb;
 
 /** `claim_rate_limits.action` keys. The table is shared by every non-Better-Auth storefront
  * endpoint (docs/plans/cart-checkout.md §3: `cart_write` from session 5, `area_search` from
- * session 8, `checkout_submit` from session 9, `shipping_quote` from session 10, `login_link_view` from session 14, more keys
+ * session 8, `checkout_submit` from session 9, `shipping_quote` from session 10, `login_link_view` from session 14, `order_view` from session 15, more keys
  * later). The shipping provider's daily budgets (`shipping_maps`, `shipping_rates`, written by
  * @ammari/commerce/shipping) and checkout's per-cart quote limit (`shipping_quote_cart:<cart id>`,
  * lib/checkout/cart-quote-limit.ts) also live in this table, under ip 0.0.0.0. */
-export type IpRateLimitAction = "view" | "claim" | "cart_write" | "cart_create" | "area_search" | "checkout_submit" | "shipping_quote" | "payment_status_check" | "payment_retry" | "payment_notification_unverified" | "login_link_view";
+export type IpRateLimitAction = "view" | "claim" | "cart_write" | "cart_create" | "area_search" | "checkout_submit" | "shipping_quote" | "payment_status_check" | "payment_retry" | "payment_notification_unverified" | "login_link_view" | "order_view";
 
 // Generous enough that a real buyer re-scanning their own card a few times (bad signal, retry,
 // showing a friend) never trips it, tight enough to slow down scripted enumeration of the

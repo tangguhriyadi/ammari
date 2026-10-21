@@ -65,7 +65,7 @@ export interface CreateCustomerAuthOptions {
    * production. */
   disableSendThrottle?: boolean;
   /** "Masuk ke akun" (./order-login-link-plugin.ts): where a login by link lands, and the confirm
-   * page failures go back to. Defaults to "/account" and "/login/link". */
+   * page failures go back to. Defaults to "/orders" ("Pesanan saya") and "/login/link". */
   orderLoginLink?: { successPath?: string; pagePath?: string };
 }
 
@@ -223,7 +223,7 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
       }),
       orderLoginLink({
         db,
-        successPath: orderLoginLinkPaths.successPath ?? "/account",
+        successPath: orderLoginLinkPaths.successPath ?? "/orders",
         pagePath: orderLoginLinkPaths.pagePath ?? "/login/link",
       }),
       ...extraPlugins,

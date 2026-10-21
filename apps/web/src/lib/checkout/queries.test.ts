@@ -53,7 +53,7 @@ afterAll(async () => {
 });
 
 async function customer() {
-  const row = await insertCustomer(testDb);
+  const row = await insertCustomer(testDb, { emailVerifiedAt: new Date() });
   created.customerIds.push(row.id);
   return row;
 }
@@ -96,7 +96,7 @@ async function checkoutOrder(overrides: Partial<typeof orders.$inferInsert> = {}
 describe("loadFinishOrder", () => {
   test("a guest with the checkout cookie sees a pending order, its deadline, payment link and totals (no cost)", async () => {
     const { order, token } = await checkoutOrder();
-    const view = await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessToken: token }, testDb);
+    const view = await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessTokens: [token] }, testDb);
     expect(view).toMatchObject({
       orderNo: order.orderNo,
       state: "pending",
@@ -116,70 +116,72 @@ describe("loadFinishOrder", () => {
 
   test("no proof, a wrong or malformed token, an expired token, or a bad order number: null", async () => {
     const { order } = await checkoutOrder();
-    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessToken: null }, testDb)).toBeNull();
-    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessToken: generateOrderAccessToken() }, testDb)).toBeNull();
-    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessToken: "short" }, testDb)).toBeNull();
-    expect(await loadFinishOrder({ orderNo: "not-an-order", sessionCustomerId: null, accessToken: null }, testDb)).toBeNull();
+    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessTokens: [null] }, testDb)).toBeNull();
+    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessTokens: [generateOrderAccessToken()] }, testDb)).toBeNull();
+    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessTokens: ["short"] }, testDb)).toBeNull();
+    expect(await loadFinishOrder({ orderNo: "not-an-order", sessionCustomerId: null, accessTokens: [null] }, testDb)).toBeNull();
 
     const expired = generateOrderAccessToken();
     await testDb.insert(orderAccessTokens).values({ orderId: order.id, tokenHash: hashOrderAccessToken(expired), createdAt: new Date(Date.now() - 2 * 86_400_000), expiresAt: new Date(Date.now() - 1000) });
-    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessToken: expired }, testDb)).toBeNull();
+    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessTokens: [expired] }, testDb)).toBeNull();
   });
 
   test("another order's token does not open this one", async () => {
     const first = await checkoutOrder();
     const second = await checkoutOrder();
-    expect(await loadFinishOrder({ orderNo: second.order.orderNo, sessionCustomerId: null, accessToken: first.token }, testDb)).toBeNull();
+    expect(await loadFinishOrder({ orderNo: second.order.orderNo, sessionCustomerId: null, accessTokens: [first.token] }, testDb)).toBeNull();
   });
 
-  test("a session opens only orders it placed while logged in, never a guest order linked by email", async () => {
+  test("a session opens orders it placed while logged in, and guest orders only while their email is still the account's (session 15)", async () => {
     const owner = await customer();
     const placed = await checkoutOrder({ customerId: owner.id, placedWithSession: true });
-    const linked = await checkoutOrder({ customerId: owner.id, placedWithSession: false });
-    const view = await loadFinishOrder({ orderNo: placed.order.orderNo, sessionCustomerId: owner.id, accessToken: null }, testDb);
+    const linked = await checkoutOrder({ customerId: owner.id, placedWithSession: false, contactEmail: owner.email });
+    const otherEmail = await checkoutOrder({ customerId: owner.id, placedWithSession: false });
+    const view = await loadFinishOrder({ orderNo: placed.order.orderNo, sessionCustomerId: owner.id, accessTokens: [null] }, testDb);
     expect(view).toMatchObject({ state: "pending", isGuestOrder: false, guestContactEmail: null });
-    expect(await loadFinishOrder({ orderNo: linked.order.orderNo, sessionCustomerId: owner.id, accessToken: null }, testDb)).toBeNull();
+    expect(await loadFinishOrder({ orderNo: linked.order.orderNo, sessionCustomerId: owner.id, accessTokens: [null] }, testDb)).toMatchObject({ isGuestOrder: true });
+    expect(await loadFinishOrder({ orderNo: otherEmail.order.orderNo, sessionCustomerId: owner.id, accessTokens: [null] }, testDb)).toBeNull();
     const stranger = await customer();
-    expect(await loadFinishOrder({ orderNo: placed.order.orderNo, sessionCustomerId: stranger.id, accessToken: null }, testDb)).toBeNull();
+    expect(await loadFinishOrder({ orderNo: placed.order.orderNo, sessionCustomerId: stranger.id, accessTokens: [null] }, testDb)).toBeNull();
   });
 
   test("states: paid, past the payment window (confirming), cancelled; no payment link outside pending", async () => {
     const paid = await checkoutOrder({ status: "to_ship", paymentStatus: "paid", paidAt: new Date() });
-    expect(await loadFinishOrder({ orderNo: paid.order.orderNo, sessionCustomerId: null, accessToken: paid.token }, testDb)).toMatchObject({
+    expect(await loadFinishOrder({ orderNo: paid.order.orderNo, sessionCustomerId: null, accessTokens: [paid.token] }, testDb)).toMatchObject({
       state: "paid",
       paymentUrl: null,
       payBy: null,
     });
     // Past the window but not finalized: a last-minute payment may still be confirmed.
     const late = await checkoutOrder({ paymentExpiresAt: new Date(Date.now() - 60_000) });
-    expect(await loadFinishOrder({ orderNo: late.order.orderNo, sessionCustomerId: null, accessToken: late.token }, testDb)).toMatchObject({
+    expect(await loadFinishOrder({ orderNo: late.order.orderNo, sessionCustomerId: null, accessTokens: [late.token] }, testDb)).toMatchObject({
       state: "confirming",
       paymentUrl: null,
       payBy: null,
     });
     const cancelled = await checkoutOrder({ status: "cancelled", paymentStatus: "expired", cancelReason: "payment_expired" });
-    expect(await loadFinishOrder({ orderNo: cancelled.order.orderNo, sessionCustomerId: null, accessToken: cancelled.token }, testDb)).toMatchObject({
+    expect(await loadFinishOrder({ orderNo: cancelled.order.orderNo, sessionCustomerId: null, accessTokens: [cancelled.token] }, testDb)).toMatchObject({
       state: "failed",
     });
     // Paid after the order was cancelled: never "Pembayaran berhasil", the money goes back.
     const refund = await checkoutOrder({ status: "cancelled", paymentStatus: "paid", paidAt: new Date(), cancelReason: "payment_expired" });
-    expect(await loadFinishOrder({ orderNo: refund.order.orderNo, sessionCustomerId: null, accessToken: refund.token }, testDb)).toMatchObject({
+    expect(await loadFinishOrder({ orderNo: refund.order.orderNo, sessionCustomerId: null, accessTokens: [refund.token] }, testDb)).toMatchObject({
       state: "refund_pending",
     });
   });
 
   test("findOwnedCheckoutOrderId: the buyer's order id, null for a stranger or a malformed number", async () => {
     const placed = await checkoutOrder({});
-    expect(await findOwnedCheckoutOrderId({ orderNo: placed.order.orderNo, sessionCustomerId: null, accessToken: placed.token }, testDb)).toBe(placed.order.id);
-    expect(await findOwnedCheckoutOrderId({ orderNo: placed.order.orderNo, sessionCustomerId: null, accessToken: null }, testDb)).toBeNull();
-    expect(await findOwnedCheckoutOrderId({ orderNo: "ORD-x", sessionCustomerId: null, accessToken: placed.token }, testDb)).toBeNull();
+    expect(await findOwnedCheckoutOrderId({ orderNo: placed.order.orderNo, sessionCustomerId: null, accessTokens: [placed.token] }, testDb)).toBe(placed.order.id);
+    expect(await findOwnedCheckoutOrderId({ orderNo: placed.order.orderNo, sessionCustomerId: null, accessTokens: [null] }, testDb)).toBeNull();
+    expect(await findOwnedCheckoutOrderId({ orderNo: "ORD-x", sessionCustomerId: null, accessTokens: [placed.token] }, testDb)).toBeNull();
   });
 
   test("a non-checkout order is never shown", async () => {
     const order = await insertOrder(testDb, { orderNo: uniqueOrderNo() });
     created.orderIds.push(order.id);
     const owner = await customer();
-    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: owner.id, accessToken: null }, testDb)).toBeNull();
+    expect(await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: owner.id, accessTokens: [null] }, testDb)).toBeNull();
   });
 });
 

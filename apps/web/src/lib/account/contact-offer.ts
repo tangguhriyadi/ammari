@@ -4,6 +4,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { customers, orders } from "@ammari/db/schema";
 import { defaultDb, type Database } from "@/lib/db";
 import { isUniqueViolation } from "@/lib/errors";
+import { visibleToCustomerSql } from "@/lib/orders/access";
 
 // The /account offer to copy contact details from guest orders (docs/plans/cart-checkout.md §5 step
 // 4, §9.3; owner decision 2026-10-21, session 14). A guest checkout records the buyer's WhatsApp
@@ -13,7 +14,9 @@ import { isUniqueViolation } from "@/lib/errors";
 //
 // Offered from the newest guest checkout order of the customer placed after their last answer
 // (`customers.contact_offer_resolved_at`): the number only while the account has none and no other
-// account uses it; promo only while the account has no promo consent and the order opted in.
+// account uses it; promo only while the account has no promo consent and the order opted in. Only
+// an order "Pesanan saya" shows the account (lib/orders/access.ts, session 15): a guest order typed
+// with an email the account no longer has is never offered.
 
 export interface ContactOffer {
   orderNo: string;
@@ -37,7 +40,7 @@ export async function loadContactOffer(customerId: string, db: Database = defaul
     .from(orders)
     .where(
       and(
-        eq(orders.customerId, customerId),
+        visibleToCustomerSql(customerId),
         isNotNull(orders.paymentStatus),
         eq(orders.placedWithSession, false),
         ...(customer.resolvedAt ? [gt(orders.createdAt, customer.resolvedAt)] : []),

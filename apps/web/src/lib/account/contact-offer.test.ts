@@ -16,15 +16,18 @@ function phone(): string {
 }
 
 async function guestCustomer(tx: TestTx) {
-  return insertCustomer(tx, { phone: null, promoConsentAt: null, name: "Tamu" });
+  return insertCustomer(tx, { phone: null, promoConsentAt: null, name: "Tamu", emailVerifiedAt: new Date() });
 }
 
-async function guestOrder(tx: TestTx, customerId: string, values: { contactPhone?: string | null; promoOptIn?: boolean; placedWithSession?: boolean; createdAt?: Date } = {}) {
+/** A checkout order of the customer, typed with the account's own email unless `contactEmail` says
+ * otherwise. */
+async function guestOrder(tx: TestTx, customerId: string, values: { contactPhone?: string | null; promoOptIn?: boolean; placedWithSession?: boolean; createdAt?: Date; contactEmail?: string } = {}) {
+  const [account] = await tx.select({ email: customers.email }).from(customers).where(eq(customers.id, customerId));
   return insertOrder(tx, {
     ...checkoutOrderValues(),
     orderNo: `ORD-2097${Math.floor(Math.random() * 90 + 10)}-${Math.floor(Math.random() * 90_000_000 + 10_000_000)}`,
     customerId,
-    contactEmail: "tamu@example.test",
+    contactEmail: values.contactEmail ?? account?.email ?? "tamu@example.test",
     contactPhone: values.contactPhone === undefined ? phone() : values.contactPhone,
     promoOptIn: values.promoOptIn ?? false,
     placedWithSession: values.placedWithSession ?? false,
@@ -45,6 +48,14 @@ describe("loadContactOffer", () => {
       await guestOrder(tx, customer.id, { createdAt: new Date(Date.now() - 60_000) });
       const newest = await guestOrder(tx, customer.id, { promoOptIn: true });
       expect(await loadContactOffer(customer.id, tx)).toEqual({ orderNo: newest.orderNo, orderDate: newest.orderDate, phone: newest.contactPhone, promo: true });
+    });
+  });
+
+  test("never from a guest order typed with an email the account does not have (session 15 visibility rule)", async () => {
+    await withRollback(async (tx) => {
+      const customer = await guestCustomer(tx);
+      await guestOrder(tx, customer.id, { promoOptIn: true, contactEmail: "someone-else@example.test" });
+      expect(await loadContactOffer(customer.id, tx)).toBeNull();
     });
   });
 

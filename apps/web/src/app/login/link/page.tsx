@@ -45,7 +45,7 @@ export default async function LoginLinkPage({ searchParams }: { searchParams: Pr
       <Shell title="Kamu sudah masuk">
         <p className="text-sm text-neutral-700">Kamu sudah masuk ke akun ini. Link di email tetap bisa dipakai sampai kedaluwarsa.</p>
         <Link href={LOGIN_LINK_SUCCESS_PATH} className={linkButton}>
-          Buka akun saya
+          Lihat pesanan saya
         </Link>
       </Shell>
     );
@@ -75,7 +75,7 @@ export default async function LoginLinkPage({ searchParams }: { searchParams: Pr
       <p className="text-sm text-neutral-700">{copy.text}</p>
       {customer ? (
         <Link href={LOGIN_LINK_SUCCESS_PATH} className={linkButton}>
-          Buka akun saya
+          Lihat pesanan saya
         </Link>
       ) : (
         <Link href={OTP_LOGIN_HREF} className={linkButton}>

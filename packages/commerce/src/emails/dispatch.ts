@@ -45,8 +45,8 @@ import { deriveOrderEmailAccessToken, deriveOrderEmailLoginToken } from "./token
 // atomic INSERT ... ON CONFLICT (order_id, kind) DO UPDATE ... WHERE ... RETURNING. A new row is
 // claimed by inserting it; an existing row only when it was never sent, its last attempt is older
 // than NOTIFICATION_LEASE_MINUTES (a send in progress elsewhere is never doubled) and it is younger
-// than NOTIFICATION_RETRY_HOURS. Every send carries an idempotency key made of the row id and a
-// hash of the exact payload, and a retry renders the same payload (the view token is derived from
+// than NOTIFICATION_RETRY_HOURS. Every send carries an idempotency key made of the row id only
+// (idempotencyKey below), and a retry renders the same payload (the view token is derived from
 // the row id, ./token.ts), so a send that reached the provider but whose answer was lost is not
 // delivered twice. The provider keeps keys for 24 hours; retries stop at 23.
 //
@@ -420,7 +420,6 @@ async function prepare(db: Database, deps: OrderEmailDeps, order: LoadedOrder, d
     address: addressOf(order, false),
     orderUrl: `${deps.siteOrigin}/orders/${encodeURIComponent(order.orderNo)}?t=${token}`,
     loginUrl: await loginUrlFor(deps, order, due, claim),
-    shopUrl: `${deps.siteOrigin}/`,
     siteHost: siteHost(deps.siteOrigin),
     whatsappNumber: order.whatsappNumber,
   };

@@ -6,8 +6,8 @@
 // reads the same value. Client-safe
 // (no directive), so server components can import the link target too.
 
-/** The email login, landing on the account page until the order list exists (`/orders`, session 15). */
-export const LOGIN_FOR_ORDERS_HREF = "/login?next=%2Faccount";
+/** The email login, landing on "Pesanan saya" (plan §4.4). */
+export const LOGIN_FOR_ORDERS_HREF = "/login?next=%2Forders";
 
 export const LOGIN_PREFILL_STORAGE_KEY = "ammari-web-login-prefill";
 const MAX_AGE_MS = 10 * 60 * 1000;

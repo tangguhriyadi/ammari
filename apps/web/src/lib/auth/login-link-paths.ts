@@ -5,6 +5,6 @@
 export const LOGIN_LINK_PAGE_PATH = "/login/link";
 /** Where the confirm page's form posts (the orderLoginLink plugin's endpoint). */
 export const LOGIN_LINK_CONSUME_ACTION = "/api/auth/order-login-link/consume";
-/** Where a login by link lands: the account page until the order list exists (`/orders`, session
- * 15; switch it in createCustomerAuth's `orderLoginLink.successPath` default and here together). */
-export const LOGIN_LINK_SUCCESS_PATH = "/account";
+/** Where a login by link lands: "Pesanan saya" (plan §9.3; createCustomerAuth's
+ * `orderLoginLink.successPath` default is the same path, change both together). */
+export const LOGIN_LINK_SUCCESS_PATH = "/orders";

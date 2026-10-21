@@ -1,5 +1,6 @@
 export {
   addCartItem,
+  addLinesToCart,
   getCartPieceCount,
   getCartView,
   mergeCartLines,
@@ -7,6 +8,8 @@ export {
   resolveCart,
   setCartItemQty,
   type CartIdentity,
+  type CartLinesAddLine,
+  type CartLinesAddResult,
   type CartLine,
   type CartLineImage,
   type CartResolution,

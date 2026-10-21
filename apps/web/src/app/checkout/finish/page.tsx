@@ -10,6 +10,7 @@ import { OutlineLink, PrimaryLink } from "@/components/buttons";
 import { LoginPrefillLink } from "@/components/checkout/login-prefill-link";
 import { PaymentStatusCheck } from "@/components/checkout/payment-status-check";
 import { ReopenPaymentButton } from "@/components/checkout/reopen-payment-button";
+import { ReorderButton } from "@/components/orders/reorder-button";
 import { LOGIN_FOR_ORDERS_HREF } from "@/lib/auth/login-prefill";
 
 // Where the payment page sends the buyer back (docs/plans/cart-checkout.md §4.4,
@@ -63,7 +64,7 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
   const { order } = await searchParams;
   const orderNo = typeof order === "string" ? order.slice(0, 40) : "";
   const [session, accessToken] = await Promise.all([getCustomerSession(), readOrderAccessCookie()]);
-  const view = orderNo ? await loadFinishOrder({ orderNo, sessionCustomerId: session?.id ?? null, accessToken }) : null;
+  const view = orderNo ? await loadFinishOrder({ orderNo, sessionCustomerId: session?.id ?? null, accessTokens: [accessToken] }) : null;
   if (!view) return <CannotShowOrder />;
 
   return (
@@ -145,9 +146,14 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
       <div className="flex flex-col gap-3">
         {view.isGuestOrder && view.guestContactEmail && <LoginPrefillLink email={view.guestContactEmail} />}
         {view.state === "failed" ? (
-          <PrimaryLink href={COLLECTION_HREF} className="w-full">
-            Lihat koleksi
-          </PrimaryLink>
+          <>
+            {/* Puts the lines back into the cart; the server re-checks that the order is a
+                cancelled, never-paid one (lib/orders/reorder-actions.ts). */}
+            <ReorderButton orderNo={view.orderNo} />
+            <OutlineLink href={COLLECTION_HREF} className="w-full">
+              Lihat koleksi
+            </OutlineLink>
+          </>
         ) : (
           <OutlineLink href={COLLECTION_HREF} className="w-full">
             Lanjut belanja

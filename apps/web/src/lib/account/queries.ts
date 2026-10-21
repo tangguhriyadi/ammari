@@ -2,6 +2,7 @@ import "server-only";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { channels, fabricColors, orderItems, orders, products, productVariants, vouchers } from "@ammari/db/schema";
 import { defaultDb, type Database } from "@/lib/db";
+import { visibleToCustomerSql } from "@/lib/orders/access";
 
 export interface MyOrderItem {
   productName: string;
@@ -20,7 +21,9 @@ export interface MyOrderRow {
 
 /** Read-only, no cost data anywhere in this query (customer-facing — CLAUDE.md's "never only a
  * UI hide" principle applies the other way too: a figure this page never selects can never leak
- * through a future UI bug). Newest order first. */
+ * through a future UI bug). Newest order first. The /account list with the cart flag off; the same
+ * visibility rule as "Pesanan saya" (lib/orders/access.ts), which changes nothing for staff-entered
+ * and marketplace orders. */
 export async function listMyOrders(customerId: string, db: Database = defaultDb): Promise<MyOrderRow[]> {
   const orderRows = await db
     .select({
@@ -31,7 +34,7 @@ export async function listMyOrders(customerId: string, db: Database = defaultDb)
     })
     .from(orders)
     .innerJoin(channels, eq(channels.id, orders.channelId))
-    .where(eq(orders.customerId, customerId))
+    .where(visibleToCustomerSql(customerId))
     .orderBy(desc(orders.orderDate));
 
   const orderIds = orderRows.map((row) => row.id);

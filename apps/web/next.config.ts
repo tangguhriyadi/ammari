@@ -85,7 +85,51 @@ const nextConfig: NextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
         ],
       },
+      // "Pesanan saya" (docs/plans/cart-checkout.md §9, session 15). The email link
+      // `/orders/<no>?t=<token>` is answered by the token route (rewrites below), which renders
+      // nothing and sends the token URL nowhere: `no-referrer`. The token-free pages send
+      // `same-origin` instead (owner decision 2026-10-21): no Referer ever leaves the site, while
+      // the page's own server actions ("Pesan lagi", the payment buttons) keep a real Origin, which
+      // Next's CSRF check needs (`no-referrer` makes browsers send `Origin: null`). Never framed
+      // (the contact offer, "Pesan lagi"), never indexed.
+      // The query-dependent split applies to the order page only (where `?t=` is rewritten);
+      // `/orders` gets its headers whatever the query (security review, session 15: a `missing`
+      // condition there let `/orders?t=x` render the list unprotected).
+      {
+        source: "/orders/:orderNo",
+        has: [{ type: "query", key: "t" }],
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Cache-Control", value: "no-store" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
+      ...[
+        { source: "/orders", missing: undefined },
+        { source: "/orders/:orderNo", missing: [{ type: "query" as const, key: "t" }] },
+      ].map(({ source, missing }) => ({
+        source,
+        ...(missing ? { missing } : {}),
+        headers: [
+          { key: "Referrer-Policy", value: "same-origin" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      })),
     ];
+  },
+  // The "Lihat pesanan" token is swapped for a cookie before any page renders (§9.2): the request
+  // with `?t=` goes to the token route, which redirects to the token-free URL. No proxy file
+  // (apps/web has none by design); a beforeFiles rewrite, so it wins over the order page itself.
+  async rewrites() {
+    return {
+      beforeFiles: [{ source: "/orders/:orderNo", has: [{ type: "query", key: "t" }], destination: "/api/orders/:orderNo/view" }],
+      afterFiles: [],
+      fallback: [],
+    };
   },
 };
 

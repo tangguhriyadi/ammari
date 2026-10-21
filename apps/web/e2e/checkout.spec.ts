@@ -161,7 +161,7 @@ test.describe("checkout, flag on", () => {
 
       // Guest: the OTP login with the contact email filled in; it never logs in by itself.
       await page.getByRole("link", { name: "Masuk untuk melihat semua pesanan" }).click();
-      await expect(page).toHaveURL(/\/login\?next=%2Faccount$/);
+      await expect(page).toHaveURL(/\/login\?next=%2Forders$/);
       await expect(page.getByLabel("Email")).toHaveValue(email);
     });
 

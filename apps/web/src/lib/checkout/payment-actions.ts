@@ -9,6 +9,7 @@ import { getCartClientIp } from "@/lib/cart/ip";
 import { recordClaimAttemptAndCount } from "@/lib/claim/throttle";
 import { defaultDb } from "@/lib/db";
 import { scheduleOrderEmails } from "@/lib/emails/order-emails";
+import { readOrderViewCookie } from "@/lib/orders/view-cookie";
 import { getPaymentRuntime } from "@/lib/payments/runtime";
 import { revalidateProductPages } from "@/lib/payments/revalidate";
 import { siteOrigin } from "@/lib/site-origin";
@@ -27,22 +28,29 @@ import {
 import { readOrderAccessCookie } from "./order-access-cookie";
 import { findOwnedCheckoutOrderId } from "./queries";
 
-// The finish page's two payment actions (docs/plans/cart-checkout.md §4.4, session 10 note):
+// The payment actions of the finish page and the order page (docs/plans/cart-checkout.md §4.4,
+// §9.1):
 // - checkPaymentStatusAction: the one server-side status check of a pending order. The gateway's
 //   status (fetched server to server, never the redirect's query string) goes through the same
 //   state machine as a notification; the page re-renders from our database when it changed.
 // - reopenPaymentPageAction: "Buka halaman pembayaran" when the payment page could not be created
 //   (a new attempt for the rest of the order's window).
 // Server actions (Next's Origin check is the CSRF guard), behind the cart flag, for the buyer who
-// may see the finish page only (session or the checkout cookie), each with a per-IP limit.
+// may see the order only (lib/orders/access.ts: the session, the checkout's cookie on the finish
+// page, or the "Lihat pesanan" cookie on the order page), each with a per-IP limit.
 
 const orderNoSchema = z.string().regex(/^ORD-[0-9]{6}-[0-9]{4,}$/);
 
-async function ownedOrderId(orderNo: unknown): Promise<string | null> {
+/** `viewLink`: also accept the "Lihat pesanan" cookie. Plan §9.2 lets that emailed, 120-day link
+ * only view the order and re-open the stored payment page, so it may run the status check (which
+ * only applies the gateway's own answer) but never open a new payment attempt (security review,
+ * session 15). */
+async function ownedOrderId(orderNo: unknown, options: { viewLink: boolean }): Promise<string | null> {
   const parsed = orderNoSchema.safeParse(orderNo);
   if (!parsed.success) return null;
-  const [session, accessToken] = await Promise.all([getCustomerSession(), readOrderAccessCookie()]);
-  return findOwnedCheckoutOrderId({ orderNo: parsed.data, sessionCustomerId: session?.id ?? null, accessToken });
+  const [session, checkoutToken, viewToken] = await Promise.all([getCustomerSession(), readOrderAccessCookie(), readOrderViewCookie()]);
+  const accessTokens = options.viewLink ? [checkoutToken, viewToken] : [checkoutToken];
+  return findOwnedCheckoutOrderId({ orderNo: parsed.data, sessionCustomerId: session?.id ?? null, accessTokens });
 }
 
 /** `changed`: the order's payment state moved, so the page should re-read it. */
@@ -51,7 +59,7 @@ export async function checkPaymentStatusAction(orderNo: string): Promise<{ chang
   try {
     const ip = await getCartClientIp("payment status check");
     if (!ip) return { changed: false };
-    const orderId = await ownedOrderId(orderNo);
+    const orderId = await ownedOrderId(orderNo, { viewLink: true });
     if (!orderId) return { changed: false };
     const runtime = getPaymentRuntime();
     if (!runtime) {
@@ -96,7 +104,7 @@ export async function reopenPaymentPageAction(orderNo: string): Promise<ReopenPa
     if ((await recordClaimAttemptAndCount(defaultDb, ip, "payment_retry", PAYMENT_RETRY_WINDOW_SECONDS)) > PAYMENT_RETRY_LIMIT) {
       return { ok: false, message: PAYMENT_RETRY_RATE_LIMITED_MESSAGE };
     }
-    const orderId = await ownedOrderId(orderNo);
+    const orderId = await ownedOrderId(orderNo, { viewLink: false });
     if (!orderId) return { ok: false, message: PAYMENT_RETRY_CLOSED_MESSAGE };
     const runtime = getPaymentRuntime();
     if (!runtime) {

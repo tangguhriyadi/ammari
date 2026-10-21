@@ -62,9 +62,9 @@ for (const viewport of [
       expect(await loginLinkState(token)).toEqual({ consumed: false, superseded: false });
 
       await page.getByRole("button", { name: "Masuk" }).click();
-      await expect(page).toHaveURL(/\/account$/);
-      await expect(page.getByRole("heading", { name: "Akun Saya" })).toBeVisible();
-      await expect(page.getByText(customer.email)).toBeVisible();
+      await expect(page).toHaveURL(/\/orders$/);
+      // The login lands on "Pesanan saya" (session 15).
+      await expect(page.getByRole("heading", { name: "Pesanan saya" })).toBeVisible();
       expect(await sessionCountFor(customer)).toBe(1);
       expect(await loginLinkState(token)).toEqual({ consumed: true, superseded: false });
     });
@@ -77,7 +77,7 @@ test("a link used twice: the second browser gets 'Link sudah tidak berlaku' and 
   const token = await issueLoginLink(customer);
   await page.goto(linkUrl(token));
   await page.getByRole("button", { name: "Masuk" }).click();
-  await expect(page).toHaveURL(/\/account$/);
+  await expect(page).toHaveURL(/\/orders$/);
 
   const other = await browser.newContext();
   try {
@@ -86,7 +86,7 @@ test("a link used twice: the second browser gets 'Link sudah tidak berlaku' and 
     await second.goto(linkUrl(token));
     await expect(second.getByRole("heading", { name: "Link sudah tidak berlaku" })).toBeVisible();
     await expect(second.getByRole("button", { name: "Masuk" })).toHaveCount(0);
-    await expect(second.getByRole("link", { name: "Masuk dengan kode" })).toHaveAttribute("href", "/login?next=%2Faccount");
+    await expect(second.getByRole("link", { name: "Masuk dengan kode" })).toHaveAttribute("href", "/login?next=%2Forders");
     // A POST of the used token (e.g. a stale tab) lands on the same answer.
     const posted = await second.request.post("/api/auth/order-login-link/consume", { form: { token }, headers: { origin: new URL(baseURL!).origin }, maxRedirects: 0 });
     expect(posted.status()).toBe(302);
@@ -119,7 +119,7 @@ test("a second link revokes the first", async ({ page, context }) => {
   await expect(page.getByRole("heading", { name: "Link sudah tidak berlaku" })).toBeVisible();
   await page.goto(linkUrl(second));
   await page.getByRole("button", { name: "Masuk" }).click();
-  await expect(page).toHaveURL(/\/account$/);
+  await expect(page).toHaveURL(/\/orders$/);
 });
 
 test("an email scanner prefetching the link (GET) logs nobody in and leaves the link working", async ({ page, context, baseURL }) => {
@@ -145,7 +145,7 @@ test("an email scanner prefetching the link (GET) logs nobody in and leaves the 
 
   await page.goto(linkUrl(token));
   await page.getByRole("button", { name: "Masuk" }).click();
-  await expect(page).toHaveURL(/\/account$/);
+  await expect(page).toHaveURL(/\/orders$/);
 });
 
 test("CSRF: a POST from another site or without an Origin is refused and the link stays usable", async ({ page, context, baseURL }) => {
@@ -178,7 +178,7 @@ test("CSRF: a POST from another site or without an Origin is refused and the lin
   // The buyer's own click still works.
   await page.goto(linkUrl(token));
   await page.getByRole("button", { name: "Masuk" }).click();
-  await expect(page).toHaveURL(/\/account$/);
+  await expect(page).toHaveURL(/\/orders$/);
 });
 
 test("without PDP consent the login lands on the consent step first", async ({ page, context }) => {
@@ -187,10 +187,10 @@ test("without PDP consent the login lands on the consent step first", async ({ p
   const token = await issueLoginLink(customer);
   await page.goto(linkUrl(token));
   await page.getByRole("button", { name: "Masuk" }).click();
-  await expect(page).toHaveURL(/\/consent\?next=%2Faccount$/);
+  await expect(page).toHaveURL(/\/consent\?next=%2Forders$/);
 });
 
-test("after login, /account offers the WhatsApp number and promo choice of the guest order; nothing is copied unasked", async ({ page, context }) => {
+test("after login, Pesanan saya offers the WhatsApp number and promo choice of the guest order; nothing is copied unasked", async ({ page, context }) => {
   await ownIp(context);
   const customer = await seedLinkCustomer("link-offer");
   const phone = uniquePhone();
@@ -198,7 +198,7 @@ test("after login, /account offers the WhatsApp number and promo choice of the g
   const token = await issueLoginLink(customer);
   await page.goto(linkUrl(token));
   await page.getByRole("button", { name: "Masuk" }).click();
-  await expect(page).toHaveURL(/\/account$/);
+  await expect(page).toHaveURL(/\/orders$/);
 
   await expect(page.getByRole("heading", { name: "Simpan data dari pesananmu?" })).toBeVisible();
   await expect(page.getByText(`memakai nomor WhatsApp ${phone}`, { exact: false })).toBeVisible();
@@ -223,7 +223,7 @@ test("the guest cart merges into the account after a login by link", async ({ pa
   const token = await issueLoginLink(customer);
   await page.goto(linkUrl(token));
   await page.getByRole("button", { name: "Masuk" }).click();
-  await expect(page).toHaveURL(/\/account$/);
+  await expect(page).toHaveURL(/\/orders$/);
 
   await page.goto("/cart");
   await expect(page.getByText("2 barang")).toBeVisible();

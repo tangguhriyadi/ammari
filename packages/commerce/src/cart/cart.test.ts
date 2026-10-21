@@ -8,6 +8,7 @@ import { CART_MAX_PIECES, CART_MAX_QTY_PER_LINE } from "./limits";
 import { generateCartToken, hashCartToken, isWellFormedCartToken } from "./token";
 import {
   addCartItem,
+  addLinesToCart,
   getCartPieceCount,
   getCartView,
   removeCartItem,
@@ -624,6 +625,180 @@ describe("concurrency", () => {
       await testDb.delete(customers).where(eq(customers.id, customer.id));
       await testDb.delete(carts).where(eq(carts.tokenHash, guestIdentity.guestTokenHash));
       await cleanupProduct({ variant, ...rest }, []);
+    }
+  });
+});
+
+describe("addLinesToCart (\"Pesan lagi\", plan §4.4, §9.1)", () => {
+  test("adds every line of a past order on top of what the cart holds; a guest's first refill creates the cart", async () => {
+    await withRollback(async (tx) => {
+      const base = await sellableVariant(tx);
+      const l = await siblingVariant(tx, base, "L");
+      const identity = guest();
+
+      const result = await addLinesToCart(tx, identity, [
+        { sku: base.variant.sku, qty: 2 },
+        { sku: l.sku, qty: 1 },
+      ]);
+      expect(result).toMatchObject({ pieceCount: 3, clearGuestCookie: false, mergeTrimmed: false });
+      expect(result.lines).toEqual([
+        { sku: base.variant.sku, requested: 2, added: 2, reason: null },
+        { sku: l.sku, requested: 1, added: 1, reason: null },
+      ]);
+      if (!result.cartId) throw new Error("expected a cart");
+      const [cart] = await tx.select().from(carts).where(eq(carts.id, result.cartId));
+      expect(cart).toMatchObject({ tokenHash: identity.guestTokenHash, customerId: null });
+
+      // A second refill adds on top of the existing lines.
+      const again = await addLinesToCart(tx, identity, [{ sku: base.variant.sku, qty: 2 }]);
+      expect(again).toMatchObject({ cartId: result.cartId, pieceCount: 5 });
+      expect(await linesOf(tx, result.cartId)).toEqual({ [base.variant.sku]: 4, [l.sku]: 1 });
+    });
+  });
+
+  test("a sold-out line and a line no longer for sale are skipped; the rest is still added", async () => {
+    await withRollback(async (tx) => {
+      const ok = await sellableVariant(tx);
+      const soldOut = await sellableVariant(tx, 0);
+      const unpublished = await sellableVariant(tx);
+      await tx.update(products).set({ isPublishedOnStorefront: false }).where(eq(products.id, unpublished.product.id));
+      const identity = guest();
+
+      const result = await addLinesToCart(tx, identity, [
+        { sku: soldOut.variant.sku, qty: 1 },
+        { sku: ok.variant.sku, qty: 1 },
+        { sku: unpublished.variant.sku, qty: 1 },
+        { sku: `SKU-${randomUUID()}`, qty: 1 },
+      ]);
+      expect(result.pieceCount).toBe(1);
+      expect(result.lines.map((line) => [line.added, line.reason])).toEqual([
+        [0, "sold_out"],
+        [1, null],
+        [0, "not_available"],
+        [0, "not_available"],
+      ]);
+    });
+  });
+
+  test("a line with less sellable stock than ordered is skipped whole, never cut down to the stock (no count leaks); holds count", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await sellableVariant(tx, 3);
+      await insertStockReservation(tx, { sku: variant.sku, qty: 1 });
+      const identity = guest();
+
+      // 3 physical - 1 held = 2 sellable, 3 ordered.
+      const result = await addLinesToCart(tx, identity, [{ sku: variant.sku, qty: 3 }]);
+      expect(result.lines).toEqual([{ sku: variant.sku, requested: 3, added: 0, reason: "insufficient_stock" }]);
+      expect(result).toMatchObject({ cartId: null, pieceCount: 0 });
+
+      // What is already in the cart counts toward the line.
+      await expectAdded(await addCartItem(tx, identity, variant.sku, 1));
+      const second = await addLinesToCart(tx, identity, [{ sku: variant.sku, qty: 2 }]);
+      expect(second.lines[0]).toMatchObject({ added: 0, reason: "insufficient_stock" });
+      expect(second.pieceCount).toBe(1);
+    });
+  });
+
+  test(`the ${CART_MAX_QTY_PER_LINE}-per-line and ${CART_MAX_PIECES}-piece caps cut a line down (that reveals no stock)`, async () => {
+    await withRollback(async (tx) => {
+      const base = await sellableVariant(tx);
+      const l = await siblingVariant(tx, base, "L");
+      const xl = await siblingVariant(tx, base, "XL");
+      const identity = guest();
+      await expectAdded(await addCartItem(tx, identity, base.variant.sku, 8));
+      await expectAdded(await addCartItem(tx, identity, l.sku, 9));
+
+      const result = await addLinesToCart(tx, identity, [
+        { sku: base.variant.sku, qty: 5 },
+        { sku: xl.sku, qty: 3 },
+        { sku: l.sku, qty: 1 },
+      ]);
+      expect(result.lines).toEqual([
+        { sku: base.variant.sku, requested: 5, added: 2, reason: "line_limit" },
+        { sku: xl.sku, requested: 3, added: 1, reason: "cart_limit" },
+        { sku: l.sku, requested: 1, added: 0, reason: "cart_limit" },
+      ]);
+      expect(result.pieceCount).toBe(CART_MAX_PIECES);
+    });
+  });
+
+  test("a line the caps leave no room for reports the cap, not its stock", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await sellableVariant(tx, 10);
+      const identity = guest();
+      await expectAdded(await addCartItem(tx, identity, variant.sku, 10));
+      const result = await addLinesToCart(tx, identity, [{ sku: variant.sku, qty: 1 }]);
+      expect(result.lines).toEqual([{ sku: variant.sku, requested: 1, added: 0, reason: "line_limit" }]);
+    });
+  });
+
+  test("the same SKU twice is one line; quantities outside 1..10 are refused per line", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await sellableVariant(tx);
+      const other = await sellableVariant(tx);
+      const result = await addLinesToCart(tx, guest(), [
+        { sku: variant.sku, qty: 2 },
+        { sku: other.variant.sku, qty: 0 },
+        { sku: variant.sku, qty: 3 },
+      ]);
+      expect(result.lines).toEqual([
+        { sku: variant.sku, requested: 5, added: 5, reason: null },
+        { sku: other.variant.sku, requested: 0, added: 0, reason: "invalid_qty" },
+      ]);
+      expect(result.pieceCount).toBe(5);
+    });
+  });
+
+  test("nothing addable: no cart is created and an existing cart is left exactly as it was", async () => {
+    await withRollback(async (tx) => {
+      const soldOut = await sellableVariant(tx, 0);
+      const identity = guest();
+      const none = await addLinesToCart(tx, identity, [{ sku: soldOut.variant.sku, qty: 1 }]);
+      expect(none).toMatchObject({ cartId: null, pieceCount: 0 });
+      expect(await tx.select().from(carts).where(eq(carts.tokenHash, identity.guestTokenHash))).toHaveLength(0);
+
+      const customer = await insertCustomer(tx);
+      const { variant } = await sellableVariant(tx);
+      const owner = { customerId: customer.id, guestTokenHash: null };
+      const cartId = await expectAdded(await addCartItem(tx, owner, variant.sku, 2));
+      const [before] = await tx.select({ at: carts.lastActivityAt }).from(carts).where(eq(carts.id, cartId));
+      const kept = await addLinesToCart(tx, owner, [{ sku: soldOut.variant.sku, qty: 1 }]);
+      expect(kept).toMatchObject({ cartId, pieceCount: 2 });
+      const [after] = await tx.select({ at: carts.lastActivityAt }).from(carts).where(eq(carts.id, cartId));
+      expect(after?.at).toEqual(before?.at);
+    });
+  });
+
+  test("a session with a guest cookie merges the guest cart first, then refills the customer's", async () => {
+    await withRollback(async (tx) => {
+      const base = await sellableVariant(tx);
+      const l = await siblingVariant(tx, base, "L");
+      const customer = await insertCustomer(tx);
+      const device = guest();
+      await expectAdded(await addCartItem(tx, device, base.variant.sku, 1));
+
+      const result = await addLinesToCart(tx, { customerId: customer.id, guestTokenHash: device.guestTokenHash }, [{ sku: l.sku, qty: 2 }]);
+      expect(result).toMatchObject({ pieceCount: 3, clearGuestCookie: true });
+      if (!result.cartId) throw new Error("expected a cart");
+      const [cart] = await tx.select().from(carts).where(eq(carts.id, result.cartId));
+      expect(cart).toMatchObject({ customerId: customer.id, tokenHash: null });
+      expect(await linesOf(tx, result.cartId)).toEqual({ [base.variant.sku]: 1, [l.sku]: 2 });
+    });
+  });
+
+  test(`two refills of the same cart at once never exceed ${CART_MAX_PIECES} pieces`, async () => {
+    const base = await sellableVariant(testDb);
+    const l = await siblingVariant(testDb, base, "L");
+    const identity = guest();
+    try {
+      await Promise.all([
+        addLinesToCart(testDb, identity, [{ sku: base.variant.sku, qty: 10 }, { sku: l.sku, qty: 5 }]),
+        addLinesToCart(testDb, identity, [{ sku: l.sku, qty: 5 }, { sku: base.variant.sku, qty: 10 }]),
+      ]);
+      expect(await getCartPieceCount(testDb, identity)).toBe(CART_MAX_PIECES);
+    } finally {
+      await testDb.delete(carts).where(eq(carts.tokenHash, identity.guestTokenHash));
+      await cleanupProduct(base, [l.sku]);
     }
   });
 });

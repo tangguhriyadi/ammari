@@ -51,8 +51,6 @@ export interface CustomerOrderEmailView {
   /** "Masuk ke akun" (plan §9.3, session 14): set only on the `created` and `paid` emails of a guest
    * order whose link was issued (dispatch.ts `loginUrlFor`), otherwise null. */
   loginUrl: string | null;
-  /** The storefront home, for "Belanja lagi". */
-  shopUrl: string;
   /** The storefront host, e.g. "ammari.id", for the footer. */
   siteHost: string;
   whatsappNumber: string | null;
@@ -344,11 +342,11 @@ export function renderCancelledEmail(view: CancelledEmailView): RenderedEmail {
     greeting(view),
     { kind: "paragraph", text: `Pesanan ${view.orderNo} kami batalkan ${why}. Tidak ada dana yang ditarik untuk pesanan ini.` },
     ...(view.totals.discount > 0 ? [{ kind: "paragraph" as const, text: "Voucher yang kamu pakai sudah kembali ke akunmu dan bisa dipakai lagi selama masa berlakunya." }] : []),
-    { kind: "paragraph", text: "Kalau masih ingin memesan, silakan pesan lagi kapan saja. Kami senang menyambutmu kembali." },
-    { kind: "button", label: "Belanja lagi", url: view.shopUrl },
+    { kind: "paragraph", text: "Kalau masih ingin memesan, tekan Pesan lagi: barang dari pesanan ini kami masukkan lagi ke keranjangmu, selama stoknya masih ada." },
+    // The order page (the "Lihat pesanan" link) has the "Pesan lagi" button (plan §9.1, session 15).
+    { kind: "button", label: "Pesan lagi", url: view.orderUrl },
     { kind: "divider" },
     ...orderBlocks(view),
-    ...accessBlocks(view, false),
     ...contactLine(view.whatsappNumber),
   ];
   return render(`Pesanan ${view.orderNo} dibatalkan`, "Pembayaran belum kami terima sampai batas waktu.", blocks, customerFooter(view));
