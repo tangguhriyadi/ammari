@@ -7,6 +7,7 @@ import { beforeEach, vi } from "vitest";
 const realFetch = globalThis.fetch;
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 // The only exceptions: the opt-in contract tests (src/shipping/biteship.contract.test.ts,
+// src/shipping/biteship-orders.contract.test.ts (also needs BITESHIP_ORDER_CONTRACT_TEST=1),
 // src/payments/midtrans.contract.test.ts), run by hand with BITESHIP_CONTRACT_TEST=1 /
 // MIDTRANS_CONTRACT_TEST=1 and test or sandbox keys; never in CI or a normal `pnpm test`. The
 // Midtrans exception names the Sandbox hosts only.

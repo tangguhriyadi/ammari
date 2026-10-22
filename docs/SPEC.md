@@ -246,7 +246,15 @@ and `/checkout/*` return not-found and the WhatsApp CTA stays primary).
   launch prerequisite), but never on booking. Once live, web orders
   move `to_ship -> shipped -> completed` automatically from tracking (a returned-to-sender
   status only raises a flag, staff confirm the return), with the manual actions kept as a
-  fallback, and customers see the tracking timeline in "Pesanan saya".
+  fallback, and customers see the tracking timeline in "Pesanan saya". Phase K as confirmed by
+  the owner on 2026-10-22 (plan §15 Phase K, decisions 46 to 51): staff press **"Pesan kurir"**
+  on a paid web order, which books exactly the locked courier and service with pickup requested
+  at once (`delivery_type: now`, no scheduled window, a per-courier cut-off hint), idempotent per
+  attempt (`reference_id` = `BITESHIP_REFERENCE_PREFIX` + order number + `-K<attempt>`); an actual
+  price more than Rp5.000 above the quote flags `shipping_cost_over_quote` (Ammari pays the
+  difference); the label is **our own 120 x 100 mm PDF** with a Code 128 waybill barcode (Biteship
+  has no label API); webhooks are hints that trigger a re-fetch, and a cron poll every 3 hours
+  re-reads open shipments at most every 6 hours (budget 60 reads a day).
 
 ## 4. Voucher & QR thank-you card program
 

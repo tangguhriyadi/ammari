@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { delay, joinUrl } from "./biteship-http";
 import { ShippingRateError, type RatesInput, type ShippingArea, type ShippingCallKind, type ShippingRateProvider } from "./provider";
 import { normalizeProviderPostalCode, type RatedService } from "./rules";
 
@@ -18,7 +19,7 @@ import { normalizeProviderPostalCode, type RatedService } from "./rules";
 //   surcharge minus discount, plus insurance/COD only when requested, which we never do).
 // - errors are `{ success: false, error, code }`; 40001010 "No courier available for requested
 //   location" (HTTP 400) means no service. Request-rate limits answer 429 (help center).
-// The same area ids go into `POST /v1/orders` in Phase K ("Use area_id from Maps API").
+// The same area ids go into `POST /v1/orders` (Phase K, ./biteship-orders.ts: "Use area_id from Maps API").
 
 export const BITESHIP_TIMEOUT_MS = 5_000;
 export const BITESHIP_RETRY_DELAY_MS = 300;
@@ -58,15 +59,6 @@ const pricingRow = z.object({
   // Whole rupiah in every documented example; pickCheapestService refuses anything else.
   price: z.number(),
 });
-
-function joinUrl(baseUrl: string, path: string): URL {
-  const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-  return new URL(path, base);
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 export function createBiteshipClient(options: BiteshipClientOptions): ShippingRateProvider {
   const timeoutMs = options.timeoutMs ?? BITESHIP_TIMEOUT_MS;

@@ -35,7 +35,10 @@ drafts, `DEPLOY_ENV` allowlist for shipping, env examples, deploy tooling; see t
 Phase C code is complete; next are the owner's dev sandbox run, the prod deploy and the 1 Dec
 launch (runbooks), then Phase K. **Sandbox fixes round 2 done 2026-10-21** (resi required for web
 orders, "menunggu pembayaran" reminder, saved address, "Beli sekarang", stale deploys, account name,
-"Halo Kak"; see "Sandbox fixes, round 2" after the session table).
+"Halo Kak"; see "Sandbox fixes, round 2" after the session table). **Phase K started 2026-10-22:**
+Biteship docs researched, breakdown K1 to K4 and decisions 46 to 51 confirmed by the owner; **K1
+done 2026-10-22** (order client, fake, shipment config, Code 128 and our own label; no migration;
+see §15 Phase K).
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
@@ -118,24 +121,35 @@ ships, staff book the order's quoted courier service by hand, enter the resi wit
     ("Use area_id from Maps API", the wording the rates page uses too), contacts, address,
     `courier_company` + `courier_type` (= the rates `courier_code` + `courier_service_code`),
     `delivery_type` `now` (waybill and pickup right away) or `scheduled`, `items`, and a unique
-    `reference_id` (a repeat returns `40002060` with the existing order id, so retries are
-    idempotent). `GET /v1/orders/:id`, `POST /v1/orders/:id/cancel` (reason code
-    `change_courier` / `pickup_delay` / `change_address` / `others`; only before pickup).
-  - Tracking (Phase K): `GET /v1/trackings/:id` (only for orders made through the API), statuses
-    `confirmed`, `scheduled`, `allocated`, `picking_up`, `picked`, `in_transit`, `dropping_off`,
-    `delivered`, `on_hold`, `return_in_transit`, `returned`, `rejected`, `cancelled`, `disposed`,
-    `courier_not_found` (one docs page lists camelCase spellings; normalize both).
+    `reference_id`. **Corrected 2026-10-22:** a repeated `reference_id` is **refused** with code
+    `40002060` and the existing order in the error's `details` (`order_id`, `waybill_id`); it does
+    not return the order, so the caller recovers it with `GET /v1/orders/:id`. The waybill is
+    issued at booking but **can change later** (the `order.waybill_id` webhook). `GET
+    /v1/orders/:id` carries status, price, `courier.routing_code` and `courier.history[]`, so the
+    tracking endpoint is not needed. `POST /v1/orders/:id/cancel` (reason code `change_courier` /
+    `pickup_delay` / `change_address` / `others`; only in `confirmed` / `scheduled` / `allocated` /
+    `picking_up`, else `40002053`; `DELETE` is deprecated). Full findings with sources: §15 Phase K
+    "Biteship research".
+  - Tracking (Phase K): statuses `confirmed`, `scheduled`, `allocated`, `picking_up`, `picked`,
+    `in_transit`, `dropping_off`, `delivered`, `on_hold`, `return_in_transit`, `returned`,
+    `rejected`, `cancelled`, `disposed`, `courier_not_found`. **Corrected 2026-10-22:** order
+    statuses are snake_case; the tracking statuses page spells the same states in camelCase
+    (`pickingUp`, `courierNotFound`); both are normalized.
   - Webhooks (Phase K): `order.status`, `order.price` (actual price differs after weighing),
-    `order.waybill_id`, registered in the dashboard. **No body signature is documented**; the help
-    center (not verifiable, it blocks automated reads) mentions optional static header
-    key/secret values. No documented retry policy.
-  - **Labels: the docs say "Biteship does not provide a Shipping Label API"** (dashboard download,
-    or print our own from the order data), while the pricing page lists "Shipping Label API" for
-    Grow: confirm with Biteship before K2.
+    `order.waybill_id`, registered in the dashboard (separate test and live webhooks). **No body
+    signature.** **Confirmed 2026-10-22** (help center, read through its public JSON API): the
+    webhook form has optional "Headers Signature Key / Secret" fields sent as static HTTP headers
+    on every request. **No automatic retries**: failed deliveries only show in the dashboard's
+    Events Log with a manual "Resend".
+  - **Labels (resolved 2026-10-22):** no label endpoint or label URL exists anywhere in the API
+    docs or changelog (the pricing page's "Shipping Label API" looks unreleased), and dashboard
+    labels come only as A6, 4x6 inch or A4. We print **our own 120 x 100 mm label** (decision 49).
   - **Test mode:** Maps, Rates and Tracking return real data and **are billed** even with a test
-    key; the Order API is simulated (no courier pickup). Shipping costs are paid from the account
-    balance (Bitepoints, top-up by QRIS or transfer; not withdrawable; a cancellation refund to the
-    balance goes through Biteship support, per the help center).
+    key; the Order API is simulated (no courier pickup, no balance used). A test order is moved
+    to "delivered" in Dashboard → Shipments → **Update Status**, one step at a time; the same menu
+    (or our own cancel call) cancels it. Shipping costs are paid from the account
+    balance (Bitepoints, top-up by QRIS or transfer; not withdrawable; refunds after a cancel
+    depend on the courier's policy).
 - **Last migration:** 0029. This plan uses 0030 onward.
 
 ## 2. Key decisions (design)
@@ -154,7 +168,7 @@ ships, staff book the order's quoted courier service by hand, enter the resi wit
 | D10 | Vouchers only with a session; redeem atomically in the order transaction; restore on cancel or payment expiry only. | SPEC §4.5, §8; decision 8. |
 | D11 | **Shipping subsidy (2026-10-21, replaces free shipping):** Ammari pays at most Rp20.000 of the courier cost per order; the buyer pays `max(0, cost - 20.000)` as a separate "Ongkir" line. `orders.shipping_amount` is the buyer's share; the quoted courier cost and the subsidy are stored on the order too (§4.5.6). Product prices are the same everywhere. The cost actually paid at booking goes on `shipments` in Phase K. | Owner decision: free shipping to e.g. Papua (Rp90.000 to Rp200.000+ per kg) is too expensive. |
 | D12 | **Address area from the shipping provider's area search (2026-10-21; Biteship Maps since D18).** The buyer picks a provider area (kecamatan, city, province, kode pos; Biteship has no kelurahan level, so the kelurahan is typed in the street address) from a search box; the chosen row is cached in **`shipping_areas`** (keyed by `provider_area_id`, renamed from `komerce_destination_id` by migration 0032) and the order and saved address point at it. Session 3's plain-text fields (no licensed dataset) are superseded for checkout; `@ammari/commerce/address` stays for validation, formatting and the snapshot. | A quote needs a provider area id; the area list comes with the provider subscription. |
-| D13 | Unpaid expiry finalized by Midtrans `expire` notifications plus a **sweeper** route called every 5 minutes by a cron container on the VPS internal network. The same cron drives Komerce tracking polls in Phase K. | No scheduler exists. |
+| D13 | Unpaid expiry finalized by Midtrans `expire` notifications plus a **sweeper** route called every 5 minutes by a cron container on the VPS internal network. The same cron drives the Biteship tracking poller in Phase K (every 3 hours, decision 48). | No scheduler exists. |
 | D14 | Transactional emails sent after commit with an `order_notifications (order_id, kind)` UNIQUE row as the idempotency guard. | Retries must not double-send; email failure never fails a webhook. |
 | D15 | **Two separate links in guest order emails.** "Lihat pesanan": view-only access to that one order (§9.2). "Masuk ke akun": a magic login link (§9.3), implemented as a **small custom Better Auth plugin** on the customer instance (our own endpoint, Better Auth's session creation, cookie, rate limiter and CSRF middleware), not the stock `magic-link` plugin. | The stock plugin logs in on GET (email scanners prefetch links), does not invalidate older links, does not bind to a customer id, and exposes public issuance. A plugin keeps the login inside Better Auth's own HTTP router, so its rate limiter and origin checks apply (SPEC §10.1's reason for not calling `.api` from server actions). |
 | D16 | **No card payments**, not enabled in Snap and not planned. | Decision 2. |
@@ -326,15 +340,21 @@ order, never reads `shipping_areas`, and does not know the new columns):
 
 ### Phase K migrations (numbers assigned at the time, expected 0034 and 0035)
 
-- **`shipments`** (K2): `order_id UNIQUE` (one shipment per order in v1), `provider`
-  (`biteship`), `provider_order_id UNIQUE` (Biteship order `id`), `provider_tracking_id` (Biteship
-  `courier.tracking_id`, for `GET /v1/trackings/:id`), `courier`, `service`, `awb UNIQUE NULL`
-  (`courier.waybill_id`), `routing_code` (printed on our own label if Biteship has no label API),
-  `cost_amount` (what Ammari actually pays: the order `price`, updated by an `order.price`
-  webhook after re-weighing; compare with the order's quoted `shipping_cost_amount`), `label_url
-  NULL`, `status` (normalized: `created` / `pickup_requested` / `picked_up` / `in_transit` /
-  `delivered` / `cancelled` / `returning` / `returned` / `problem`), `provider_status text` (raw),
-  `delivered_at`, `last_polled_at`, `last_event_at`, timestamps.
+- **`shipments`** (K2, **revised 2026-10-22** for booking attempts): **one row per booking
+  attempt** (a shipment cancelled before pickup can be booked again), `attempt int` with UNIQUE
+  `(order_id, attempt)`, and a **partial UNIQUE on `(order_id)` for every status other than
+  `cancelled` and `failed`**, so the database allows at most one live shipment per order (never a
+  double booking); `reference_id UNIQUE` (`shipmentReferenceId`: `<prefix><order_no>-K<attempt>`),
+  `provider` (`biteship`), `provider_order_id UNIQUE NULL` (Biteship order `id`; NULL while the
+  booking's answer is unknown), `provider_tracking_id`, `courier`, `service`, `awb NULL`
+  (`courier.waybill_id`, may change), `routing_code` (printed on our label), `cost_amount` (what
+  Ammari actually pays: the order `price`, updated by `order.price`; compare with the order's
+  `shipping_cost_amount`), `status` (our booking states `booking` / `failed` plus the normalized
+  `pickup_requested` / `picked_up` / `in_transit` / `delivered` / `cancelled` / `returning` /
+  `returned` / `problem`), `provider_status text` (raw), pickup and driver fields,
+  `delivered_at`, `last_polled_at`, `last_event_at`, timestamps. No `label_url` (no label API).
+  The same migration widens the `needs_attention` CHECK with **`shipping_cost_over_quote`**
+  (decision 47); K2 checks first that the current admin renders an unknown flag safely (rollback).
 - **`shipment_events`** (K3): `shipment_id`, `occurred_at`, `provider_status`,
   `normalized_status`, `description`, `location`, `source` (`webhook` / `poll`), UNIQUE
   `(shipment_id, occurred_at, provider_status)` so replays and repeated polls never duplicate.
@@ -748,7 +768,7 @@ used_order_id = NULL, used_at = NULL WHERE used_order_id = $order AND status = '
   K: staff book that service by hand, then manual "Tandai dikirim" (courier prefilled from the
   order) with the resi sends the "Pesanan dikirim" email. Since round 2 the courier and resi are
   required for a web order (server-side), bulk "Tandai dikirim" skips web orders, and the order page
-  has "Tambah resi" / "Ubah resi". After Phase K: "Buat pengiriman" books Biteship and prints
+  has "Tambah resi" / "Ubah resi". After Phase K: "Pesan kurir" books Biteship and prints
   the label; the manual path stays as fallback.
 - **`/stock`:** read-only "Dipesan" figure from active reservations, reservation rows on
   `/stock/[sku]`, and a note on the count page that reserved pieces are still counted.
@@ -1021,11 +1041,20 @@ build and with `E2E_TEST_LOGIN=true`, the e2e fixtures gate). The real client is
 the key, base URL and origin are all set; otherwise area search and quotes answer "unavailable"
 (fail closed) and log which variable is missing (name only).
 apps/admin: `MIDTRANS_SERVER_KEY`, `MIDTRANS_IS_PRODUCTION`, `MIDTRANS_ORDER_ID_PREFIX`,
-existing `MAIN_SITE_URL`; Phase K adds `BITESHIP_API_KEY`, `BITESHIP_BASE_URL`,
-`BITESHIP_ORIGIN_AREA_ID`, `BITESHIP_SHIPPER_*` (origin contact name, phone and address for
-`POST /v1/orders`).
-apps/web Phase K: `BITESHIP_WEBHOOK_PATH_TOKEN` (long random path segment) and, if Biteship's
-optional webhook header key/secret exists as the help center says, `BITESHIP_WEBHOOK_HEADER_SECRET`.
+existing `MAIN_SITE_URL`; Phase K adds the **shipment runtime** (`shipmentRuntimeFromEnv`, K1, read
+by apps/admin from K2 and apps/web from K3): `BITESHIP_API_KEY`, `BITESHIP_BASE_URL`,
+`BITESHIP_ORIGIN_AREA_ID`, `BITESHIP_SHIPPER_NAME` (2 to 60 characters), `BITESHIP_SHIPPER_PHONE`
+(an Indonesian mobile number), `BITESHIP_SHIPPER_ADDRESS` (10 to 300 characters; decision 50),
+`BITESHIP_REFERENCE_PREFIX` (`A-Z0-9-`, at most 16; required outside production, e.g. `DEV-` /
+`LOCAL-`; decision 51), `BITESHIP_DAILY_ORDERS_BUDGET` (default 60 order reads a day; order writes
+have a fixed safety cap of 200), `SHIPPING_ORDER_PROVIDER` (`biteship`, the default, or `fake`,
+e2e only like `SHIPPING_RATE_PROVIDER`), `DEPLOY_ENV`. **A live key is refused for bookings
+outside `DEPLOY_ENV=production`** (it would call real couriers); a test key is refused in
+production. The names go into the env examples when K2/K3 first read them (`set-env-var.sh` must
+also refuse `SHIPPING_ORDER_PROVIDER`, like the other provider switches).
+apps/web Phase K: the same shipment runtime (webhook re-fetch and poller), plus
+`BITESHIP_WEBHOOK_PATH_TOKEN` (long random path segment) and `BITESHIP_WEBHOOK_HEADER_SECRET` (the
+static value of Biteship's webhook "Headers Signature Key / Secret" fields, confirmed to exist).
 cron service: `INTERNAL_CRON_SECRET` (`env/cron.env`, same value as web's; added to
 `deploy*/env/web.env.example` and the new `deploy*/env/cron.env.example` in session 12).
 Added to `deploy/env/*.env.example` and `.env.example` in session 17 (names only); payment and
@@ -1048,7 +1077,7 @@ shipping code paths fail closed when their variables are missing.
   `FakeShippingRateProvider` (session 8: a handful of fictional areas, e.g. "Kecamatan E2E
   Murah" quoting Rp12.000 (buyer Rp0), "Kecamatan E2E Jauh" quoting Rp95.000 (buyer Rp75.000),
   one with no allowlisted service, one whose quote fails as unavailable, one without kode pos, and
-  a search text that fails the search itself) and `FakeShippingProvider` for Phase K, all behind
+  a search text that fails the search itself) and `FakeShipmentProvider` for Phase K (K1, below), all behind
   the existing e2e fixtures gate. Unit tests inject a stub `fetch` into the Biteship client;
   nothing in CI or e2e reaches Biteship or Midtrans.
 - **e2e (Chromium + WebKit, 390 px and 1280 px):** add to cart, cart edits and sold-out line,
@@ -1513,40 +1542,162 @@ Not a launch blocker for 1 Dec (manual courier + resi and manual "Selesai" cover
 required: target live within the first weeks of December. **Prerequisite: the Biteship account
 on Grow with the live Order API activated** (live keys need an activation request; test keys have
 the Order API on by default, simulated without pickup). No separate plan or key: the same
-`BITESHIP_API_KEY` session 8 uses for Maps and Rates.
+`BITESHIP_API_KEY` session 8 uses for Maps and Rates. **Breakdown confirmed by the owner
+2026-10-22** with decisions 46 to 51 (§16).
 
-| # | Session | Migration | Notes |
+| # | Session | Migration | Tests / reviewers |
 |---|---|---|---|
-| K1 | Biteship **order** client next to session 8's rate client in `@ammari/commerce/shipping`: create (`POST /v1/orders`), retrieve (`GET /v1/orders/:id`), cancel (`POST /v1/orders/:id/cancel`), tracking (`GET /v1/trackings/:id`), typed errors, fixtures from the docs, opt-in test-key contract tests (simulated orders). No area id mapping: the order takes the same `destination_area_id` the quote used (`orders.shipping_destination_id`). Confirm with Biteship: the label question (below) and the webhook header secret | none | read-only and test-mode calls first |
-| K2 | `shipments` table; admin "Buat pengiriman" on `/packing` and order detail: `POST /v1/orders` with the order's locked `courier_company` / `courier_type` / `destination_area_id`, `origin_area_id`, shipper and recipient contacts, one item (as in §4.5.3, real goods value), `delivery_type` `now` (waybill and pickup request right away), `reference_id` = the order number (unique, so a retried booking returns the existing order via `40002060`, never a second shipment); AWB (`courier.waybill_id`) written to `orders.tracking_number`/`courier` and `shipments`; actual cost (`price`) stored as `cost_amount` and shown next to the quote; label: Biteship's dashboard label or our own printable label from the order data (decided in K1); cancel shipment before pickup (refund to the Biteship balance via Biteship support, staff note) | expected 0034 | security, database |
-| K3 | Tracking: webhook endpoint (`order.status`, `order.price`, `order.waybill_id`) + poller + `shipment_events` + status normalization + automatic `to_ship -> shipped` (on `picked` / `in_transit`) and `shipped -> completed` (on `delivered`), emails `shipped`/`delivered`, `tracking_stale` / `delivery_problem` flags; `order.price` updates `shipments.cost_amount` | expected 0035 | security, silent-failure-hunter |
-| K4 | Customer tracking timeline in "Pesanan saya" and admin "Pengiriman" section; manual fallback actions | none | react, e2e 390/1280 |
+| K1 | **DONE 2026-10-22.** Order client, fake, shipment config, Code 128 and our own label (as built below). | none | TDD; typescript, security, silent-failure-hunter |
+| K2 | **0034:** `shipments` per §3 (attempts, partial UNIQUE for the one live shipment, `reference_id` UNIQUE, `provider_order_id` UNIQUE NULL) and the `shipping_cost_over_quote` flag. `@ammari/commerce` booking: `bookShipment` (transaction: lock the order, paid web order in `to_ship` with a quote, no live shipment, insert the attempt `booking`; outside any transaction `createShipment`; transaction: store id, waybill, tracking id, price, status; `failed` only on a clear refusal), `recheckBooking` (re-sends the **same** reference: booked now, or `duplicate_reference` recovered through `existingOrderId` + `getShipment`), `cancelShipment` (before pickup only; the attempt ends `cancelled`, a new attempt may follow). Destination from the order's snapshot (recipient, phone, street line, courier note) and `shipping_destination_id`; one item "Pakaian" with the goods value and `shipping_weight_grams`; never the buyer's email. Admin: **"Pesan kurir"** on the `/packing` row and the order page, "Cek ulang pemesanan", "Batalkan pengiriman", "Cetak label" (the K1 PDF, one page per order), "Pengiriman" with booking, pickup state ("Menunggu kurir" / "Kurir menuju lokasi" / "Sudah dijemput"), driver when sent, the cut-off hint, actual cost next to the quote (`finance.view_profit`). Permission `orders.manage` (no new key). Manual resi path unchanged. Env examples and `set-env-var.sh` (refuse `SHIPPING_ORDER_PROVIDER`). | 0034 | TDD, committed race (two "Pesan kurir" at once: one booking), admin e2e 390/1280 with the fake; database, security, react |
+| K3 | **0035:** `shipment_events` (UNIQUE `(shipment_id, occurred_at, provider_status)`) and `shipping_webhook_events`. Webhook route in apps/web (path token + header secret, always 200, debounced re-fetch, §"Webhook vs polling"), `applyShipmentSnapshot` (status mapping below, `order.price`, waybill changes, both flags), poller route + `CRON_JOBS` key + the 3-hour block in both `cron.sh`, `delivered` email template and due rule, 12-month retention for webhook events, gated fake "advance shipment" test route posting through the real webhook route. | 0035 | TDD + replay, out-of-order, concurrency; security, silent-failure-hunter, database |
+| K4 | Buyer timeline in the "Lacak pengiriman" block (`/orders/[orderNo]`, latest on top, courier names only, never the provider's name), admin timeline, manual fallback polish (manual resi vs booked waybill), e2e both apps 390/1280. Runbook `docs/launch/shipping-dev.md`: env values to set (shipper, prefix, budget, webhook token and header secret), test webhooks, the two activation test orders (one delivered through Update Status, one cancelled through our "Batalkan pengiriman"), **print a label on the thermal printer at 100% and scan its barcode with a phone**, then go live. | none | react, e2e 390/1280 |
 
-**Webhook vs polling.** Biteship webhooks are registered in the dashboard and **carry no
-documented signature** (the help center mentions optional static header key/secret values,
-unverified). So:
-- The webhook is a **hint only**: the registered URL carries a long random path token
-  (`/api/shipping/biteship/webhook/<BITESHIP_WEBHOOK_PATH_TOKEN>`), plus the header secret if
-  Biteship offers one; the handler logs the payload to `shipping_webhook_events`, looks up the
-  shipment by Biteship `order_id`, then **re-fetches `GET /v1/orders/:id` from Biteship** and acts
-  only on that response (same rule as Midtrans). Always 200 quickly (the help center says Biteship
-  expects a fast 200; retry behavior is not documented, hence the poller).
-- **Polling is the backstop**, sized to Grow's **Tracking quota of 2.000 per month**: the cron
-  polls only shipments not in a final state whose last event is older than 24 hours, at most once
-  a day each (whether `GET /v1/orders/:id` counts against the Tracking quota is not documented;
-  assume it does). A shipment with no new event for 5 days flags `tracking_stale`.
-- Normalization maps Biteship statuses (snake_case, with the camelCase spellings one docs page
-  shows accepted too) to `shipments.status`: `confirmed` / `scheduled` / `allocated` /
-  `picking_up` -> `pickup_requested`, `picked` -> `picked_up`, `in_transit` / `dropping_off` ->
-  `in_transit`, `delivered` -> `delivered`, `return_in_transit` -> `returning`, `returned` ->
-  `returned`, `cancelled` -> `cancelled`, `on_hold` / `rejected` / `courier_not_found` /
-  `disposed` -> `problem`; **an unknown status never completes an order**, it is stored raw and
-  flagged.
-- **Auto-complete:** `shipped -> completed` runs through `transitionOrderStatus` (no staff actor,
-  audit-logged) only on a normalized `delivered`. **Manual fallback:** staff can still "Tandai
-  dikirim" and "Tandai selesai" from admin; a returning/returned or problem status flags
-  `delivery_problem` and never auto-transitions to `returned` (staff confirm, since stock rows
-  follow).
+**K1 as built (2026-10-22).** `@ammari/commerce/shipment-rules` (pure, client-safe):
+`BITESHIP_ORDER_STATUSES`, `canonicalBiteshipStatus` (camelCase, upper case, spaces and hyphens to
+the documented snake_case; anything else null), `normalizeBiteshipStatus` (mapping below; unknown
+is null, never a state), `BITESHIP_CANCELLABLE_STATUSES`, `BITESHIP_FINAL_STATUSES`,
+`shipmentReferenceId(prefix, orderNo, attempt)` (`<prefix><order_no>-K<attempt>`, attempt 1 to 99),
+`toBiteshipPhone` (`+628...` to `08...`), `SHIPPING_PICKUP_CUTOFFS` / `pickupCutoffFor` (WIB:
+JNE 14.00, J&T 15.59, SiCepat 17.00, AnterAja 14.00, ID Express 15.00, POS 16.00; hint only),
+`SHIPPING_COST_OVER_QUOTE_THRESHOLD` (5.000) / `isShippingCostOverQuote`. `@ammari/commerce/shipping`
+(server-only): `ShipmentProvider` (`createShipment`, `getShipment`, `cancelShipment`) and
+`ShipmentProviderError` (`unavailable`, `refused`, `duplicate_reference` with `existingOrderId`,
+`not_found`, `not_cancellable`, `bad_response`, `budget_exhausted`; `outcomeUnknown` on any write
+(booking or cancel) whose answer was lost or unreadable: timeout, network error, 5xx, an unreadable
+2xx, a 4xx without Biteship's error envelope; `logFields()` never carries the body); `createBiteshipOrdersClient` (`biteship-orders.ts`: `delivery_type: now`,
+`origin_collection_method: pickup`, shipper = origin = Ammari, one `fashion` item, no email,
+insurance or COD; bookings and cancels never retried, reads retried once on network error/5xx;
+timeouts 15 s / 15 s / 10 s; 401/403/404/408/425/429 unavailable; `refused` only for Biteship's
+own envelope (`success: false` + numeric code, a numeric string accepted); 40002060 duplicate,
+40002053 not cancellable, 40002054 to 56 retryable; free text cleaned to one line and capped
+before it is sent; lenient parsing: only `success` and `id` required, odd fields null and logged
+by field name (never the value), undocumented statuses logged as sent, history rows parsed one by
+one, a time without offset read as WIB, sorted oldest first, https links only; a booking answer
+naming another reference, or any answer for another order id, is a bad response; a malformed
+stored id is a RangeError, never `not_found`; a failed budget record is `unavailable`); `canceled` is read as `cancelled`; `createFakeShipmentProvider` (`fake-shipments.ts`: in-memory, process-wide store,
+unique references, waybill `E2E` + 13 digits, quoted fake-area price, cancel only before pickup,
+controls `advance` / `setPrice` / `setWaybill`; "Kecamatan E2E Gangguan" books but loses the answer
+once, "Kecamatan E2E Tanpa Layanan" is refused); `shipmentRuntimeFromEnv` (`shipment-config.ts`,
+§12; shares `readBiteshipConnection` with the rate runtime, now in `biteship-env.ts`); budgets
+`shipping_orders` (reads, default 60) and `shipping_order_writes` (200) in `budget.ts`
+(`ShippingBudgetKind`). Opt-in `biteship-orders.contract.test.ts` (`BITESHIP_CONTRACT_TEST=1` and
+`BITESHIP_ORDER_CONTRACT_TEST=1`, test key only: book, re-send the reference (must be a duplicate
+naming the same order), read, cancel, read; prints what Biteship returns; never run in this
+session). apps/admin `lib/shipping/code128.ts` (hand-written Code 128, sets B and C with the usual
+switching rule, check symbol; refuses non-printable ASCII) and `lib/shipping/label-pdf.ts`
+(`planBarcode`: module 4, 3 or 2 printer dots at 203 dpi, the widest that fits, bars on the dot
+grid, quiet zones of 10 modules inside 4 mm margins, 16 mm bars, `LabelBarcodeError` (`invalid`: not 1 to 40 printable ASCII without spaces, since the
+barcode must encode the stored waybill exactly, never a cleaned copy; `too_long`);
+`layoutShippingLabel` returns the draw operations and **warnings** (`characters_replaced`,
+`recipient_name_cut`, `recipient_address_cut`, `recipient_area_cut`, `sender_cut`, `note_cut`):
+courier label, routing code, order number, "NON COD", barcode and the same waybill text (shrunk to
+fit), "PENERIMA" (name, phone, street at 8 pt in 4 lines or 7 pt in 5 before anything is cut, area
+line), "PENGIRIM", "Berat 1,4 kg Isi: Pakaian x N", "Catatan"; WinAnsi-safe text (smart quotes and
+dashes as ASCII, invisible characters dropped, other scripts "?" with a warning, capped at 500);
+weight and pieces must be positive whole numbers; `buildShippingLabelPdf` returns `{ pdf, warnings
+}`, one 120 x 100 mm page per label; `shippingLabelPdfFilename`). Shared: `readBiteshipConnection`
+now also refuses a path in `BITESHIP_BASE_URL`; the shipment config refuses `DEV-` / `LOCAL-` /
+`E2E-` / `CT-` / `TEST-` as the reference prefix in production; the budget fails closed on an
+unreadable count. Tests: `shipment-rules.test.ts`, `biteship-orders.test.ts`,
+`shipments.test.ts` (fake, runtime, budgets on the test database), `code128.test.ts` (table length,
+widths, bar/space parity, uniqueness, known symbols, hand-computed values, round trip through an
+independent decoder), `label-pdf.test.ts` (dot grid, quiet zones, step-down, refusal, contents,
+everything inside the page, wrapping, odd characters, warnings). **Barcode checked outside the
+suite:** labels for six waybills (16 digits, letters + digits, hyphens, 32 letters at 2 dots, an
+odd digit count, 30 wide letters) rasterized at 203 dpi to pure black and white and decoded by
+macOS Vision: all six read back exactly. Reviews (typescript, security, silent-failure-hunter):
+no Critical; fixed: a duplicate reference hidden by an odd error body could read as "not booked"
+(now `refused` only for Biteship's own envelope, anything else `outcomeUnknown`), a waybill with
+odd characters printed as a different barcode, cancels with a lost answer, strict parsing of
+`courier` / notes / `code`, silent nulls, smart quotes printed as "?", silent truncation on the
+label, `wrapText` loop guard, prefix rule in production, base URL path, budget NaN. The printed check on the real printer and a phone stays in the K4 runbook.
+
+Notes from K1 for later sessions:
+- **K2 (booking safety):** any error with `outcomeUnknown` keeps the attempt `booking` (never
+  `failed`, never a new attempt); only `refused` and `budget_exhausted` / `unavailable` without
+  `outcomeUnknown` may end it. On `duplicate_reference`, read `existingOrderId` with `getShipment`
+  and adopt it **only if its `referenceId` equals the one sent**. Without `existingOrderId` (no
+  `details`) it cannot be recovered automatically: keep `booking` and show it as "perlu dicek
+  manual" with the reference id. A RangeError from the client is our own data or code error.
+- **K2 (cancel):** after `outcomeUnknown` or `not_cancellable`, read the order before telling staff
+  anything: a cancel that worked but lost its answer is re-answered 40002053.
+- **K2 (label):** show `warnings` before printing ("Sebagian teks di label dipotong atau diganti,
+  cek sebelum dicetak"); `LabelBarcodeError` means "print Biteship's label from the dashboard". Print through the same
+  base64 server-action route as the sticker sheets.
+- **K2 (messages and price):** treat `refused` codes for balance (40002039, 40009003) and an
+  inactive key (40002002) with their own Indonesian messages. A booked price can be null (not
+  sent, logged by the client): store null, show "biaya belum diketahui" and let the next read fill
+  it; the over-quote check runs when a price arrives.
+- **K3:** use `knownStatus` for decisions and `providerStatus` for display; an entry with a null
+  `status` is stored and flagged, never applied. Check the webhook's path token and header secret
+  **before** spending the `orders` budget on a re-fetch. The budget counts every HTTP attempt (a
+  retried read costs 2): treat `budget_exhausted` as "try again tomorrow" and make it visible (a
+  log line per run and an admin hint), never as "no change". `BITESHIP_FINAL_STATUSES` decides what the poller
+  stops reading. The fake's `controls` back the gated "advance shipment" route.
+- **K2/K3:** the shipment runtime is not wired into either app yet; add the env names to the
+  examples in the session that first reads them.
+
+**Status mapping** (normalized `shipments.status`, decision 48's flags; K3 applies it):
+
+| Biteship status | State | Order effect (K3) |
+|---|---|---|
+| `confirmed`, `scheduled`, `allocated`, `picking_up` | `pickup_requested` | none; no pickup 2 days after booking flags `tracking_stale` |
+| `picked` | `picked_up` | `to_ship -> shipped` (no staff actor, courier + Biteship waybill as resi; the cron email pass sends "Pesanan dikirim") |
+| `in_transit`, `dropping_off` | `in_transit` | same as `picked` when pickup was missed |
+| `delivered` | `delivered` | `shipped -> completed` (through `shipped` first if needed), `delivered` email |
+| `return_in_transit` / `returned` | `returning` / `returned` | flag `delivery_problem`, never an automatic `returned` (staff confirm; stock follows) |
+| `on_hold`, `rejected`, `disposed` | `problem` | flag `delivery_problem` |
+| `courier_not_found`, `cancelled` we did not ask for | `cancelled` | flag `delivery_problem`; the order can be booked again |
+| unknown | stored raw, no state | flagged, never applied |
+
+Also: a waybill change updates `shipments.awb` and `orders.tracking_number`; a waybill that fails
+the resi rule (`[A-Z0-9-]{6,40}`) is flagged and the order not moved; no new event for 5 days on an
+open shipment flags `tracking_stale`; a manual resi that differs from the booked waybill is flagged.
+
+**Webhook vs polling** (decision 48). Biteship webhooks carry no body signature, are not retried,
+and are registered in the dashboard. So:
+- The webhook is a **hint only**: URL `/api/shipping/biteship/webhook/<BITESHIP_WEBHOOK_PATH_TOKEN>`
+  plus the static header from the "Headers Signature Key / Secret" fields, compared in constant
+  time; any POST answers 200 at once (an empty or odd body too); the payload goes to
+  `shipping_webhook_events`; an unknown Biteship `order_id` is logged and nothing is fetched; a
+  known one is **re-fetched with `GET /v1/orders/:id`, at most once per shipment every 2 minutes**,
+  and only that response is applied (same rule as Midtrans).
+- **Polling is the backstop:** the cron calls the poller **every 3 hours**; a shipment is read only
+  when both its last event and its last poll are older than **6 hours**, and booked-but-not-picked
+  shipments are always read; shipments in a final status are never read. Every read (webhook or
+  poll) draws on the shared daily budget `shipping_orders` (default 60, Grow's Tracking quota
+  2.000 / 31, assuming order reads count against it).
+- **Auto-complete** only on a normalized `delivered`, through `transitionOrderStatus` (no staff
+  actor, audit-logged). **Manual fallback:** staff can still "Tandai dikirim" and "Tandai selesai".
+
+**Biteship research (public docs, read 2026-10-22; no API calls).**
+- Create order, required and optional fields, `delivery_type` `now` / `scheduled`
+  (`delivery_date` `YYYY-MM-DD`, `delivery_time` `HH:mm`, WIB inferred from the example),
+  `origin_collection_method` `pickup` / `drop_off`, `reference_id` unique:
+  https://biteship.com/id/docs/api/orders/create. Error codes (40002060 duplicate with `details`,
+  40002053 not cancellable, 40002013 time passed, 40002039 / 40009003 payment, 40002002 key not
+  activated): https://biteship.com/id/docs/api/orders/error.
+- Retrieve (all fields nullable, `routing_code`, `history[]`, driver):
+  https://biteship.com/id/docs/api/orders/retrieve. Cancel: https://biteship.com/id/docs/api/orders/delete.
+  Statuses and the "Deletable" column: https://biteship.com/id/docs/api/orders/overview. Tracking
+  status spellings: https://biteship.com/id/docs/api/trackings/status.
+- Webhooks (payloads `order.status`, `order.price`, `order.waybill_id`; "return 200 immediately"):
+  https://biteship.com/en/docs/api/webhook/overview; header key/secret, no retries, Events Log
+  "Resend": https://help.biteship.com/hc/en-us/articles/58382055713689; test-mode webhook button:
+  https://biteship.com/id/docs/api/webhook/play_webhook.
+- Labels: "Biteship does not provide a Shipping Label API" and the required contents:
+  https://biteship.com/id/docs/shipping_label; dashboard sizes A6 / 4x6 inch / A4, PDF or ZPL:
+  https://help.biteship.com/hc/id/articles/43305470200473; pricing page row:
+  https://biteship.com/en/pricing.
+- Test mode and activation (simulated orders, Update Status to delivered, cancel; the form asks for
+  one delivered and one cancelled test order id, couriers, optionally our own label):
+  https://biteship.com/id/docs/sandbox, https://help.biteship.com/hc/en-us/articles/58597705576985,
+  https://biteship.com/id/docs/go_live/submit-activation-request.
+- Pickup cut-offs: https://help.biteship.com/hc/id/articles/48424915220377. Price changes after
+  re-weighing (volumetric L x W x H / 6000, deducted from the balance):
+  https://help.biteship.com/hc/en-us/articles/58290967440153.
+- Not documented anywhere: rate limits, webhook timeout or source IPs, an install-time test request,
+  whether `GET /v1/orders/:id` counts against the Tracking quota.
 
 **Biteship plan: Grow** (owner decision 2026-10-21, D18; replaces the Komerce Enterprise plan).
 - **Grow, Rp149.000/month** (structure effective 2 Nov 2026, https://biteship.com/id/harga):
@@ -1564,10 +1715,11 @@ unverified). So:
 - Ammari does not use Biteship COD or insurance; online payment stays on Midtrans (D5).
 
 What to confirm with Biteship when subscribing (not owner decisions):
-1. Live Order API activation for the account.
-2. **Labels:** the docs say there is no Shipping Label API (dashboard download or our own
-   label), while the pricing page lists one for Grow.
-3. Webhook authentication options (the header key/secret) and retry behavior.
+1. Live Order API activation for the account (form: one delivered and one cancelled test order id
+   from our integration, the couriers, optionally our own label; K4 runbook).
+2. ~~Labels~~ (resolved 2026-10-22: our own label, decision 49). Optionally upload it with the
+   activation form.
+3. ~~Webhook authentication options~~ (resolved: static header key/secret, no retries).
 4. Whether `GET /v1/orders/:id` counts against the Tracking quota.
 5. That the six allowlisted couriers can all be active at once on Grow, and their service codes
    (the contract test prints them).
@@ -1582,8 +1734,8 @@ What to confirm with Biteship when subscribing (not owner decisions):
 - The quoted price and the actual booking price can differ (tariff updates, re-weighing reported
   by `order.price`); Ammari carries the difference, visible per order from K2.
 - Tracking quota (2.000/month) is tight for polling; the webhook is the primary signal and the
-  poller stays daily. If it is still too low, lengthen the interval before raising the plan
-  question.
+  poller reads a shipment at most every 6 hours within a daily budget of 60 (decision 48). If it is
+  still too low, lengthen the interval or lower the budget before raising the plan question.
 - One provider for everything: a Biteship outage blocks both quotes and bookings. The manual path
   (staff book with the courier directly, "Tandai dikirim" with courier + resi, manual "Selesai")
   stays available.
@@ -1725,7 +1877,28 @@ Owner decisions 2026-10-21 (session 16):
     stock-short order resolves that flag too; `refund_due` / `paid_after_cancel` cannot be dismissed
     while money is owed; the courier cost and subsidy on the order page need `finance.view_profit`.)
 
+Owner decisions 2026-10-22 (Phase K breakdown K1 to K4 confirmed, §15 Phase K):
+
+46. **Pickup: `delivery_type: now` only, `origin_collection_method: pickup`**, with a per-courier
+    cut-off hint for staff; no scheduled pickup window.
+47. **New flag `shipping_cost_over_quote`** when the actual courier price is more than Rp5.000 above
+    the locked `shipping_cost_amount`, checked at booking and on every price update. Ammari pays the
+    difference either way; the buyer is never charged.
+48. **Polling:** the cron calls the poller every 3 hours; each open shipment is read at most every
+    6 hours (booked but not picked up: always), within a shared daily budget `shipping_orders`
+    (default 60). Webhooks are hints that trigger a re-fetch.
+49. **Label: our own 120 x 100 mm PDF** (the 100 x 120 mm sticker roll used landscape) with a
+    hand-written, fully tested Code 128 encoder (no new package), quiet zones and a module width a
+    203 dpi thermal printer and a phone can read; K4's runbook includes printing it and scanning
+    the barcode with a phone.
+50. **Sender contact from env:** `BITESHIP_SHIPPER_NAME`, `BITESHIP_SHIPPER_PHONE`,
+    `BITESHIP_SHIPPER_ADDRESS` plus `BITESHIP_ORIGIN_AREA_ID`; values never in the repo (the runbook
+    says what to set).
+51. **`BITESHIP_REFERENCE_PREFIX`** (e.g. `DEV-` on dev, empty or a prod prefix on prod), failing
+    closed like the Midtrans prefix; required outside production because dev and local share one
+    test account.
+
 Remaining small items to confirm with third parties (not owner decisions): the Biteship items in
-§15 "What to confirm with Biteship" (live Order API activation, labels, webhook authentication,
-Tracking quota use, six active couriers and their service codes, billing); whether the Midtrans
+§15 "What to confirm with Biteship" (live Order API activation, Tracking quota use, six active
+couriers and their service codes, billing; labels and webhook authentication resolved 2026-10-22); whether the Midtrans
 merchant review requires naming the processor on the privacy page.
