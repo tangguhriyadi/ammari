@@ -69,7 +69,7 @@ printf 'Alamat penjemputan (jalan, nomor, RT/RW, kelurahan): '; IFS= read -r v; 
 printf 'DEV-\n' | devssh 'cd /opt/ammari && ./set-env-var.sh env/admin.env BITESHIP_REFERENCE_PREFIX'
 ```
 
-After B4's restart, check the sender in the first label you print (F3): it shows exactly what was
+After B4's restart, check the sender in the first label you print (F4): it shows exactly what was
 saved.
 
 Rules the app checks at start (a wrong value refuses booking with a message and logs the variable
@@ -200,30 +200,56 @@ note for G. (It is the id Biteship's dashboard shows for that shipment; not a se
 
 ## F. Print the label on the thermal printer and scan it with a phone
 
-Decision 49: our own 120 x 100 mm label (the 100 x 120 mm sticker roll used landscape), Code 128 at
-a module width a 203 dpi printer can draw exactly. Checked by software in K1 (rasterized at 203 dpi
-and decoded); this is the real-world check.
+Decision 49: our own 120 x 100 mm landscape label, Code 128 at a module width a 203 dpi printer can
+draw exactly. The PDF page is **portrait 100 mm wide x 120 mm tall**, exactly like the QR sticker
+PDF and the roll itself, with the label drawn turned 90 degrees inside it (the label's left edge
+along the top of the page). So the driver has nothing to rotate: the first test print used a
+landscape page, the driver turned and shifted it onto the roll, ~2-3 mm of the label's left edge
+was cut off ("J&T" printed as "&T") and the print ran over the gap into the next sticker. All text,
+lines and the barcode (quiet zones included) stay at least 3 mm inside every edge. Checked by
+software (rasterized at 203 dpi, margins measured and the barcode decoded); this is the real-world
+check.
 
 1. **[dev admin]** A booked order (E2's rebooked one, or any) → **Cetak label** (or /packing →
    **Cetak label**). If a "Sebagian teks di label dipotong atau diganti" dialog appears, read it.
-   The PDF downloads: one page per order.
-2. Print from the PDF viewer on the computer connected to the thermal printer:
-   - paper / label size **100 x 120 mm** (or the roll's own preset), orientation **landscape**;
-   - scale **100% / Actual size**. Never "Fit to page" or "Shrink": scaling breaks the barcode's
-     dot grid;
+   The PDF downloads: one page per order. On screen the page is portrait with the text running
+   down the page: that is correct, do not rotate it.
+2. **Once per printer (and after changing the roll): gap calibration**, so the printer knows where
+   each 100 x 120 mm sticker starts. Without it the print drifts and crosses the gap.
+   - Load the roll, close the cover, printer on and idle (no blinking error light).
+   - Press and hold the **FEED** button until the status light blinks (about 2-3 seconds on most
+     203 dpi label printers of this type), then release. The printer feeds a few stickers while it
+     measures the gap and stops at the start of the next sticker.
+   - If it keeps feeding without stopping or stops mid-sticker, check that the roll sits against
+     the guides and the gap sensor is not covered, then repeat. If the OKAY printer's manual
+     describes a different button sequence (or its Windows/macOS utility has a "Calibrate" / "Auto
+     detect" button), use that.
+   - Driver settings for the printer (System Settings → Printers or the driver's own preferences),
+     if it has them: media type **labels with gaps** (not continuous / not black mark), paper size
+     **100 x 120 mm**.
+3. Print from the PDF viewer on the computer connected to the thermal printer:
+   - paper / label size **100 x 120 mm** (the same paper size the QR sticker sheets use), portrait;
+   - scale **100% / Actual size**. Never "Fit to page", "Shrink oversized pages" or "Scale to
+     fit": scaling breaks the barcode's dot grid and moves the margins;
+   - turn off **Auto rotate** / "Auto portrait/landscape" if the dialog shows it (macOS Preview:
+     untick "Auto Rotate"; Chrome: Layout **Portrait**, Scale **Default/100**, Margins **None**);
    - print density / darkness: the printer's normal setting; raise it one step only if the bars
      come out grey.
-3. Look at it: the label fills the sticker without being cut, the bars are solid black with clean
-   white gaps, the blank margin left and right of the barcode is untouched, the waybill text under
-   the barcode is readable, recipient and sender text readable, "NON COD" printed.
-4. Scan with a phone: Google Lens (Android or iOS) or any barcode scanner app (Code 128), from about
+4. Look at it: the whole label lands on one sticker with a blank border of about 3-4 mm on every
+   side (nothing cut, nothing over the gap; "J&T" and "PENERIMA" complete), the bars are solid black
+   with clean white gaps, the blank space before and after the barcode is untouched, the waybill
+   text under the barcode is readable, recipient and sender text readable, "NON COD" printed. If
+   the print is shifted along the roll (towards or over the gap), run the gap calibration (2)
+   again; if it is shifted or cut sideways, check the roll guides and that the paper size is
+   100 x 120 mm and the scale 100%.
+5. Scan with a phone: Google Lens (Android or iOS) or any barcode scanner app (Code 128), from about
    15 cm, flat and well lit. **Pass:** it reads within a couple of tries and the decoded text equals
    the waybill shown in admin **exactly** (same letters, digits and hyphens). If a courier app
    (J&T, JNE) has a resi scanner, try it too.
-5. If it fails: print once more at 100% with density one step higher; if it still fails, note the
+6. If it fails: print once more at 100% with density one step higher; if it still fails, note the
    printer model, the waybill and a photo of the label, and use Biteship's own label from its
    dashboard (A6) for real parcels until it is fixed.
-6. Keep the PDF: you can upload it with the activation form (G).
+7. Keep the PDF: you can upload it with the activation form (G).
 
 ## G. Fill the Order API activation form
 

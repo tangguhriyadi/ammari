@@ -1604,7 +1604,7 @@ fit), "PENERIMA" (name, phone, street at 8 pt in 4 lines or 7 pt in 5 before any
 line), "PENGIRIM", "Berat 1,4 kg Isi: Pakaian x N", "Catatan"; WinAnsi-safe text (smart quotes and
 dashes as ASCII, invisible characters dropped, other scripts "?" with a warning, capped at 500);
 weight and pieces must be positive whole numbers; `buildShippingLabelPdf` returns `{ pdf, warnings
-}`, one 120 x 100 mm page per label; `shippingLabelPdfFilename`). Shared: `readBiteshipConnection`
+}`, one portrait 100 x 120 mm page per label with the 120 x 100 label turned onto it; `shippingLabelPdfFilename`). Shared: `readBiteshipConnection`
 now also refuses a path in `BITESHIP_BASE_URL`; the shipment config refuses `DEV-` / `LOCAL-` /
 `E2E-` / `CT-` / `TEST-` as the reference prefix in production; the budget fails closed on an
 unreadable count. Tests: `shipment-rules.test.ts`, `biteship-orders.test.ts`,
@@ -2115,7 +2115,8 @@ Owner decisions 2026-10-22 (Phase K breakdown K1 to K4 confirmed, §15 Phase K):
 48. **Polling:** the cron calls the poller every 3 hours; each open shipment is read at most every
     6 hours (booked but not picked up: always), within a shared daily budget `shipping_orders`
     (default 60). Webhooks are hints that trigger a re-fetch.
-49. **Label: our own 120 x 100 mm PDF** (the 100 x 120 mm sticker roll used landscape) with a
+49. **Label: our own 120 x 100 mm PDF** (on a portrait 100 x 120 mm page, the sticker roll, with
+    the label turned 90 degrees inside it and a 3 mm blank margin all round) with a
     hand-written, fully tested Code 128 encoder (no new package), quiet zones and a module width a
     203 dpi thermal printer and a phone can read; K4's runbook includes printing it and scanning
     the barcode with a phone.

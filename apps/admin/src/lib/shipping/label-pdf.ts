@@ -1,29 +1,47 @@
 import "server-only";
-import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
+import { PDFDocument, StandardFonts, degrees, rgb, type PDFFont } from "pdf-lib";
 import { CODE128_QUIET_ZONE_MODULES, encodeCode128 } from "./code128";
 
 // Our own shipping label (docs/plans/cart-checkout.md §15 Phase K, decision 49): Biteship has no
 // label API (its docs: "Biteship does not provide a Shipping Label API") and its dashboard labels
-// come only as A6, 4x6 inch or A4. One label per page, 120 mm wide x 100 mm tall: the same thermal
-// roll as the 100 x 120 mm thank-you stickers (lib/packing/sticker-pdf.ts), used landscape.
+// come only as A6, 4x6 inch or A4. One label per page: a 120 mm wide x 100 mm tall landscape label
+// on the same thermal roll as the 100 x 120 mm thank-you stickers (lib/packing/sticker-pdf.ts).
 // Contents follow Biteship's label requirements (https://biteship.com/id/docs/shipping_label):
 // courier and service, routing code, the waybill as a barcode and as text, sender and recipient,
 // weight; plus "NON COD" and our order number. Indonesian text, never the shipping provider's
 // name. Built from draw operations (`layoutShippingLabel`) so the layout is testable without
 // parsing a PDF.
 //
+// Page: portrait 100 x 120 mm, exactly the sticker PDF's page (and the roll's own size), with the
+// landscape label drawn turned 90 degrees clockwise inside it (`toPageOp`): the label's left edge
+// runs along the page's top edge, its top along the page's right edge. A landscape page made the
+// printer driver turn and shift it onto the portrait roll (first real print: ~2-3 mm cut off the
+// label's left edge and the print running over the gap into the next sticker); a portrait page
+// with no /Rotate leaves the driver nothing to turn. Everything (text with its ascenders and
+// descenders, lines, the barcode with its quiet zones) stays at least `SAFE_MARGIN_MM` from every
+// edge of the sticker.
+//
 // Barcode (Code 128, ./code128.ts): every module is a whole number of printer dots at 203 dpi
 // (0.125 mm), as wide as fits (4, 3 or 2 dots: 0.5, 0.375 or 0.25 mm, all far above the 0.19 mm a
 // phone camera needs at arm's length), with a quiet zone of at least 10 modules on both sides and
-// 16 mm tall bars. Bar edges are placed on the dot grid measured from the page edge, so a driver
-// printing at 100% (never "fit to page") renders every bar the same width.
+// 16 mm tall bars. The bars run across the page, so their widths lie along the paper feed; bar
+// edges are placed on the dot grid measured from the label's left edge, which is the page's top
+// edge (where the printer's first dot row is), so a driver printing at 100% (never "fit to page")
+// renders every bar the same width.
 
 const MM_TO_PT = 72 / 25.4;
 const mm = (value: number) => value * MM_TO_PT;
 
+/** The label as read: landscape. Layout coordinates (`LabelOp`) are in this frame. */
 export const LABEL_WIDTH_MM = 120;
 export const LABEL_HEIGHT_MM = 100;
+/** The PDF page: portrait, the sticker roll's own 100 x 120 mm (lib/packing/sticker-pdf.ts). */
+export const PAGE_WIDTH_MM = LABEL_HEIGHT_MM;
+export const PAGE_HEIGHT_MM = LABEL_WIDTH_MM;
+/** Text and lines start this far in from the label's edges... */
 const MARGIN_MM = 4;
+/** ...so that no ink at all (ascenders, descenders, quiet zones included) is closer than this. */
+export const SAFE_MARGIN_MM = 3;
 const PRINTER_DPI = 203;
 export const PRINTER_DOT_MM = 25.4 / PRINTER_DPI;
 /** Widest first: the widest module that still fits gives the easiest scan. */
@@ -56,10 +74,28 @@ export interface ShippingLabelData {
   note: string | null;
 }
 
+/** In PDF points in the label's own landscape frame (origin bottom-left of the label as read). */
 export type LabelOp =
   | { kind: "text"; text: string; x: number; y: number; size: number; bold: boolean }
   | { kind: "bar"; x: number; y: number; width: number; height: number }
   | { kind: "line"; x1: number; y1: number; x2: number; y2: number; thickness: number };
+
+/** A `LabelOp` on the portrait page (PDF points, origin bottom-left of the page). Text is drawn
+ * rotated 90 degrees clockwise about its baseline start (x, y), so it runs down the page. */
+export type PageOp =
+  | { kind: "text"; text: string; x: number; y: number; size: number; bold: boolean; rotateDegrees: -90 }
+  | { kind: "bar"; x: number; y: number; width: number; height: number }
+  | { kind: "line"; x1: number; y1: number; x2: number; y2: number; thickness: number };
+
+/** Turns the landscape label 90 degrees clockwise onto the portrait page: label (x, y) is page
+ * (y, pageHeight - x). The label's left edge becomes the page's top edge, its bottom the page's
+ * left edge; a bar's width (along the label) becomes a height (along the paper feed). */
+export function toPageOp(op: LabelOp): PageOp {
+  const pageHeight = mm(PAGE_HEIGHT_MM);
+  if (op.kind === "text") return { ...op, x: op.y, y: pageHeight - op.x, rotateDegrees: -90 };
+  if (op.kind === "bar") return { kind: "bar", x: op.y, y: pageHeight - op.x - op.width, width: op.height, height: op.width };
+  return { kind: "line", x1: op.y1, y1: pageHeight - op.x1, x2: op.y2, y2: pageHeight - op.x2, thickness: op.thickness };
+}
 
 export interface LabelFonts {
   regular: PDFFont;
@@ -95,15 +131,16 @@ export interface BarcodePlan {
   moduleDots: number;
   /** In mm, quiet zones included. */
   totalWidthMm: number;
-  /** Left edge of the first bar, mm from the page's left edge, on the dot grid. */
+  /** Left edge of the first bar, mm from the label's left edge (the page's top edge), on the dot
+   * grid. */
   firstBarMm: number;
-  /** Each bar as [left, width] in mm, on the dot grid. */
+  /** Each bar as [left, width] in mm from the label's left edge, on the dot grid. */
   bars: Array<[number, number]>;
   quietZoneModules: number;
 }
 
-/** Fits the waybill's Code 128 into `availableMm` (quiet zones included), centred on the page, on
- * the printer's dot grid. */
+/** Fits the waybill's Code 128 into `availableMm` (quiet zones included), centred along the
+ * label's width, on the printer's dot grid. */
 export function planBarcode(text: string, availableMm = LABEL_WIDTH_MM - MARGIN_MM * 2): BarcodePlan {
   if (!BARCODE_WAYBILL.test(text)) throw new LabelBarcodeError("invalid");
   const code = encodeCode128(text);
@@ -112,8 +149,8 @@ export function planBarcode(text: string, availableMm = LABEL_WIDTH_MM - MARGIN_
   const moduleDots = MODULE_DOT_CHOICES.find((dots) => totalModules * dots <= availableDots);
   if (moduleDots === undefined) throw new LabelBarcodeError("too_long");
 
-  const pageDots = Math.floor(LABEL_WIDTH_MM / PRINTER_DOT_MM);
-  const startDot = Math.floor((pageDots - totalModules * moduleDots) / 2);
+  const labelDots = Math.floor(LABEL_WIDTH_MM / PRINTER_DOT_MM);
+  const startDot = Math.floor((labelDots - totalModules * moduleDots) / 2);
   const bars: Array<[number, number]> = [];
   let dot = startDot + CODE128_QUIET_ZONE_MODULES * moduleDots;
   code.widths.forEach((width, index) => {
@@ -220,14 +257,104 @@ export function formatLabelWeight(grams: number): string {
   return `${WEIGHT_FORMAT.format(grams / 1000)} kg`;
 }
 
+interface PlacedLine {
+  text: string;
+  /** Baseline, mm below the label's top edge. */
+  baselineMm: number;
+  size: number;
+  bold: boolean;
+}
+
+/** Point sizes for the recipient's name, phone and address (street and area), largest first. The
+ * whole recipient always prints: a long name or address shrinks the block (down to 5 pt for a
+ * 500-character address, the order form's limit) instead of being cut. */
+const RECIPIENT_STYLES: ReadonlyArray<{ name: number; phone: number; address: number }> = [
+  { name: 11, phone: 9, address: 8 },
+  { name: 11, phone: 9, address: 7.5 },
+  { name: 10, phone: 9, address: 7 },
+  { name: 10, phone: 8, address: 6.5 },
+  { name: 9, phone: 8, address: 6 },
+  { name: 9, phone: 8, address: 5.5 },
+  { name: 8, phone: 7, address: 5 },
+];
+/** Baseline of "PENERIMA"; the recipient's lines follow it. */
+const RECIPIENT_TOP_MM = 48.5;
+/** No ink below this (the footer line is at 87 mm). */
+const RECIPIENT_BOTTOM_MM = 86;
+const LINE_ADVANCE = 1.3;
+const GROUP_GAP_MM = 0.5;
+
+const ptToMm = (value: number) => value / MM_TO_PT;
+
+/** The recipient column's lines: name, phone, street address, area, at the largest sizes where all
+ * of it fits. Only text longer than the order form allows can still be cut (then `cuts` says so). */
+function layoutRecipient(
+  fields: { name: string; phone: string; address: string; area: string },
+  fonts: LabelFonts,
+  widthPt: number,
+): { lines: PlacedLine[]; cuts: LabelWarning[] } {
+  type Group = { lines: string[]; size: number; bold: boolean };
+  const all = Number.MAX_SAFE_INTEGER;
+  const place = (groups: Group[]) => {
+    const placed: PlacedLine[] = [];
+    let baseline = RECIPIENT_TOP_MM;
+    groups.forEach((group, groupIndex) => {
+      group.lines.forEach((line, lineIndex) => {
+        // A little air before the phone and before the street address; the area follows the street.
+        const gap = lineIndex === 0 && (groupIndex === 1 || groupIndex === 2) ? GROUP_GAP_MM : 0;
+        baseline += ptToMm(group.size * LINE_ADVANCE) + gap;
+        placed.push({ text: line, baselineMm: baseline, size: group.size, bold: group.bold });
+      });
+    });
+    return placed;
+  };
+  const fits = (placed: PlacedLine[]) => {
+    const last = placed.at(-1);
+    if (!last) return true;
+    const font = last.bold ? fonts.bold : fonts.regular;
+    const descent = font.heightAtSize(last.size) - font.heightAtSize(last.size, { descender: false });
+    return last.baselineMm + ptToMm(descent) <= RECIPIENT_BOTTOM_MM;
+  };
+  const groups = (style: (typeof RECIPIENT_STYLES)[number], name: string[], address: string[], area: string[]): Group[] => [
+    { lines: name, size: style.name, bold: true },
+    { lines: [fields.phone], size: style.phone, bold: false },
+    { lines: address, size: style.address, bold: false },
+    { lines: area, size: style.address, bold: true },
+  ];
+  const wrap = (value: string, font: PDFFont, size: number, maxLines = all) => (value ? wrapText(font, value, size, widthPt, maxLines) : []);
+
+  for (const style of RECIPIENT_STYLES) {
+    const placed = place(
+      groups(style, wrap(fields.name, fonts.bold, style.name), wrap(fields.address, fonts.regular, style.address), wrap(fields.area, fonts.bold, style.address)),
+    );
+    if (fits(placed)) return { lines: placed, cuts: [] };
+  }
+
+  // Past the order form's limits only: the smallest sizes, name and area in at most 2 lines each,
+  // the street address in as many lines as still fit.
+  const style = RECIPIENT_STYLES.at(-1)!;
+  const cuts: LabelWarning[] = [];
+  const name = wrap(fields.name, fonts.bold, style.name, 2);
+  if (wrap(fields.name, fonts.bold, style.name, 3).length > 2) cuts.push("recipient_name_cut");
+  const area = wrap(fields.area, fonts.bold, style.address, 2);
+  if (wrap(fields.area, fonts.bold, style.address, 3).length > 2) cuts.push("recipient_area_cut");
+  const addressLines = wrap(fields.address, fonts.regular, style.address).length;
+  for (let keep = addressLines; keep > 1; keep -= 1) {
+    const placed = place(groups(style, name, wrap(fields.address, fonts.regular, style.address, keep), area));
+    if (fits(placed)) return { lines: placed, cuts: keep < addressLines ? [...cuts, "recipient_address_cut"] : cuts };
+  }
+  const lines = place(groups(style, name, wrap(fields.address, fonts.regular, style.address, 1), area));
+  return { lines, cuts: addressLines > 1 ? [...cuts, "recipient_address_cut"] : cuts };
+}
+
 export interface LabelLayout {
   ops: LabelOp[];
   /** Empty when the label shows every field exactly. */
   warnings: LabelWarning[];
 }
 
-/** Every draw operation of one label, in PDF points (origin bottom-left), and what had to be cut or
- * replaced to fit. Throws `LabelBarcodeError` for a waybill we cannot encode exactly, a RangeError
+/** Every draw operation of one label, in PDF points in the label's landscape frame (origin
+ * bottom-left; `toPageOp` puts them on the page), and what had to be cut or replaced to fit. Throws `LabelBarcodeError` for a waybill we cannot encode exactly, a RangeError
  * for a weight or piece count that is not a positive whole number. */
 export function layoutShippingLabel(data: ShippingLabelData, fonts: LabelFonts): LabelLayout {
   if (!Number.isSafeInteger(data.pieces) || data.pieces <= 0) throw new RangeError("label pieces must be a positive whole number");
@@ -235,12 +362,12 @@ export function layoutShippingLabel(data: ShippingLabelData, fonts: LabelFonts):
   const plan = planBarcode(data.waybill);
   const ops: LabelOp[] = [];
   const warnings = new Set<LabelWarning>();
-  const pageWidth = mm(LABEL_WIDTH_MM);
-  const pageHeight = mm(LABEL_HEIGHT_MM);
-  /** Baseline `fromTopMm` below the top edge. */
-  const y = (fromTopMm: number) => pageHeight - mm(fromTopMm);
+  const labelWidth = mm(LABEL_WIDTH_MM);
+  const labelHeight = mm(LABEL_HEIGHT_MM);
+  /** Baseline `fromTopMm` below the label's top edge. */
+  const y = (fromTopMm: number) => labelHeight - mm(fromTopMm);
   const left = mm(MARGIN_MM);
-  const right = pageWidth - mm(MARGIN_MM);
+  const right = labelWidth - mm(MARGIN_MM);
 
   const clean = (value: string) => {
     const info = labelTextInfo(value);
@@ -288,7 +415,7 @@ export function layoutShippingLabel(data: ShippingLabelData, fonts: LabelFonts):
   }
   let waybillSize = 13;
   while (waybillSize > 7 && fonts.bold.widthOfTextAtSize(data.waybill, waybillSize) > right - left) waybillSize -= 0.5;
-  text(data.waybill, (pageWidth - fonts.bold.widthOfTextAtSize(data.waybill, waybillSize)) / 2, BARCODE_TOP_MM + BARCODE_HEIGHT_MM + 5, waybillSize, true);
+  text(data.waybill, (labelWidth - fonts.bold.widthOfTextAtSize(data.waybill, waybillSize)) / 2, BARCODE_TOP_MM + BARCODE_HEIGHT_MM + 5, waybillSize, true);
   hLine(44);
 
   // Recipient (left, wide) and sender (right, narrow).
@@ -296,22 +423,18 @@ export function layoutShippingLabel(data: ShippingLabelData, fonts: LabelFonts):
   ops.push({ kind: "line", x1: columnSplit, y1: y(44), x2: columnSplit, y2: y(87), thickness: 0.8 });
   const recipientWidth = columnSplit - left - mm(2);
   text("PENERIMA", left, 48.5, 7, true);
-  text(fitted(clean(data.recipient.name), fonts.bold, 11, recipientWidth, "recipient_name_cut"), left, 53.5, 11, true);
-  text(localPhone(data.recipient.phone), left, 58, 9);
-  let line = 62.5;
-  // 8 pt in up to 4 lines, else 7 pt in up to 5, before anything is cut.
-  const address = block(clean(data.recipient.address), fonts.regular, [[8, 4, 3.6], [7, 5, 3.1]], recipientWidth, "recipient_address_cut");
-  for (const part of address.lines) {
-    text(part, left, line, address.size);
-    line += address.step;
-  }
-  if (data.recipient.areaLine) {
-    const area = block(clean(data.recipient.areaLine), fonts.bold, [[8, 2, 3.6], [7, 2, 3.1]], recipientWidth, "recipient_area_cut");
-    for (const part of area.lines) {
-      text(part, left, line, area.size, true);
-      line += area.step;
-    }
-  }
+  const recipient = layoutRecipient(
+    {
+      name: clean(data.recipient.name),
+      phone: localPhone(data.recipient.phone),
+      address: clean(data.recipient.address),
+      area: data.recipient.areaLine ? clean(data.recipient.areaLine) : "",
+    },
+    fonts,
+    recipientWidth,
+  );
+  for (const line of recipient.lines) text(line.text, left, line.baselineMm, line.size, line.bold);
+  for (const cut of recipient.cuts) warnings.add(cut);
 
   const senderLeft = columnSplit + mm(2);
   const senderWidth = right - senderLeft;
@@ -338,7 +461,7 @@ export interface ShippingLabelPdf {
   warnings: LabelWarning[][];
 }
 
-/** One page per label, in the order given. */
+/** One portrait 100 x 120 mm page per label (the label turned onto it), in the order given. */
 export async function buildShippingLabelPdf(labels: ShippingLabelData[]): Promise<ShippingLabelPdf> {
   const pdf = await PDFDocument.create();
   const fonts: LabelFonts = {
@@ -349,9 +472,11 @@ export async function buildShippingLabelPdf(labels: ShippingLabelData[]): Promis
   for (const label of labels) {
     const layout = layoutShippingLabel(label, fonts);
     warnings.push(layout.warnings);
-    const page = pdf.addPage([mm(LABEL_WIDTH_MM), mm(LABEL_HEIGHT_MM)]);
-    for (const op of layout.ops) {
-      if (op.kind === "text") page.drawText(op.text, { x: op.x, y: op.y, size: op.size, font: op.bold ? fonts.bold : fonts.regular, color: rgb(0, 0, 0) });
+    const page = pdf.addPage([mm(PAGE_WIDTH_MM), mm(PAGE_HEIGHT_MM)]);
+    for (const op of layout.ops.map(toPageOp)) {
+      if (op.kind === "text") {
+        page.drawText(op.text, { x: op.x, y: op.y, size: op.size, font: op.bold ? fonts.bold : fonts.regular, color: rgb(0, 0, 0), rotate: degrees(op.rotateDegrees) });
+      }
       else if (op.kind === "bar") page.drawRectangle({ x: op.x, y: op.y, width: op.width, height: op.height, color: rgb(0, 0, 0) });
       else page.drawLine({ start: { x: op.x1, y: op.y1 }, end: { x: op.x2, y: op.y2 }, thickness: op.thickness, color: rgb(0, 0, 0) });
     }
