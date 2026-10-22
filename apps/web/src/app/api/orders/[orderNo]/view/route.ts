@@ -5,7 +5,16 @@ import { recordClaimAttemptAndCount } from "@/lib/claim/throttle";
 import { defaultDb } from "@/lib/db";
 import { isOrderNo, redeemOrderViewToken } from "@/lib/orders/access";
 import { ORDER_VIEW_LIMIT, ORDER_VIEW_WINDOW_SECONDS } from "@/lib/orders/limits";
-import { ORDER_VIEW_COOKIE_NAME, orderViewCookieAttributes } from "@/lib/orders/view-cookie";
+import {
+  ORDER_VIEW_INDEX_COOKIE_NAME,
+  addToOrderViewIndex,
+  orderViewCookieAttributes,
+  orderViewCookieName,
+  orderViewCookiePath,
+  orderViewIndexCookieAttributes,
+  parseOrderViewIndex,
+  serializeOrderViewIndex,
+} from "@/lib/orders/view-cookie";
 
 // The "Lihat pesanan" link from order emails, `/orders/<orderNo>?t=<token>` (docs/plans/
 // cart-checkout.md §9.2), lands here through next.config.ts's rewrite (only when the query has
@@ -16,11 +25,32 @@ import { ORDER_VIEW_COOKIE_NAME, orderViewCookieAttributes } from "@/lib/orders/
 // way without a cookie, so the answer never tells whether the order exists; the page then shows its
 // one "cannot show this order" state. No body, `Referrer-Policy: no-referrer` (nothing on this
 // response can load or link anything, and the token URL is never sent as a Referer), never cached.
-// The token is never logged.
+// The token is never logged. The order is also added to the site-wide index cookie that lets
+// logout find and clear every such cookie (lib/orders/view-cookie.ts).
 
 export const dynamic = "force-dynamic";
 
-function redirectTo(location: string, cookie?: { orderNo: string; token: string; expiresAt: Date }): Response {
+interface ViewCookie {
+  orderNo: string;
+  token: string;
+  expiresAt: Date;
+  /** The index cookie's current value, as the request sent it. */
+  index: string | undefined;
+}
+
+function setCookieHeader(name: string, value: string, attributes: { path: string; secure: boolean; expires?: Date; maxAge?: number }): string {
+  return [
+    `${name}=${value}`,
+    `Path=${attributes.path}`,
+    ...(attributes.expires ? [`Expires=${attributes.expires.toUTCString()}`] : []),
+    ...(attributes.maxAge !== undefined ? [`Max-Age=${attributes.maxAge}`] : []),
+    "HttpOnly",
+    "SameSite=Lax",
+    ...(attributes.secure ? ["Secure"] : []),
+  ].join("; ");
+}
+
+function redirectTo(location: string, cookie?: ViewCookie): Response {
   const headers = new Headers({
     Location: location,
     "Referrer-Policy": "no-referrer",
@@ -29,16 +59,14 @@ function redirectTo(location: string, cookie?: { orderNo: string; token: string;
   });
   const response = new Response(null, { status: 303, headers });
   if (cookie) {
+    // Raw headers rather than Next's cookie store, which keeps one Set-Cookie per name.
     const attributes = orderViewCookieAttributes(cookie.orderNo, cookie.expiresAt);
-    const parts = [
-      `${ORDER_VIEW_COOKIE_NAME}=${cookie.token}`,
-      `Path=${attributes.path}`,
-      `Expires=${attributes.expires.toUTCString()}`,
-      "HttpOnly",
-      "SameSite=Lax",
-      ...(attributes.secure ? ["Secure"] : []),
-    ];
-    response.headers.append("Set-Cookie", parts.join("; "));
+    response.headers.append("Set-Cookie", setCookieHeader(orderViewCookieName(cookie.orderNo), cookie.token, attributes));
+    const { orderNos, evicted } = addToOrderViewIndex(parseOrderViewIndex(cookie.index), cookie.orderNo);
+    for (const orderNo of evicted) {
+      response.headers.append("Set-Cookie", setCookieHeader(orderViewCookieName(orderNo), "", { path: orderViewCookiePath(orderNo), secure: attributes.secure, expires: new Date(0) }));
+    }
+    response.headers.append("Set-Cookie", setCookieHeader(ORDER_VIEW_INDEX_COOKIE_NAME, serializeOrderViewIndex(orderNos), orderViewIndexCookieAttributes()));
   }
   return response;
 }
@@ -60,7 +88,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const redeemed = token ? await redeemOrderViewToken(orderNo, token) : null;
     // Only a token that was just matched by its hash is ever written back (it is 43 base64url
     // characters, so it needs no escaping in the cookie).
-    return redeemed && token ? redirectTo(cleanUrl, { orderNo, token, expiresAt: redeemed.expiresAt }) : redirectTo(cleanUrl);
+    return redeemed && token ? redirectTo(cleanUrl, { orderNo, token, expiresAt: redeemed.expiresAt, index: request.cookies.get(ORDER_VIEW_INDEX_COOKIE_NAME)?.value }) : redirectTo(cleanUrl);
   } catch (error) {
     console.error("[orders] order view link failed", databaseErrorLogFields(error));
     return redirectTo(`${cleanUrl}?status=error`);

@@ -33,7 +33,7 @@ export async function loadOrderPageAccess(orderNo: string): Promise<OrderPageAcc
       return gate.action === "redirect" ? { kind: "consent", to: gate.to } : { kind: "ok", access, session };
     }
   }
-  const token = await readOrderViewCookie();
+  const token = await readOrderViewCookie(orderNo);
   if (!token) return { kind: "none", session };
   const ip = await getCartClientIp("order page");
   if (!ip) return { kind: "error" };
@@ -47,7 +47,7 @@ export async function loadOrderPageAccess(orderNo: string): Promise<OrderPageAcc
  * null. Each action keeps its own rate limit, counted before this lookup. */
 export async function findActionableOrderId(orderNo: unknown): Promise<string | null> {
   if (!isOrderNo(orderNo)) return null;
-  const [session, viewToken, checkoutToken] = await Promise.all([getCustomerSession(), readOrderViewCookie(), readOrderAccessCookie()]);
+  const [session, viewToken, checkoutToken] = await Promise.all([getCustomerSession(), readOrderViewCookie(orderNo), readOrderAccessCookie()]);
   const access = await findAccessibleOrder({ orderNo, sessionCustomerId: session?.id ?? null, accessTokens: [viewToken, checkoutToken] });
   return access?.orderId ?? null;
 }

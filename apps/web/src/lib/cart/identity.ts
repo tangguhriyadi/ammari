@@ -76,3 +76,17 @@ export async function clearGuestCartCookie(): Promise<void> {
   const store = await cookies();
   if (store.has(CART_COOKIE_NAME)) store.delete(CART_COOKIE_NAME);
 }
+
+/** Logout: always expire the cookie, whether or not this request carried it. The cart row stays: a
+ * guest cart merged at login already belongs to the account, which gets it back on the next login;
+ * one never merged is simply no longer reachable from this browser. */
+export async function expireGuestCartCookie(): Promise<void> {
+  (await cookies()).delete({
+    name: CART_COOKIE_NAME,
+    path: "/",
+    httpOnly: true,
+    // The same attributes it was written with, so every browser accepts the expiry.
+    secure: process.env.NODE_ENV === "production" || siteOrigin().startsWith("https://"),
+    sameSite: "lax",
+  });
+}

@@ -14,6 +14,14 @@ export function announceCartCount(pieceCount: number): void {
   window.dispatchEvent(new CustomEvent<CartCountDetail>(CART_COUNT_EVENT, { detail: { pieceCount } }));
 }
 
+export const CART_COUNT_REFRESH_EVENT = "ammari:cart-count-refresh";
+
+/** Asks the header to re-read the count from the server, after an optimistic announce turned out
+ * wrong (a logout that failed). */
+export function requestCartCountRefresh(): void {
+  window.dispatchEvent(new Event(CART_COUNT_REFRESH_EVENT));
+}
+
 export const CART_STATUS_EVENT = "ammari:cart-status";
 /** The `/cart` heading, focused after a line is removed (its row unmounts). */
 export const CART_HEADING_ID = "cart-heading";

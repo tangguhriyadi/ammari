@@ -1,10 +1,9 @@
 "use server";
 
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { customerAuth } from "@/lib/auth/customer";
+import { signOutCustomer } from "@/lib/auth/sign-out";
 
 export async function logoutAction(): Promise<void> {
-  await customerAuth.api.signOut({ headers: await headers() });
+  await signOutCustomer();
   redirect("/login");
 }

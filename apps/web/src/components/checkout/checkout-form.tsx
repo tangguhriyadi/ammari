@@ -25,7 +25,7 @@ import { failedCallMessage } from "@/lib/stale-deployment";
 import { CHECKOUT_CALL_LOST_MESSAGE, SHIPPING_QUOTE_PENDING_MESSAGE } from "@/lib/checkout/messages";
 import { quoteShippingAction } from "@/lib/checkout/quote-actions";
 import type { QuoteShippingActionResult } from "@/lib/checkout/quote-types";
-import { announceCartCount } from "@/lib/cart/count-event";
+import { announceCartCount, requestCartCountRefresh } from "@/lib/cart/count-event";
 import { formatPriceIdr } from "@/lib/format";
 import { buildWhatsappUrl } from "@/lib/whatsapp";
 import { AreaCombobox } from "./area-combobox";
@@ -454,7 +454,17 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
                 <button
                   type="button"
                   onClick={() => {
-                    if (!isSigningOut) startSignOut(() => signOutFromCheckoutAction());
+                    if (isSigningOut) return;
+                    // The header bag empties at once; a failed logout has it re-read the real count.
+                    announceCartCount(0);
+                    startSignOut(async () => {
+                      try {
+                        await signOutFromCheckoutAction();
+                      } catch (error) {
+                        requestCartCountRefresh();
+                        throw error;
+                      }
+                    });
                   }}
                   aria-disabled={isSigningOut || undefined}
                   className="min-h-11 text-ink underline underline-offset-4"

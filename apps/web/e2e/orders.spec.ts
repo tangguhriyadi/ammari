@@ -132,7 +132,9 @@ test("the Lihat pesanan link on another device: the token becomes a cookie for t
     // View only: no link to the account's order list.
     await expect(page.getByRole("link", { name: "Pesanan saya" })).toHaveCount(0);
     const cookies = await phone.cookies();
-    expect(cookies.find((cookie) => cookie.name === "ammari_order_view")).toMatchObject({ path: `/orders/${order.orderNo}`, httpOnly: true, sameSite: "Lax" });
+    expect(cookies.find((cookie) => cookie.name === `ammari_order_view_${order.orderNo}`)).toMatchObject({ path: `/orders/${order.orderNo}`, httpOnly: true, sameSite: "Lax" });
+    // The site-wide list logout uses to clear it (lib/orders/view-cookie.ts).
+    expect(cookies.find((cookie) => cookie.name === "ammari_order_views")).toMatchObject({ value: order.orderNo, path: "/", httpOnly: true, sameSite: "Lax" });
 
     // A reload works from the cookie alone; history holds only the clean URL.
     await page.reload();
@@ -181,7 +183,7 @@ test("an expired token, a wrong token and an unknown order number all read the s
       await expect(page.getByTestId("order-not-found")).toHaveText(NOT_FOUND);
       await expect(page.getByRole("link", { name: "Masuk untuk melihat pesanan" })).toHaveAttribute("href", "/login?next=%2Forders");
     }
-    expect((await context.cookies()).filter((cookie) => cookie.name === "ammari_order_view")).toHaveLength(0);
+    expect((await context.cookies()).filter((cookie) => cookie.name.startsWith("ammari_order_view"))).toHaveLength(0);
   } finally {
     await context.close();
   }

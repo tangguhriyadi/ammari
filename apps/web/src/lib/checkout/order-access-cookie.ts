@@ -18,6 +18,7 @@ export const ORDER_ACCESS_COOKIE_NAME = "ammari_checkout_order_v2";
  * rather than the same name on a new path, because browsers send both same-name cookies (longest
  * path first) and the old one would shadow the new order's token on /checkout (security review). */
 const LEGACY_ORDER_ACCESS_COOKIE_NAME = "ammari_checkout_order";
+const LEGACY_ORDER_ACCESS_COOKIE_PATH = "/checkout";
 export const ORDER_ACCESS_COOKIE_PATH = "/";
 /** The finish page matters while paying and right after; the token row itself lives 120 days. */
 const ORDER_ACCESS_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
@@ -38,4 +39,13 @@ export async function writeOrderAccessCookie(token: string): Promise<void> {
     path: ORDER_ACCESS_COOKIE_PATH,
     maxAge: ORDER_ACCESS_COOKIE_MAX_AGE_SECONDS,
   });
+}
+
+/** Server actions only (logout): expires this cookie and the legacy `/checkout` one, so the next
+ * person on this browser is not shown the order as theirs. The order and its token stay. */
+export async function clearOrderAccessCookies(): Promise<void> {
+  const store = await cookies();
+  const secure = process.env.NODE_ENV === "production" || siteOrigin().startsWith("https://");
+  store.delete({ name: ORDER_ACCESS_COOKIE_NAME, path: ORDER_ACCESS_COOKIE_PATH, httpOnly: true, secure, sameSite: "lax" });
+  store.delete({ name: LEGACY_ORDER_ACCESS_COOKIE_NAME, path: LEGACY_ORDER_ACCESS_COOKIE_PATH, httpOnly: true, secure, sameSite: "lax" });
 }

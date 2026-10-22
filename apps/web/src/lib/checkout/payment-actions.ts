@@ -54,7 +54,7 @@ const orderNoSchema = z.string().regex(/^ORD-[0-9]{6}-[0-9]{4,}$/);
 async function ownedOrderId(orderNo: unknown, options: { viewLink: boolean }): Promise<string | null> {
   const parsed = orderNoSchema.safeParse(orderNo);
   if (!parsed.success) return null;
-  const [session, checkoutToken, viewToken] = await Promise.all([getCustomerSession(), readOrderAccessCookie(), readOrderViewCookie()]);
+  const [session, checkoutToken, viewToken] = await Promise.all([getCustomerSession(), readOrderAccessCookie(), readOrderViewCookie(parsed.data)]);
   const accessTokens = options.viewLink ? [checkoutToken, viewToken] : [checkoutToken];
   return findOwnedCheckoutOrderId({ orderNo: parsed.data, sessionCustomerId: session?.id ?? null, accessTokens });
 }

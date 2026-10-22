@@ -142,7 +142,8 @@ describe("the Lihat pesanan token route", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.text()).toBe("");
     const cookie = response.headers.get("set-cookie") ?? "";
-    expect(cookie).toContain(`ammari_order_view=${token}`);
+    expect(cookie).toContain(`ammari_order_view_${order.orderNo}=${token}`);
+    expect(cookie).toContain(`ammari_order_views=${order.orderNo}; Path=/;`);
     expect(cookie).toContain(`Path=/orders/${order.orderNo}`);
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Lax");
@@ -193,7 +194,7 @@ describe("Pesan lagi", () => {
       { sku: available.variant.sku, qty: 2 },
       { sku: soldOut.variant.sku, qty: 1 },
     ]);
-    jar.set("ammari_order_view", token);
+    jar.set(`ammari_order_view_${order.orderNo}`, token);
 
     const result = await reorderAction(order.orderNo);
     expect(result).toMatchObject({ ok: true, pieceCount: 2, addedPieces: 2, mergeTrimmed: false });
@@ -225,12 +226,18 @@ describe("Pesan lagi", () => {
     const refused = { ok: false, message: "Pesanan ini tidak bisa dipesan lagi dari sini." };
 
     expect(await reorderAction(order.orderNo)).toEqual(refused);
-    jar.set("ammari_order_view", generateOrderAccessToken());
+    jar.set(`ammari_order_view_${order.orderNo}`, generateOrderAccessToken());
     expect(await reorderAction(order.orderNo)).toEqual(refused);
-    jar.set("ammari_order_view", token);
-    expect(await reorderAction(uniqueOrderNo())).toEqual(refused);
+    jar.clear();
+    const unknown = uniqueOrderNo();
+    jar.set(`ammari_order_view_${unknown}`, token);
+    expect(await reorderAction(unknown)).toEqual(refused);
+    // A cookie for one order never opens another.
+    jar.clear();
+    jar.set(`ammari_order_view_${pending.order.orderNo}`, token);
+    expect(await reorderAction(order.orderNo)).toEqual(refused);
     expect(await reorderAction("ORD-1")).toEqual(refused);
-    jar.set("ammari_order_view", pending.token);
+    jar.set(`ammari_order_view_${pending.order.orderNo}`, pending.token);
     expect(await reorderAction(pending.order.orderNo)).toEqual(refused);
     expect(jar.has("ammari_cart")).toBe(false);
   });
@@ -239,7 +246,7 @@ describe("Pesan lagi", () => {
     delete process.env.STOREFRONT_CART_ENABLED;
     const { variant } = await sellableVariant(5);
     const { order, token } = await orderWith([{ sku: variant.sku, qty: 1 }]);
-    jar.set("ammari_order_view", token);
+    jar.set(`ammari_order_view_${order.orderNo}`, token);
     expect(await reorderAction(order.orderNo)).toEqual({ ok: false, message: "Keranjang belum tersedia." });
     expect(await testDb.select().from(claimRateLimits).where(eq(claimRateLimits.ip, clientIp))).toHaveLength(0);
   });
@@ -247,7 +254,7 @@ describe("Pesan lagi", () => {
   test("counts as a cart write: over the per-IP limit it is refused", async () => {
     const { variant } = await sellableVariant(5);
     const { order, token } = await orderWith([{ sku: variant.sku, qty: 1 }]);
-    jar.set("ammari_order_view", token);
+    jar.set(`ammari_order_view_${order.orderNo}`, token);
     await testDb.insert(claimRateLimits).values(Array.from({ length: 120 }, () => ({ ip: clientIp, action: "cart_write" })));
     expect(await reorderAction(order.orderNo)).toEqual({ ok: false, message: "Terlalu banyak percobaan. Coba lagi beberapa menit lagi." });
   });
@@ -257,7 +264,7 @@ describe("payment actions and the emailed view cookie (plan §9.2)", () => {
   test("the view cookie never opens a new payment attempt; the checkout cookie still may", async () => {
     const { variant } = await sellableVariant(5);
     const { order, token } = await orderWith([{ sku: variant.sku, qty: 1 }], { status: "awaiting_payment", paymentStatus: "pending", cancelReason: null, cancelledAt: null });
-    jar.set("ammari_order_view", token);
+    jar.set(`ammari_order_view_${order.orderNo}`, token);
     expect(await reopenPaymentPageAction(order.orderNo)).toEqual({ ok: false, message: PAYMENT_RETRY_CLOSED_MESSAGE });
 
     jar.clear();
@@ -279,7 +286,7 @@ describe("payment actions and the emailed view cookie (plan §9.2)", () => {
       placedWithSession: true,
     });
     const closed = { ok: false, message: PAYMENT_RETRY_CLOSED_MESSAGE, refresh: false };
-    jar.set("ammari_order_view", token);
+    jar.set(`ammari_order_view_${order.orderNo}`, token);
     expect(await changePaymentMethodAction(order.orderNo)).toEqual(closed);
 
     jar.clear();

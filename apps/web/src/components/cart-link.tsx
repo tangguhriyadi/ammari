@@ -3,21 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CART_COUNT_EVENT, CART_COUNT_PATH, type CartCountDetail } from "@/lib/cart/count-event";
+import { CART_COUNT_EVENT, CART_COUNT_PATH, CART_COUNT_REFRESH_EVENT, type CartCountDetail } from "@/lib/cart/count-event";
 
 /** The header's cart icon (docs/design/storefront.md §4, rendered only while the cart flag is on).
  * The count is fetched per page from the uncached count route, never rendered on the server: the
  * layout around it is part of ISR-cached pages. Re-fetched on every navigation (a login may have
  * merged a guest cart in the meantime) and updated straight away when a cart write announces its
  * new count, and again when the page comes back from the back/forward cache (another tab may
- * have changed the cart). Until the first answer, and if the fetch fails, the bag shows without a
+ * have changed the cart), or when asked to (a logout that failed after emptying the badge). Until the first answer, and if the fetch fails, the bag shows without a
  * number. A 404 means the flag was switched off while this page's cached HTML still carries the
  * icon: the icon then hides itself instead of linking to a missing page. */
 export function CartLink() {
   const pathname = usePathname();
   const [pieceCount, setPieceCount] = useState<number | null>(null);
   const [disabled, setDisabled] = useState(false);
-  // Bumped by a back/forward-cache restore to re-run the fetch below.
+  // Bumped by a back/forward-cache restore or a refresh request to re-run the fetch below.
   const [restoreCount, setRestoreCount] = useState(0);
   // Bumped by every announced count, so a fetch that started before a cart write cannot
   // overwrite the newer count when it resolves late.
@@ -49,8 +49,15 @@ export function CartLink() {
     function handlePageShow(event: PageTransitionEvent) {
       if (event.persisted) setRestoreCount((value) => value + 1);
     }
+    function handleRefresh() {
+      setRestoreCount((value) => value + 1);
+    }
     window.addEventListener("pageshow", handlePageShow);
-    return () => window.removeEventListener("pageshow", handlePageShow);
+    window.addEventListener(CART_COUNT_REFRESH_EVENT, handleRefresh);
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener(CART_COUNT_REFRESH_EVENT, handleRefresh);
+    };
   }, []);
 
   useEffect(() => {
