@@ -428,7 +428,7 @@ check_checkout_config() {
   report "$(is_eq "$kv" "MIDTRANS_NOTIFICATION_URL=https://${WEB_HOST}/api/payments/midtrans/notification")" "checkout: web.env ${kv:-MIDTRANS_NOTIFICATION_URL=<no data>}"
 
   # Wrong in every mode: a fake provider or a sandbox order prefix in prod.
-  for kv in "web.env:PAYMENT_PROVIDER" "admin.env:PAYMENT_PROVIDER" "web.env:SHIPPING_RATE_PROVIDER"; do
+  for kv in "web.env:PAYMENT_PROVIDER" "admin.env:PAYMENT_PROVIDER" "web.env:SHIPPING_RATE_PROVIDER" "admin.env:SHIPPING_ORDER_PROVIDER"; do
     line="$(grep "^CFGKV:${kv}=" <<<"$output" | cut -d: -f3-)"
     case "$line" in
       *"=<missing>" | *"=" | *"=midtrans" | *"=biteship") pass "checkout: ${kv%%:*} ${line:-${kv#*:}=<no data>} (no fake provider)" ;;

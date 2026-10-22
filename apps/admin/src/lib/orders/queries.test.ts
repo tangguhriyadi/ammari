@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { withRollback } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
-import { orderNotifications, orders, payments, stockMovements, type OrderAttentionFlag } from "@ammari/db/schema";
+import { orderNotifications, orders, payments, shipments, stockMovements, type OrderAttentionFlag } from "@ammari/db/schema";
 import { createOrder } from "@ammari/commerce/orders";
 import { eq } from "drizzle-orm";
 import { countOrdersNeedingAttention, getOrderDetail, listOrders, stripOrderDetailCost } from "./queries";
@@ -147,3 +147,27 @@ describe("web checkout orders (docs/plans/cart-checkout.md §7, session 16)", ()
     });
   });
 });
+
+describe("getOrderDetail courier bookings (Phase K2)", () => {
+  test("lists every attempt newest first, and stripOrderDetailCost hides the booked cost but keeps whether it is known", async () => {
+    await withRollback(async (tx) => {
+      const order = await insertOrder(tx, { ...checkoutOrderValues(), status: "to_ship", paymentStatus: "paid", paidAt: new Date() });
+      await tx.insert(shipments).values([
+        { orderId: order.id, attempt: 1, referenceId: `T-${order.id}-K1`, provider: "biteship", courier: "jne", service: "reg", status: "cancelled", providerOrderId: "aaaaaaaaaaaaaaaaaaaaaaaa", cancelledAt: new Date(), costAmount: 12_000 },
+        { orderId: order.id, attempt: 2, referenceId: `T-${order.id}-K2`, provider: "biteship", courier: "jne", service: "reg", status: "pickup_requested", providerOrderId: "bbbbbbbbbbbbbbbbbbbbbbbb", awb: "JNE0002", costAmount: 18_000 },
+      ]);
+      const detail = (await getOrderDetail(order.id, tx))!;
+      expect(detail.checkout!.shipments.map((row) => [row.attempt, row.status, row.costAmount])).toEqual([
+        [2, "pickup_requested", 18_000],
+        [1, "cancelled", 12_000],
+      ]);
+      const stripped = stripOrderDetailCost(detail, false);
+      expect(stripped.checkout!.shipments.map((row) => [row.costAmount, row.costKnown])).toEqual([
+        [null, true],
+        [null, true],
+      ]);
+      expect(stripped.checkout!.quote!.costAmount).toBeNull();
+    });
+  });
+});
+

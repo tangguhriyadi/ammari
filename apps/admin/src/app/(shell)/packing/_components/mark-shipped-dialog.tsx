@@ -11,6 +11,8 @@ export interface MarkShippedDialogProps {
   isCheckout: boolean;
   /** Prefills "Kurir" with a web checkout order's quoted service (staff book exactly that one). */
   defaultCourier?: string | null;
+  /** The courier booking's waybill (Phase K2), prefilled as the resi. */
+  bookedWaybill?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onShipped: () => void;
@@ -21,7 +23,7 @@ export interface MarkShippedDialogProps {
  * An order without an active thank-you card needs an explicit confirmation
  * (docs/plans/packing-cards.md's "nothing ships without a card" rule) rather than silently letting
  * it through; web checkout orders never carry a card. */
-export function MarkShippedDialog({ orderId, orderNo, hasActiveCard, isCheckout, defaultCourier, open, onOpenChange, onShipped }: MarkShippedDialogProps) {
+export function MarkShippedDialog({ orderId, orderNo, hasActiveCard, isCheckout, defaultCourier, bookedWaybill, open, onOpenChange, onShipped }: MarkShippedDialogProps) {
   return (
     <ShipmentDetailsDialog
       title={`Tandai dikirim: ${orderNo}`}
@@ -30,6 +32,7 @@ export function MarkShippedDialog({ orderId, orderNo, hasActiveCard, isCheckout,
       confirmVariant={hasActiveCard ? "primary" : "danger"}
       checkoutOrder={isCheckout}
       defaultCourier={defaultCourier}
+      bookedWaybill={bookedWaybill}
       open={open}
       onOpenChange={onOpenChange}
       submit={({ courier, trackingNumber }) =>

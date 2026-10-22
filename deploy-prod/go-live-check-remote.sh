@@ -168,6 +168,7 @@ done
 cfg_kv admin.env MIDTRANS_IS_PRODUCTION
 cfg_kv admin.env DEPLOY_ENV
 cfg_kv admin.env PAYMENT_PROVIDER
+cfg_kv admin.env SHIPPING_ORDER_PROVIDER
 
 v="$(env_value env/web.env BITESHIP_API_KEY || true)"
 case "$v" in

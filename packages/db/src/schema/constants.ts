@@ -266,8 +266,36 @@ export const ORDER_ATTENTION_FLAGS = [
   "payment_anomaly",
   "tracking_stale",
   "delivery_problem",
+  // Migration 0034 (Phase K2): the booked courier price is more than Rp5.000 above the locked quote
+  // (decision 47), and a resi typed by staff differs from the booked waybill (owner 2026-10-22).
+  "shipping_cost_over_quote",
+  "tracking_number_mismatch",
 ] as const;
 export type OrderAttentionFlag = (typeof ORDER_ATTENTION_FLAGS)[number];
+
+// ---------- Courier booking (docs/plans/cart-checkout.md §3 "Phase K migrations", migration 0034) ----------
+
+export const SHIPMENT_PROVIDERS = ["biteship"] as const;
+export type ShipmentProviderName = (typeof SHIPMENT_PROVIDERS)[number];
+
+/** One booking attempt's state (shipments.status). `booking`: the attempt is reserved and the
+ * provider's answer is not known yet (or was lost); `failed`: the provider clearly refused, nothing
+ * was booked. The rest are the normalized tracking states (SHIPMENT_TRACKING_STATUSES in
+ * @ammari/commerce/shipment-rules, kept equal by a test). `cancelled` and `failed` end an attempt;
+ * every other status is "live", and at most one live attempt exists per order. */
+export const SHIPMENT_STATUSES = [
+  "booking",
+  "failed",
+  "pickup_requested",
+  "picked_up",
+  "in_transit",
+  "delivered",
+  "cancelled",
+  "returning",
+  "returned",
+  "problem",
+] as const;
+export type ShipmentStatus = (typeof SHIPMENT_STATUSES)[number];
 
 /** Transactional emails (plan §8); order_notifications (order_id, kind) is UNIQUE, the
  * idempotency guard that keeps a retried webhook from sending twice. */

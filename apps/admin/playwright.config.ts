@@ -101,6 +101,9 @@ export default defineConfig({
       // a staff cancel of an unpaid web order asks it, and it knows no transaction, so the order
       // is cancelled locally (docs/plans/cart-checkout.md session 16). Nothing reaches Midtrans.
       PAYMENT_PROVIDER: "fake",
+      // The in-memory courier booking provider (Phase K2, same gate): "Pesan kurir" books with it,
+      // nothing reaches Biteship.
+      SHIPPING_ORDER_PROVIDER: "fake",
       DATABASE_URL: e2eDatabaseUrl(),
       MAIN_SITE_URL: "http://localhost:3000",
       E2E_OTP_EXPIRES_IN_SECONDS: "8",

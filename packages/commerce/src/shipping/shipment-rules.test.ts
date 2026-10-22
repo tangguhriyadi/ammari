@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  SHIPMENT_TRACKING_STATUSES,
+  shipmentPickupState,
   BITESHIP_CANCELLABLE_STATUSES,
   BITESHIP_FINAL_STATUSES,
   BITESHIP_ORDER_STATUSES,
@@ -11,6 +13,7 @@ import {
   toBiteshipPhone,
 } from "./shipment-rules";
 import { SHIPPING_SERVICE_ALLOWLIST } from "./rules";
+import { SHIPMENT_STATUSES } from "@ammari/db/schema";
 
 describe("Biteship status normalization", () => {
   test.each([
@@ -120,5 +123,18 @@ describe("isShippingCostOverQuote", () => {
     [100_000, 35_000, true],
   ])("actual %i vs quote %i -> %s", (actual, quoted, flagged) => {
     expect(isShippingCostOverQuote(actual, quoted)).toBe(flagged);
+  });
+});
+
+describe("shipmentPickupState", () => {
+  test("waiting, on the way, picked up; null for ended, problem or unknown statuses", () => {
+    expect(["confirmed", "scheduled", "allocated"].map(shipmentPickupState)).toEqual(["waiting", "waiting", "waiting"]);
+    expect(shipmentPickupState("pickingUp")).toBe("courier_on_the_way");
+    expect(["picked", "in_transit", "dropping_off", "delivered", "return_in_transit", "returned"].map(shipmentPickupState)).toEqual(Array(6).fill("picked_up"));
+    expect(["cancelled", "courier_not_found", "on_hold", "rejected", "disposed", "teleported", null].map(shipmentPickupState)).toEqual(Array(7).fill(null));
+  });
+
+  test("our shipment statuses are the booking states plus every normalized tracking state (the DB CHECK uses the first)", () => {
+    expect([...SHIPMENT_STATUSES]).toEqual(["booking", "failed", ...SHIPMENT_TRACKING_STATUSES]);
   });
 });

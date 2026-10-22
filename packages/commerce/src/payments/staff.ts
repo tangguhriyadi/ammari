@@ -1,6 +1,6 @@
 import "server-only";
-import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
-import { orders, payments, type OrderAttentionFlag, type PaymentStatus } from "@ammari/db/schema";
+import { and, asc, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
+import { orders, payments, shipments, type OrderAttentionFlag, type PaymentStatus } from "@ammari/db/schema";
 import { writeAuditLog, type Database } from "../db";
 import { ActionError, errorLogFields } from "../errors";
 import { transitionOrderStatus } from "../orders/lifecycle";
@@ -40,6 +40,7 @@ export const STAFF_CANCEL_MESSAGES = {
   stillPending: "Pembayaran pesanan ini masih berjalan dan belum bisa dihentikan. Pesanan tidak dibatalkan. Coba lagi sebentar lagi.",
   checkGateway: "Midtrans melaporkan status pembayaran yang perlu dicek dulu. Pesanan tidak dibatalkan. Cek transaksinya di dashboard Midtrans.",
   changed: "Status pesanan sudah berubah. Muat ulang halaman.",
+  liveShipment: "Kurir sudah dipesan untuk pesanan ini. Batalkan pengiriman dulu di bagian Pengiriman, lalu batalkan pesanan.",
 } as const;
 
 /** Gateway statuses after which the buyer can no longer pay that attempt (same set as the sweep). */
@@ -97,6 +98,14 @@ async function cancelPaid(db: Database, orderId: string, actorStaffUserId: strin
       console.error("[payments] staff cancel refused: open order with an unexpected payment status", { orderNo: order.orderNo, paymentStatus: order.paymentStatus });
       throw new ActionError(STAFF_CANCEL_MESSAGES.changed);
     }
+    // A booked courier must be cancelled first (Phase K2): never a cancelled order with a parcel on
+    // its way. Under the order lock, which bookShipment takes too.
+    const [live] = await tx
+      .select({ id: shipments.id })
+      .from(shipments)
+      .where(and(eq(shipments.orderId, order.id), notInArray(shipments.status, ["cancelled", "failed"])))
+      .limit(1);
+    if (live) throw new ActionError(STAFF_CANCEL_MESSAGES.liveShipment);
     const refundDue = order.paymentStatus === "paid" || order.paymentStatus === "partially_refunded";
     await transitionOrderStatus(order.id, "cancelled", actorStaffUserId, tx, { checkoutCancelByStaff: true });
     const [updated] = await tx

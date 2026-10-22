@@ -19,6 +19,9 @@ export interface ShipmentDetailsDialogProps {
   checkoutOrder: boolean;
   defaultCourier?: string | null;
   defaultTrackingNumber?: string | null;
+  /** The waybill of the order's courier booking (Phase K2): prefills the resi when there is none,
+   * and a different resi is warned about (the server flags it `tracking_number_mismatch`). */
+  bookedWaybill?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   submit: (values: { courier: string; trackingNumber: string }) => Promise<ActionResult<unknown>>;
@@ -36,13 +39,16 @@ export function ShipmentDetailsDialog({
   checkoutOrder,
   defaultCourier,
   defaultTrackingNumber,
+  bookedWaybill,
   open,
   onOpenChange,
   submit,
   onDone,
 }: ShipmentDetailsDialogProps) {
   const [courier, setCourier] = useState(defaultCourier ?? "");
-  const [trackingNumber, setTrackingNumber] = useState(defaultTrackingNumber ?? "");
+  const [trackingNumber, setTrackingNumber] = useState(defaultTrackingNumber ?? bookedWaybill ?? "");
+  const typedResi = trackingNumber.replace(/\s+/g, "").toUpperCase();
+  const differsFromBooking = Boolean(bookedWaybill) && typedResi !== "" && typedResi !== bookedWaybill!.replace(/\s+/g, "").toUpperCase();
   const [fieldErrors, setFieldErrors] = useState<{ courier?: string; trackingNumber?: string }>({});
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -123,6 +129,12 @@ export function ShipmentDetailsDialog({
             error={fieldErrors.trackingNumber}
           />
           {checkoutOrder && <p className="mt-1 text-sm text-neutral-600">Pesanan website: nomor resi wajib, dikirim ke pembeli lewat email.</p>}
+          {bookedWaybill && <p className="mt-1 text-sm text-neutral-600">Resi dari pemesanan kurir: {bookedWaybill}</p>}
+          {differsFromBooking && (
+            <p role="status" className="mt-1 text-sm text-danger-700">
+              Nomor resi ini berbeda dengan resi dari pemesanan kurir. Pesanan akan ditandai Perlu dicek.
+            </p>
+          )}
         </div>
         {error && (
           <p role="alert" className="text-base text-danger-700">

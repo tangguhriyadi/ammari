@@ -21,8 +21,8 @@
 # an unquoted ` #` as a comment and strips quotes, so such a value would silently change. A symlink
 # is refused (the rename would replace the link, not its target). NODE_ENV and E2E_TEST_LOGIN are refused: they
 # must never be in a deployed env file (E2E_TEST_LOGIN unlocks the fake payment and shipping
-# providers and the /api/test routes), and PAYMENT_PROVIDER / SHIPPING_RATE_PROVIDER must stay
-# unset; DEPLOY_ENV only takes production, dev, development or test.
+# providers and the /api/test routes), and PAYMENT_PROVIDER / SHIPPING_RATE_PROVIDER /
+# SHIPPING_ORDER_PROVIDER must stay unset; DEPLOY_ENV only takes production, dev, development or test.
 #
 # Never add `set -x` here: it would print the value.
 set -euo pipefail
@@ -38,7 +38,7 @@ valid_key() {
   case "$1" in
     NODE_ENV | E2E_TEST_LOGIN) die "$1 must never be written to a deployed env file" ;;
     # Their defaults (midtrans, biteship) are the only values a server may use.
-    PAYMENT_PROVIDER | SHIPPING_RATE_PROVIDER) die "$1 must stay unset on a server (the default is the real provider)" ;;
+    PAYMENT_PROVIDER | SHIPPING_RATE_PROVIDER | SHIPPING_ORDER_PROVIDER) die "$1 must stay unset on a server (the default is the real provider)" ;;
   esac
 }
 

@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { orderItems, orders, payments, products, productVariants, stockReservations, type OrderAttentionFlag, type OrderPaymentStatus, type PaymentStatus } from "@ammari/db/schema";
 import type { Database, Tx } from "../db";
 import { FieldError } from "../errors";
+import { withAttentionFlags } from "../orders/attention";
 import { transitionOrderStatus } from "../orders/lifecycle";
 import type { PaymentStatusReport } from "./provider";
 import { isKnownTransactionStatus } from "./status";
@@ -58,13 +59,7 @@ const ORDER_PAID_LIKE: readonly (OrderPaymentStatus | null)[] = ["paid", "refund
 
 /** Adds flags to `needs_attention` as a set (adding never removes another; order of first
  * appearance kept; plan §3). */
-function withFlags(flags: readonly OrderAttentionFlag[]) {
-  const added = sql`array[${sql.join(
-    flags.map((flag) => sql`${flag}`),
-    sql`, `,
-  )}]::text[]`;
-  return sql`array(select f from unnest(${orders.needsAttention} || ${added}) with ordinality as t(f, i) group by f order by min(i))`;
-}
+const withFlags = withAttentionFlags;
 
 async function flagOrder(tx: Tx, orderId: string, flags: readonly OrderAttentionFlag[]): Promise<void> {
   await tx.update(orders).set({ needsAttention: withFlags(flags), updatedAt: sql`now()` }).where(eq(orders.id, orderId));

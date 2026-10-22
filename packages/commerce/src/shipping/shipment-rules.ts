@@ -151,3 +151,18 @@ export const SHIPPING_COST_OVER_QUOTE_THRESHOLD = 5_000;
 export function isShippingCostOverQuote(actualAmount: number, quotedAmount: number): boolean {
   return actualAmount - quotedAmount > SHIPPING_COST_OVER_QUOTE_THRESHOLD;
 }
+
+/** What staff see about the pickup on a booked shipment (K2): "Menunggu kurir" until a courier is
+ * on the way, "Kurir menuju lokasi" while `picking_up`, "Sudah dijemput" from `picked` on. Null for
+ * a shipment that is not booked, ended, or in a status we do not know. */
+export type ShipmentPickupState = "waiting" | "courier_on_the_way" | "picked_up";
+
+const PICKED_UP_OR_LATER: ReadonlySet<BiteshipOrderStatus> = new Set(["picked", "in_transit", "dropping_off", "delivered", "return_in_transit", "returned"]);
+
+export function shipmentPickupState(providerStatus: string | null): ShipmentPickupState | null {
+  const known = providerStatus ? canonicalBiteshipStatus(providerStatus) : null;
+  if (!known) return null;
+  if (known === "picking_up") return "courier_on_the_way";
+  if (known === "confirmed" || known === "scheduled" || known === "allocated") return "waiting";
+  return PICKED_UP_OR_LATER.has(known) ? "picked_up" : null;
+}

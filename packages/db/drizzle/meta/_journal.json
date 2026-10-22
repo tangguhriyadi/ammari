@@ -239,6 +239,13 @@
       "when": 1792562966457,
       "tag": "0033_customer_login_links",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792631262692,
+      "tag": "0034_shipments",
+      "breakpoints": true
     }
   ]
 }

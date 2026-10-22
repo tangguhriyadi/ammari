@@ -9,9 +9,10 @@ import {
   productImages,
   products,
   productVariants,
+  shipments,
   thankYouCards,
 } from "@ammari/db/schema";
-import type { ChannelId, Size } from "@ammari/db/schema";
+import type { ChannelId, ShipmentStatus, Size } from "@ammari/db/schema";
 import { orderBuyerNameSql } from "@/lib/orders/buyer-name";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { buildImageSizeUrl } from "@/lib/products/image-queries";
@@ -88,6 +89,8 @@ export interface PackingQueueRow {
   isCheckout: boolean;
   /** The quoted courier service locked on a checkout order (e.g. "JNE Reguler"); null otherwise. */
   shippingServiceLabel: string | null;
+  /** The order's live courier booking (Phase K2: "Pesan kurir"), if any. */
+  shipment: { status: ShipmentStatus; awb: string | null; providerStatus: string | null } | null;
 }
 
 export interface PackingPickListItem {
@@ -138,6 +141,13 @@ export async function listPackingQueue(
     .where(eq(thankYouCards.status, "claimed"))
     .as("claimed_card");
 
+  // At most one live attempt per order (shipments_live_order_id_key).
+  const liveShipment = db
+    .select({ orderId: shipments.orderId, status: shipments.status, awb: shipments.awb, providerStatus: shipments.providerStatus })
+    .from(shipments)
+    .where(notInArray(shipments.status, ["cancelled", "failed"]))
+    .as("live_shipment");
+
   const rows = await db
     .select({
       id: orders.id,
@@ -152,12 +162,16 @@ export async function listPackingQueue(
       persistedStickerCode: activeCard.stickerCode,
       paymentStatus: orders.paymentStatus,
       shippingServiceLabel: orders.shippingCourierLabel,
+      shipmentStatus: liveShipment.status,
+      shipmentAwb: liveShipment.awb,
+      shipmentProviderStatus: liveShipment.providerStatus,
     })
     .from(orders)
     .innerJoin(channels, eq(channels.id, orders.channelId))
     .leftJoin(customers, eq(customers.id, orders.customerId))
     .leftJoin(activeCard, eq(activeCard.orderId, orders.id))
     .leftJoin(claimedCard, eq(claimedCard.orderId, orders.id))
+    .leftJoin(liveShipment, eq(liveShipment.orderId, orders.id))
     .where(where)
     .orderBy(asc(orders.orderDate), asc(orders.id))
     .limit(pagination.limit)
@@ -177,7 +191,7 @@ export async function listPackingQueue(
   const previewInputs = await getStickerCodeInputsForOrders(unprintedOrderIds, db);
   const previewMap = assignStickerCodes(previewInputs, fixedEntries);
 
-  const rowsWithStickerCodes: PackingQueueRow[] = rows.map(({ persistedStickerCode, paymentStatus, ...row }) => {
+  const rowsWithStickerCodes: PackingQueueRow[] = rows.map(({ persistedStickerCode, paymentStatus, shipmentStatus, shipmentAwb, shipmentProviderStatus, ...row }) => {
     const isPrinted = row.cardPrintedAt !== null;
     const isCheckout = paymentStatus !== null;
     return {
@@ -186,6 +200,7 @@ export async function listPackingQueue(
       stickerCode: isCheckout ? null : isPrinted ? persistedStickerCode : (previewMap.get(row.id) ?? null),
       stickerCodeIsPreview: !isCheckout && !isPrinted,
       isCheckout,
+      shipment: shipmentStatus ? { status: shipmentStatus, awb: shipmentAwb, providerStatus: shipmentProviderStatus } : null,
     };
   });
 

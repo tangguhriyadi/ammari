@@ -1,6 +1,6 @@
 import "server-only";
-import { and, eq, sql } from "drizzle-orm";
-import { orderItems, orders, stockMovements, vouchers, MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
+import { and, desc, eq, notInArray, sql, type SQL } from "drizzle-orm";
+import { orderItems, orders, shipments, stockMovements, vouchers, MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
 import type { ChannelId, OrderStatus } from "@ammari/db/schema";
 import { valueDeltaForConsumption } from "../inventory/moving-average";
 import { lockVariantForUpdate } from "../stock/lock";
@@ -8,6 +8,7 @@ import { currentBalanceForSkuLocked } from "../stock/ledger";
 import { consumeReservationsForOrder, releaseReservationsForOrder } from "../stock/reservations";
 import { ActionError, FieldError, isPostgresConstraintViolation, mapUniqueViolation } from "../errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "../db";
+import { withAttentionFlags, withoutAttentionFlag } from "./attention";
 import { generateOrderNumber } from "./order-number";
 import { parseShipmentDetails, type ShipmentDetails } from "./shipment-details";
 import { canTransitionOrderStatus, ORDER_STATUS_TIMESTAMP_COLUMN, STOCK_NOT_YET_DECREMENTED_STATUSES } from "./status";
@@ -341,6 +342,28 @@ async function restoreVoucherForCancelledOrder(tx: Tx, orderId: string): Promise
     .where(and(eq(vouchers.usedOrderId, orderId), eq(vouchers.status, "used")));
 }
 
+/** A checkout order booked through the courier provider (Phase K2) has a waybill; a resi staff type
+ * that differs from it is flagged `tracking_number_mismatch` (owner 2026-10-22), and a resi that
+ * matches it again clears that flag. The manual path stays open either way (fallback). Returns the
+ * `needs_attention` expression to set, or null when nothing changes. Under the order's row lock. */
+async function trackingMismatchUpdate(tx: Tx, order: { id: string; paymentStatus: unknown; needsAttention: readonly string[] }, trackingNumber: string | null): Promise<SQL | null> {
+  if (order.paymentStatus === null || trackingNumber === null) return null;
+  const [live] = await tx
+    .select({ awb: shipments.awb, status: shipments.status })
+    .from(shipments)
+    .where(and(eq(shipments.orderId, order.id), notInArray(shipments.status, ["cancelled", "failed"])))
+    .orderBy(desc(shipments.attempt))
+    .limit(1);
+  const flagged = order.needsAttention.includes("tracking_number_mismatch");
+  // A booking whose answer is not known yet may still have booked a courier: shipping by hand now
+  // risks two parcels, so staff are asked to check (the manual path stays open).
+  if (live?.status === "booking") return flagged ? null : withAttentionFlags(["tracking_number_mismatch"]);
+  if (!live?.awb) return null;
+  const normalize = (value: string) => value.replace(/\s+/g, "").toUpperCase();
+  if (normalize(live.awb) !== normalize(trackingNumber)) return flagged ? null : withAttentionFlags(["tracking_number_mismatch"]);
+  return flagged ? withoutAttentionFlag("tracking_number_mismatch") : null;
+}
+
 /** The ONLY path allowed to move an order between statuses (status.ts's own doc comment) —
  * checks ORDER_STATUS_TRANSITIONS, stamps the matching timestamp column, and runs the matching
  * stock side effect (decrement on awaiting_payment -> to_ship, consuming a checkout order's
@@ -380,6 +403,7 @@ export async function transitionOrderStatus(
     // "Proses" of a checkout order paid while stock was short (plan §6.2): once the sale is
     // written the flag is resolved, so it ends in the same update (every other flag stays).
     const resolvesStockShort = fromStatus === "awaiting_payment" && toStatus === "to_ship" && order.needsAttention.includes("stock_short_at_payment");
+    const mismatch = shipment ? await trackingMismatchUpdate(tx, order, shipment.trackingNumber) : null;
 
     if (fromStatus === "awaiting_payment" && toStatus === "to_ship") {
       const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
@@ -417,6 +441,7 @@ export async function transitionOrderStatus(
         ...(timestampColumn ? { [timestampColumn]: new Date() } : {}),
         ...shippingFields,
         ...(resolvesStockShort ? { needsAttention: sql`array_remove(${orders.needsAttention}, 'stock_short_at_payment')` } : {}),
+        ...(mismatch ? { needsAttention: mismatch } : {}),
       })
       .where(and(eq(orders.id, orderId), eq(orders.status, fromStatus)))
       .returning();
@@ -455,7 +480,7 @@ export async function updateShipmentDetails(
 ): Promise<{ changed: boolean }> {
   return db.transaction(async (tx) => {
     const [order] = await tx
-      .select({ id: orders.id, status: orders.status, paymentStatus: orders.paymentStatus, courier: orders.courier, trackingNumber: orders.trackingNumber })
+      .select({ id: orders.id, status: orders.status, paymentStatus: orders.paymentStatus, courier: orders.courier, trackingNumber: orders.trackingNumber, needsAttention: orders.needsAttention })
       .from(orders)
       .where(eq(orders.id, orderId))
       .for("update")
@@ -465,7 +490,11 @@ export async function updateShipmentDetails(
     const next = shipmentDetailsOrThrow(input, order.paymentStatus !== null);
     if (next.courier === order.courier && next.trackingNumber === order.trackingNumber) return { changed: false };
 
-    await tx.update(orders).set({ courier: next.courier, trackingNumber: next.trackingNumber }).where(eq(orders.id, orderId));
+    const mismatch = await trackingMismatchUpdate(tx, order, next.trackingNumber);
+    await tx
+      .update(orders)
+      .set({ courier: next.courier, trackingNumber: next.trackingNumber, ...(mismatch ? { needsAttention: mismatch } : {}) })
+      .where(eq(orders.id, orderId));
     await writeAuditLog(tx, {
       actorStaffUserId,
       action: "update_shipment_details",

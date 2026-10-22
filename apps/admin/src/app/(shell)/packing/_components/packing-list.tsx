@@ -12,6 +12,9 @@ import {
   printThankYouCardsAction,
   type PrintableCard,
 } from "../actions";
+import { downloadOrOpenPdf, openStickerPopupPlaceholder } from "@/lib/client/pdf-download";
+import { CourierBooking } from "@/components/orders/courier-booking";
+import { SHIPMENT_STATUS_BADGE_VARIANT, SHIPMENT_STATUS_LABELS } from "@/lib/orders/shipment-labels";
 import { PickList } from "./pick-list";
 import { MarkShippedDialog } from "./mark-shipped-dialog";
 import { PrintCardsOverlay } from "./print-cards-overlay";
@@ -50,11 +53,24 @@ function CardStatusBadge({ printedAt, claimedAt, isCheckout }: { printedAt: Date
   );
 }
 
-/** The courier service a web checkout order was quoted with: staff book exactly this one (before
- * Phase K, by hand). */
+/** The courier service a web checkout order was quoted with ("Pesan kurir" books exactly this one;
+ * staff book it by hand on the manual path). */
 function ServiceLine({ label }: { label: string | null }) {
   if (!label) return null;
   return <span className="text-sm text-neutral-700">Kirim: {label}</span>;
+}
+
+/** The live courier booking of a web order (Phase K2): its state and waybill. */
+function BookingLine({ shipment }: { shipment: PackingQueueRow["shipment"] }) {
+  if (!shipment) return null;
+  return (
+    <span className="flex flex-wrap items-center gap-1.5 text-sm text-neutral-700">
+      <Badge variant={SHIPMENT_STATUS_BADGE_VARIANT[shipment.status]} className="whitespace-nowrap">
+        {SHIPMENT_STATUS_LABELS[shipment.status]}
+      </Badge>
+      {shipment.awb && <span className="font-mono break-all">Resi {shipment.awb}</span>}
+    </span>
+  );
 }
 
 /** `srLabel`: only needed in the mobile `CardList`, where this renders as a bare string with no
@@ -76,60 +92,6 @@ function StickerCode({ code, isPreview, srLabel }: { code: string | null; isPrev
       {isPreview && <span className="not-italic"> (pratinjau)</span>}
     </span>
   );
-}
-
-/** iPadOS Safari reports its UA as a plain Mac ("Macintosh") since iPadOS 13 — the only reliable
- * way to tell it apart from a real Mac is that a touch-capable Mac UA is always an iPad (no
- * production Mac has a touchscreen). Needed because a synthetic `<a download>` click is
- * unreliable there for blob PDFs across iPadOS versions; opening the blob URL in a new tab
- * instead hands the PDF to Safari's own inline viewer, from which "Cetak"/"Simpan ke File" both
- * work via the share sheet — a better outcome there than a download that may silently do
- * nothing. */
-function isLikelyIPadSafari(): boolean {
-  return typeof navigator !== "undefined" && /Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
-}
-
-/** On the iPad-Safari path, MUST be called synchronously inside the click handler that starts
- * the print — never after an `await` (the two server-action round-trips a real print goes
- * through). Safari only allows `window.open` to create a real, non-blocked window within an
- * actual user-gesture call stack; calling it once the PDF bytes are finally ready (well outside
- * that window) is the textbook case Safari's popup blocker exists to catch, and it fails
- * silently — `window.open` just returns `null`/an already-closed window, with nothing to show
- * for it even though the mint already committed server-side. Opening a blank tab immediately and
- * navigating it later (`popup.location.href = ...`) sidesteps this: the OPEN itself happens in
- * the gesture, only the navigation is deferred. Returns `null` on every other browser, where the
- * plain `<a download>` path below is used instead and no popup is needed at all. */
-function openStickerPopupPlaceholder(): Window | null {
-  return isLikelyIPadSafari() ? window.open("", "_blank") : null;
-}
-
-/** `popup`: whatever `openStickerPopupPlaceholder` returned for THIS SAME click, or `null` on a
- * non-iPad-Safari browser. Returns an error message to show the staffer, or `null` on success. */
-function downloadOrOpenPdf(pdfBase64: string, filename: string, popup: Window | null): string | null {
-  const binary = atob(pdfBase64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
-
-  if (isLikelyIPadSafari()) {
-    if (!popup || popup.closed) {
-      URL.revokeObjectURL(url);
-      return "Pop-up diblokir. Izinkan pop-up untuk situs ini di pengaturan Safari, lalu coba lagi.";
-    }
-    popup.location.href = url;
-  } else {
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-  }
-  // Delayed, not immediate — revoking right after `.click()`/navigating `popup` can race the
-  // browser actually starting to read the blob in some engines.
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  return null;
 }
 
 export function PackingList({ rows, items, canShip }: PackingListProps) {
@@ -284,6 +246,10 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
     router.refresh();
   }
 
+  // From the current rows, not the snapshot taken when the dialog opened: a booking may settle meanwhile.
+  const shippingShipment = shippingOrder ? (rows.find((row) => row.id === shippingOrder.id)?.shipment ?? null) : null;
+  const shippingWaybill = shippingShipment && shippingShipment.status !== "booking" ? shippingShipment.awb : null;
+
   if (rows.length === 0) {
     return <EmptyState title="Antrean packing kosong" description="Belum ada pesanan dengan status Siap Kirim." />;
   }
@@ -349,8 +315,10 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 {formatDate(new Date(row.orderDate))} · {row.customerName ?? row.buyerUsername ?? "-"}
               </p>
               <ServiceLine label={row.shippingServiceLabel} />
+              <BookingLine shipment={row.shipment} />
               <StickerCode code={row.stickerCode} isPreview={row.stickerCodeIsPreview} srLabel="Kode stiker" />
               <PickList items={items[row.id] ?? []} />
+              {canShip && row.isCheckout && <CourierBooking orderId={row.id} orderNo={row.orderNo} shipment={row.shipment} variant="row" disabled={pending} />}
               {canShip && (
                 // Disabled while ANY bulk/print transition is in flight (`pending` covers the
                 // header's "Cetak kartu"/"Tandai dikirim" actions) — otherwise a staffer could
@@ -409,6 +377,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                   <span className="font-medium">{row.orderNo}</span>
                   <Badge variant="neutral">{row.channelName}</Badge>
                   <ServiceLine label={row.shippingServiceLabel} />
+                  <BookingLine shipment={row.shipment} />
                 </div>
               </Td>
               <Td className="text-neutral-700">
@@ -434,9 +403,12 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
               </Td>
               {canShip && (
                 <Td className="whitespace-nowrap">
-                  <Button variant="secondary" disabled={pending} onClick={() => setShippingOrder(row)}>
-                    Tandai dikirim
-                  </Button>
+                  <div className="flex flex-col items-start gap-2">
+                    {row.isCheckout && <CourierBooking orderId={row.id} orderNo={row.orderNo} shipment={row.shipment} variant="row" disabled={pending} />}
+                    <Button variant="secondary" disabled={pending} onClick={() => setShippingOrder(row)}>
+                      Tandai dikirim
+                    </Button>
+                  </div>
                 </Td>
               )}
             </Tr>
@@ -446,12 +418,13 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
 
       {shippingOrder && (
         <MarkShippedDialog
-          key={shippingOrder.id}
+          key={`${shippingOrder.id}:${shippingWaybill ?? ""}`}
           orderId={shippingOrder.id}
           orderNo={shippingOrder.orderNo}
           hasActiveCard={shippingOrder.isCheckout || shippingOrder.cardPrintedAt !== null}
           isCheckout={shippingOrder.isCheckout}
           defaultCourier={shippingOrder.shippingServiceLabel}
+          bookedWaybill={shippingWaybill}
           open={shippingOrder !== null}
           onOpenChange={(open) => !open && setShippingOrder(null)}
           onShipped={() => router.refresh()}

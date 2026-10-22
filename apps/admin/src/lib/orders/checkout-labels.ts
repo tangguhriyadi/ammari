@@ -93,7 +93,30 @@ export const ATTENTION_FLAG_COPY: Record<OrderAttentionFlag, AttentionFlagCopy> 
     label: "Masalah pengiriman",
     meaning: "Kurir melaporkan masalah atau paket kembali. Cek ke kurir sebelum mengubah status pesanan.",
   },
+  shipping_cost_over_quote: {
+    label: "Ongkir kurir lebih mahal",
+    meaning: "Biaya kurir yang ditagih Biteship lebih dari Rp5.000 di atas ongkir saat checkout. Ammari menanggung selisihnya, pembeli tidak ditagih. Cek beratnya, lalu tandai beres.",
+  },
+  tracking_number_mismatch: {
+    label: "Resi beda dengan pesanan kurir",
+    meaning: "Nomor resi yang diisi berbeda dengan resi dari pemesanan kurir. Cek mana yang benar, perbaiki lewat Ubah resi, lalu tandai beres.",
+  },
 };
+
+export function isKnownAttentionFlag(flag: string): flag is OrderAttentionFlag {
+  return Object.hasOwn(ATTENTION_FLAG_COPY, flag);
+}
+
+/** The copy for a flag, safe for a value this build does not know (a newer release wrote it and
+ * this one was rolled back to: the page must still render, plan §3 rollback note). */
+export function attentionFlagCopy(flag: string): AttentionFlagCopy {
+  return (
+    (ATTENTION_FLAG_COPY as Record<string, AttentionFlagCopy | undefined>)[flag] ?? {
+      label: `Tanda lain (${flag})`,
+      meaning: "Tanda dari versi aplikasi yang lebih baru. Cek pesanan ini, lalu hubungi pemilik.",
+    }
+  );
+}
 
 /** "1,4 kg" for 1400 g; "800 g" below a kilogram. */
 export function formatWeight(grams: number): string {

@@ -8,6 +8,7 @@ import {
   orderNotifications,
   orders,
   payments,
+  shipments,
   products,
   productVariants,
   shippingAreas,
@@ -15,7 +16,7 @@ import {
   thankYouCards,
   vouchers,
 } from "@ammari/db/schema";
-import type { ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus } from "@ammari/db/schema";
+import type { ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus, ShipmentStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
 import { orderBuyerNameSql } from "./buyer-name";
@@ -261,6 +262,33 @@ export interface CheckoutAddress {
   notes: string | null;
 }
 
+/** One courier booking attempt (Phase K2), newest first on the order. */
+export interface CheckoutShipment {
+  id: string;
+  attempt: number;
+  referenceId: string;
+  status: ShipmentStatus;
+  providerStatus: string | null;
+  courier: string;
+  service: string;
+  awb: string | null;
+  routingCode: string | null;
+  /** What Ammari pays the courier: a cost figure, so `null` without finance.view_profit. */
+  costAmount: number | null;
+  /** Whether the price is known at all (shown as "biaya belum diketahui" otherwise, to anyone). */
+  costKnown: boolean;
+  driverName: string | null;
+  driverPhone: string | null;
+  driverPlateNumber: string | null;
+  lastError: string | null;
+  bookedAt: Date | null;
+  pickedUpAt: Date | null;
+  cancelRequestedAt: Date | null;
+  cancelledAt: Date | null;
+  failedAt: Date | null;
+  createdAt: Date;
+}
+
 export interface CheckoutOrderDetail {
   paymentStatus: OrderPaymentStatus;
   paymentExpiresAt: Date | null;
@@ -279,6 +307,8 @@ export interface CheckoutOrderDetail {
   /** Courier and resi from "Tandai dikirim". */
   courier: string | null;
   trackingNumber: string | null;
+  /** Courier booking attempts, newest first (Phase K2). */
+  shipments: CheckoutShipment[];
 }
 
 function text(value: unknown): string | null {
@@ -305,7 +335,8 @@ async function getCheckoutOrderDetail(
   order: typeof orders.$inferSelect & { paymentStatus: OrderPaymentStatus },
   db: Database,
 ): Promise<CheckoutOrderDetail> {
-  const [attemptRows, emailRows, voucherRows, areaRows] = await Promise.all([
+  const [shipmentRows, attemptRows, emailRows, voucherRows, areaRows] = await Promise.all([
+    db.select().from(shipments).where(eq(shipments.orderId, order.id)).orderBy(desc(shipments.attempt)),
     db
       .select({
         id: payments.id,
@@ -378,6 +409,29 @@ async function getCheckoutOrderDetail(
     emails: emailRows,
     courier: order.courier,
     trackingNumber: order.trackingNumber,
+    shipments: shipmentRows.map((row) => ({
+      id: row.id,
+      attempt: row.attempt,
+      referenceId: row.referenceId,
+      status: row.status,
+      providerStatus: row.providerStatus,
+      courier: row.courier,
+      service: row.service,
+      awb: row.awb,
+      routingCode: row.routingCode,
+      costAmount: row.costAmount,
+      costKnown: row.costAmount !== null,
+      driverName: row.driverName,
+      driverPhone: row.driverPhone,
+      driverPlateNumber: row.driverPlateNumber,
+      lastError: row.lastError,
+      bookedAt: row.bookedAt,
+      pickedUpAt: row.pickedUpAt,
+      cancelRequestedAt: row.cancelRequestedAt,
+      cancelledAt: row.cancelledAt,
+      failedAt: row.failedAt,
+      createdAt: row.createdAt,
+    })),
   };
 }
 
@@ -458,8 +512,12 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
  * server-side, never left to the client to hide. */
 export function stripOrderDetailCost(detail: OrderDetail, canViewProfit: boolean): OrderDetail {
   if (canViewProfit) return detail;
-  const checkout = detail.checkout?.quote
-    ? { ...detail.checkout, quote: { ...detail.checkout.quote, costAmount: null, subsidyAmount: null } }
+  const checkout = detail.checkout
+    ? {
+        ...detail.checkout,
+        quote: detail.checkout.quote ? { ...detail.checkout.quote, costAmount: null, subsidyAmount: null } : null,
+        shipments: detail.checkout.shipments.map((shipment) => ({ ...shipment, costAmount: null })),
+      }
     : detail.checkout;
   return { ...detail, items: detail.items.map((item) => ({ ...item, unitCost: null })), checkout };
 }

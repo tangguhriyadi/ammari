@@ -38,7 +38,8 @@ orders, "menunggu pembayaran" reminder, saved address, "Beli sekarang", stale de
 "Halo Kak"; see "Sandbox fixes, round 2" after the session table). **Phase K started 2026-10-22:**
 Biteship docs researched, breakdown K1 to K4 and decisions 46 to 51 confirmed by the owner; **K1
 done 2026-10-22** (order client, fake, shipment config, Code 128 and our own label; no migration;
-see §15 Phase K).
+see §15 Phase K). **K2 done 2026-10-22** (migration 0034 `shipments`, two new flags, "Pesan kurir"
+from admin, our label; see §15 Phase K "K2 as built").
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
@@ -1548,7 +1549,7 @@ the Order API on by default, simulated without pickup). No separate plan or key:
 | # | Session | Migration | Tests / reviewers |
 |---|---|---|---|
 | K1 | **DONE 2026-10-22.** Order client, fake, shipment config, Code 128 and our own label (as built below). | none | TDD; typescript, security, silent-failure-hunter |
-| K2 | **0034:** `shipments` per §3 (attempts, partial UNIQUE for the one live shipment, `reference_id` UNIQUE, `provider_order_id` UNIQUE NULL) and the `shipping_cost_over_quote` flag. `@ammari/commerce` booking: `bookShipment` (transaction: lock the order, paid web order in `to_ship` with a quote, no live shipment, insert the attempt `booking`; outside any transaction `createShipment`; transaction: store id, waybill, tracking id, price, status; `failed` only on a clear refusal), `recheckBooking` (re-sends the **same** reference: booked now, or `duplicate_reference` recovered through `existingOrderId` + `getShipment`), `cancelShipment` (before pickup only; the attempt ends `cancelled`, a new attempt may follow). Destination from the order's snapshot (recipient, phone, street line, courier note) and `shipping_destination_id`; one item "Pakaian" with the goods value and `shipping_weight_grams`; never the buyer's email. Admin: **"Pesan kurir"** on the `/packing` row and the order page, "Cek ulang pemesanan", "Batalkan pengiriman", "Cetak label" (the K1 PDF, one page per order), "Pengiriman" with booking, pickup state ("Menunggu kurir" / "Kurir menuju lokasi" / "Sudah dijemput"), driver when sent, the cut-off hint, actual cost next to the quote (`finance.view_profit`). Permission `orders.manage` (no new key). Manual resi path unchanged. Env examples and `set-env-var.sh` (refuse `SHIPPING_ORDER_PROVIDER`). | 0034 | TDD, committed race (two "Pesan kurir" at once: one booking), admin e2e 390/1280 with the fake; database, security, react |
+| K2 | **DONE 2026-10-22** (as built below). **0034:** `shipments` per §3 (attempts, partial UNIQUE for the one live shipment, `reference_id` UNIQUE, `provider_order_id` UNIQUE NULL) and the `shipping_cost_over_quote` flag. `@ammari/commerce` booking: `bookShipment` (transaction: lock the order, paid web order in `to_ship` with a quote, no live shipment, insert the attempt `booking`; outside any transaction `createShipment`; transaction: store id, waybill, tracking id, price, status; `failed` only on a clear refusal), `recheckBooking` (re-sends the **same** reference: booked now, or `duplicate_reference` recovered through `existingOrderId` + `getShipment`), `cancelShipment` (before pickup only; the attempt ends `cancelled`, a new attempt may follow). Destination from the order's snapshot (recipient, phone, street line, courier note) and `shipping_destination_id`; one item "Pakaian" with the goods value and `shipping_weight_grams`; never the buyer's email. Admin: **"Pesan kurir"** on the `/packing` row and the order page, "Cek ulang pemesanan", "Batalkan pengiriman", "Cetak label" (the K1 PDF, one page per order), "Pengiriman" with booking, pickup state ("Menunggu kurir" / "Kurir menuju lokasi" / "Sudah dijemput"), driver when sent, the cut-off hint, actual cost next to the quote (`finance.view_profit`). Permission `orders.manage` (no new key). Manual resi path unchanged. Env examples and `set-env-var.sh` (refuse `SHIPPING_ORDER_PROVIDER`). | 0034 | TDD, committed race (two "Pesan kurir" at once: one booking), admin e2e 390/1280 with the fake; database, security, react |
 | K3 | **0035:** `shipment_events` (UNIQUE `(shipment_id, occurred_at, provider_status)`) and `shipping_webhook_events`. Webhook route in apps/web (path token + header secret, always 200, debounced re-fetch, §"Webhook vs polling"), `applyShipmentSnapshot` (status mapping below, `order.price`, waybill changes, both flags), poller route + `CRON_JOBS` key + the 3-hour block in both `cron.sh`, `delivered` email template and due rule, 12-month retention for webhook events, gated fake "advance shipment" test route posting through the real webhook route. | 0035 | TDD + replay, out-of-order, concurrency; security, silent-failure-hunter, database |
 | K4 | Buyer timeline in the "Lacak pengiriman" block (`/orders/[orderNo]`, latest on top, courier names only, never the provider's name), admin timeline, manual fallback polish (manual resi vs booked waybill), e2e both apps 390/1280. Runbook `docs/launch/shipping-dev.md`: env values to set (shipper, prefix, budget, webhook token and header secret), test webhooks, the two activation test orders (one delivered through Update Status, one cancelled through our "Batalkan pengiriman"), **print a label on the thermal printer at 100% and scan its barcode with a phone**, then go live. | none | react, e2e 390/1280 |
 
@@ -1611,6 +1612,74 @@ no Critical; fixed: a duplicate reference hidden by an odd error body could read
 odd characters printed as a different barcode, cancels with a lost answer, strict parsing of
 `courier` / notes / `code`, silent nulls, smart quotes printed as "?", silent truncation on the
 label, `wrapText` loop guard, prefix rule in production, base URL path, budget NaN. The printed check on the real printer and a phone stays in the K4 runbook.
+
+**K2 as built (2026-10-22).** Owner decisions this session: (52) a resi staff type that differs
+from the booked waybill raises a new flag **`tracking_number_mismatch`** ("Resi beda dengan pesanan
+kurir"), added to the CHECK in 0034 with `shipping_cost_over_quote`; (53) **the admin renders any
+unknown flag safely from K2 on** and both new flags are written from K2 (a dev rollback to the K1
+image would show its error page for an order carrying one; prod's image predates
+`needs_attention`, so a prod rollback is safe). Rollback check done: apps/web never reads
+`needs_attention`, the admin list only counts flags, the K1 order page threw on an unknown flag.
+- **0034 `shipments`** (`packages/db/src/schema/shipments.ts`, `SHIPMENT_STATUSES` =
+  `booking` / `failed` + the normalized tracking states): one row per attempt, UNIQUE `(order_id,
+  attempt)` (1 to 99), partial UNIQUE `shipments_live_order_id_key` on `order_id` where status is
+  not `cancelled` / `failed`, `reference_id` UNIQUE, `provider_order_id` UNIQUE NULL (required
+  once booked), `provider_tracking_id`, `courier`, `service`, `awb`, `routing_code`,
+  `tracking_link`, `cost_amount`, `status`, `provider_status`, `last_error` (reason and code only),
+  driver name / phone / plate, `booked_at`, `picked_up_at`, `delivered_at`, `cancel_requested_at`,
+  `cancelled_at`, `failed_at`, `last_polled_at`, `last_event_at` (K3), booked / cancelled by staff,
+  timestamps; CHECKs for the state consistency; poller index for K3. Hand edits: header and
+  `lock_timeout`. `migration-0034.test.ts` (upgrade from 0033 with a flagged order, every rule, K1
+  writes, idempotent re-run); applied fresh, to a copy of local `ammari`, then to local `ammari`.
+- **`@ammari/commerce/shipping` `bookings.ts`:** `bookShipment` (order lock, paid web order in
+  `to_ship`, no live attempt, attempt reserved `booking`, provider called outside any transaction,
+  then stored under the order lock), `recheckBooking` (a `booking` attempt re-sends the same
+  reference: booked, or the duplicate adopted only when its reference is ours; a re-send never ends
+  the attempt: a refusal, a duplicate without an order id or with another reference, or an order
+  that moved on (shipped by hand, cancelled) leaves it "perlu dicek manual" with the reference id;
+  a booked attempt is read again), `cancelShipment` (before pickup only; a lost or 40002053 answer
+  is read first; the attempt ends and attempt N+1 may follow), `refreshShipmentForLabel` (one read
+  when the routing code is missing; a failed read becomes a label warning). Never a status moved
+  backwards and never an ended attempt revived by a late read. Over-quote flag on every price change
+  (decision 47). A booked order that fails to be stored keeps the attempt open (logged with the
+  provider id) instead of reading as "not booked". Refusal messages: balance (40002039, 40009003),
+  inactive key (40002002), budget, unavailable. Destination from the snapshot (name, phone, street
+  line, note), one "Pakaian" item with the subtotal and the quoted weight; never the email.
+  `orders/attention.ts` (flag set helpers, shared with payments). `transitionOrderStatus` /
+  `updateShipmentDetails` flag `tracking_number_mismatch` when the resi differs from the live
+  booking's waybill (and when shipping by hand while a booking is unsettled), and clear it when the
+  resi matches again; a waybill arriving later is checked too. Staff cancel of a paid order is
+  refused while a live booking exists ("Batalkan pengiriman dulu").
+- **apps/admin:** `lib/shipping/runtime.ts` (`shipmentRuntimeFromEnv`, fails closed with variable
+  names logged), `app/(shell)/orders/shipment-actions.ts` (`orders.manage`; cost stripped from the
+  answer without `finance.view_profit`), `components/orders/courier-booking.tsx` ("Pesan kurir",
+  "Cek ulang pemesanan", "Batalkan pengiriman" with a reason, "Cetak label" with the warnings
+  dialog before the download; same base64 route as the stickers, helpers moved to
+  `lib/client/pdf-download.ts`), `lib/shipping/label-data.ts`, `lib/orders/shipment-labels.ts`.
+  /packing rows show the booking state and waybill; the order page's "Pengiriman" shows status,
+  reference, waybill, pickup state, routing code, driver, actual cost next to the quote
+  (`finance.view_profit`), the cut-off hint and earlier attempts. "Tandai dikirim" / "Ubah resi"
+  prefill the waybill and warn on a different resi. Unknown flags get a generic copy and no "Tandai
+  beres".
+- **Env:** admin examples (local, dev, prod) list the shipment runtime names; `set-env-var.sh`
+  refuses `SHIPPING_ORDER_PROVIDER`; the prod go-live check fails a fake `SHIPPING_ORDER_PROVIDER`
+  in admin.env. Admin e2e runs `SHIPPING_ORDER_PROVIDER=fake`.
+- **Tests:** `bookings.test.ts` (booking, refusals, over-quote, late price, lost answer and
+  recovery, re-send rules, cancel paths, staff cancel guard, resi mismatch, stale reads, committed
+  race: two "Pesan kurir" at once give one booking), `shipment-rules.test.ts`, admin
+  `checkout-labels.test.ts`, `queries.test.ts`, e2e `courier-booking.spec.ts` (390/1280). Reviews:
+  database, security, react, silent-failure-hunter; no Critical; High/Medium fixed (stale read
+  reviving a cancelled attempt, re-send for an order shipped by hand, booking stored-failure read
+  as "not booked", cost in the action answer, long error text in the table cell, label download
+  errors, permanent provider faults shown as "try again").
+- **Known, not fixed (Low):** two cancels at once both reach the provider (the second is settled by
+  reading); `audit_log` rows carry the booked cost (like the order rows already logged; no audit
+  viewer exists); the label refreshes only when the routing code is missing, so a waybill change
+  after booking reaches the label once K3 applies `order.waybill_id`; a manually cleared
+  `tracking_number_mismatch` stays cleared after a rebook.
+- **For K3/K4:** apply the poller and webhook through the same stored-state rules (never backwards,
+  never revive an ended attempt); flag `delivery_problem` for a cancel we did not ask for (now only
+  logged as an error); the K4 runbook sets the admin env values below.
 
 Notes from K1 for later sessions:
 - **K2 (booking safety):** any error with `outcomeUnknown` keeps the attempt `booking` (never
@@ -1897,6 +1966,14 @@ Owner decisions 2026-10-22 (Phase K breakdown K1 to K4 confirmed, §15 Phase K):
 51. **`BITESHIP_REFERENCE_PREFIX`** (e.g. `DEV-` on dev, empty or a prod prefix on prod), failing
     closed like the Midtrans prefix; required outside production because dev and local share one
     test account.
+
+Owner decisions 2026-10-22 (K2):
+
+52. **New flag `tracking_number_mismatch`** when a resi staff type differs from the booked waybill
+    (also raised when shipping by hand while a booking is unsettled); added to the CHECK in 0034.
+53. **Rollback:** the admin renders any unknown flag safely from K2 on, and K2 writes both new flags
+    at once (a dev rollback to the K1 image shows its error page for an order carrying one; prod is
+    unaffected).
 
 Remaining small items to confirm with third parties (not owner decisions): the Biteship items in
 §15 "What to confirm with Biteship" (live Order API activation, Tracking quota use, six active

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button, Dialog, Label, Textarea, useToast } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import type { OrderAttentionFlag, OrderPaymentStatus, OrderStatus } from "@ammari/db/schema";
-import { ATTENTION_FLAG_COPY } from "@/lib/orders/checkout-labels";
+import { attentionFlagCopy, isKnownAttentionFlag } from "@/lib/orders/checkout-labels";
 import { ORDER_STATUS_LABELS } from "@/lib/orders/status-labels";
 import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
 import type { ActionResult } from "@/lib/action-result";
@@ -58,11 +58,13 @@ export interface CheckoutStatusActionsProps {
   totalAmount: number;
   /** Prefills "Kurir" in the "Dikirim" dialog (staff book exactly the quoted service). */
   quotedCourierLabel: string | null;
+  /** The courier booking's waybill (Phase K2), prefilled as the resi. */
+  bookedWaybill?: string | null;
   /** ORDER_STATUS_TRANSITIONS for the current status. */
   allowedTransitions: OrderStatus[];
 }
 
-export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus, totalAmount, quotedCourierLabel, allowedTransitions }: CheckoutStatusActionsProps) {
+export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus, totalAmount, quotedCourierLabel, bookedWaybill, allowedTransitions }: CheckoutStatusActionsProps) {
   const router = useRouter();
   const toast = useToast();
   const [error, setError] = useState<string | null>(null);
@@ -138,6 +140,7 @@ export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus,
           confirmLabel="Tandai dikirim"
           checkoutOrder
           defaultCourier={quotedCourierLabel}
+          bookedWaybill={bookedWaybill}
           open={shipping}
           onOpenChange={setShipping}
           submit={({ courier, trackingNumber }) => markShippedAction({ orderId, courier, trackingNumber, confirmNoCard: true })}
@@ -250,8 +253,10 @@ export function AttentionPanel({ orderId, status, flags, refundableAttempts, ref
       <h2 className="text-lg font-semibold text-neutral-900">Perlu dicek</h2>
       <ul className="flex flex-col gap-3">
         {flags.map((flag) => {
-          const copy = ATTENTION_FLAG_COPY[flag];
+          const copy = attentionFlagCopy(flag);
+          // A flag this build does not know (rollback) is shown but cannot be cleared from here.
           const clearable =
+            isKnownAttentionFlag(flag) &&
             !(flag === "stock_short_at_payment" && status === "awaiting_payment") && !((flag === "refund_due" || flag === "paid_after_cancel") && refundOwed);
           return (
             <li key={flag} className="flex flex-col gap-2 rounded-md bg-white p-3">

@@ -127,11 +127,18 @@ export const E2E_CHECKOUT_PRODUCT_NAME = "E2E Gamis Web";
 export const E2E_CHECKOUT_SKU = "E2E-WEB-M";
 export const E2E_CHECKOUT_LAYOUTS = ["390", "1280"] as const;
 /** The seeded orders' numbers per viewport: unpaid, paid (Siap Kirim), paid while stock was short,
- * paid and flagged as an anomaly, paid for the resi flow (`ship`), and shipped without a resi
- * (`noresi`, as the 2026-10-21 sandbox run left one). */
-export function e2eCheckoutOrderNo(kind: "pending" | "paid" | "short" | "flagged" | "ship" | "noresi", layout: (typeof E2E_CHECKOUT_LAYOUTS)[number]): string {
+ * paid and flagged as an anomaly, paid for the resi flow (`ship`), shipped without a resi
+ * (`noresi`, as the 2026-10-21 sandbox run left one), and two paid orders for courier booking
+ * (Phase K2, courier-booking.spec.ts) with the fake provider: `book` at a normal fake area, `lost` at
+ * the area whose booking answer is lost once. */
+export function e2eCheckoutOrderNo(kind: "pending" | "paid" | "short" | "flagged" | "ship" | "noresi" | "book" | "lost", layout: (typeof E2E_CHECKOUT_LAYOUTS)[number]): string {
   return `ORD-E2E-WEB-${kind.toUpperCase()}-${layout}`;
 }
+
+// The fake shipment provider's areas (packages/commerce/src/shipping/fake.ts): a normal booking, and
+// one whose booking answer is lost once (the attempt stays "belum pasti" until "Cek ulang").
+const E2E_BOOKING_AREA = "E2EMURAH40111";
+const E2E_LOST_ANSWER_AREA = "E2EGANGGUAN40333";
 
 // A product published before migration 0031 made "Berat kirim" a publish rule (like prod's first
 // published product): live, active, no weight. product-shipping-weight.spec.ts reads it; nothing
@@ -536,6 +543,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         { kind: "flagged" as const, status: "to_ship" as const, paid: true, sold: true, flags: ["payment_anomaly" as const] },
         { kind: "ship" as const, status: "to_ship" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[] },
         { kind: "noresi" as const, status: "shipped" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[] },
+        { kind: "book" as const, status: "to_ship" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[], destination: E2E_BOOKING_AREA },
+        { kind: "lost" as const, status: "to_ship" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[], destination: E2E_LOST_ANSWER_AREA },
       ];
       for (const seed of seeds) {
         const orderNo = e2eCheckoutOrderNo(seed.kind, layout);
@@ -547,6 +556,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
             paymentStatus: seed.paid ? "paid" : "pending",
             paidAt: seed.paid ? new Date(now) : null,
             needsAttention: seed.flags,
+            ...("destination" in seed ? { shippingDestinationId: seed.destination } : {}),
             ...(seed.status === "shipped" ? { shippedAt: new Date(now), courier: "J&T Reguler", trackingNumber: null } : {}),
           })
           .returning({ id: orders.id });

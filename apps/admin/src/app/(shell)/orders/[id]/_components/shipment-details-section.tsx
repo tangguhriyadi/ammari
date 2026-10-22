@@ -13,12 +13,14 @@ export interface ShipmentDetailsSectionProps {
   trackingNumber: string | null;
   /** A web checkout order: both required, and its buyer's "sudah dikirim" email waits for the resi. */
   isCheckout: boolean;
+  /** The courier booking's waybill (Phase K2): a different resi is warned about and flagged. */
+  bookedWaybill?: string | null;
   canManage: boolean;
 }
 
 /** Courier and resi of a shipped order, with "Tambah resi" / "Ubah resi" (2026-10-21 sandbox run: a
  * web order had shipped without a resi and its buyer could not track it). */
-export function ShipmentDetailsSection({ orderId, orderNo, courier, trackingNumber, isCheckout, canManage }: ShipmentDetailsSectionProps) {
+export function ShipmentDetailsSection({ orderId, orderNo, courier, trackingNumber, isCheckout, bookedWaybill, canManage }: ShipmentDetailsSectionProps) {
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -63,6 +65,7 @@ export function ShipmentDetailsSection({ orderId, orderNo, courier, trackingNumb
           checkoutOrder={isCheckout}
           defaultCourier={courier}
           defaultTrackingNumber={trackingNumber}
+          bookedWaybill={bookedWaybill}
           open={open}
           onOpenChange={setOpen}
           submit={(values) => updateShipmentDetailsAction({ orderId, ...values })}

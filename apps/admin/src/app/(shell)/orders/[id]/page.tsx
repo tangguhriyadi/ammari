@@ -29,6 +29,9 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
     .filter((attempt) => attempt.status === "paid" || attempt.status === "partially_refunded")
     .map((attempt) => ({ paymentId: attempt.id, attempt: attempt.attempt, amount: attempt.grossAmount - attempt.refundedAmount }));
 
+  // The courier booking's waybill (Phase K2) prefills and checks the resi in "Tandai dikirim" / "Ubah resi".
+  const bookedWaybill = checkout?.shipments.find((shipment) => shipment.status !== "cancelled" && shipment.status !== "failed" && shipment.status !== "booking")?.awb ?? null;
+
   const timeline = [
     { label: "Dibuat", at: detail.createdAt },
     { label: "Dikirim", at: detail.shippedAt },
@@ -72,6 +75,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             paymentStatus={checkout.paymentStatus}
             totalAmount={detail.totalAmount}
             quotedCourierLabel={checkout.quote?.courierLabel ?? null}
+            bookedWaybill={bookedWaybill}
             allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]}
           />
         ) : (
@@ -94,6 +98,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
           courier={detail.courier}
           trackingNumber={detail.trackingNumber}
           isCheckout={checkout !== null}
+          bookedWaybill={bookedWaybill}
           canManage={canManage}
         />
       )}
@@ -131,7 +136,13 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
       {checkout && (
         <>
           <PaymentSection checkout={checkout} />
-          <ShippingSection checkout={checkout} />
+          <ShippingSection
+            checkout={checkout}
+            orderId={detail.id}
+            orderNo={detail.orderNo}
+            canBook={detail.status === "to_ship" && checkout.paymentStatus === "paid"}
+            canManage={canManage}
+          />
           <ContactSection checkout={checkout} fallbackAddress={detail.shippingAddress} />
           <VoucherAndEmailSection checkout={checkout} discountAmount={detail.discountAmount} />
         </>

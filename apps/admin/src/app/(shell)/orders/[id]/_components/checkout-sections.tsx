@@ -1,6 +1,8 @@
 import { Badge } from "@ammari/ui";
 import { formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import type { CheckoutOrderDetail } from "@/lib/orders/queries";
+import { CourierBooking } from "@/components/orders/courier-booking";
+import { SHIPMENT_STATUS_BADGE_VARIANT, SHIPMENT_STATUS_LABELS, isLiveShipmentStatus, pickupCutoffHint, pickupStateLabel } from "@/lib/orders/shipment-labels";
 import {
   ORDER_PAYMENT_STATUS_BADGE_VARIANT,
   ORDER_PAYMENT_STATUS_LABELS,
@@ -103,8 +105,33 @@ export function PaymentSection({ checkout }: { checkout: CheckoutOrderDetail }) 
   );
 }
 
-export function ShippingSection({ checkout }: { checkout: CheckoutOrderDetail }) {
+export interface ShippingSectionProps {
+  checkout: CheckoutOrderDetail;
+  orderId: string;
+  orderNo: string;
+  /** Booking is offered only for a paid web order in to_ship (the server checks again). */
+  canBook: boolean;
+  canManage: boolean;
+}
+
+/** Why a booking attempt did not settle, in words (shipments.last_error is a reason and a code). */
+function bookingErrorText(lastError: string | null): string | null {
+  if (!lastError) return null;
+  if (lastError.startsWith("duplicate_reference")) return "Biteship menyebut referensi ini sudah dipakai; cek di dashboard Biteship.";
+  if (lastError.startsWith("refused")) return `Ditolak Biteship (${lastError.slice("refused:".length) || "tanpa kode"}).`;
+  if (lastError.startsWith("budget_exhausted")) return "Batas harian pemakaian Biteship tercapai.";
+  if (lastError === "invalid_data") return "Data pesanan ditolak sebelum dikirim.";
+  return "Jawaban Biteship belum diterima.";
+}
+
+export function ShippingSection({ checkout, orderId, orderNo, canBook, canManage }: ShippingSectionProps) {
   const quote = checkout.quote;
+  const live = checkout.shipments.find((shipment) => isLiveShipmentStatus(shipment.status)) ?? null;
+  const ended = checkout.shipments.filter((shipment) => !isLiveShipmentStatus(shipment.status));
+  const pickup = live ? pickupStateLabel(live.providerStatus) : null;
+  const cutoff = quote && (!live || live.status === "booking" || live.status === "pickup_requested") ? pickupCutoffHint(quote.courierCode) : null;
+  // The quote's cost is stripped for viewers without finance.view_profit, the booked cost too.
+  const showsCost = quote?.costAmount !== null && quote?.costAmount !== undefined;
   return (
     <Section title="Pengiriman">
       {quote ? (
@@ -112,14 +139,67 @@ export function ShippingSection({ checkout }: { checkout: CheckoutOrderDetail })
           <DetailRow label="Layanan" value={quote.courierLabel} />
           <DetailRow label="Berat" value={formatWeight(quote.weightGrams)} />
           {quote.destinationLabel && <DetailRow label="Tujuan" value={quote.destinationLabel} />}
-          {quote.costAmount !== null && <DetailRow label="Ongkir kurir" value={formatRupiah(quote.costAmount)} />}
+          {quote.costAmount !== null && <DetailRow label="Ongkir kurir (checkout)" value={formatRupiah(quote.costAmount)} />}
           {quote.subsidyAmount !== null && <DetailRow label="Subsidi Ammari" value={formatRupiah(quote.subsidyAmount)} />}
           <DetailRow label="Dibayar pembeli" value={formatRupiah(quote.buyerAmount)} />
           <DetailRow label="Ongkir dihitung" value={formatDateTime(quote.quotedAt)} />
-          <p className="text-sm text-neutral-600">Pesan kurir dengan layanan ini. Ongkir sudah terkunci di pesanan dan tidak bisa diubah.</p>
+          <p className="text-sm text-neutral-600">Ongkir sudah terkunci di pesanan dan tidak bisa diubah. Kalau kurir dipesan manual, pakai layanan ini.</p>
         </>
       ) : (
         <p className="text-base text-neutral-600">Tidak ada data ongkir.</p>
+      )}
+
+      <h3 className="mt-2 text-base font-semibold text-neutral-900">Pemesanan kurir</h3>
+      {live ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-neutral-600">Status</span>
+            <Badge variant={SHIPMENT_STATUS_BADGE_VARIANT[live.status]}>{SHIPMENT_STATUS_LABELS[live.status]}</Badge>
+          </div>
+          <DetailRow label="Referensi" value={live.referenceId} />
+          <DetailRow label="No. resi kurir" value={live.awb ?? "-"} />
+          {pickup && <DetailRow label="Penjemputan" value={pickup} />}
+          {live.routingCode && <DetailRow label="Kode rute" value={live.routingCode} />}
+          {(live.driverName || live.driverPhone || live.driverPlateNumber) && (
+            <DetailRow label="Kurir" value={[live.driverName, live.driverPhone, live.driverPlateNumber].filter(Boolean).join(" · ")} />
+          )}
+          {showsCost && (
+            <DetailRow
+              label="Biaya kurir sebenarnya"
+              value={live.costAmount !== null ? `${formatRupiah(live.costAmount)} (checkout ${formatRupiah(quote!.costAmount!)})` : "Biaya belum diketahui"}
+            />
+          )}
+          {live.bookedAt && <DetailRow label="Dipesan" value={formatDateTime(live.bookedAt)} />}
+          {live.status === "booking" && (
+            <p role="status" className="text-sm text-danger-700">
+              Pemesanan belum pasti: kurir mungkin sudah dipesan. Tekan Cek ulang pemesanan. {bookingErrorText(live.lastError) ?? ""}
+            </p>
+          )}
+          {live.cancelRequestedAt && (
+            <p role="status" className="text-sm text-danger-700">
+              Pembatalan sudah diminta tapi belum pasti. Tekan Cek ulang pemesanan.
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="text-base text-neutral-600">{canBook ? "Kurir belum dipesan." : "Tidak ada pemesanan kurir yang aktif."}</p>
+      )}
+      {cutoff && <p className="text-sm text-neutral-600">{cutoff}</p>}
+      {canManage && (live !== null || canBook) && (
+        <CourierBooking orderId={orderId} orderNo={orderNo} shipment={live ? { status: live.status, awb: live.awb } : null} variant="section" />
+      )}
+
+      {ended.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {ended.map((shipment) => (
+            <li key={shipment.id} className="text-sm text-neutral-600 break-words">
+              Percobaan {shipment.attempt}: {SHIPMENT_STATUS_LABELS[shipment.status]}
+              {shipment.awb ? ` · resi ${shipment.awb}` : ""}
+              {shipment.status === "failed" && bookingErrorText(shipment.lastError) ? ` · ${bookingErrorText(shipment.lastError)}` : ""}
+              {` · ${formatDateTime(shipment.cancelledAt ?? shipment.failedAt ?? shipment.createdAt)}`}
+            </li>
+          ))}
+        </ul>
       )}
       {/* Courier and resi: the "Resi" section, with "Tambah resi" / "Ubah resi". */}
     </Section>
