@@ -4,6 +4,7 @@ import { formatDate, formatRupiah } from "@ammari/ui/lib";
 import { requireConsentedSession } from "@/lib/auth/require-customer";
 import { listMyOrders, listMyVouchers } from "@/lib/account/queries";
 import { loadContactOffer } from "@/lib/account/contact-offer";
+import { loadSavedAddressSummary } from "@/lib/account/saved-address";
 import { isCartEnabled } from "@/lib/cart-flag";
 import { listCustomerOrders } from "@/lib/orders/queries";
 import { OrderList } from "@/components/orders/order-list";
@@ -12,6 +13,7 @@ import { AccountName } from "./account-name";
 import { ContactOfferCard } from "./contact-offer-card";
 import { LogoutButton } from "./logout-button";
 import { ProfileBanner } from "./profile-banner";
+import { SavedAddressSection } from "./saved-address-section";
 
 const VOUCHER_STATUS_LABELS: Record<string, string> = {
   active: "Aktif",
@@ -27,11 +29,12 @@ const ACCOUNT_ORDER_PREVIEW = 5;
 export default async function AccountPage() {
   const customer = await requireConsentedSession("/account");
   const cartEnabled = isCartEnabled();
-  const [myOrders, orderPage, myVouchers, contactOffer] = await Promise.all([
+  const [myOrders, orderPage, myVouchers, contactOffer, savedAddress] = await Promise.all([
     cartEnabled ? Promise.resolve([]) : listMyOrders(customer.id),
     cartEnabled ? listCustomerOrders(customer.id, 1, undefined, ACCOUNT_ORDER_PREVIEW) : Promise.resolve(null),
     listMyVouchers(customer.id),
     loadContactOffer(customer.id),
+    loadSavedAddressSummary(customer.id),
   ]);
 
   return (
@@ -43,6 +46,10 @@ export default async function AccountPage() {
       </div>
 
       {contactOffer ? <ContactOfferCard key={contactOffer.orderNo} {...contactOffer} /> : !customer.phone && <ProfileBanner />}
+
+      {/* Flag off: only while an address exists (the component decides), so a rollback never hides
+          a buyer's saved data or the way to delete it. */}
+      <SavedAddressSection address={savedAddress} showWhenEmpty={cartEnabled} />
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">Voucher saya</h2>

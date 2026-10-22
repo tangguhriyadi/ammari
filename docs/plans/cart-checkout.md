@@ -1201,8 +1201,8 @@ stale-deploy handling.
    last step of the order transaction, under a savepoint that drops only 22xxx/23xxx data errors;
    never for a guest). `/checkout` (session only) shows it as a card with "Ganti alamat" (normal
    form, prefilled; "Pakai alamat tersimpan" goes back) and quotes its area afresh on arrival;
-   placeOrder quotes again as always. Follow-up: a way for the buyer to delete the saved address
-   (the privacy draft lists deletion of saved addresses as a right; today only by request).
+   placeOrder quotes again as always. Deletion by the buyer: built, see "Alamat tersimpan on
+   /account" below.
 4. **"Beli sekarang"** (flag on): primary "Beli sekarang", outlined "Tambah ke keranjang", small text
    link "Tanya via WhatsApp". Decision: it checks out the **whole cart** (simpler and safe: the buyer
    sees every line on /checkout before paying, no second cart or checkout mode). `ensureCartItem`
@@ -1229,6 +1229,52 @@ Tests: commerce (lifecycle, emails, cart, placeOrder), web (pending order, saved
 stale deployment, PDP, checkout form, contact offer), e2e `apps/web/e2e/checkout-return.spec.ts`,
 `account.spec.ts`, `apps/admin/e2e/checkout-orders.spec.ts` (two new seeded orders `ship`,
 `noresi`).
+
+### "Alamat tersimpan" on /account (2026-10-22, before launch)
+
+The privacy draft promises the buyer can delete their saved address. `/account` (logged in) shows an
+"Alamat tersimpan" section (`app/account/saved-address-section.tsx`): the default address
+(recipient, phone, full address, area label, courier note) read by `loadSavedAddressSummary`
+(`lib/account/saved-address.ts`, no ids reach the page) with "Hapus alamat" behind a confirm dialog
+("Hapus alamat tersimpan?", "Batal" / "Hapus"); without one, a note that the address is saved
+automatically on the next order while logged in (no form). After "Hapus": "Alamat tersimpan sudah
+dihapus." (focused) and the page refreshes in the same answer, so the contact offer no longer says
+it would replace a saved address.
+
+- **Delete** (`deleteSavedAddressAction`, `app/account/saved-address-actions.ts`): takes no input;
+  the customer comes from the session (no session: redirect to `/login?next=/account`; no consent
+  needed, deleting your own data is never gated). `saved_address_delete` 30/10 min per IP
+  (`getCartClientIp`, counted before the delete; a missing `CF-Connecting-IP` in production refuses
+  like every cart write). One transaction: `DELETE FROM customer_addresses WHERE customer_id =
+  <session> RETURNING id` (every row of that customer, today at most the default) and an
+  `audit_log` row `customer_address_deleted` / `customer` / customer id with only `{ deletedCount,
+  by: "customer" }`, never the address. A second press deletes nothing, writes no audit row and
+  answers ok. Orders are never touched (their snapshot stays). Next's Origin check is the CSRF guard.
+- **Afterwards:** the next checkout opens on the empty address form (name/phone still prefilled from
+  the account, as for anyone without a saved address); the contact offer offers a guest order's
+  address again only when ticked (unchanged).
+- **Cart flag:** the action ignores it. Flag on: the section always shows. Flag off: only while an
+  address exists (so a rollback never hides a buyer's data), and after a deletion only the
+  confirmation (no "saved on the next order" note: there is no checkout).
+- No migration (no new column; `claim_rate_limits.action` is free text).
+- Legal draft (`docs/launch/legal-drafts.md`): added the saved address to the collected data, its
+  retention ("sampai kamu menghapusnya sendiri") and the self-service deletion right.
+
+Tests: `apps/web/src/lib/account/saved-address.test.ts` (load own only and the typed kode pos;
+delete own rows with the audit row free of address text and the order row unchanged; another
+customer's address untouched; double delete; action: no session, own only, second press ok, rate
+limit counted before the delete), `apps/web/e2e/saved-address.spec.ts` + `e2e/helpers/saved-address-db.ts`
+(390/1280, Chromium + WebKit; flag on: empty note, a logged-in order saves the address, Batal keeps
+it, Hapus deletes it, the order keeps its address, reload, next checkout has the empty form; flag
+off: no section without an address, a seeded one shows and deletes). Reviews: security, react (no
+Critical/High; Mediums fixed: per-IP limit raised from 10 to 30 for shared carrier addresses, no
+"saved on the next order" note with the flag off, a failed attempt's error cleared when the dialog
+closes; Lows fixed: shared message module, an address saved later shows again after a refresh).
+Accepted (security, Medium): a Cloudflare misconfiguration without `CF-Connecting-IP` also refuses
+the deletion, like every cart write; `go-live-check.sh` covers the proxy path.
+
+Known flaky, not from this change: `e2e/contact-offer.spec.ts` (WebKit, once in three runs) can press
+"Bayar sekarang" while the quote is still loading ("Ongkir sedang dihitung"); passed 20/20 on repeat.
 
 Notes from session 17 for later sessions:
 - **Owner, before 1 Mar 2027:** the privacy policy draft promises the 90-day anonymization of

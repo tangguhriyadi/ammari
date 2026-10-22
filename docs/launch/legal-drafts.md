@@ -51,6 +51,7 @@ Berlaku sejak: [1 Desember 2026]. Terakhir diperbarui: [tanggal].
 - Isi pesanan, harga, ongkos kirim, voucher yang dipakai, dan berat paket.
 - Status pembayaran dan jenis metode pembayaran yang kamu pilih (misalnya QRIS atau virtual account).
 - Pilihan persetujuan syarat dan ketentuan serta persetujuan promo pada pesanan itu.
+- Jika kamu memesan sambil masuk ke akun, alamat pengiriman pesanan itu disimpan di akunmu sebagai alamat tersimpan, untuk mengisi alamat pada checkout berikutnya. Setiap pesanan berikutnya menggantinya.
 
 Kami **tidak** menerima atau menyimpan nomor kartu, PIN, kata sandi bank, atau data login dompet digitalmu. Pembayaran dilakukan di halaman penyedia jasa pembayaran. Ammari tidak menerima pembayaran dengan kartu kredit.
 
@@ -95,6 +96,7 @@ Ammari **tidak menjual** data pribadimu. Data hanya dibagikan sebatas yang diper
 - Keranjang belanja: 30 hari tanpa aktivitas untuk pengunjung tanpa akun, 180 hari tanpa aktivitas untuk pemilik akun.
 - Catatan notifikasi pembayaran: 12 bulan.
 - Link "Lihat pesanan": berlaku 120 hari, catatannya dihapus 30 hari setelah habis masa berlakunya. Link masuk sekali pakai: berlaku 24 jam, catatannya dihapus 30 hari setelah dipakai atau habis masa berlakunya.
+- Alamat tersimpan di akun: sampai kamu menghapusnya sendiri di halaman Akun Saya, atau sampai akunmu dihapus. Menghapusnya tidak mengubah alamat pada pesanan yang sudah dibuat.
 - Data akun: selama akunmu ada. Jika kamu meminta akun dihapus, data akun dihapus, kecuali catatan pesanan yang wajib disimpan untuk pembukuan.
 
 ## Keamanan
@@ -107,6 +109,7 @@ Sesuai UU PDP, kamu berhak:
 
 - mengetahui dan meminta salinan data pribadimu yang kami simpan;
 - memperbaiki data yang tidak akurat;
+- menghapus alamat tersimpan kapan saja, langsung di halaman Akun Saya (bagian "Alamat tersimpan", tombol "Hapus alamat");
 - meminta penghapusan akun dan data pribadimu, dengan pengecualian catatan pesanan yang wajib kami simpan;
 - menarik persetujuan promo kapan saja;
 - menarik persetujuan pemrosesan data, dengan konsekuensi akun tidak bisa dipakai lagi;
