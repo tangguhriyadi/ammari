@@ -67,13 +67,20 @@ function same(a: string, b: string): boolean {
   return timingSafeEqual(digest(a), digest(b));
 }
 
-export type WebhookAuth = { ok: true } | { ok: false; failed: "path_token" | "header_secret" };
+/** `bad_path`: the path token is wrong (checked first: a caller without the URL learns nothing about
+ * the header). `missing_header`: no header of that name, or an empty one (the dashboard's header
+ * fields not saved, or a proxy dropped it). `bad_header`: present, wrong value. */
+export type WebhookAuthFailure = "bad_path" | "missing_header" | "bad_header";
+export type WebhookAuth = { ok: true } | { ok: false; failed: WebhookAuthFailure };
 
-/** Both checks always run (a wrong path token does not answer faster than a wrong header). */
+/** Both checks always run (a wrong path token does not answer faster than a wrong header). The
+ * header value is trimmed like the env value (Headers.get already drops the outer whitespace). */
 export function authorizeWebhook(secrets: WebhookSecrets, pathToken: string, headers: Headers): WebhookAuth {
   const pathOk = same(pathToken, secrets.pathToken);
-  const headerOk = same(headers.get(secrets.headerName) ?? "", secrets.headerSecret);
-  if (!pathOk) return { ok: false, failed: "path_token" };
-  if (!headerOk) return { ok: false, failed: "header_secret" };
+  const sent = headers.get(secrets.headerName)?.trim() ?? "";
+  const headerOk = same(sent, secrets.headerSecret);
+  if (!pathOk) return { ok: false, failed: "bad_path" };
+  if (sent === "") return { ok: false, failed: "missing_header" };
+  if (!headerOk) return { ok: false, failed: "bad_header" };
   return { ok: true };
 }

@@ -7,7 +7,7 @@ import { orderItems, orders, shipmentEvents, shipments, shippingWebhookEvents } 
 import { BITESHIP_ORDER_PICKED } from "./biteship-fixtures";
 import { createBiteshipOrdersClient } from "./biteship-orders";
 import type { ShipmentReader } from "./tracking";
-import { parseShippingWebhookBody, processShippingWebhook, recordShippingWebhook } from "./webhook";
+import { describeShippingWebhookBody, parseShippingWebhookBody, processShippingWebhook, recordShippingWebhook } from "./webhook";
 
 // docs/plans/cart-checkout.md §15 Phase K "Webhook vs polling" (K3): the courier webhook is logged
 // and only re-fetches; nothing in its body is acted on. The re-fetch runs the real Biteship order
@@ -85,18 +85,41 @@ async function logged(db: TestDatabase, body: string) {
 describe("parseShippingWebhookBody", () => {
   test("reads the event and the Biteship order id, keeps the payload as sent", () => {
     const parsed = parseShippingWebhookBody(JSON.stringify(ORDER_STATUS_WEBHOOK));
-    expect(parsed).toMatchObject({ event: "order.status", providerOrderId: BITESHIP_ORDER_PICKED.id, rawText: null });
+    expect(parsed).toMatchObject({ event: "order.status", providerOrderId: BITESHIP_ORDER_PICKED.id, rawText: null, format: "json" });
     expect(parsed.payload).toEqual(ORDER_STATUS_WEBHOOK);
   });
 
+  test("a form-encoded body is read the same way and kept as its fields", () => {
+    const form = new URLSearchParams({ event: "order.status", order_id: BITESHIP_ORDER_PICKED.id, status: "picked" }).toString();
+    for (const parsed of [parseShippingWebhookBody(form, "application/x-www-form-urlencoded; charset=utf-8"), parseShippingWebhookBody(form, null)]) {
+      expect(parsed).toMatchObject({ event: "order.status", providerOrderId: BITESHIP_ORDER_PICKED.id, rawText: null, format: "form" });
+      expect(parsed.payload).toEqual({ event: "order.status", order_id: BITESHIP_ORDER_PICKED.id, status: "picked" });
+    }
+    expect(parseShippingWebhookBody(`constructor=x&__proto__=y&order_id=${BITESHIP_ORDER_PICKED.id}`, null).payload).toEqual(
+      Object.fromEntries([["constructor", "x"], ["__proto__", "y"], ["order_id", BITESHIP_ORDER_PICKED.id]]),
+    );
+    // Text that is neither stays text.
+    expect(parseShippingWebhookBody("a=b", null)).toMatchObject({ format: "text", rawText: "a=b", providerOrderId: null });
+  });
+
+  test("the log description names the claimed status and, without an order id, the field names only", () => {
+    expect(describeShippingWebhookBody(parseShippingWebhookBody(JSON.stringify(ORDER_STATUS_WEBHOOK)))).toEqual({ format: "json", claimedStatus: "delivered", keys: null });
+    const nested = describeShippingWebhookBody(parseShippingWebhookBody(JSON.stringify({ event: "order.status", data: { order_id: "x" }, "bad key!": 1, status: "Budi Jl. Merdeka 1" })));
+    expect(nested).toEqual({ format: "json", claimedStatus: null, keys: ["event", "data", "status"] });
+    expect(JSON.stringify(nested)).not.toContain("Merdeka");
+    expect(describeShippingWebhookBody(parseShippingWebhookBody(""))).toEqual({ format: "empty", claimedStatus: null, keys: [] });
+  });
+
   test("an empty, odd or hostile body is kept but names nothing", () => {
-    expect(parseShippingWebhookBody("")).toEqual({ payload: null, rawText: null, event: null, providerOrderId: null });
-    expect(parseShippingWebhookBody("   ")).toEqual({ payload: null, rawText: null, event: null, providerOrderId: null });
-    expect(parseShippingWebhookBody("not json")).toEqual({ payload: null, rawText: "not json", event: null, providerOrderId: null });
+    expect(parseShippingWebhookBody("")).toEqual({ payload: null, rawText: null, event: null, providerOrderId: null, format: "empty" });
+    expect(parseShippingWebhookBody("   ")).toEqual({ payload: null, rawText: null, event: null, providerOrderId: null, format: "empty" });
+    expect(parseShippingWebhookBody("not json")).toEqual({ payload: null, rawText: "not json", event: null, providerOrderId: null, format: "text" });
     expect(parseShippingWebhookBody("x".repeat(10_000)).rawText).toHaveLength(4_000);
     expect(parseShippingWebhookBody("[1,2]")).toMatchObject({ payload: [1, 2], event: null, providerOrderId: null });
     expect(parseShippingWebhookBody(JSON.stringify({ order_id: "../../v1/orders", event: 5 }))).toMatchObject({ providerOrderId: null, event: null });
     expect(parseShippingWebhookBody(JSON.stringify({ order_id: 12345 })).providerOrderId).toBeNull();
+    // The event is stored and logged: a known shape, otherwise just "other".
+    expect(parseShippingWebhookBody(JSON.stringify({ event: "Budi\nJl. Merdeka 1" })).event).toBe("other");
     // NUL characters would make Postgres refuse the row: dropped.
     expect(parseShippingWebhookBody('{"order_id":"abc\\u0000","event":"x"}'.replace("\\u0000", "\u0000")).providerOrderId).toBe("abc");
   });
@@ -126,7 +149,7 @@ describe("processShippingWebhook", () => {
       const outcome = await processShippingWebhook(tx, reader, event);
 
       // The body said delivered for Rp1; Biteship says picked for Rp41.000.
-      expect(outcome).toEqual({ result: "applied", orderNo: order.orderNo, orderTransitions: ["shipped"] });
+      expect(outcome).toEqual({ result: "applied", shipmentFound: true, fetch: "fetched", orderNo: order.orderNo, orderTransitions: ["shipped"] });
       const [stored] = await tx.select().from(shipments).where(eq(shipments.id, shipment.id));
       expect(stored).toMatchObject({ status: "picked_up", providerStatus: "picked", costAmount: 41_000, routingCode: "BDO-JKT 12250" });
       const [updated] = await tx.select().from(orders).where(eq(orders.id, order.id));
@@ -145,7 +168,7 @@ describe("processShippingWebhook", () => {
       const body = JSON.stringify(ORDER_STATUS_WEBHOOK);
       await processShippingWebhook(tx, reader, await logged(tx, body));
       const replay = await logged(tx, body);
-      expect(await processShippingWebhook(tx, reader, replay)).toEqual({ result: "debounced", orderNo: null, orderTransitions: [] });
+      expect(await processShippingWebhook(tx, reader, replay)).toEqual({ result: "debounced", shipmentFound: true, fetch: "debounced", orderNo: null, orderTransitions: [] });
       expect(reader.reads()).toBe(1);
       expect(await tx.select().from(shippingWebhookEvents).where(eq(shippingWebhookEvents.shipmentId, shipment.id))).toHaveLength(2);
       const [stored] = await tx.select().from(shipments).where(eq(shipments.id, shipment.id));
@@ -155,12 +178,11 @@ describe("processShippingWebhook", () => {
 
   test("an order that is not ours, or no order id at all, is logged and nothing is fetched", async () => {
     await withRollback(async (tx) => {
-      vi.spyOn(console, "info").mockImplementation(() => undefined);
       const reader = fixtureReader();
       const unknown = await logged(tx, JSON.stringify({ ...ORDER_STATUS_WEBHOOK, order_id: "ffffffffffffffffffffffff" }));
-      expect((await processShippingWebhook(tx, reader, unknown)).result).toBe("unknown_order");
+      expect(await processShippingWebhook(tx, reader, unknown)).toMatchObject({ result: "unknown_order", shipmentFound: false, fetch: "none" });
       const empty = await logged(tx, "");
-      expect((await processShippingWebhook(tx, reader, empty)).result).toBe("no_order_id");
+      expect(await processShippingWebhook(tx, reader, empty)).toMatchObject({ result: "no_order_id", shipmentFound: null, fetch: "none" });
       expect(reader.reads()).toBe(0);
       const rows = await tx.select().from(shippingWebhookEvents).where(eq(shippingWebhookEvents.id, empty.id));
       expect(rows[0]).toMatchObject({ payload: null, rawText: null, bodyBytes: 0, result: "no_order_id" });

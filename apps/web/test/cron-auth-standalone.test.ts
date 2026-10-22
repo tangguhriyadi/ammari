@@ -4,7 +4,9 @@ import { rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
+import postgres from "postgres";
 import { ensureE2eDatabase } from "@ammari/db/test-e2e-db";
 
 // The dev incident of 2026-10-21: every cron call answered 404 and web logged "[cron] internal
@@ -20,6 +22,12 @@ import { ensureE2eDatabase } from "@ammari/db/test-e2e-db";
 // `node <distDir>/standalone/apps/web/server.js`, then calls it with curl the way
 // deploy/cron/cron.sh does (`-X POST -H @<header file>`). Slow (one full build), like
 // test/homepage-deploy-regression.test.ts.
+//
+// The same server also takes the courier webhook (the dev incident of 2026-10-22: Biteship's posts
+// answered 200 and nothing was logged): the header name in Biteship's spelling and a secret with
+// the env file's trailing newline pass, `after()` really runs in the standalone server (the post's
+// row is processed), and every post gets exactly one log line that never carries the token, the
+// header value or the body. No Biteship key is set, so nothing is read from Biteship.
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +38,9 @@ const distDir = path.join(appRoot, ".next-cron-auth-test");
 const serverJs = path.join(distDir, "standalone", "apps", "web", "server.js");
 
 const SECRET = "cron-auth-standalone-test-secret-0123456789";
+// Built at runtime: never a secret-shaped literal in the repo.
+const WEBHOOK_PATH_TOKEN = randomBytes(24).toString("hex");
+const WEBHOOK_HEADER_SECRET = randomBytes(24).toString("hex");
 const BUILD_TIMEOUT_MS = 180_000;
 const START_TIMEOUT_MS = 30_000;
 const TEST_TIMEOUT_MS = BUILD_TIMEOUT_MS + START_TIMEOUT_MS + 60_000;
@@ -95,6 +106,8 @@ async function curlPost(url: string, headers: string[]): Promise<number> {
 describe("internal cron auth on the real standalone server", () => {
   let server: ChildProcess | undefined;
   let serverOutput = "";
+  let port = 0;
+  let e2eDatabaseUrl = "";
 
   afterAll(async () => {
     if (!server) return;
@@ -109,7 +122,7 @@ describe("internal cron auth on the real standalone server", () => {
       if (!rawDatabaseUrl) throw new Error("DATABASE_URL is not set");
       // `ammari_e2e` (disposable, migrated, seeded): retention deletes only rows past their age
       // limits, never the owner's `ammari` database.
-      const e2eDatabaseUrl = await ensureE2eDatabase(rawDatabaseUrl);
+      e2eDatabaseUrl = await ensureE2eDatabase(rawDatabaseUrl);
 
       await rm(distDir, { recursive: true, force: true });
       // Same build environment as apps/web/Dockerfile's build stage.
@@ -127,7 +140,7 @@ describe("internal cron auth on the real standalone server", () => {
         BUILD_TIMEOUT_MS,
       );
 
-      const port = await getFreePort();
+      port = await getFreePort();
       // The image's CMD (`node apps/web/server.js`) with its runtime env (NODE_ENV, PORT,
       // HOSTNAME); bound to loopback here only so the test never listens on the LAN.
       server = spawn(process.execPath, [serverJs], {
@@ -141,6 +154,10 @@ describe("internal cron auth on the real standalone server", () => {
           BETTER_AUTH_URL: `http://127.0.0.1:${port}`,
           CUSTOMER_BETTER_AUTH_SECRET: "cron-auth-test-secret-do-not-use-in-prod",
           INTERNAL_CRON_SECRET: SECRET,
+          BITESHIP_WEBHOOK_PATH_TOKEN: WEBHOOK_PATH_TOKEN,
+          BITESHIP_WEBHOOK_HEADER_NAME: "X-Ammari-Courier-Secret",
+          // As set-env-var.sh may leave it: a trailing newline.
+          BITESHIP_WEBHOOK_HEADER_SECRET: `${WEBHOOK_HEADER_SECRET}\n`,
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -171,4 +188,50 @@ describe("internal cron auth on the real standalone server", () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it("courier webhook: always 200, one log line per post, after() processes the stored post", async () => {
+    if (!server) throw new Error("the standalone server did not start (see the test above)");
+    const before = serverOutput.length;
+    const providerOrderId = randomBytes(12).toString("hex");
+    const body = JSON.stringify({ event: "order.status", order_id: providerOrderId, status: "picked", courier_driver_name: "Budi Santoso" });
+    const curlWebhook = async (token: string, headers: string[]) => {
+      const args = ["-sS", "-o", "/dev/null", "-X", "POST", "--max-time", "30", "-w", "%{http_code}", "-H", "Content-Type: application/json", "--data-binary", body];
+      for (const header of headers) args.push("-H", header);
+      const { stdout } = await execFileAsync("curl", [...args, `http://127.0.0.1:${port}/api/shipping/biteship/webhook/${token}`]);
+      return Number(stdout.trim());
+    };
+    try {
+      expect(await curlWebhook("a".repeat(48), [`X-Ammari-Courier-Secret: ${WEBHOOK_HEADER_SECRET}`])).toBe(200);
+      expect(await curlWebhook(WEBHOOK_PATH_TOKEN, [])).toBe(200);
+      expect(await curlWebhook(WEBHOOK_PATH_TOKEN, ["X-Ammari-Courier-Secret: wrong"])).toBe(200);
+      expect(await curlWebhook(WEBHOOK_PATH_TOKEN, [`X-Ammari-Courier-Secret: ${WEBHOOK_HEADER_SECRET}`])).toBe(200);
+
+      const sql = postgres(e2eDatabaseUrl, { max: 1 });
+      try {
+        const deadline = Date.now() + 10_000;
+        let rows: { result: string | null }[] = [];
+        while (Date.now() < deadline) {
+          rows = await sql<{ result: string | null }[]>`select result from shipping_webhook_events where provider_order_id = ${providerOrderId}`;
+          if (rows[0]?.result) break;
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        // Stored once (only the authenticated post), and processed after the answer.
+        expect(rows).toEqual([{ result: "unknown_order" }]);
+      } finally {
+        await sql.end();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const output = serverOutput.slice(before);
+      const lines = output.split("\n").filter((line) => line.includes("[shipping] courier webhook {"));
+      expect(lines).toHaveLength(4);
+      expect(output).toMatch(/auth: 'bad_path'/);
+      expect(output).toMatch(/auth: 'missing_header'/);
+      expect(output).toMatch(/auth: 'bad_header'/);
+      expect(output).toMatch(/auth: 'ok'/);
+      expect(output).toMatch(/result: 'unknown_order'/);
+      for (const secret of [WEBHOOK_PATH_TOKEN, WEBHOOK_HEADER_SECRET, "Budi Santoso"]) expect(output).not.toContain(secret);
+    } catch (error) {
+      throw new Error(`${(error as Error).message}\n--- standalone server output ---\n${serverOutput.slice(before)}`);
+    }
+  });
 });

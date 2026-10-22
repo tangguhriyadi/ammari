@@ -426,6 +426,111 @@ describe("reads: claim, debounce, webhook re-fetch", () => {
     });
   });
 
+  // The dev incident of 2026-10-22: Biteship sent one post per status step, 13 seconds apart. The
+  // first read saw `allocated` (no order change) and the post that carried `picked` came inside its
+  // 2-minute window, so it only asked the 3-hourly poll to read later.
+  test("a post inside another read's window waits for the window, then reads: the later step ships the order", async () => {
+    await withRollback(async (tx) => {
+      const booked = await bookedOrder(tx);
+      const answers = new Map([[booked.providerOrderId, snapshot(booked, "allocated", [entry("confirmed", T0), entry("allocated", minutes(10))])]]);
+      const r = reader(answers);
+      const first = await refetchShipmentForWebhook(tx, r, booked.shipmentId);
+      expect(first).toMatchObject({ outcome: "applied", fetch: "fetched" });
+      expect(first.applied?.orderTransitions).toEqual([]);
+
+      // Biteship moves on; its next post arrives seconds later.
+      answers.set(booked.providerOrderId, PICKED(booked));
+      const waits: number[] = [];
+      const second = await refetchShipmentForWebhook(tx, r, booked.shipmentId, {
+        waitForReadWindow: async (ms) => {
+          waits.push(ms);
+          // The window passes (the test transaction's now() is frozen, so the read is backdated).
+          await tx.update(shipments).set({ lastPolledAt: sql`now() - interval '121 seconds'` }).where(eq(shipments.id, booked.shipmentId));
+          return true;
+        },
+      });
+      expect(second).toMatchObject({ outcome: "applied", fetch: "deferred" });
+      expect(second.applied?.orderTransitions).toEqual(["shipped"]);
+      expect(waits).toHaveLength(1);
+      expect(waits[0]).toBeGreaterThan(100_000);
+      expect(waits[0]).toBeLessThanOrEqual(121_000);
+      expect(r.calls).toHaveLength(2);
+      expect(await shipmentOf(tx, booked.shipmentId)).toMatchObject({ refetchRequestedAt: null, providerStatus: "picked" });
+      expect((await orderOf(tx, booked.orderId)).status).toBe("shipped");
+    });
+  });
+
+  test("a waiting post that another read served meanwhile does not read again", async () => {
+    await withRollback(async (tx) => {
+      const booked = await bookedOrder(tx);
+      const r = reader(new Map([[booked.providerOrderId, PICKED(booked)]]));
+      await refetchShipmentForWebhook(tx, r, booked.shipmentId);
+      const waited = await refetchShipmentForWebhook(tx, r, booked.shipmentId, {
+        waitForReadWindow: async () => {
+          // Another waiting post's read claims first, after this post arrived.
+          await tx.update(shipments).set({ lastPolledAt: sql`now() - interval '121 seconds'` }).where(eq(shipments.id, booked.shipmentId));
+          expect(await claimShipmentRead(tx, booked.shipmentId)).not.toBeNull();
+          return true;
+        },
+      });
+      expect(waited).toEqual({ outcome: "debounced", applied: null, fetch: "debounced" });
+      expect(r.calls).toHaveLength(1);
+    });
+  });
+
+  test("a shipment that ends while a post waits is reported closed, not read", async () => {
+    await withRollback(async (tx) => {
+      const booked = await bookedOrder(tx);
+      const r = reader(new Map([[booked.providerOrderId, PICKED(booked)]]));
+      await refetchShipmentForWebhook(tx, r, booked.shipmentId);
+      const waited = await refetchShipmentForWebhook(tx, r, booked.shipmentId, {
+        waitForReadWindow: async () => {
+          await tx.update(shipments).set({ status: "cancelled", cancelledAt: new Date(), lastPolledAt: sql`now() - interval '121 seconds'` }).where(eq(shipments.id, booked.shipmentId));
+          return true;
+        },
+      });
+      expect(waited).toEqual({ outcome: "closed", applied: null, fetch: "none" });
+      expect(r.calls).toHaveLength(1);
+    });
+  });
+
+  test("the wait is the rest of the window by the database clock, plus a second", async () => {
+    await withRollback(async (tx) => {
+      const booked = await bookedOrder(tx);
+      const r = reader(new Map([[booked.providerOrderId, PICKED(booked)]]));
+      await refetchShipmentForWebhook(tx, r, booked.shipmentId);
+      // Read 118 s ago (the transaction's now() is fixed): 2 s of the window left.
+      await tx.update(shipments).set({ lastPolledAt: sql`now() - interval '118 seconds'` }).where(eq(shipments.id, booked.shipmentId));
+      const waits: number[] = [];
+      await refetchShipmentForWebhook(tx, r, booked.shipmentId, {
+        waitForReadWindow: async (ms) => {
+          waits.push(ms);
+          return false;
+        },
+      });
+      expect(waits).toEqual([3_000]);
+    });
+  });
+
+  test("a post told not to wait stays debounced for the poll", async () => {
+    await withRollback(async (tx) => {
+      const booked = await bookedOrder(tx);
+      const r = reader(new Map([[booked.providerOrderId, PICKED(booked)]]));
+      await refetchShipmentForWebhook(tx, r, booked.shipmentId);
+      const seen: string[] = [];
+      const skipped = await refetchShipmentForWebhook(tx, r, booked.shipmentId, {
+        waitForReadWindow: async (_ms, shipmentId) => {
+          seen.push(shipmentId);
+          return false;
+        },
+      });
+      expect(skipped).toEqual({ outcome: "debounced", applied: null, fetch: "debounced" });
+      expect(seen).toEqual([booked.shipmentId]);
+      expect((await shipmentOf(tx, booked.shipmentId)).refetchRequestedAt).not.toBeNull();
+      expect(r.calls).toHaveLength(1);
+    });
+  });
+
   test("ended, final and unbooked shipments are never read", async () => {
     await withRollback(async (tx) => {
       const delivered = await bookedOrder(tx, { status: "delivered" });
@@ -610,6 +715,27 @@ describe("races (committed transactions)", () => {
       const transitions = await testDb.select().from(auditLog).where(and(eq(auditLog.entityId, booked.orderId), eq(auditLog.action, "transition_status")));
       expect(transitions).toHaveLength(1);
       expect((await orderOf(testDb, booked.orderId)).status).toBe("shipped");
+    } finally {
+      await cleanUp(booked);
+    }
+  });
+});
+
+describe("races: posts waiting for the read window (committed transactions)", () => {
+  test("two posts that waited for the same window read once between them", async () => {
+    const booked = await bookedOrder(testDb);
+    try {
+      const r = reader(new Map([[booked.providerOrderId, PICKED(booked)]]));
+      expect((await refetchShipmentForWebhook(testDb, r, booked.shipmentId)).outcome).toBe("applied");
+      // Both wake when the window ends (backdated here, once) and claim at once.
+      let ended: Promise<unknown> | null = null;
+      const windowEnds = () => (ended ??= testDb.update(shipments).set({ lastPolledAt: sql`now() - interval '121 seconds'` }).where(eq(shipments.id, booked.shipmentId)).then(() => true)) as Promise<boolean>;
+      const [a, b] = await Promise.all([
+        refetchShipmentForWebhook(testDb, r, booked.shipmentId, { waitForReadWindow: windowEnds }),
+        refetchShipmentForWebhook(testDb, r, booked.shipmentId, { waitForReadWindow: windowEnds }),
+      ]);
+      expect([a.fetch, b.fetch].sort()).toEqual(["debounced", "deferred"]);
+      expect(r.calls).toHaveLength(2);
     } finally {
       await cleanUp(booked);
     }

@@ -1,5 +1,5 @@
 import { randomBytes, randomInt } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { withRollback, type TestTx } from "@ammari/db/test-utils";
@@ -29,6 +29,18 @@ vi.mock("next/server", async (importOriginal) => ({
   },
 }));
 
+// The route waits out the 2-minute read window with node:timers/promises; the test decides what
+// "waiting" does (the rolled-back transaction's now() is frozen, so it backdates the last read).
+let onSleep: (ms: number) => Promise<void> = async () => undefined;
+const sleeps: number[] = [];
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: async (ms: number) => {
+    sleeps.push(ms);
+    await onSleep(ms);
+  },
+}));
+
 const webhook = await import("./route");
 const advance = await import("../../../../test/shipments/advance/route");
 const poll = await import("../../../../internal/shipping/poll/route");
@@ -49,6 +61,8 @@ const ENV = {
 beforeEach(() => {
   Object.assign(process.env, ENV);
   pending.length = 0;
+  sleeps.length = 0;
+  onSleep = async () => undefined;
   scheduleOrderEmails.mockClear();
 });
 afterEach(() => {
@@ -133,9 +147,85 @@ describe("POST /api/shipping/biteship/webhook/<token>", () => {
     });
   });
 
+  test("one log line per post: the auth result, never the token, the header value or the body", async () => {
+    await inRollback(async (tx) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const { shipment } = await bookedOrder(tx);
+      const body = JSON.stringify({ event: "order.status", order_id: shipment.providerOrderId, status: "picked", courier_driver_name: "Budi Santoso" });
+      await post("wrong-token", body);
+      await post(PATH_TOKEN, body, {});
+      await post(PATH_TOKEN, body, { "x-ammari-courier": "nope" });
+      const lines = () => [...warn.mock.calls, ...info.mock.calls].filter(([message]) => message === "[shipping] courier webhook");
+      expect(lines().map(([, fields]) => (fields as { auth: string }).auth)).toEqual(["bad_path", "missing_header", "bad_header"]);
+      expect(lines().every(([, fields]) => (fields as { contentType: string }).contentType === "application/json")).toBe(true);
+
+      await post(PATH_TOKEN, body);
+      expect(lines()).toHaveLength(3); // the authenticated post's line comes once it is processed
+      await runAfter();
+      expect(lines()).toHaveLength(4);
+      expect(lines()[3]![1]).toMatchObject({ auth: "ok", event: "order.status", format: "json", claimedStatus: "picked", providerOrderId: shipment.providerOrderId, shipment: "found", fetch: "fetched", result: "failed" });
+      const everything = JSON.stringify([...warn.mock.calls, ...info.mock.calls]);
+      for (const secret of [PATH_TOKEN, HEADER_SECRET, "Budi Santoso", "courier_driver_name"]) expect(everything).not.toContain(secret);
+    });
+  });
+
+  test("Biteship's three status steps seconds apart: the post inside the read window waits, then ships the order", async () => {
+    await inRollback(async (tx) => {
+      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const { order, shipment } = await bookedOrder(tx);
+      const { createFakeShipmentProvider } = await import("@ammari/commerce/shipping");
+      const fake = createFakeShipmentProvider();
+      fake.controls.adopt({ providerOrderId: shipment.providerOrderId!, referenceId: shipment.referenceId, waybillId: shipment.awb, courierCode: "jne", serviceCode: "reg", price: 12_000, providerStatus: "confirmed" });
+      const step = (status: string) => post(PATH_TOKEN, JSON.stringify({ event: "order.status", order_id: shipment.providerOrderId, status }));
+
+      // allocated: read at once, nothing to do for the order yet.
+      fake.controls.advance(shipment.providerOrderId!, "allocated");
+      await step("allocated");
+      await runAfter();
+      expect((await tx.select().from(orders).where(eq(orders.id, order.id)))[0]!.status).toBe("to_ship");
+
+      // picking_up and picked arrive inside that read's 2 minutes.
+      fake.controls.advance(shipment.providerOrderId!, "picking_up");
+      await step("picking_up");
+      fake.controls.advance(shipment.providerOrderId!, "picked");
+      await step("picked");
+      let windowEnded = false;
+      onSleep = async () => {
+        if (windowEnded) return;
+        windowEnded = true;
+        await tx.update(shipments).set({ lastPolledAt: sql`now() - interval '121 seconds'` }).where(eq(shipments.id, shipment.id));
+      };
+      await runAfter();
+      expect(sleeps).toHaveLength(2);
+      expect((await tx.select().from(orders).where(eq(orders.id, order.id)))[0]).toMatchObject({ status: "shipped", trackingNumber: shipment.awb });
+      expect(scheduleOrderEmails).toHaveBeenCalledWith([{ orderNo: order.orderNo }], "shipping webhook");
+      const lines = info.mock.calls.filter(([message]) => message === "[shipping] courier webhook").map(([, fields]) => fields as { fetch: string; orderTransitions: string[] });
+      expect(lines.map((line) => line.fetch)).toEqual(["fetched", "deferred", "debounced"]);
+      expect(lines[1]!.orderTransitions).toEqual(["shipped"]);
+    });
+  });
+
+  test("a form-encoded post is read like a JSON one", async () => {
+    await inRollback(async (tx) => {
+      vi.spyOn(console, "info").mockImplementation(() => undefined);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const { shipment } = await bookedOrder(tx);
+      const body = new URLSearchParams({ event: "order.status", order_id: shipment.providerOrderId!, status: "picked" }).toString();
+      await post(PATH_TOKEN, body, { "x-ammari-courier": HEADER_SECRET, "content-type": "application/x-www-form-urlencoded" });
+      await runAfter();
+      const [row] = await tx.select().from(shippingWebhookEvents).where(eq(shippingWebhookEvents.providerOrderId, shipment.providerOrderId!));
+      expect(row).toMatchObject({ event: "order.status", shipmentId: shipment.id, payload: { event: "order.status", order_id: shipment.providerOrderId, status: "picked" } });
+    });
+  });
+
   test("an empty, odd or oversized body still answers 200; oversized ones are not stored", async () => {
     await inRollback(async (tx) => {
       vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      vi.spyOn(console, "info").mockImplementation(() => undefined);
       const before = (await webhookRows(tx)).length;
       expect((await post(PATH_TOKEN, "")).status).toBe(200);
       expect((await post(PATH_TOKEN, "not json")).status).toBe(200);

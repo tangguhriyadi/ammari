@@ -1757,9 +1757,23 @@ ulang" goes through the same apply path, so it can ship or complete the order to
   Cloudflare and Biteship's Events Log see it (rotate token and header secret together: env first,
   then the dashboard); a read without history can still overwrite price, driver and waybill with
   older values (the status is protected by rank); a delivered shipment whose order move was refused is
-  not read again (its `delivery_problem` flag is the signal; staff ship and complete by hand); a
-  debounced webhook waits for the next poll (up to 3 hours); the K2 race test's leftovers in
-  `ammari_test` were cleaned by hand once.
+  not read again (its `delivery_problem` flag is the signal; staff ship and complete by hand); the K2
+  race test's leftovers in `ammari_test` were cleaned by hand once.
+- **Dev incident 2026-10-22 (fixed):** ORD-202610-0007 moved to `picked` in the Biteship test
+  dashboard; Biteship sent one `order.status` post per step, 13 s apart (from `confirmed`: allocated,
+  picking_up, picked), all answered 200, the order stayed Siap Kirim and nothing was logged. The first
+  post's read saw an early step (no order move, no log); the next two came inside its 2-minute read
+  window and only asked the 3-hourly poll to read (the "debounced webhook waits for the next poll"
+  this list used to accept). Verified on the real standalone server: `after()` runs, the header name
+  in any case and a secret with the env file's trailing newline pass. Fix: a post inside another
+  read's window waits in `after()` for the window to end (computed by the database), then claims and
+  reads (`fetch: "deferred"`); of several waiting posts one reads, the others are served by it; the
+  re-read request stays as the poll's backstop if the process stops while waiting. Every post now gets
+  exactly one `[shipping] courier webhook` log line (auth `ok` / `bad_path` / `missing_header` /
+  `bad_header` / `not_configured`, content type, event, claimed status word, Biteship order id, body
+  field names when it named no order id, shipment found or not ours, fetch, result, order
+  transitions; never the token, the header value or the body). A form-encoded body is read like JSON.
+  `test/cron-auth-standalone.test.ts` now also posts to the webhook on the built server.
 - **For K4:** the buyer timeline reads `shipment_events` (latest first, `description` is the courier's
   text: escape it, never in emails); admin timeline; runbook steps below.
 

@@ -508,17 +508,69 @@ export async function readClaimedShipment(db: Database, reader: ShipmentReader, 
   }
 }
 
+/** Milliseconds until this shipment's 2-minute read window ends (0 when it already has), or null when
+ * it is no longer readable. Computed by the database, whose clock set `last_polled_at`. */
+async function readWindowRemainingMs(db: Database, shipmentId: string): Promise<number | null> {
+  const [row] = await db
+    .select({
+      ms: sql<number>`greatest(0, ceil(extract(epoch from (coalesce(${shipments.lastPolledAt}, now()) + make_interval(secs => ${SHIPMENT_READ_DEBOUNCE_SECONDS}) - now())) * 1000))::int`,
+    })
+    .from(shipments)
+    .where(and(eq(shipments.id, shipmentId), readableCondition()))
+    .limit(1);
+  return row ? Number(row.ms) : null;
+}
+
+/** Margin past the end of the read window before the deferred read claims (clock rounding). */
+const DEFERRED_READ_MARGIN_MS = 1_000;
+
+export interface WebhookRefetchResult extends ShipmentReadResult {
+  /** `fetched`: read at once. `deferred`: the post came inside another read's 2-minute window, so it
+   * waited for the window to end and then read. `debounced`: still inside a window and not waiting
+   * (or, after waiting, a read that started after this post already served it); the next poll reads
+   * it. `none`: nothing was read (closed, or no reader). */
+  fetch: "fetched" | "deferred" | "debounced" | "none";
+}
+
+export interface WebhookRefetchOptions {
+  /** Waits this long (the rest of the read window) and answers true, or answers false at once to
+   * not wait (another post for this shipment is already waiting: its read starts after both arrived;
+   * or too many are waiting). Without it, or on false, a debounced post only asks the next poll (up
+   * to 3 hours later) to read the shipment. */
+  waitForReadWindow?: (ms: number, shipmentId: string) => Promise<boolean>;
+}
+
 /** The webhook's re-fetch for one shipment (decision 48): claimed (at most once every 2 minutes),
- * read, applied. A debounced call asks the next poll to read it instead. */
-export async function refetchShipmentForWebhook(db: Database, reader: ShipmentReader | null, shipmentId: string): Promise<ShipmentReadResult> {
-  const claimed = await claimShipmentRead(db, shipmentId);
-  if (!claimed) return { outcome: (await requestRefetch(db, shipmentId, null)) ? "debounced" : "closed", applied: null };
+ * read, applied. A post that comes while another read's window is open (Biteship sends one post per
+ * status step, seconds apart: `allocated`, `picking_up`, `picked`) is what that read could not see,
+ * so with `waitForReadWindow` it waits for the window to end and reads then. Of several waiting posts
+ * only one claims (the claim is one statement); for the others that read, which started after they
+ * arrived, already serves them. The re-read request stays set until a read claims it, so the poll is
+ * still the backstop when the process stops while waiting. */
+export async function refetchShipmentForWebhook(db: Database, reader: ShipmentReader | null, shipmentId: string, options: WebhookRefetchOptions = {}): Promise<WebhookRefetchResult> {
+  let claimed = await claimShipmentRead(db, shipmentId);
+  let fetchMode: WebhookRefetchResult["fetch"] = "fetched";
+  if (!claimed) {
+    if (!(await requestRefetch(db, shipmentId, null))) return { outcome: "closed", applied: null, fetch: "none" };
+    if (!options.waitForReadWindow) return { outcome: "debounced", applied: null, fetch: "debounced" };
+    const remainingMs = await readWindowRemainingMs(db, shipmentId);
+    if (remainingMs === null) return { outcome: "closed", applied: null, fetch: "none" };
+    const waited = await options.waitForReadWindow(Math.min(remainingMs, SHIPMENT_READ_DEBOUNCE_SECONDS * 1000) + DEFERRED_READ_MARGIN_MS, shipmentId);
+    if (!waited) return { outcome: "debounced", applied: null, fetch: "debounced" };
+    claimed = await claimShipmentRead(db, shipmentId);
+    if (!claimed) {
+      // Ended or final while waiting, or another read (started after this post) served it.
+      if ((await readWindowRemainingMs(db, shipmentId)) === null) return { outcome: "closed", applied: null, fetch: "none" };
+      return { outcome: "debounced", applied: null, fetch: "debounced" };
+    }
+    fetchMode = "deferred";
+  }
   if (!reader) {
     // Claimed but nothing can read it: hand it to the next poll (which will log the same problem).
     await requestRefetch(db, shipmentId, null);
-    return { outcome: "unavailable", applied: null };
+    return { outcome: "unavailable", applied: null, fetch: "none" };
   }
-  return readClaimedShipment(db, reader, claimed, "webhook");
+  return { ...(await readClaimedShipment(db, reader, claimed, "webhook")), fetch: fetchMode };
 }
 
 // ---------- the poller (cron, every 3 hours) ----------

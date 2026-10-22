@@ -102,13 +102,17 @@ export {
   type ShipmentReader,
   type ShipmentReadOutcome,
   type ShipmentReadResult,
+  type WebhookRefetchOptions,
+  type WebhookRefetchResult,
 } from "./tracking";
 export {
   SHIPPING_WEBHOOK_MAX_BYTES,
+  describeShippingWebhookBody,
   parseShippingWebhookBody,
   processShippingWebhook,
   recordShippingWebhook,
   type ParsedShippingWebhook,
+  type ShippingWebhookBodyDescription,
   type ShippingWebhookOutcome,
   type ShippingWebhookResult,
 } from "./webhook";

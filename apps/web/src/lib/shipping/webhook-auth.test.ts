@@ -37,12 +37,24 @@ describe("webhookSecretsFromEnv", () => {
 });
 
 describe("authorizeWebhook", () => {
-  const secrets = (webhookSecretsFromEnv(env) as { ok: true; secrets: Parameters<typeof authorizeWebhook>[0] }).secrets;
+  const okResult = webhookSecretsFromEnv(env) as { ok: true; secrets: Parameters<typeof authorizeWebhook>[0] };
+  const secrets = okResult.secrets;
   test("needs both the path token and the header", () => {
     expect(authorizeWebhook(secrets, token, new Headers({ "x-ammari-courier": secret }))).toEqual({ ok: true });
-    expect(authorizeWebhook(secrets, `${token}x`, new Headers({ "x-ammari-courier": secret }))).toEqual({ ok: false, failed: "path_token" });
-    expect(authorizeWebhook(secrets, token, new Headers({ "x-ammari-courier": `${secret}x` }))).toEqual({ ok: false, failed: "header_secret" });
-    expect(authorizeWebhook(secrets, token, new Headers())).toEqual({ ok: false, failed: "header_secret" });
-    expect(authorizeWebhook(secrets, "", new Headers({ "x-ammari-courier": secret }))).toEqual({ ok: false, failed: "path_token" });
+    expect(authorizeWebhook(secrets, `${token}x`, new Headers({ "x-ammari-courier": secret }))).toEqual({ ok: false, failed: "bad_path" });
+    expect(authorizeWebhook(secrets, token, new Headers({ "x-ammari-courier": `${secret}x` }))).toEqual({ ok: false, failed: "bad_header" });
+    expect(authorizeWebhook(secrets, token, new Headers())).toEqual({ ok: false, failed: "missing_header" });
+    expect(authorizeWebhook(secrets, token, new Headers({ "x-ammari-courier": "" }))).toEqual({ ok: false, failed: "missing_header" });
+    expect(authorizeWebhook(secrets, "", new Headers({ "x-ammari-courier": secret }))).toEqual({ ok: false, failed: "bad_path" });
+    // A wrong path never says anything about the header.
+    expect(authorizeWebhook(secrets, "", new Headers())).toEqual({ ok: false, failed: "bad_path" });
+  });
+
+  test("the header name in any case, and the value's outer whitespace, as Biteship's form may send them", () => {
+    expect(authorizeWebhook(secrets, token, new Headers({ "X-AMMARI-COURIER": secret }))).toEqual({ ok: true });
+    expect(authorizeWebhook(secrets, token, new Headers({ "x-ammari-courier": ` ${secret}\t` }))).toEqual({ ok: true });
+    // A secret pasted into the env file with a trailing newline still matches.
+    const padded = (webhookSecretsFromEnv({ ...env, BITESHIP_WEBHOOK_HEADER_SECRET: `${secret}\n`, BITESHIP_WEBHOOK_PATH_TOKEN: `${token}\r\n` }) as typeof okResult).secrets;
+    expect(authorizeWebhook(padded, token, new Headers({ "x-ammari-courier": secret }))).toEqual({ ok: true });
   });
 });
