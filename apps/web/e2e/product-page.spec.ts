@@ -119,6 +119,42 @@ test.describe("/products/[slug]", () => {
     });
   }
 
+  // The size chart's table is wider than a phone (min 480px): only its own container scrolls
+  // sideways, the page never does (`.curtain-clip`'s min-width: 0 in globals.css).
+  for (const viewport of [
+    { name: "390px", width: 390, height: 844 },
+    { name: "1280px", width: 1280, height: 900 },
+  ]) {
+    test(`the open Ukuran panel never makes the page scroll sideways (${viewport.name})`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`/products/${E2E_PRODUCT_SLUG}`);
+      const ukuran = page.getByRole("button", { name: "Ukuran", exact: true });
+      await ukuran.click();
+      await expect(page.locator(`[id="${await ukuran.getAttribute("aria-controls")}"]`)).toHaveAttribute("data-state", "open");
+      const table = page.getByRole("region", { name: "Tabel panduan ukuran" });
+      await expect(table.getByRole("rowheader", { name: "M" })).toBeVisible();
+
+      const pageWidth = await page.evaluate(() => ({ scroll: document.scrollingElement!.scrollWidth, viewport: document.documentElement.clientWidth }));
+      expect(pageWidth.scroll).toBe(pageWidth.viewport);
+
+      const box = await table.evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth, right: element.getBoundingClientRect().right }));
+      expect(box.right).toBeLessThanOrEqual(viewport.width);
+      if (viewport.width === 390) {
+        // The table itself scrolls, the hint says so, and the Ukuran column stays put.
+        expect(box.scroll).toBeGreaterThan(box.client);
+        await expect(page.getByText("Geser tabel ke samping untuk melihat semua kolom.")).toBeVisible();
+        const sizeCell = table.getByRole("rowheader", { name: "M" });
+        const before = (await sizeCell.boundingBox())!.x;
+        await table.evaluate((element) => element.scrollTo({ left: element.scrollWidth, behavior: "instant" }));
+        expect((await sizeCell.boundingBox())!.x).toBe(before);
+        expect(await page.evaluate(() => window.scrollX)).toBe(0);
+      } else {
+        expect(box.scroll).toBe(box.client);
+        await expect(page.getByText("Geser tabel ke samping untuk melihat semua kolom.")).toBeHidden();
+      }
+    });
+  }
+
   test("prefers-reduced-motion: accordion panels switch instantly", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto(`/products/${E2E_PRODUCT_SLUG}`);

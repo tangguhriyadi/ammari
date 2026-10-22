@@ -5,6 +5,10 @@ import { getCachedHomepageProductTiles, getCachedPublishedHomepageContent } from
 import { HomepageSections } from "@/components/homepage/homepage-sections";
 import { getHomepageMeta } from "@/lib/store-settings";
 import { getSiteOgImage, siteOgImageMetadata } from "@/lib/content/site-og-image";
+import { VOUCHER_CLAIMED_PARAM, VOUCHER_CLAIMED_VALUE, voucherClaimedMessage } from "@/lib/claim/claimed-notice";
+import { findJustClaimedVoucherExpiry } from "@/lib/claim/claimed-notice-data";
+import { getCustomerSession } from "@/lib/auth/customer-session";
+import { VoucherClaimedNotice } from "@/components/voucher-claimed-notice";
 
 // `/` has no dynamic route segment, so without this Next would attempt to prerender it once
 // during `next build` itself — which runs against a non-connecting placeholder DATABASE_URL in
@@ -48,7 +52,29 @@ async function getHomepageView() {
   return resolveHomepageView(view, tiles);
 }
 
-export default async function HomePage() {
-  const view = await getHomepageView();
-  return <HomepageSections view={view} />;
+/** The claimed notice's dates come from the signed-in buyer's own just-claimed voucher. Any
+ * miss (no session, nothing fresh, a failed read) gives the plain message instead: the notice
+ * is a courtesy and must never break the homepage. */
+async function getVoucherClaimedMessage(): Promise<string> {
+  try {
+    const customer = await getCustomerSession();
+    const expiresAt = customer ? await findJustClaimedVoucherExpiry(customer.id) : null;
+    return voucherClaimedMessage(expiresAt);
+  } catch (error) {
+    console.error("[claim] reading the just-claimed voucher for the homepage notice failed", error);
+    return voucherClaimedMessage(null);
+  }
+}
+
+export default async function HomePage({ searchParams }: PageProps<"/">) {
+  const resolvedSearchParams = await searchParams;
+  // Where a successful voucher claim lands (lib/claim/claimed-notice.ts).
+  const voucherClaimed = resolvedSearchParams[VOUCHER_CLAIMED_PARAM] === VOUCHER_CLAIMED_VALUE;
+  const [view, claimedMessage] = await Promise.all([getHomepageView(), voucherClaimed ? getVoucherClaimedMessage() : null]);
+  return (
+    <>
+      <HomepageSections view={view} />
+      {claimedMessage && <VoucherClaimedNotice message={claimedMessage} />}
+    </>
+  );
 }

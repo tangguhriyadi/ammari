@@ -1,5 +1,8 @@
 const DEFAULT_NEXT_PATH = "/account";
 
+/** The homepage product grid (components/homepage/product-grid-section.tsx's `id="koleksi"`). */
+export const COLLECTION_PATH = "/#koleksi";
+
 // Mirrors better-auth's own `isSafeRelativeURL` (node_modules/better-auth/dist/auth/
 // trusted-origins.mjs) almost exactly — that function already gets this right and is used to
 // validate `callbackURL` on every better-auth endpoint, so this app's own `?next=` handling
@@ -35,9 +38,10 @@ function isSafeRelativePath(value: string): boolean {
  * followed. Call this once, at the page boundary where the raw `next` search param is read
  * (every redirect target built downstream — login, consent — then works with an already-
  * trusted value), and again at the layer that actually builds a redirect URL (defense in depth
- * — see consent.ts and require-customer.ts). */
-export function sanitizeNextPath(raw: string | string[] | undefined): string {
+ * — see consent.ts and require-customer.ts). `fallback` (itself trusted, a constant) is where a
+ * missing or unsafe value goes instead; /account unless the caller names another. */
+export function sanitizeNextPath(raw: string | string[] | undefined, fallback: string = DEFAULT_NEXT_PATH): string {
   const value = Array.isArray(raw) ? raw[0] : raw;
-  if (!value) return DEFAULT_NEXT_PATH;
-  return isSafeRelativePath(value) ? value : DEFAULT_NEXT_PATH;
+  if (!value) return fallback;
+  return isSafeRelativePath(value) ? value : fallback;
 }

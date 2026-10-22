@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { requireConsentedSession } from "@/lib/auth/require-customer";
 import { normalizeClaimTokenInput, hashClaimToken } from "@/lib/claim/token";
 import { claimVoucher } from "@/lib/claim/queries";
+import { VOUCHER_CLAIMED_REDIRECT } from "@/lib/claim/claimed-notice";
 import { recordClaimAttemptAndCount, CLAIM_SUBMIT_WINDOW_SECONDS, CLAIM_SUBMIT_LIMIT } from "@/lib/claim/throttle";
 import { getClaimClientIp } from "@/lib/claim/ip";
 import { defaultDb } from "@/lib/db";
@@ -14,10 +15,8 @@ import {
   CLAIM_REJECTION_MESSAGES,
 } from "@/lib/claim/messages";
 
-export type ClaimActionState =
-  | { status: "idle" }
-  | { status: "error"; message: string }
-  | { status: "success"; amount: number; expiresAt: string };
+// No "success" state: a successful claim redirects (VOUCHER_CLAIMED_REDIRECT) instead of returning.
+export type ClaimActionState = { status: "idle" } | { status: "error"; message: string };
 
 export async function claimAction(_prev: ClaimActionState, formData: FormData): Promise<ClaimActionState> {
   const token = String(formData.get("token") ?? "");
@@ -38,7 +37,9 @@ export async function claimAction(_prev: ClaimActionState, formData: FormData): 
   const outcome = await claimVoucher(tokenHash, customer, defaultDb);
 
   if (outcome.ok) {
-    return { status: "success", amount: outcome.voucher.amount, expiresAt: outcome.voucher.expiresAt.toISOString() };
+    // Straight to the collection so the buyer can shop right away; the homepage shows the
+    // one-time "voucher is in your account" notice. Outside the transaction, after it committed.
+    redirect(VOUCHER_CLAIMED_REDIRECT);
   }
 
   if (outcome.reason === "consent_required") {

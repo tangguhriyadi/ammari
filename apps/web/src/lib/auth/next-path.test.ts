@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { sanitizeNextPath } from "./next-path";
+import { COLLECTION_PATH, sanitizeNextPath } from "./next-path";
 
 describe("sanitizeNextPath", () => {
   test("passes through a plain internal path", () => {
@@ -41,5 +41,16 @@ describe("sanitizeNextPath", () => {
 
   test("takes the first value when given an array (e.g. a repeated query param)", () => {
     expect(sanitizeNextPath(["/account", "/other"])).toBe("/account");
+  });
+
+  test("a caller-given fallback replaces /account for a missing or unsafe value, never an explicit safe one", () => {
+    expect(sanitizeNextPath(undefined, COLLECTION_PATH)).toBe("/#koleksi");
+    expect(sanitizeNextPath("", COLLECTION_PATH)).toBe("/#koleksi");
+    expect(sanitizeNextPath("//evil.com", COLLECTION_PATH)).toBe("/#koleksi");
+    expect(sanitizeNextPath("/claim/ABC", COLLECTION_PATH)).toBe("/claim/ABC");
+  });
+
+  test("the collection anchor itself is a safe internal path", () => {
+    expect(sanitizeNextPath(COLLECTION_PATH)).toBe("/#koleksi");
   });
 });

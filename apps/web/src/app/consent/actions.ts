@@ -5,13 +5,14 @@ import { eq } from "drizzle-orm";
 import { customers } from "@ammari/db/schema";
 import { db } from "@ammari/db";
 import { getCustomerSession } from "@/lib/auth/customer-session";
-import { sanitizeNextPath } from "@/lib/auth/next-path";
+import { COLLECTION_PATH, sanitizeNextPath } from "@/lib/auth/next-path";
 
 export async function acceptPdpConsentAction(formData: FormData): Promise<void> {
   const customer = await getCustomerSession();
   if (!customer) redirect("/login");
 
-  const next = sanitizeNextPath(formData.get("next")?.toString());
+  // Same fallback as the page: an explicit `next` is kept, none means the collection.
+  const next = sanitizeNextPath(formData.get("next")?.toString(), COLLECTION_PATH);
   // Defensive only — the checkbox is `required`, so a real browser never submits without it
   // ticked. The server still never trusts that client-side guard alone.
   const consented = formData.get("consent") === "on";

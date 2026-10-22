@@ -83,8 +83,12 @@ body {
     transition-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
   }
 
+  /* min-width: 0 too: a grid item's automatic minimum is its min-content width, so without it a
+   * wide child (the PDP size chart's min-w table) stretches the track past the panel and the
+   * whole page scrolls sideways instead of the child's own overflow-x container. */
   .curtain-clip {
     min-height: 0;
+    min-width: 0;
     overflow: hidden;
   }
 

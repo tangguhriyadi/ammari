@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCustomerSession } from "@/lib/auth/customer-session";
 import { needsConsent } from "@/lib/auth/consent";
-import { sanitizeNextPath } from "@/lib/auth/next-path";
+import { COLLECTION_PATH, sanitizeNextPath } from "@/lib/auth/next-path";
 import { ConsentForm } from "./consent-form";
 
 export default async function ConsentPage({
@@ -10,7 +10,9 @@ export default async function ConsentPage({
   searchParams: Promise<{ next?: string }>;
 }) {
   const { next } = await searchParams;
-  const safeNext = sanitizeNextPath(next);
+  // No `next` asked for: once consented, straight to the collection to shop. An explicit one
+  // (e.g. the claim page that sent the buyer here) is always kept.
+  const safeNext = sanitizeNextPath(next, COLLECTION_PATH);
 
   const customer = await getCustomerSession();
   if (!customer) redirect(`/login?next=${encodeURIComponent(safeNext)}`);
