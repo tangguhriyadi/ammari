@@ -87,11 +87,12 @@ export const ATTENTION_FLAG_COPY: Record<OrderAttentionFlag, AttentionFlagCopy> 
   },
   tracking_stale: {
     label: "Pelacakan berhenti",
-    meaning: "Tidak ada kabar pengiriman baru selama beberapa hari. Cek ke kurir.",
+    meaning: "Kurir belum menjemput paket 2 hari setelah dipesan, atau tidak ada kabar pengiriman baru selama 5 hari. Cek ke kurir atau di dashboard Biteship.",
   },
   delivery_problem: {
     label: "Masalah pengiriman",
-    meaning: "Kurir melaporkan masalah atau paket kembali. Cek ke kurir sebelum mengubah status pesanan.",
+    meaning:
+      "Kurir melaporkan masalah, paket dikembalikan, pengiriman dibatalkan tanpa permintaan kita, atau status dan resi dari Biteship tidak bisa diproses otomatis. Cek ke kurir atau di dashboard Biteship sebelum mengubah status pesanan.",
   },
   shipping_cost_over_quote: {
     label: "Ongkir kurir lebih mahal",

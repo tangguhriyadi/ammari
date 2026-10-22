@@ -3,10 +3,10 @@ import { and, desc, eq, notInArray, sql } from "drizzle-orm";
 import { orderItems, orders, shipments, type ShipmentStatus } from "@ammari/db/schema";
 import { writeAuditLog, type Database, type Tx } from "../db";
 import { ActionError, errorLogFields, isPostgresConstraintViolation } from "../errors";
-import { withAttentionFlags } from "../orders/attention";
 import type { ShipmentRuntime } from "./shipment-config";
 import { ShipmentProviderError, type CreateShipmentInput, type ProviderShipment, type ShipmentCancelReasonCode } from "./shipment-provider";
-import { SHIPMENT_MAX_ATTEMPTS, isShippingCostOverQuote, shipmentReferenceId } from "./shipment-rules";
+import { SHIPMENT_MAX_ATTEMPTS, shipmentReferenceId } from "./shipment-rules";
+import { ENDED_SHIPMENT_STATUSES, SHIPMENT_CHANGED_MESSAGE, applyShipmentSnapshot } from "./tracking";
 
 // Courier booking for staff (docs/plans/cart-checkout.md §15 Phase K, K2; decisions 46 to 51).
 //
@@ -25,8 +25,9 @@ import { SHIPMENT_MAX_ATTEMPTS, isShippingCostOverQuote, shipmentReferenceId } f
 // - A cancel is allowed only before pickup; a lost or "not cancellable" answer is checked by
 //   reading the order before staff are told anything. A cancelled attempt ends and a new attempt
 //   may follow.
-// The order's status never changes here (K3 moves it on pickup and delivery); every change writes
-// an audit_log row with the staff actor. Logs carry reasons, codes and our own ids only, never the
+// Every read of a booked attempt goes through the tracking rules (./tracking.ts, K3): a read that
+// finds the parcel picked up or delivered moves the order like the webhook and the poller do. Every
+// change writes an audit_log row with the staff actor. Logs carry reasons, codes and our own ids only, never the
 // recipient's name, phone or address.
 
 export const SHIPMENT_MESSAGES = {
@@ -51,7 +52,7 @@ export const SHIPMENT_MESSAGES = {
   cancelUnknown: "Pembatalan belum pasti. Tekan Cek ulang pemesanan sebentar lagi.",
   cancelUnavailable: "Biteship belum bisa dihubungi. Pengiriman belum dibatalkan. Coba lagi sebentar lagi.",
   cancelRefused: "Biteship menolak pembatalan ini. Pengiriman belum dibatalkan. Cek di dashboard Biteship.",
-  changed: "Pengiriman sudah berubah. Muat ulang halaman.",
+  changed: SHIPMENT_CHANGED_MESSAGE,
   providerFault: "Biteship tidak bisa memberi status pengiriman ini. Cek di dashboard Biteship.",
   cancelProviderFault: "Biteship tidak bisa memproses pembatalan ini. Pengiriman belum dibatalkan. Cek di dashboard Biteship.",
 } as const;
@@ -60,7 +61,7 @@ export const SHIPMENT_MESSAGES = {
 const BALANCE_CODES = new Set([40002039, 40009003]);
 const INACTIVE_KEY_CODE = 40002002;
 
-const ENDED: ShipmentStatus[] = ["cancelled", "failed"];
+const ENDED: ShipmentStatus[] = [...ENDED_SHIPMENT_STATUSES];
 
 export type ShipmentActionOutcome =
   /** The provider has the booking (booked now, recovered, or refreshed). */
@@ -91,10 +92,7 @@ function refusalMessage(error: ShipmentProviderError): string {
   return SHIPMENT_MESSAGES.unavailable;
 }
 
-/** Resi and waybill compared the way the resi rule stores them (no spaces, upper case). */
-export function sameResi(a: string, b: string): boolean {
-  return a.replace(/\s+/g, "").toUpperCase() === b.replace(/\s+/g, "").toUpperCase();
-}
+export { sameResi } from "./tracking";
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
@@ -146,96 +144,16 @@ function assertBookable(order: OrderRow): void {
   if (order.status !== "to_ship" || order.paymentStatus !== "paid") throw new ActionError(SHIPMENT_MESSAGES.notReady);
 }
 
-/** Forward order of the normal path. A read taken before a newer one was stored (the provider is read
- * outside the lock) must never move the status back along it. */
-const FORWARD_RANK: Partial<Record<ShipmentStatus, number>> = { booking: 0, pickup_requested: 1, picked_up: 2, in_transit: 3, delivered: 4 };
-
-/** The shipment's columns from what the provider says about it. The status only moves when the
- * provider sent a status we know; a booked order without one counts as waiting for pickup. */
-function snapshotFields(previous: ShipmentRow, shipment: ProviderShipment): Partial<typeof shipments.$inferInsert> {
-  const reported: ShipmentStatus = shipment.status ?? (previous.status === "booking" ? "pickup_requested" : previous.status);
-  const before = FORWARD_RANK[previous.status];
-  const after = FORWARD_RANK[reported];
-  const status: ShipmentStatus = before !== undefined && after !== undefined && after < before ? previous.status : reported;
-  return {
-    providerOrderId: shipment.providerOrderId,
-    providerTrackingId: shipment.trackingId ?? previous.providerTrackingId,
-    awb: shipment.waybillId ?? previous.awb,
-    routingCode: shipment.routingCode ?? previous.routingCode,
-    trackingLink: shipment.trackingLink ?? previous.trackingLink,
-    costAmount: shipment.price ?? previous.costAmount,
-    providerStatus: shipment.providerStatus ?? previous.providerStatus,
-    status,
-    driverName: shipment.driver?.name ?? previous.driverName,
-    driverPhone: shipment.driver?.phone ?? previous.driverPhone,
-    driverPlateNumber: shipment.driver?.plateNumber ?? previous.driverPlateNumber,
-    bookedAt: previous.bookedAt ?? new Date(),
-    pickedUpAt: previous.pickedUpAt ?? (status === "picked_up" || status === "in_transit" ? new Date() : null),
-    deliveredAt: previous.deliveredAt ?? (status === "delivered" ? new Date() : null),
-    cancelledAt: status === "cancelled" ? (previous.cancelledAt ?? new Date()) : previous.cancelledAt,
-    // A cancel that was asked for is settled either way once the provider says where it stands.
-    cancelRequestedAt: status === "pickup_requested" ? previous.cancelRequestedAt : null,
-    lastError: null,
-    updatedAt: new Date(),
-  };
-}
-
-/** Writes what the provider says onto the attempt, under the order lock, and flags the order
- * `shipping_cost_over_quote` when a new price is more than Rp5.000 above the locked quote (decision
- * 47; only when the price changed, so a flag staff cleared is not raised again by a later read).
- * Returns null when the row is no longer this booking (settled by a concurrent call). */
+/** Writes what the provider says onto the attempt through the tracking rules (./tracking.ts: events,
+ * order effects, the over-quote and waybill flags), as a staff read. */
 async function applyProviderShipment(
   db: Database,
   shipmentId: string,
   shipment: ProviderShipment,
   options: { expectBooking: boolean; actorStaffUserId: string | null; action: string },
-): Promise<{ row: ShipmentRow; overQuote: boolean } | null> {
-  return db.transaction(async (tx) => {
-    const [ref] = await tx.select({ orderId: shipments.orderId }).from(shipments).where(eq(shipments.id, shipmentId)).limit(1);
-    if (!ref) throw new Error("shipment vanished");
-    const order = await lockOrder(tx, ref.orderId);
-    const [previous] = await tx.select().from(shipments).where(eq(shipments.id, shipmentId)).for("update").limit(1);
-    if (!previous) throw new Error("shipment vanished under the order lock");
-    if (options.expectBooking && previous.status !== "booking") {
-      if (previous.providerOrderId === shipment.providerOrderId) return { row: previous, overQuote: false };
-      console.error("[shipping] a booking answer names another provider order than the one stored", { shipmentId, referenceId: previous.referenceId });
-      throw new ActionError(SHIPMENT_MESSAGES.changed);
-    }
-    // An ended attempt stays ended: a read taken before a cancel finished (label print, Cek ulang)
-    // must never make it live again (and a newer attempt may exist by now).
-    if (ENDED.includes(previous.status)) return { row: previous, overQuote: false };
-    if (previous.providerOrderId !== null && previous.providerOrderId !== shipment.providerOrderId) {
-      console.error("[shipping] provider answer for another order id", { shipmentId, referenceId: previous.referenceId });
-      throw new ActionError(SHIPMENT_MESSAGES.changed);
-    }
-    const fields = snapshotFields(previous, shipment);
-    const [row] = await tx.update(shipments).set(fields).where(eq(shipments.id, shipmentId)).returning();
-    if (!row) throw new Error("shipment update matched nothing under its lock");
-
-    const priceChanged = row.costAmount !== null && row.costAmount !== previous.costAmount;
-    const overQuote = priceChanged && order.shippingCostAmount !== null && isShippingCostOverQuote(row.costAmount!, order.shippingCostAmount);
-    if (overQuote && !order.needsAttention.includes("shipping_cost_over_quote")) {
-      await tx.update(orders).set({ needsAttention: withAttentionFlags(["shipping_cost_over_quote"]), updatedAt: sql`now()` }).where(eq(orders.id, order.id));
-    }
-    // A resi staff typed before the waybill was known (or before it changed) is checked now too.
-    if (row.awb !== null && row.awb !== previous.awb && order.trackingNumber !== null && !sameResi(row.awb, order.trackingNumber) && !order.needsAttention.includes("tracking_number_mismatch")) {
-      await tx.update(orders).set({ needsAttention: withAttentionFlags(["tracking_number_mismatch"]), updatedAt: sql`now()` }).where(eq(orders.id, order.id));
-    }
-    if (row.costAmount === null && previous.status === "booking") console.warn("[shipping] booked without a known price; checked again on the next read", { shipmentId });
-    // M7: ended at the provider without our cancel (e.g. no courier found). K3 flags it.
-    if (row.status === "cancelled" && previous.cancelRequestedAt === null) {
-      console.error("[shipping] shipment ended by the provider without a cancel from us", { shipmentId, providerStatus: row.providerStatus });
-    }
-    await writeAuditLog(tx, {
-      actorStaffUserId: options.actorStaffUserId,
-      action: options.action,
-      entityType: "order",
-      entityId: order.id,
-      before: { shipmentId, status: previous.status, awb: previous.awb, costAmount: previous.costAmount, providerStatus: previous.providerStatus },
-      after: { shipmentId, referenceId: row.referenceId, providerOrderId: row.providerOrderId, status: row.status, awb: row.awb, costAmount: row.costAmount, providerStatus: row.providerStatus, overQuote },
-    });
-    return { row, overQuote };
-  });
+): Promise<{ row: ShipmentRow; overQuote: boolean }> {
+  const result = await applyShipmentSnapshot(db, shipmentId, shipment, { source: "staff", ...options });
+  return { row: result.row, overQuote: result.overQuote };
 }
 
 async function recordStillBooking(db: Database, shipmentId: string, lastError: string): Promise<void> {
@@ -284,7 +202,7 @@ async function settleBooked(
   booked: ProviderShipment,
   actorStaffUserId: string,
 ): Promise<ShipmentActionOutcome> {
-  let settled: { row: ShipmentRow; overQuote: boolean } | null;
+  let settled: { row: ShipmentRow; overQuote: boolean };
   try {
     settled = await applyProviderShipment(db, shipment.id, booked, { expectBooking: true, actorStaffUserId, action: "book_shipment" });
   } catch (error) {
@@ -297,7 +215,6 @@ async function settleBooked(
     await recordStillBooking(db, shipment.id, "apply_failed").catch(() => undefined);
     return pending(shipment, false);
   }
-  if (!settled) return pending(shipment, false);
   if (settled.row.status === "cancelled") return { outcome: "cancelled", shipmentId: shipment.id };
   return { outcome: "booked", shipmentId: shipment.id, awb: settled.row.awb, costAmount: settled.row.costAmount, overQuote: settled.overQuote };
 }
@@ -490,7 +407,6 @@ async function refreshShipment(db: Database, runtime: ShipmentRuntime, live: Shi
     throw error;
   }
   const settled = await applyProviderShipment(db, live.id, current, { expectBooking: false, actorStaffUserId, action: "refresh_shipment" });
-  if (!settled) throw new ActionError(SHIPMENT_MESSAGES.changed);
   if (settled.row.status === "cancelled") return { outcome: "cancelled", shipmentId: live.id };
   return { outcome: "booked", shipmentId: live.id, awb: settled.row.awb, costAmount: settled.row.costAmount, overQuote: settled.overQuote };
 }
@@ -617,7 +533,7 @@ async function settleCancelByReading(
     return settleCancelled(db, live.id, actorStaffUserId);
   }
   const settled = await applyProviderShipment(db, live.id, current, { expectBooking: false, actorStaffUserId, action: "refresh_shipment" });
-  const status = settled?.row.status;
+  const status = settled.row.status;
   if (why === "unknown" && status === "pickup_requested") throw new ActionError(SHIPMENT_MESSAGES.cancelUnknown);
   // Not cancelled: whatever the provider says now stands; the request is withdrawn.
   await db

@@ -10,6 +10,7 @@ import {
   payments,
   products,
   productVariants,
+  shipments,
   storeSettings,
   type OrderAttentionFlag,
   type OrderCancelReason,
@@ -17,12 +18,14 @@ import {
   type OrderPaymentStatus,
   type OrderStatus,
 } from "@ammari/db/schema";
+import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import type { Database } from "../db";
 import { errorLogFields } from "../errors";
 import { ORDER_ACCESS_TOKEN_DAYS, hashOrderAccessToken } from "../checkout/access-token";
 import {
   renderCancelledEmail,
   renderCreatedEmail,
+  renderDeliveredEmail,
   renderOwnerPaidEmail,
   renderPaidEmail,
   renderShippedEmail,
@@ -39,7 +42,8 @@ import { deriveOrderEmailAccessToken, deriveOrderEmailLoginToken } from "./token
 //
 // Which emails an order needs is read from the order's own state (dueOrderEmails), never passed in
 // by the caller, so every hook (checkout, the payment notification, the finish page's status check,
-// the expiry sweep, and the cron pass that also covers staff's "Tandai dikirim") calls the same
+// the expiry sweep, the courier tracking webhook and poller, and the cron pass that also covers
+// staff's "Tandai dikirim") calls the same
 // dispatchOrderEmails and a duplicate or late call can only send what is still due.
 //
 // At most once per (order, kind): the `order_notifications` row is claimed before sending with one
@@ -106,7 +110,8 @@ export type DueOrderEmail =
   | { kind: "paid"; variant: "confirmed" | "review" }
   | { kind: "owner_paid"; variant: "paid" | "stock_short" | "after_cancel" }
   | { kind: "cancelled"; reason: CancelledEmailReason }
-  | { kind: "shipped" };
+  | { kind: "shipped" }
+  | { kind: "delivered" };
 
 export interface OrderEmailState {
   status: OrderStatus;
@@ -119,6 +124,9 @@ export interface OrderEmailState {
   needsAttention: OrderAttentionFlag[];
   /** The "sudah dikirim" email waits for it (a resi added later on the admin order page). */
   trackingNumber: string | null;
+  /** A courier booking of the order reported the parcel delivered (Phase K3): only then does a
+   * completed order get "sudah sampai" (staff's own "Selesai" sends nothing). */
+  deliveredByCourier?: boolean;
 }
 
 /** The emails a checkout order needs in its current state (plan §8; owner decisions 2026-10-21,
@@ -139,6 +147,11 @@ export function dueOrderEmails(order: OrderEmailState, now: Date): DueOrderEmail
       // enter one to ship a checkout order; an order that shipped without one (before that rule)
       // gets the email once staff add it on the order page.
       return order.trackingNumber?.trim() ? [{ kind: "shipped" }] : [];
+    case "completed":
+      // "Pesanan sudah sampai" (plan §8, K3): the courier reported it delivered. An order that went
+      // from to_ship straight to completed in one read gets only this one (its unsent "sudah
+      // dikirim" is superseded).
+      return order.deliveredByCourier ? [{ kind: "delivered" }] : [];
     case "cancelled":
       if (paidAfterCancel) return [{ kind: "paid", variant: "review" }, { kind: "owner_paid", variant: "after_cancel" }];
       if (order.paidAt === null && (order.cancelReason === "payment_expired" || order.cancelReason === "payment_cancelled")) {
@@ -180,6 +193,8 @@ const orderColumns = {
   cancelReason: orders.cancelReason,
   needsAttention: orders.needsAttention,
   trackingNumber: orders.trackingNumber,
+  // Qualified on both sides (packages/db/src/sql-helpers.ts): the pass queries orders alone.
+  deliveredByCourier: sql<boolean>`exists (select 1 from ${shipments} where ${qualifiedColumn(shipments, shipments.orderId)} = ${qualifiedColumn(orders, orders.id)} and ${qualifiedColumn(shipments, shipments.status)} = 'delivered')`,
 };
 
 interface ClaimedNotification {
@@ -378,6 +393,10 @@ function addressOf(order: LoadedOrder, withNotes: boolean): OrderEmailAddress | 
  * is not reachable from a mail client, so those emails keep the text wordmark. */
 export const EMAIL_LOGO_PATH = "/logos/ammari-primary.png";
 
+/** The storefront's "Pengembalian & penukaran" page (apps/web `/returns-exchange`), linked from
+ * "Pesanan sudah sampai". */
+export const RETURNS_PAGE_PATH = "/returns-exchange";
+
 function emailLogoUrl(origin: string): string | null {
   try {
     const url = new URL(EMAIL_LOGO_PATH, origin);
@@ -480,6 +499,8 @@ async function prepare(db: Database, deps: OrderEmailDeps, order: LoadedOrder, d
       return { to: order.contactEmail, email: renderCancelledEmail({ ...view, reason: due.reason, paymentDeadline: order.paymentExpiresAt }) };
     case "shipped":
       return { to: order.contactEmail, email: renderShippedEmail({ ...view, courier: order.courier, trackingNumber: order.trackingNumber }) };
+    case "delivered":
+      return { to: order.contactEmail, email: renderDeliveredEmail({ ...view, returnsUrl: `${deps.siteOrigin}${RETURNS_PAGE_PATH}` }) };
   }
 }
 

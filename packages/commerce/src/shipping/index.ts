@@ -67,9 +67,12 @@ export {
   FAKE_SHIPMENT_ORIGIN,
   FAKE_SHIPMENT_REFERENCE_PREFIX,
   shipmentRuntimeFromEnv,
+  trackingRuntimeFromEnv,
   type ShipmentOrigin,
   type ShipmentRuntime,
   type ShipmentRuntimeResult,
+  type TrackingRuntime,
+  type TrackingRuntimeResult,
 } from "./shipment-config";
 export {
   SHIPMENT_CANCEL_REASON_CODES,
@@ -81,3 +84,31 @@ export {
   refreshShipmentForLabel,
   type ShipmentActionOutcome,
 } from "./bookings";
+export {
+  OPEN_SHIPMENT_STATUSES,
+  SHIPMENT_EVENT_STALE_DAYS,
+  SHIPMENT_PICKUP_STALE_DAYS,
+  SHIPMENT_POLL_INTERVAL_HOURS,
+  SHIPMENT_READ_DEBOUNCE_SECONDS,
+  applyShipmentSnapshot,
+  claimShipmentRead,
+  flagStaleShipments,
+  pollShipments,
+  readClaimedShipment,
+  refetchShipmentForWebhook,
+  type ApplySnapshotOptions,
+  type ApplySnapshotResult,
+  type ShipmentPollSummary,
+  type ShipmentReader,
+  type ShipmentReadOutcome,
+  type ShipmentReadResult,
+} from "./tracking";
+export {
+  SHIPPING_WEBHOOK_MAX_BYTES,
+  parseShippingWebhookBody,
+  processShippingWebhook,
+  recordShippingWebhook,
+  type ParsedShippingWebhook,
+  type ShippingWebhookOutcome,
+  type ShippingWebhookResult,
+} from "./webhook";

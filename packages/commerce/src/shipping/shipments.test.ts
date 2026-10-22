@@ -6,7 +6,7 @@ import { BITESHIP_ORDER_CREATED, BITESHIP_ORDER_PICKED } from "./biteship-fixtur
 import { SHIPPING_BUDGET_ACTIONS, SHIPPING_BUDGET_IP } from "./budget";
 import { FAKE_SHIPPING_AREAS } from "./fake";
 import { FAKE_SHIPMENT_REFUSED_CODE, createFakeShipmentProvider, createFakeShipmentStore } from "./fake-shipments";
-import { FAKE_SHIPMENT_ORIGIN, shipmentRuntimeFromEnv } from "./shipment-config";
+import { FAKE_SHIPMENT_ORIGIN, shipmentRuntimeFromEnv, trackingRuntimeFromEnv } from "./shipment-config";
 import { ShipmentProviderError, type CreateShipmentInput } from "./shipment-provider";
 import { shippingRuntimeFromEnv } from "./config";
 import { fakeBiteshipKey } from "../../test/fake-keys";
@@ -282,5 +282,68 @@ describe("shipmentRuntimeFromEnv", () => {
       expect(rows.filter((row) => row.action === SHIPPING_BUDGET_ACTIONS.order_writes)).toHaveLength(1);
       expect(await tx.select().from(claimRateLimits).where(and(eq(claimRateLimits.ip, SHIPPING_BUDGET_IP), eq(claimRateLimits.action, SHIPPING_BUDGET_ACTIONS.rates)))).toHaveLength(0);
     });
+  });
+});
+
+describe("trackingRuntimeFromEnv (apps/web, K3: reads only)", () => {
+  const reads = {
+    BITESHIP_API_KEY: fakeBiteshipKey("test"),
+    BITESHIP_BASE_URL: "https://api.biteship.com",
+    BITESHIP_ORIGIN_AREA_ID: "IDNP9IDNC23IDND245IDZ40132",
+    DEPLOY_ENV: "dev",
+  };
+
+  test("needs no sender or reference prefix; the reader cannot book", async () => {
+    await withRollback(async (tx) => {
+      const result = trackingRuntimeFromEnv(tx, reads);
+      if (!result.ok) throw new Error(result.problems.join("; "));
+      expect(result.runtime.reader.name).toBe("biteship");
+      expect(Object.keys(result.runtime.reader).sort()).toEqual(["getShipment", "name"]);
+    });
+  });
+
+  test("the same key rules as bookings, the budget checked, the fake only in e2e", async () => {
+    await withRollback(async (tx) => {
+      expect(trackingRuntimeFromEnv(tx, {})).toEqual({ ok: false, problems: ["BITESHIP_API_KEY is not set", "BITESHIP_BASE_URL is not set", "BITESHIP_ORIGIN_AREA_ID is not set"] });
+      expect(trackingRuntimeFromEnv(tx, { ...reads, BITESHIP_API_KEY: fakeBiteshipKey("live") }).ok).toBe(false);
+      expect(trackingRuntimeFromEnv(tx, { ...reads, DEPLOY_ENV: "production" }).ok).toBe(false);
+      expect(trackingRuntimeFromEnv(tx, { ...reads, BITESHIP_API_KEY: fakeBiteshipKey("live"), DEPLOY_ENV: "production" }).ok).toBe(true);
+      expect(trackingRuntimeFromEnv(tx, { ...reads, BITESHIP_DAILY_ORDERS_BUDGET: "0" })).toEqual({ ok: false, problems: ["BITESHIP_DAILY_ORDERS_BUDGET must be a positive whole number"] });
+      const e2e = trackingRuntimeFromEnv(tx, { SHIPPING_ORDER_PROVIDER: "fake", NODE_ENV: "development", E2E_TEST_LOGIN: "true" });
+      expect(e2e.ok && e2e.runtime.reader.name).toBe("fake");
+      expect(trackingRuntimeFromEnv(tx, { SHIPPING_ORDER_PROVIDER: "fake", NODE_ENV: "production", E2E_TEST_LOGIN: "true" }).ok).toBe(false);
+      expect(trackingRuntimeFromEnv(tx, { ...reads, SHIPPING_ORDER_PROVIDER: "komerce" }).ok).toBe(false);
+    });
+  });
+
+  test("reads draw on the shared orders budget", async () => {
+    await withRollback(async (tx) => {
+      await tx.delete(claimRateLimits).where(eq(claimRateLimits.ip, SHIPPING_BUDGET_IP));
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(BITESHIP_ORDER_PICKED), { status: 200 }));
+      const result = trackingRuntimeFromEnv(tx, { ...reads, BITESHIP_DAILY_ORDERS_BUDGET: "1" });
+      if (!result.ok) throw new Error(result.problems.join("; "));
+      try {
+        await result.runtime.reader.getShipment(BITESHIP_ORDER_PICKED.id);
+        expect((await caught(result.runtime.reader.getShipment(BITESHIP_ORDER_PICKED.id))).reason).toBe("budget_exhausted");
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+  });
+});
+
+describe("FakeShipmentProvider.adopt (e2e: an order booked in another process)", () => {
+  test("adds a stored booking once, at its stored status, so it can be advanced and read", async () => {
+    const fake = createFakeShipmentProvider({ store: createFakeShipmentStore() });
+    const input = { providerOrderId: "abcdefabcdefabcdefabcdef", referenceId: "E2E-ORD-202612-0009-K1", waybillId: "E2E0000000000009", courierCode: "jne", serviceCode: "reg", price: 12_000, providerStatus: "allocated" };
+    expect(fake.controls.adopt(input)).toMatchObject({ providerStatus: "allocated", waybillId: "E2E0000000000009", price: 12_000 });
+    fake.controls.advance(input.providerOrderId, "picked");
+    // Adopting again keeps what the store has.
+    expect(fake.controls.adopt(input).providerStatus).toBe("picked");
+    const read = await fake.getShipment(input.providerOrderId);
+    expect(read.history.map((entry) => entry.providerStatus)).toEqual(["allocated", "picked"]);
+    // Its reference is taken: a re-sent booking is a duplicate naming it.
+    expect((await caught(fake.createShipment(booking({ referenceId: input.referenceId })))).existingOrderId).toBe(input.providerOrderId);
   });
 });

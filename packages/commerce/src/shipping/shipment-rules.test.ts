@@ -13,7 +13,7 @@ import {
   toBiteshipPhone,
 } from "./shipment-rules";
 import { SHIPPING_SERVICE_ALLOWLIST } from "./rules";
-import { SHIPMENT_STATUSES } from "@ammari/db/schema";
+import { SHIPMENT_STATUSES, SHIPMENT_TRACKING_STATES } from "@ammari/db/schema";
 
 describe("Biteship status normalization", () => {
   test.each([
@@ -136,5 +136,6 @@ describe("shipmentPickupState", () => {
 
   test("our shipment statuses are the booking states plus every normalized tracking state (the DB CHECK uses the first)", () => {
     expect([...SHIPMENT_STATUSES]).toEqual(["booking", "failed", ...SHIPMENT_TRACKING_STATUSES]);
+    expect([...SHIPMENT_TRACKING_STATES]).toEqual([...SHIPMENT_TRACKING_STATUSES]);
   });
 });

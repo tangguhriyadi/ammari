@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { describe, expect, test, vi } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
-import { customers, orderAccessTokens, orderItems, orderNotifications, orders, payments, stockMovements, stockReservations, storeSettings } from "@ammari/db/schema";
+import { customers, orderAccessTokens, orderItems, orderNotifications, orders, payments, shipments, stockMovements, stockReservations, storeSettings } from "@ammari/db/schema";
 import type { Tx } from "../db";
 import { hashOrderAccessToken } from "../checkout/access-token";
 import { formatRupiah } from "./format";
@@ -16,7 +16,10 @@ import { sweepExpiredPayments } from "../payments/sweep";
 import { adjustStock } from "../stock/ledger";
 import { reserveStockForOrder } from "../stock/reservations";
 import { dispatchOrderEmails, dispatchPendingOrderEmails, dueOrderEmails, greetingName, type LoginLinkIssueOutcome, type OrderEmailDeps, type OrderEmailState } from "./dispatch";
-import { renderCancelledEmail, renderCreatedEmail, renderOwnerPaidEmail, renderPaidEmail, renderShippedEmail, type CustomerOrderEmailView } from "./templates";
+import { renderCancelledEmail, renderCreatedEmail, renderDeliveredEmail, renderOwnerPaidEmail, renderPaidEmail, renderShippedEmail, type CustomerOrderEmailView } from "./templates";
+import { applyShipmentSnapshot } from "../shipping/tracking";
+import { normalizeBiteshipStatus } from "../shipping/shipment-rules";
+import type { ProviderShipment } from "../shipping/shipment-provider";
 import { deriveOrderEmailAccessToken, deriveOrderEmailLoginToken } from "./token";
 
 // docs/plans/cart-checkout.md D14, §8 (session 13): order emails. The transport is a recorder
@@ -106,6 +109,13 @@ describe("dueOrderEmails", () => {
     expect(dueOrderEmails(state({ status: "shipped", paymentStatus: null }), now)).toEqual([]);
     expect(dueOrderEmails(state({ status: "to_ship", paymentStatus: null, paidAt: null }), now)).toEqual([]);
   });
+  test("completed: `delivered` only when the courier reported it delivered (K3), never for a manual or marketplace order", () => {
+    expect(dueOrderEmails(state({ status: "completed", paymentStatus: "paid", paidAt: now, trackingNumber: "JP1234567890", deliveredByCourier: true }), now)).toEqual([{ kind: "delivered" }]);
+    expect(dueOrderEmails(state({ status: "completed", paymentStatus: "paid", paidAt: now, deliveredByCourier: false }), now)).toEqual([]);
+    expect(dueOrderEmails(state({ status: "shipped", paymentStatus: "paid", paidAt: now, trackingNumber: "JP1234567890", deliveredByCourier: true }), now)).toEqual([{ kind: "shipped" }]);
+    expect(dueOrderEmails(state({ status: "returned", paymentStatus: "paid", paidAt: now, deliveredByCourier: true }), now)).toEqual([]);
+    expect(dueOrderEmails(state({ status: "completed", paymentStatus: null, deliveredByCourier: true }), now)).toEqual([]);
+  });
 });
 
 // ---------- greeting ----------
@@ -158,6 +168,7 @@ const allRendered = () => [
   renderCancelledEmail({ ...baseView, reason: "admin_paid", paymentDeadline: deadline }),
   renderShippedEmail({ ...baseView, courier: "JNE", trackingNumber: "JNE123456789" }),
   renderShippedEmail({ ...baseView, courier: null, trackingNumber: null }),
+  renderDeliveredEmail({ ...baseView, returnsUrl: "https://ammari.example/returns-exchange" }),
   ...(["paid", "stock_short", "after_cancel"] as const).map((variant) =>
     renderOwnerPaidEmail({
       orderNo: baseView.orderNo,
@@ -219,7 +230,7 @@ describe("templates", () => {
 
   test("every buyer email greets \"Halo Kak <name>,\" or \"Halo Kak,\" in both parts", () => {
     const buyerEmails = allRendered().slice(0, -3);
-    expect(buyerEmails).toHaveLength(10);
+    expect(buyerEmails).toHaveLength(11);
     for (const email of buyerEmails) {
       expect(email.text).toContain("Halo Kak Siti <Aminah>,");
       expect(email.html).toContain("Halo Kak Siti &lt;Aminah&gt;,");
@@ -279,6 +290,15 @@ describe("templates", () => {
     expect(paid.text).not.toContain("Pesan lagi");
     expect(paid.text).not.toContain("Tidak ada dana yang ditarik");
     expect(paid.text).toContain("Lihat pesanan");
+  });
+
+  test("the delivered email says it arrived and links the returns and exchange page and the order", () => {
+    const delivered = renderDeliveredEmail({ ...baseView, returnsUrl: "https://ammari.example/returns-exchange" });
+    expect(delivered.subject).toBe("Pesanan ORD-202612-0007 sudah sampai");
+    expect(delivered.text).toContain("Pesanan sudah sampai");
+    expect(delivered.text).toContain("Ketentuan pengembalian dan penukaran:\nhttps://ammari.example/returns-exchange");
+    expect(delivered.text).toContain(`Lihat pesanan:\n${baseView.orderUrl}`);
+    expect(delivered.html).toContain('href="https://ammari.example/returns-exchange"');
   });
 
   test("the shipped email shows courier and resi when known", () => {
@@ -397,6 +417,35 @@ async function ageNotifications(db: TestDatabase, orderId: string, minutes: numb
   await withTriggerDisabled(db, "order_notifications", "set_updated_at", () =>
     db.update(orderNotifications).set({ updatedAt: at, createdAt: at }).where(eq(orderNotifications.orderId, orderId)),
   );
+}
+
+/** A booked courier attempt for the order, as K2 leaves it after "Pesan kurir". */
+async function bookedShipment(db: TestDatabase, orderId: string, awb: string): Promise<{ id: string; providerOrderId: string }> {
+  const [row] = await db
+    .insert(shipments)
+    .values({ orderId, attempt: 1, referenceId: `T-${orderId}-K1`, provider: "biteship", providerOrderId: randomUUID().replace(/-/g, "").slice(0, 24), courier: "jne", service: "reg", awb, status: "pickup_requested", providerStatus: "confirmed", bookedAt: new Date() })
+    .returning({ id: shipments.id, providerOrderId: shipments.providerOrderId });
+  return { id: row!.id, providerOrderId: row!.providerOrderId! };
+}
+
+/** A parsed courier read of that attempt in `status`. */
+function courierRead(placed: Placed, booked: { providerOrderId: string }, status: "picked" | "delivered", awb: string): ProviderShipment {
+  return {
+    providerOrderId: booked.providerOrderId,
+    referenceId: null,
+    providerStatus: status,
+    knownStatus: status,
+    status: normalizeBiteshipStatus(status),
+    waybillId: awb,
+    trackingId: null,
+    routingCode: null,
+    courierCode: "jne",
+    serviceCode: "reg",
+    price: null,
+    trackingLink: null,
+    driver: null,
+    history: [{ providerStatus: status, status: normalizeBiteshipStatus(status), note: `E2E ${placed.orderNo}`, occurredAt: new Date() }],
+  };
 }
 
 function quiet() {
@@ -532,6 +581,55 @@ describe("dispatchOrderEmails", () => {
       const shipped = forOrder(sent, placed.orderNo).filter((message) => message.subject.includes("sudah dikirim"));
       expect(shipped).toHaveLength(1);
       expect(shipped[0]!.body).toContain("Nomor resi: JNE00012345");
+    });
+  });
+
+  test("courier tracking (K3): picked up sends \"sudah dikirim\" with the waybill; delivered sends \"sudah sampai\" once", async () => {
+    await withRollback(async (tx) => {
+      const { deps, sent } = recorder();
+      await setSupportEmail(tx, "pemilik@example.test");
+      const placed = await placedOrder(tx);
+      await applyPaymentStatus(tx, report(placed, "settlement"));
+      await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
+      const booked = await bookedShipment(tx, placed.orderId, "JNE00099887766");
+      await applyShipmentSnapshot(tx, booked.id, courierRead(placed, booked, "picked", "JNE00099887766"), { source: "poll", actorStaffUserId: null, action: "track_shipment_poll" });
+      await dispatchPendingOrderEmails(tx, deps);
+      await applyShipmentSnapshot(tx, booked.id, courierRead(placed, booked, "delivered", "JNE00099887766"), { source: "webhook", actorStaffUserId: null, action: "track_shipment_webhook" });
+      await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
+      await dispatchPendingOrderEmails(tx, deps);
+      const mine = forOrder(sent, placed.orderNo).filter((message) => !message.to.includes("pemilik")).map((message) => message.subject);
+      expect(mine.slice(-2)).toEqual([`Pesanan ${placed.orderNo} sudah dikirim`, `Pesanan ${placed.orderNo} sudah sampai`]);
+      const shippedEmail = forOrder(sent, placed.orderNo).find((message) => message.subject.includes("sudah dikirim"))!;
+      expect(shippedEmail.body).toContain("Kurir: JNE Reguler\nNomor resi: JNE00099887766");
+      expect(forOrder(sent, placed.orderNo).find((message) => message.subject.includes("sudah sampai"))!.body).toContain("https://ammari.example/returns-exchange");
+    });
+  });
+
+  test("courier tracking: delivered straight from Diproses sends only \"sudah sampai\"; staff's own Selesai sends nothing", async () => {
+    await withRollback(async (tx) => {
+      quiet();
+      const { deps, sent } = recorder();
+      await setSupportEmail(tx, "pemilik@example.test");
+      const placed = await placedOrder(tx);
+      await applyPaymentStatus(tx, report(placed, "settlement"));
+      await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
+      const booked = await bookedShipment(tx, placed.orderId, "JNE00099887766");
+      const result = await applyShipmentSnapshot(tx, booked.id, courierRead(placed, booked, "delivered", "JNE00099887766"), { source: "poll", actorStaffUserId: null, action: "track_shipment_poll" });
+      expect(result.orderTransitions).toEqual(["shipped", "completed"]);
+      await dispatchPendingOrderEmails(tx, deps);
+      await dispatchPendingOrderEmails(tx, deps);
+      const subjects = forOrder(sent, placed.orderNo).map((message) => message.subject);
+      expect(subjects.filter((subject) => subject.includes("sudah dikirim"))).toEqual([]);
+      expect(subjects.filter((subject) => subject.includes("sudah sampai"))).toHaveLength(1);
+
+      // Completed by staff without a courier delivery: no "sudah sampai".
+      const manual = await placedOrder(tx);
+      await applyPaymentStatus(tx, report(manual, "settlement"));
+      const staff = await insertStaffUser(tx);
+      await transitionOrderStatus(manual.orderId, "shipped", staff.id, tx, { courier: "JNE", trackingNumber: "JNE00012345" });
+      await transitionOrderStatus(manual.orderId, "completed", staff.id, tx);
+      await dispatchPendingOrderEmails(tx, deps);
+      expect(forOrder(sent, manual.orderNo).filter((message) => message.subject.includes("sudah sampai"))).toEqual([]);
     });
   });
 

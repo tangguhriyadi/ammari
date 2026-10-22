@@ -1,7 +1,15 @@
 import { sql } from "drizzle-orm";
-import { bigint, check, index, integer, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { checkIn, timestamps } from "./columns";
-import { SHIPMENT_PROVIDERS, SHIPMENT_STATUSES, type ShipmentProviderName, type ShipmentStatus } from "./constants";
+import { bigint, check, index, integer, jsonb, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { checkIn, createdAtOnly, timestamps } from "./columns";
+import {
+  SHIPMENT_EVENT_SOURCES,
+  SHIPMENT_PROVIDERS,
+  SHIPMENT_STATUSES,
+  SHIPMENT_TRACKING_STATES,
+  type ShipmentEventSource,
+  type ShipmentProviderName,
+  type ShipmentStatus,
+} from "./constants";
 import { orders } from "./orders";
 import { staffUsers } from "./rbac";
 
@@ -54,9 +62,16 @@ export const shipments = pgTable(
     cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true, mode: "date" }),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true, mode: "date" }),
     failedAt: timestamp("failed_at", { withTimezone: true, mode: "date" }),
-    // K3: the poller and webhook bookkeeping.
+    // K3: the poller and webhook bookkeeping. `last_polled_at`: the last provider read claimed for
+    // this shipment (webhook re-fetch or poll; also the 2-minute debounce). `last_event_at`: the
+    // newest courier history entry seen.
     lastPolledAt: timestamp("last_polled_at", { withTimezone: true, mode: "date" }),
     lastEventAt: timestamp("last_event_at", { withTimezone: true, mode: "date" }),
+    // K3 (0035): a webhook arrived while a read was debounced or failed; the next poll reads it.
+    refetchRequestedAt: timestamp("refetch_requested_at", { withTimezone: true, mode: "date" }),
+    // K3 (0035): when `tracking_stale` was last raised for this shipment, so one quiet spell flags
+    // the order once (a flag staff cleared is raised again only after a newer event).
+    staleFlaggedAt: timestamp("stale_flagged_at", { withTimezone: true, mode: "date" }),
     bookedByStaffUserId: uuid("booked_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     cancelledByStaffUserId: uuid("cancelled_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     ...timestamps(),
@@ -87,5 +102,65 @@ export const shipments = pgTable(
     check("shipments_failed_consistency_check", sql`(${table.status} = 'failed') = (${table.failedAt} is not null)`),
     check("shipments_failed_unbooked_check", sql`${table.status} <> 'failed' or ${table.providerOrderId} is null`),
     check("shipments_cancelled_at_check", sql`${table.status} <> 'cancelled' or ${table.cancelledAt} is not null`),
+  ],
+);
+
+// Courier tracking (docs/plans/cart-checkout.md §3 "Phase K migrations", §15 Phase K, migration
+// 0035, K3). One row per courier history entry, as read from the provider (`GET /v1/orders/:id`'s
+// `courier.history[]`); replays of the same read and repeated polls never duplicate a row (UNIQUE
+// below, written with ON CONFLICT DO NOTHING). Kept with the order (plan §11: 10 years).
+export const shipmentEvents = pgTable(
+  "shipment_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shipmentId: uuid("shipment_id")
+      .notNull()
+      .references(() => shipments.id, { onDelete: "restrict" }),
+    occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "date" }).notNull(),
+    // The documented snake_case status, or the raw text (trimmed, capped) when undocumented.
+    providerStatus: text("provider_status").notNull(),
+    // Our state for it; NULL for an undocumented status (stored, never applied).
+    normalizedStatus: text("normalized_status").$type<Exclude<ShipmentStatus, "booking" | "failed">>(),
+    // The courier's own note, one line, capped (may name a place or the recipient: never logged).
+    description: text("description").notNull().default(""),
+    location: text("location"),
+    source: text("source").$type<ShipmentEventSource>().notNull(),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    // Also the shipment_id index (leading column): the timeline reads by shipment.
+    unique("shipment_events_shipment_id_occurred_at_provider_status_key").on(table.shipmentId, table.occurredAt, table.providerStatus),
+    check("shipment_events_normalized_status_check", sql`${table.normalizedStatus} is null or ${checkIn(table.normalizedStatus, SHIPMENT_TRACKING_STATES)}`),
+    check("shipment_events_source_check", checkIn(table.source, SHIPMENT_EVENT_SOURCES)),
+  ],
+);
+
+// The raw courier webhook log (docs/plans/cart-checkout.md §3, §11: 12 months), like
+// payment_notifications. Only posts that passed the path token and header secret are stored; the
+// webhook is a hint, so `result` says what its re-fetch did (`applied`, `debounced`, ...).
+export const shippingWebhookEvents = pgTable(
+  "shipping_webhook_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    receivedAt: timestamp("received_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    // `event` and `order_id` from the body when present (capped), for lookups; never trusted.
+    event: text("event"),
+    providerOrderId: text("provider_order_id"),
+    // The shipment the body's order id named, when we have it.
+    shipmentId: uuid("shipment_id").references(() => shipments.id, { onDelete: "set null" }),
+    // The body as sent: parsed JSON, or the text (capped) when it was not JSON. Both NULL for an
+    // empty body.
+    payload: jsonb("payload"),
+    rawText: text("raw_text"),
+    bodyBytes: integer("body_bytes").notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true, mode: "date" }),
+    result: text("result"),
+  },
+  (table) => [
+    index("shipping_webhook_events_received_at_idx").on(table.receivedAt),
+    index("shipping_webhook_events_provider_order_id_idx").on(table.providerOrderId),
+    index("shipping_webhook_events_shipment_id_idx").on(table.shipmentId),
+    check("shipping_webhook_events_payload_or_text_check", sql`${table.payload} is null or ${table.rawText} is null`),
+    check("shipping_webhook_events_body_bytes_check", sql`${table.bodyBytes} >= 0`),
   ],
 );

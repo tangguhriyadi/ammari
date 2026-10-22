@@ -80,6 +80,11 @@ export interface ShippedEmailView extends CustomerOrderEmailView {
   trackingNumber: string | null;
 }
 
+export interface DeliveredEmailView extends CustomerOrderEmailView {
+  /** The storefront's "Pengembalian & penukaran" page. */
+  returnsUrl: string;
+}
+
 export interface OwnerPaidEmailView {
   orderNo: string;
   variant: "paid" | "stock_short" | "after_cancel";
@@ -424,6 +429,25 @@ export function renderShippedEmail(view: ShippedEmailView): RenderedEmail {
     ...contactLine(view.whatsappNumber),
   ];
   return render(`Pesanan ${view.orderNo} sudah dikirim`, view.trackingNumber ? `Nomor resi: ${view.trackingNumber}` : "Pesanan kamu sedang dalam perjalanan.", blocks, customerFooter(view), view.logoUrl);
+}
+
+/** `delivered` (Phase K3): the courier reported the parcel delivered and the order is complete. */
+export function renderDeliveredEmail(view: DeliveredEmailView): RenderedEmail {
+  const blocks: Block[] = [
+    { kind: "heading", text: "Pesanan sudah sampai" },
+    greeting(view),
+    { kind: "paragraph", text: `Menurut kurir, pesanan ${view.orderNo} sudah diterima. Terima kasih sudah berbelanja di Ammari, semoga kamu suka dan nyaman memakainya.` },
+    {
+      kind: "paragraph",
+      text: "Kalau ada yang kurang pas, misalnya ukuran, kamu bisa mengajukan penukaran atau pengembalian sesuai ketentuan kami. Kalau paketnya ternyata belum kamu terima, segera hubungi kami.",
+    },
+    { kind: "link", label: "Ketentuan pengembalian dan penukaran", url: view.returnsUrl },
+    ...accessBlocks(view, true),
+    { kind: "divider" },
+    ...orderBlocks(view),
+    ...contactLine(view.whatsappNumber),
+  ];
+  return render(`Pesanan ${view.orderNo} sudah sampai`, "Semoga kamu suka dengan pesananmu.", blocks, customerFooter(view), view.logoUrl);
 }
 
 // ---------- owner email ----------

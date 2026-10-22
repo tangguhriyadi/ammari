@@ -6,6 +6,7 @@ export {
   NOTIFICATION_LEASE_MINUTES,
   NOTIFICATION_RETRY_HOURS,
   NOTIFICATION_SCAN_HOURS,
+  RETURNS_PAGE_PATH,
   dispatchOrderEmails,
   dispatchPendingOrderEmails,
   dueOrderEmails,
@@ -23,6 +24,7 @@ export { deriveOrderEmailAccessToken, deriveOrderEmailLoginToken } from "./token
 export {
   renderCancelledEmail,
   renderCreatedEmail,
+  renderDeliveredEmail,
   renderOwnerPaidEmail,
   renderPaidEmail,
   renderShippedEmail,

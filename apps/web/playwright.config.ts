@@ -32,6 +32,11 @@ export const E2E_PREVIEW_SECRET = "e2e-test-preview-secret-do-not-use-in-prod";
 // against this exact number (lib/store-settings.ts).
 export const E2E_WHATSAPP_NUMBER = "6281234567890";
 
+// The courier webhook's path token and header secret for the e2e run only (lib/shipping/
+// webhook-auth.ts): fixed, so shipment-tracking.spec.ts can post a forged and a right request.
+export const E2E_WEBHOOK_PATH_TOKEN = ["e2e", "courier", "webhook", "path", "0".repeat(24)].join("-");
+export const E2E_WEBHOOK_HEADER_SECRET = ["e2e", "courier", "webhook", "secret", "0".repeat(24)].join("-");
+
 export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./e2e/global-setup.ts",
@@ -99,6 +104,13 @@ export default defineConfig({
       // gate as the fake shipping provider.
       PAYMENT_PROVIDER: "fake",
       MIDTRANS_ORDER_ID_PREFIX: "E2E-",
+      // Courier tracking (docs/plans/cart-checkout.md §15 Phase K, K3): the fake courier, read through
+      // the real webhook route by the gated /api/test/shipments/advance. Fixed e2e-only values (the
+      // route and the spec read them from this server's env), never a deployed one.
+      SHIPPING_ORDER_PROVIDER: "fake",
+      BITESHIP_WEBHOOK_PATH_TOKEN: E2E_WEBHOOK_PATH_TOKEN,
+      BITESHIP_WEBHOOK_HEADER_NAME: "X-Ammari-Courier-E2E",
+      BITESHIP_WEBHOOK_HEADER_SECRET: E2E_WEBHOOK_HEADER_SECRET,
       STORE_WHATSAPP_NUMBER: E2E_WHATSAPP_NUMBER,
     },
     timeout: 120_000,

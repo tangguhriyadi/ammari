@@ -124,11 +124,22 @@ function bookingErrorText(lastError: string | null): string | null {
   return "Jawaban Biteship belum diterima.";
 }
 
+/** Why the last automatic tracking read of a booked shipment failed (shipments.last_error `read:...`,
+ * K3), in words; null when the last read went through. */
+function trackingErrorText(lastError: string | null): string | null {
+  if (!lastError?.startsWith("read:")) return null;
+  const reason = lastError.slice("read:".length);
+  if (reason === "budget_exhausted") return "Pelacakan otomatis tertunda: batas harian pemakaian Biteship tercapai. Dicek lagi besok, atau tekan Cek ulang pemesanan.";
+  if (reason === "unavailable") return "Pelacakan otomatis tertunda: Biteship belum bisa dihubungi. Dicek lagi otomatis.";
+  return "Pelacakan otomatis gagal membaca pengiriman ini. Cek di dashboard Biteship.";
+}
+
 export function ShippingSection({ checkout, orderId, orderNo, canBook, canManage }: ShippingSectionProps) {
   const quote = checkout.quote;
   const live = checkout.shipments.find((shipment) => isLiveShipmentStatus(shipment.status)) ?? null;
   const ended = checkout.shipments.filter((shipment) => !isLiveShipmentStatus(shipment.status));
   const pickup = live ? pickupStateLabel(live.providerStatus) : null;
+  const trackingError = live && live.status !== "booking" ? trackingErrorText(live.lastError) : null;
   const cutoff = quote && (!live || live.status === "booking" || live.status === "pickup_requested") ? pickupCutoffHint(quote.courierCode) : null;
   // The quote's cost is stripped for viewers without finance.view_profit, the booked cost too.
   const showsCost = quote?.costAmount !== null && quote?.costAmount !== undefined;
@@ -173,6 +184,11 @@ export function ShippingSection({ checkout, orderId, orderNo, canBook, canManage
           {live.status === "booking" && (
             <p role="status" className="text-sm text-danger-700">
               Pemesanan belum pasti: kurir mungkin sudah dipesan. Tekan Cek ulang pemesanan. {bookingErrorText(live.lastError) ?? ""}
+            </p>
+          )}
+          {trackingError && (
+            <p role="status" className="text-sm text-neutral-600">
+              {trackingError}
             </p>
           )}
           {live.cancelRequestedAt && (

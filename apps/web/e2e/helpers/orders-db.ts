@@ -47,21 +47,22 @@ export interface OrderLine {
 }
 
 /** A storefront checkout order. `state`: `pending` (inside the payment window), `cancelled` (the
- * payment expired), `shipped` (paid, courier and resi entered). Ongkir: cost Rp95.000, buyer
- * Rp75.000. */
+ * payment expired), `paid` (paid, in Diproses, no resi yet), `shipped` (paid, courier and resi
+ * entered). Ongkir: cost Rp95.000, buyer Rp75.000. */
 export async function seedCheckoutOrder(params: {
   customerId: string | null;
   email: string;
   placedWithSession: boolean;
   lines: OrderLine[];
-  state: "pending" | "cancelled" | "shipped";
+  state: "pending" | "cancelled" | "paid" | "shipped";
   paymentUrl?: string;
 }): Promise<SeededOrder> {
   const orderNo = e2eOrderNo();
   const subtotal = params.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0);
   const shipping = 75_000;
-  const status = { pending: "awaiting_payment", cancelled: "cancelled", shipped: "shipped" }[params.state];
-  const paymentStatus = { pending: "pending", cancelled: "expired", shipped: "paid" }[params.state];
+  const status = { pending: "awaiting_payment", cancelled: "cancelled", paid: "to_ship", shipped: "shipped" }[params.state];
+  const paymentStatus = { pending: "pending", cancelled: "expired", paid: "paid", shipped: "paid" }[params.state];
+  const paid = params.state === "paid" || params.state === "shipped";
   return withSql(async (sql) =>
     sql.begin(async (tx) => {
       const [order] = await tx<{ id: string }[]>`
@@ -76,7 +77,7 @@ export async function seedCheckoutOrder(params: {
           'web', ${orderNo}, now() - interval '2 hours', ${status}, ${subtotal}, ${shipping}, 0, ${subtotal + shipping}, ${params.customerId},
           ${paymentStatus},
           ${params.state === "pending" ? sql`now() + interval '50 minutes'` : sql`now() - interval '70 minutes'`},
-          ${params.state === "shipped" ? sql`now() - interval '100 minutes'` : null},
+          ${paid ? sql`now() - interval '100 minutes'` : null},
           ${params.state === "cancelled" ? sql`now() - interval '60 minutes'` : null},
           ${params.state === "cancelled" ? "payment_expired" : null},
           ${params.state === "shipped" ? sql`now() - interval '30 minutes'` : null},
@@ -88,7 +89,7 @@ export async function seedCheckoutOrder(params: {
         returning id`;
       if (!order) throw new Error("failed to seed e2e order");
       for (const line of params.lines) {
-        await tx`insert into order_items (order_id, sku, qty, unit_price, unit_cost) values (${order.id}, ${line.sku}, ${line.qty}, ${line.unitPrice}, ${params.state === "shipped" ? 111_111 : 0})`;
+        await tx`insert into order_items (order_id, sku, qty, unit_price, unit_cost) values (${order.id}, ${line.sku}, ${line.qty}, ${line.unitPrice}, ${paid ? 111_111 : 0})`;
       }
       if (params.paymentUrl) {
         await tx`insert into payments (order_id, provider, provider_order_id, attempt, gross_amount, redirect_url, status)
@@ -138,4 +139,33 @@ export async function customerCartLines(customerId: string): Promise<Record<stri
  * without its own CF-Connecting-IP comes from there). */
 export async function clearOrderLimits(): Promise<void> {
   await withSql((sql) => sql`delete from claim_rate_limits where ip = '127.0.0.1' and action in ('order_view', 'cart_write', 'cart_create')`);
+}
+
+export interface SeededShipment {
+  providerOrderId: string;
+  awb: string;
+}
+
+/** A courier booking of the order as admin's "Pesan kurir" stores it with the fake courier (K2):
+ * waiting for pickup, waybill issued. The web "advance shipment" test route adopts it into its own
+ * fake courier (docs/plans/cart-checkout.md §15 Phase K, K3). */
+export async function seedBookedShipment(order: SeededOrder): Promise<SeededShipment> {
+  const providerOrderId = randomBytes(12).toString("hex");
+  const awb = `E2E${randomInt(1_000_000_000, 9_999_999_999)}${randomInt(100, 999)}`;
+  await withSql(
+    (sql) => sql`
+      insert into shipments (order_id, attempt, reference_id, provider, provider_order_id, courier, service, awb, cost_amount, status, provider_status, booked_at, last_event_at)
+      values (${order.id}, 1, ${`E2E-${order.orderNo}-K1`}, 'biteship', ${providerOrderId}, 'jne', 'reg', ${awb}, 95000, 'pickup_requested', 'confirmed', now(), now())`,
+  );
+  return { providerOrderId, awb };
+}
+
+/** The order's status and attention flags, as stored. */
+export async function orderState(orderId: string): Promise<{ status: string; needsAttention: string[]; trackingNumber: string | null }> {
+  return withSql(async (sql) => {
+    const [row] = await sql<{ status: string; needs_attention: string[]; tracking_number: string | null }[]>`
+      select status, needs_attention, tracking_number from orders where id = ${orderId}`;
+    if (!row) throw new Error("no such e2e order");
+    return { status: row.status, needsAttention: row.needs_attention, trackingNumber: row.tracking_number };
+  });
 }

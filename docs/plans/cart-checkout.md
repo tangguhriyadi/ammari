@@ -39,7 +39,9 @@ orders, "menunggu pembayaran" reminder, saved address, "Beli sekarang", stale de
 Biteship docs researched, breakdown K1 to K4 and decisions 46 to 51 confirmed by the owner; **K1
 done 2026-10-22** (order client, fake, shipment config, Code 128 and our own label; no migration;
 see §15 Phase K). **K2 done 2026-10-22** (migration 0034 `shipments`, two new flags, "Pesan kurir"
-from admin, our label; see §15 Phase K "K2 as built").
+from admin, our label; see §15 Phase K "K2 as built"). **K3 done 2026-10-22** (migration 0035
+`shipment_tracking`, Biteship webhook, poller, status mapping, "sudah sampai" email; see §15 Phase K
+"K3 as built").
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
@@ -1054,8 +1056,11 @@ outside `DEPLOY_ENV=production`** (it would call real couriers); a test key is r
 production. The names go into the env examples when K2/K3 first read them (`set-env-var.sh` must
 also refuse `SHIPPING_ORDER_PROVIDER`, like the other provider switches).
 apps/web Phase K: the same shipment runtime (webhook re-fetch and poller), plus
-`BITESHIP_WEBHOOK_PATH_TOKEN` (long random path segment) and `BITESHIP_WEBHOOK_HEADER_SECRET` (the
-static value of Biteship's webhook "Headers Signature Key / Secret" fields, confirmed to exist).
+`BITESHIP_WEBHOOK_PATH_TOKEN` (long random path segment), `BITESHIP_WEBHOOK_HEADER_NAME` and
+`BITESHIP_WEBHOOK_HEADER_SECRET` (the key and the static value of Biteship's webhook "Headers
+Signature Key / Secret" fields, confirmed to exist). **As built (K3, decision 54):** web uses a
+read-only tracking runtime (`BITESHIP_API_KEY`, `BITESHIP_BASE_URL`, `BITESHIP_ORIGIN_AREA_ID`,
+`BITESHIP_DAILY_ORDERS_BUDGET`, `DEPLOY_ENV`; no `BITESHIP_SHIPPER_*`, no reference prefix).
 cron service: `INTERNAL_CRON_SECRET` (`env/cron.env`, same value as web's; added to
 `deploy*/env/web.env.example` and the new `deploy*/env/cron.env.example` in session 12).
 Added to `deploy/env/*.env.example` and `.env.example` in session 17 (names only); payment and
@@ -1550,7 +1555,7 @@ the Order API on by default, simulated without pickup). No separate plan or key:
 |---|---|---|---|
 | K1 | **DONE 2026-10-22.** Order client, fake, shipment config, Code 128 and our own label (as built below). | none | TDD; typescript, security, silent-failure-hunter |
 | K2 | **DONE 2026-10-22** (as built below). **0034:** `shipments` per §3 (attempts, partial UNIQUE for the one live shipment, `reference_id` UNIQUE, `provider_order_id` UNIQUE NULL) and the `shipping_cost_over_quote` flag. `@ammari/commerce` booking: `bookShipment` (transaction: lock the order, paid web order in `to_ship` with a quote, no live shipment, insert the attempt `booking`; outside any transaction `createShipment`; transaction: store id, waybill, tracking id, price, status; `failed` only on a clear refusal), `recheckBooking` (re-sends the **same** reference: booked now, or `duplicate_reference` recovered through `existingOrderId` + `getShipment`), `cancelShipment` (before pickup only; the attempt ends `cancelled`, a new attempt may follow). Destination from the order's snapshot (recipient, phone, street line, courier note) and `shipping_destination_id`; one item "Pakaian" with the goods value and `shipping_weight_grams`; never the buyer's email. Admin: **"Pesan kurir"** on the `/packing` row and the order page, "Cek ulang pemesanan", "Batalkan pengiriman", "Cetak label" (the K1 PDF, one page per order), "Pengiriman" with booking, pickup state ("Menunggu kurir" / "Kurir menuju lokasi" / "Sudah dijemput"), driver when sent, the cut-off hint, actual cost next to the quote (`finance.view_profit`). Permission `orders.manage` (no new key). Manual resi path unchanged. Env examples and `set-env-var.sh` (refuse `SHIPPING_ORDER_PROVIDER`). | 0034 | TDD, committed race (two "Pesan kurir" at once: one booking), admin e2e 390/1280 with the fake; database, security, react |
-| K3 | **0035:** `shipment_events` (UNIQUE `(shipment_id, occurred_at, provider_status)`) and `shipping_webhook_events`. Webhook route in apps/web (path token + header secret, always 200, debounced re-fetch, §"Webhook vs polling"), `applyShipmentSnapshot` (status mapping below, `order.price`, waybill changes, both flags), poller route + `CRON_JOBS` key + the 3-hour block in both `cron.sh`, `delivered` email template and due rule, 12-month retention for webhook events, gated fake "advance shipment" test route posting through the real webhook route. | 0035 | TDD + replay, out-of-order, concurrency; security, silent-failure-hunter, database |
+| K3 | **DONE 2026-10-22** (as built below). **0035:** `shipment_events` (UNIQUE `(shipment_id, occurred_at, provider_status)`) and `shipping_webhook_events`. Webhook route in apps/web (path token + header secret, always 200, debounced re-fetch, §"Webhook vs polling"), `applyShipmentSnapshot` (status mapping below, `order.price`, waybill changes, both flags), poller route + `CRON_JOBS` key + the 3-hour block in both `cron.sh`, `delivered` email template and due rule, 12-month retention for webhook events, gated fake "advance shipment" test route posting through the real webhook route. | 0035 | TDD + replay, out-of-order, concurrency; security, silent-failure-hunter, database |
 | K4 | Buyer timeline in the "Lacak pengiriman" block (`/orders/[orderNo]`, latest on top, courier names only, never the provider's name), admin timeline, manual fallback polish (manual resi vs booked waybill), e2e both apps 390/1280. Runbook `docs/launch/shipping-dev.md`: env values to set (shipper, prefix, budget, webhook token and header secret), test webhooks, the two activation test orders (one delivered through Update Status, one cancelled through our "Batalkan pengiriman"), **print a label on the thermal printer at 100% and scan its barcode with a phone**, then go live. | none | react, e2e 390/1280 |
 
 **K1 as built (2026-10-22).** `@ammari/commerce/shipment-rules` (pure, client-safe):
@@ -1680,6 +1685,83 @@ image would show its error page for an order carrying one; prod's image predates
 - **For K3/K4:** apply the poller and webhook through the same stored-state rules (never backwards,
   never revive an ended attempt); flag `delivery_problem` for a cancel we did not ask for (now only
   logged as an error); the K4 runbook sets the admin env values below.
+
+**K3 as built (2026-10-22).** Owner decisions this session: (54) **apps/web reads with its own
+read-only runtime** (`trackingRuntimeFromEnv`: key, base URL, origin, `BITESHIP_DAILY_ORDERS_BUDGET`,
+`SHIPPING_ORDER_PROVIDER`, the same test/live key rules as admin; no sender, no reference prefix in
+web.env); (55) session rules confirmed with the plan: `delivery_problem` also for an undocumented
+status, a waybill that fails the resi rule, a parcel moving for a cancelled order and a read that
+keeps failing (not found, unreadable, another order); flags raised only on change; the "sudah sampai"
+email only when the courier reported delivery (staff's own "Selesai" sends none); staff's "Cek
+ulang" goes through the same apply path, so it can ship or complete the order too.
+- **0035 `shipment_tracking`** (`schema/shipments.ts`): `shipment_events` (`provider_status` NOT NULL,
+  `normalized_status` NULL for an undocumented status, `description`, `location`, `source` `webhook` /
+  `poll` / `staff`; UNIQUE `(shipment_id, occurred_at, provider_status)`, FK restrict),
+  `shipping_webhook_events` (`event`, `provider_order_id`, `shipment_id` FK set null, `payload jsonb`
+  or `raw_text`, `body_bytes`, `processed_at`, `result`; index on `received_at` for retention), and
+  on `shipments` `refetch_requested_at` (a webhook arrived while its read was debounced or failed) and
+  `stale_flagged_at` (`tracking_stale` once per quiet spell). Hand edits: header and `lock_timeout`.
+  `migration-0035.test.ts` (upgrade from 0034 with a booked shipment, every rule, K2 writes,
+  idempotent re-run); applied to `ammari_test`, `ammari_e2e` and local `ammari`.
+- **`@ammari/commerce/shipping` `tracking.ts`:** `applyShipmentSnapshot` (order lock, then shipment
+  lock; history to `shipment_events` ON CONFLICT DO NOTHING; a read whose newest history entry is
+  older than `last_event_at` only adds events; courier times more than 5 minutes in the future are
+  clamped; never backwards along pickup, transit, delivered; delivered / returned / ended final;
+  another provider order or reference refused; status mapping and flags per the table above;
+  `to_ship -> shipped` with no staff actor, the quoted courier label and the waybill as resi, then
+  `completed`; a refused move (or a constraint it trips) is a flag, never a rolled-back read; a new
+  waybill follows a resi that came from the booking, a different staff resi is flagged; audit row only
+  when something changed). `claimShipmentRead` (one conditional UPDATE: at most one read per shipment
+  per 2 minutes, shared by webhook and poller), `readClaimedShipment` (budget and unavailable ask for a
+  re-read and set `last_error` `read:<reason>`, shown on the admin order page; a permanent failure
+  flags `delivery_problem` once), `refetchShipmentForWebhook`, `flagStaleShipments` (2 days no pickup,
+  5 days no event; only orders in `to_ship` / `shipped`), `pollShipments` (re-fetch requests first,
+  then waiting for pickup (unless its reads fail for good), then quiet over 6 hours; 100 a run, 150 s;
+  stops at `budget_exhausted` and marks the rest; one shipment's DB error never ends the run).
+  `webhook.ts`: `parseShippingWebhookBody` (only `event` and `order_id` read), `recordShippingWebhook`
+  (a payload jsonb refuses is kept as text), `processShippingWebhook`. `shipment-config.ts`
+  `trackingRuntimeFromEnv`; the fake's `adopt` control. Emails: `delivered` due rule
+  (`deliveredByCourier`, an EXISTS on a delivered shipment) and `renderDeliveredEmail` ("Pesanan sudah
+  sampai", link to `/returns-exchange`). Retention: `shipping_webhook_events` after 12 months.
+  `CRON_JOBS` gets `shipmentPoll`. K2's bookings now apply every read through `applyShipmentSnapshot`.
+- **apps/web:** `POST /api/shipping/biteship/webhook/[token]` (path token and static header from env,
+  constant time, both always checked; always 200 "ok"; only authenticated posts logged, body up to 16
+  KB; re-fetch and apply in `after()`, then the order's emails), `POST /api/internal/shipping/poll`
+  (cron auth; 200, 503 not configured, 429 budget used up, 502 Biteship down, 500 a read failed),
+  gated `POST /api/test/shipments/advance` (adopts the stored booking into web's fake, moves it,
+  resets the debounce, calls the real webhook handler). Caddy unchanged (the path is not caught by the
+  `/api/internal`, `/api/test`, `/api/revalidate` 404s); dev's Cloudflare Access needs a bypass for
+  `api/shipping/biteship/webhook` (K4 runbook). Env names in the three web env examples.
+- **cron:** both `cron.sh` (identical) call the poll at start and every 3 hours after the email pass;
+  a call with no answer at all is retried after 10 minutes, any answer waits 3 hours.
+- **apps/admin:** wider copy for `delivery_problem` and `tracking_stale`; "Pelacakan otomatis tertunda
+  / gagal" under a live booking whose last read failed.
+- **Tests:** `tracking.test.ts` (every mapping row, flags on change only, waybill rules, replay,
+  out of order, no-history rank, future times, ended attempts, mismatch, claim and debounce, read
+  failures, poll selection, budget stop, mismatch and DB-error robustness, stale flags; committed race:
+  two webhooks, a staff read and a poll at once ship the order once), `webhook.test.ts` (parse, escaped
+  NUL kept as text, re-fetch applies only Biteship's answer, replay debounced, unknown order),
+  `shipments.test.ts` (tracking runtime, adopt), `emails.test.ts` (delivered rule, template, tracking to
+  emails end to end), `retention.test.ts`, web route tests, `webhook-auth.test.ts`, web e2e
+  `shipment-tracking.spec.ts` (390/1280: forged webhook changes nothing, picked to Dikirim with the
+  waybill, delivered to Selesai).
+- **Reviews** (security, silent-failure-hunter, database, typescript): no Critical. Fixed: a DB error on
+  one shipment ended the whole poll (High), a read naming another order raised no flag (High), escaped
+  NUL lost the webhook row, a future courier time froze the stale-read rule, refused moves on later
+  reads were silent, a constraint error in a move rolled back the whole read forever, a permanently
+  failing pickup read every run, cron losing a poll to a restart, secrets equal or placeholder-like,
+  body cap 32 to 16 KB, stale flags on finished orders.
+- **Known, not fixed (Low / by design):** the raw webhook payload (it may carry the courier driver's
+  name and phone) is kept 12 months as the plan's retention says; authenticated posts are not rate
+  limited (they need both secrets); one log line per refused post; the path token is in the URL, so
+  Cloudflare and Biteship's Events Log see it (rotate token and header secret together: env first,
+  then the dashboard); a read without history can still overwrite price, driver and waybill with
+  older values (the status is protected by rank); a delivered shipment whose order move was refused is
+  not read again (its `delivery_problem` flag is the signal; staff ship and complete by hand); a
+  debounced webhook waits for the next poll (up to 3 hours); the K2 race test's leftovers in
+  `ammari_test` were cleaned by hand once.
+- **For K4:** the buyer timeline reads `shipment_events` (latest first, `description` is the courier's
+  text: escape it, never in emails); admin timeline; runbook steps below.
 
 Notes from K1 for later sessions:
 - **K2 (booking safety):** any error with `outcomeUnknown` keeps the attempt `booking` (never
@@ -1974,6 +2056,16 @@ Owner decisions 2026-10-22 (K2):
 53. **Rollback:** the admin renders any unknown flag safely from K2 on, and K2 writes both new flags
     at once (a dev rollback to the K1 image shows its error page for an order carrying one; prod is
     unaffected).
+
+Owner decisions 2026-10-22 (K3):
+
+54. **apps/web tracks with a read-only runtime** (`trackingRuntimeFromEnv`): no sender contact or
+    reference prefix in web.env; the same key rules and shared read budget as admin.
+55. **K3 session rules (confirmed with the plan):** `delivery_problem` also for an undocumented status,
+    a waybill failing the resi rule, a parcel moving for a cancelled order and a read that keeps
+    failing; flags only on change (`shipments.refetch_requested_at` and `stale_flagged_at` added in
+    0035); the "sudah sampai" email only on courier delivery; staff's "Cek ulang" uses the same apply
+    path.
 
 Remaining small items to confirm with third parties (not owner decisions): the Biteship items in
 §15 "What to confirm with Biteship" (live Order API activation, Tracking quota use, six active

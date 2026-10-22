@@ -7,6 +7,9 @@
 # Every 5 minutes: POST /api/internal/payments/sweep (the payment expiry sweep), then POST
 # /api/internal/emails/dispatch (order emails: retries and staff-made changes such as "Tandai
 # dikirim"). Once when the container starts and then every 24 hours: POST /api/internal/retention.
+# Once when the container starts and then every 3 hours: POST /api/internal/shipping/poll (courier
+# tracking, Phase K: re-reads open shipments within the daily Biteship read budget and flags stale
+# ones; docs/plans/cart-checkout.md decision 48).
 # All straight at the web
 # container over the internal Docker network (`web` is the dev service name and prod's floating
 # alias for the active slot, deploy-prod/remote-deploy.sh point_web_alias), never through Caddy,
@@ -36,6 +39,13 @@ EMAILS_ALERT_AFTER=3
 RETENTION_MAX_TIME=600
 # A failed retention run is retried after an hour, not a day.
 RETENTION_RETRY_AFTER=3600
+# Courier tracking poll (decision 48). Not retried early when it answered: a used-up daily read
+# budget (429) or Biteship being down (502) is not fixed by asking again sooner, and webhooks still
+# arrive. No answer at all (web restarting during a deploy) is retried after POLL_RETRY_AFTER.
+POLL_EVERY=10800
+POLL_RETRY_AFTER=600
+# The poll stops starting new reads after 150 seconds; a read takes at most about 20 (one retry).
+POLL_MAX_TIME=240
 # This many failed sweeps in a row (15 minutes) logs an ALERT line on every further failure.
 SWEEP_ALERT_AFTER=3
 
@@ -53,7 +63,7 @@ pause() {
 # Whitespace or a CR from the env file would never match the web side (which trims): drop it.
 INTERNAL_CRON_SECRET="$(printf '%s' "${INTERNAL_CRON_SECRET:-}" | tr -d ' \t\r\n')"
 if [ -z "$INTERNAL_CRON_SECRET" ]; then
-  log "INTERNAL_CRON_SECRET is not set in env/cron.env; idle (no sweep, no emails, no retention)"
+  log "INTERNAL_CRON_SECRET is not set in env/cron.env; idle (no sweep, no emails, no retention, no tracking poll)"
   while :; do pause 3600; done
 fi
 
@@ -63,7 +73,7 @@ printf 'authorization: Bearer %s\n' "$INTERNAL_CRON_SECRET" > "$HEADER_FILE"
 unset INTERNAL_CRON_SECRET
 
 # call <path> <max seconds>: logs the HTTP status and the (small JSON) answer, never the secret.
-# Returns 0 only for a 2xx answer.
+# Returns 0 only for a 2xx answer; leaves the HTTP status in $status (empty or 000: no answer).
 call() {
   body="$(curl -sS -X POST -H "@$HEADER_FILE" --max-time "$2" -w '\n%{http_code}' "$TARGET$1" 2>&1)"
   rc=$?
@@ -75,7 +85,8 @@ call() {
       return 0
       ;;
     401) log "ERROR $1 -> 401: INTERNAL_CRON_SECRET differs between env/cron.env and env/web.env" ;;
-    503) log "ERROR $1 -> 503 $answer (web.env lacks INTERNAL_CRON_SECRET, or the payment provider or email sending is not configured: see web's logs)" ;;
+    503) log "ERROR $1 -> 503 $answer (web.env lacks INTERNAL_CRON_SECRET, or the payment provider, email sending or courier tracking is not configured: see web's logs)" ;;
+    429) log "ERROR $1 -> 429 $answer (the daily Biteship order read budget is used up; tracking reads wait until tomorrow)" ;;
     *) log "ERROR $1 -> ${status:-no answer} (curl exit $rc) $answer" ;;
   esac
   return 1
@@ -84,6 +95,7 @@ call() {
 # Let the web container finish starting after a deploy.
 pause 30
 last_retention=0
+last_poll=0
 sweep_failures=0
 email_failures=0
 while :; do
@@ -112,6 +124,15 @@ while :; do
     if [ "$email_failures" -ge "$EMAILS_ALERT_AFTER" ]; then
       log "ALERT: the order email pass has failed $email_failures times in a row; order emails are not going out"
     fi
+  fi
+  # Its failures are ERROR lines from call; the next run is the usual 3 hours later.
+  now="$(date +%s)"
+  if [ $((now - last_poll)) -ge "$POLL_EVERY" ]; then
+    call /api/internal/shipping/poll "$POLL_MAX_TIME"
+    case "$status" in
+      [1-5][0-9][0-9]) [ "$status" = "000" ] && last_poll=$((now - POLL_EVERY + POLL_RETRY_AFTER)) || last_poll="$now" ;;
+      *) last_poll=$((now - POLL_EVERY + POLL_RETRY_AFTER)) ;;
+    esac
   fi
   pause "$SWEEP_EVERY"
 done

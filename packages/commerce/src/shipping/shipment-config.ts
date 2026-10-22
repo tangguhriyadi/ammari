@@ -7,6 +7,7 @@ import { DEFAULT_DAILY_SHIPPING_BUDGETS, consumeShippingCallBudget } from "./bud
 import { FAKE_ORIGIN_AREA_ID } from "./fake";
 import { createFakeShipmentProvider } from "./fake-shipments";
 import type { ShipmentProvider } from "./shipment-provider";
+import type { ShipmentReader } from "./tracking";
 import { NON_PRODUCTION_REFERENCE_PREFIXES, SHIPMENT_REFERENCE_PREFIX_PATTERN } from "./shipment-rules";
 
 // Which courier booking provider runs, from the environment (docs/plans/cart-checkout.md §12,
@@ -103,4 +104,47 @@ export function shipmentRuntimeFromEnv(db: Database, env: ShippingEnv): Shipment
     beforeRequest: (kind) => consumeShippingCallBudget(db, kind, kind === "orders" ? ordersBudget : DEFAULT_DAILY_SHIPPING_BUDGETS.order_writes),
   });
   return { ok: true, runtime: { provider, origin: { name, phone, address, areaId: connection.originAreaId }, referencePrefix } };
+}
+
+export interface TrackingRuntime {
+  /** Reads only: apps/web never books or cancels. */
+  reader: ShipmentReader;
+}
+
+export type TrackingRuntimeResult = { ok: true; runtime: TrackingRuntime } | { ok: false; problems: string[] };
+
+/** The courier tracking runtime for apps/web (K3: the webhook's re-fetch and the poller; owner
+ * decision 2026-10-22: read-only, so web never holds the sender's contact or the reference prefix).
+ * The same key rules as the booking runtime (a test key outside production only, a live key in
+ * production only), so web reads the same Biteship account admin books on, and the shared daily
+ * `shipping_orders` read budget (`BITESHIP_DAILY_ORDERS_BUDGET`, set to the same value in both apps).
+ * `SHIPPING_ORDER_PROVIDER=fake` only in an e2e run, reading the process's fake store. */
+export function trackingRuntimeFromEnv(db: Database, env: ShippingEnv): TrackingRuntimeResult {
+  const problems: string[] = [];
+  const providerName = env.SHIPPING_ORDER_PROVIDER?.trim() || "biteship";
+
+  if (providerName === "fake") {
+    if (env.NODE_ENV === "production" || env.E2E_TEST_LOGIN !== "true") {
+      problems.push("SHIPPING_ORDER_PROVIDER=fake is only allowed in e2e runs (non-production build with E2E_TEST_LOGIN=true)");
+      return { ok: false, problems };
+    }
+    return { ok: true, runtime: { reader: createFakeShipmentProvider() } };
+  }
+  if (providerName !== "biteship") {
+    problems.push("SHIPPING_ORDER_PROVIDER must be biteship or fake");
+    return { ok: false, problems };
+  }
+
+  const connection = readBiteshipConnection(env, problems, { liveKeyOnlyInProduction: true });
+  const ordersBudget = positiveInt(env.BITESHIP_DAILY_ORDERS_BUDGET, DEFAULT_DAILY_SHIPPING_BUDGETS.orders);
+  if (ordersBudget === null) problems.push("BITESHIP_DAILY_ORDERS_BUDGET must be a positive whole number");
+  if (problems.length > 0 || !connection || ordersBudget === null) return { ok: false, problems };
+
+  const client = createBiteshipOrdersClient({
+    apiKey: connection.apiKey,
+    baseUrl: connection.baseUrl,
+    // Only reads are ever made through this runtime; a write would still be capped like admin's.
+    beforeRequest: (kind) => consumeShippingCallBudget(db, kind, kind === "orders" ? ordersBudget : DEFAULT_DAILY_SHIPPING_BUDGETS.order_writes),
+  });
+  return { ok: true, runtime: { reader: { name: client.name, getShipment: (providerOrderId) => client.getShipment(providerOrderId) } } };
 }

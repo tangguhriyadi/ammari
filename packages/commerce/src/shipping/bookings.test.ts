@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { testDb, withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
-import { auditLog, fabricColors, fabrics, orderItems, orders, products, productVariants, shipments, staffUsers } from "@ammari/db/schema";
+import { auditLog, fabricColors, fabrics, orderItems, orders, products, productVariants, shipmentEvents, shipments, staffUsers } from "@ammari/db/schema";
 import { ActionError } from "../errors";
 import { transitionOrderStatus, updateShipmentDetails } from "../orders/lifecycle";
 import { STAFF_CANCEL_MESSAGES, cancelCheckoutOrderByStaff } from "../payments/staff";
@@ -501,6 +501,8 @@ describe("races (committed transactions)", () => {
 });
 
 async function cleanUp(orderIds: string[], skus: string[], staffIds: string[]): Promise<void> {
+  const shipmentIds = (await testDb.select({ id: shipments.id }).from(shipments).where(inArray(shipments.orderId, orderIds))).map((row) => row.id);
+  if (shipmentIds.length > 0) await testDb.delete(shipmentEvents).where(inArray(shipmentEvents.shipmentId, shipmentIds));
   await testDb.delete(shipments).where(inArray(shipments.orderId, orderIds));
   await testDb.delete(auditLog).where(inArray(auditLog.entityId, orderIds));
   await testDb.delete(orderItems).where(inArray(orderItems.orderId, orderIds));

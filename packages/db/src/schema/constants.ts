@@ -297,6 +297,15 @@ export const SHIPMENT_STATUSES = [
 ] as const;
 export type ShipmentStatus = (typeof SHIPMENT_STATUSES)[number];
 
+/** The normalized tracking states a courier history entry can carry (shipment_events.normalized_status,
+ * migration 0035): every shipment status except our own booking states. */
+export const SHIPMENT_TRACKING_STATES = SHIPMENT_STATUSES.filter((status) => status !== "booking" && status !== "failed");
+
+/** Where a tracking event was read (migration 0035, K3): the webhook's re-fetch, the cron poller, or
+ * a read staff triggered (booking, "Cek ulang", label print). */
+export const SHIPMENT_EVENT_SOURCES = ["webhook", "poll", "staff"] as const;
+export type ShipmentEventSource = (typeof SHIPMENT_EVENT_SOURCES)[number];
+
 /** Transactional emails (plan §8); order_notifications (order_id, kind) is UNIQUE, the
  * idempotency guard that keeps a retried webhook from sending twice. */
 export const ORDER_NOTIFICATION_KINDS = ["created", "paid", "shipped", "delivered", "cancelled", "owner_paid"] as const;

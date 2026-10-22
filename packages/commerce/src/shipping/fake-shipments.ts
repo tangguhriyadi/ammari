@@ -72,6 +72,10 @@ export interface FakeShipmentControls {
   /** The courier issued another waybill (Biteship's `order.waybill_id`). */
   setWaybill(providerOrderId: string, waybillId: string | null): ProviderShipment;
   get(providerOrderId: string): ProviderShipment | null;
+  /** e2e only (the web "advance shipment" route): the fake store is per process, so an order admin
+   * booked in its own process is unknown to web's. Adds it from what our database stored about it
+   * (no-op when the store already has it). */
+  adopt(input: { providerOrderId: string; referenceId: string; waybillId: string | null; courierCode: string; serviceCode: string; price: number | null; providerStatus: string | null }): ProviderShipment;
 }
 
 export interface FakeShipmentProviderOptions {
@@ -140,6 +144,33 @@ export function createFakeShipmentProvider(options: FakeShipmentProviderOptions 
     get(providerOrderId) {
       const order = store.byId.get(providerOrderId);
       return order ? copy(order.shipment) : null;
+    },
+    adopt(input) {
+      const existing = store.byId.get(input.providerOrderId);
+      if (existing) return copy(existing.shipment);
+      const known = input.providerStatus ? canonicalBiteshipStatus(input.providerStatus) : null;
+      const order: FakeOrder = {
+        shipment: {
+          providerOrderId: input.providerOrderId,
+          referenceId: input.referenceId,
+          providerStatus: null,
+          knownStatus: null,
+          status: null,
+          waybillId: input.waybillId,
+          trackingId: null,
+          routingCode: null,
+          courierCode: input.courierCode,
+          serviceCode: input.serviceCode,
+          price: input.price,
+          trackingLink: null,
+          driver: null,
+          history: [],
+        },
+      };
+      setStatus(order, known ?? "confirmed");
+      store.byId.set(input.providerOrderId, order);
+      store.byReference.set(input.referenceId, input.providerOrderId);
+      return copy(order.shipment);
     },
   };
 

@@ -1,6 +1,6 @@
 import "server-only";
 import { sql, type SQL } from "drizzle-orm";
-import { carts, claimRateLimits, customerLoginLinks, orderAccessTokens, paymentNotifications, shippingRateCache } from "@ammari/db/schema";
+import { carts, claimRateLimits, customerLoginLinks, orderAccessTokens, paymentNotifications, shippingRateCache, shippingWebhookEvents } from "@ammari/db/schema";
 import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import type { Database } from "../db";
 import { errorLogFields } from "../errors";
@@ -17,7 +17,9 @@ import { errorLogFields } from "../errors";
 //   bumps it; lines go with the cart, ON DELETE CASCADE);
 // - `order_access_tokens` 30 days after they expired;
 // - `customer_login_links` 30 days after they expired (session 14; a used link was used before it
-//   expired, so this is also more than 30 days after its use; the login itself stays in audit_log).
+//   expired, so this is also more than 30 days after its use; the login itself stays in audit_log);
+// - `shipping_webhook_events` older than 12 months (K3, the raw courier webhook log; the tracking
+//   events themselves stay with the order in `shipment_events`).
 // Not here (later sessions): anonymizing unpaid orders after 90 days and paid ones after 10 years.
 //
 // Each table is deleted in batches of RETENTION_BATCH_SIZE rows, each batch its own statement, so
@@ -38,6 +40,7 @@ export const RETENTION_RULES = [
   { name: "customer_carts", table: carts, condition: sql`${carts.customerId} is not null and ${carts.lastActivityAt} < now() - interval '180 days'` },
   { name: "order_access_tokens", table: orderAccessTokens, condition: sql`${orderAccessTokens.expiresAt} < now() - interval '30 days'` },
   { name: "customer_login_links", table: customerLoginLinks, condition: sql`${customerLoginLinks.expiresAt} < now() - interval '30 days'` },
+  { name: "shipping_webhook_events", table: shippingWebhookEvents, condition: sql`${shippingWebhookEvents.receivedAt} < now() - interval '12 months'` },
 ] as const satisfies readonly { name: string; table: { id: unknown }; condition: SQL }[];
 
 export type RetentionRuleName = (typeof RETENTION_RULES)[number]["name"];

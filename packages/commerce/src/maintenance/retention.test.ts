@@ -3,7 +3,7 @@ import { inArray } from "drizzle-orm";
 import { describe, expect, test, vi } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { insertCustomer, insertOrder, insertProductVariant } from "@ammari/db/test-fixtures";
-import { cartItems, carts, claimRateLimits, customerLoginLinks, orderAccessTokens, paymentNotifications, shippingRateCache } from "@ammari/db/schema";
+import { cartItems, carts, claimRateLimits, customerLoginLinks, orderAccessTokens, paymentNotifications, shippingRateCache, shippingWebhookEvents } from "@ammari/db/schema";
 import { runRetention } from "./retention";
 
 // docs/plans/cart-checkout.md §11, session 12: each rule deletes exactly the rows past their
@@ -16,7 +16,7 @@ async function ids<T extends { id: string }>(rows: Promise<T[]>): Promise<string
   return (await rows).map((row) => row.id);
 }
 
-async function remaining(db: TestDatabase, table: typeof paymentNotifications | typeof claimRateLimits | typeof shippingRateCache | typeof carts | typeof orderAccessTokens | typeof customerLoginLinks, wanted: string[]) {
+async function remaining(db: TestDatabase, table: typeof paymentNotifications | typeof claimRateLimits | typeof shippingRateCache | typeof carts | typeof orderAccessTokens | typeof customerLoginLinks | typeof shippingWebhookEvents, wanted: string[]) {
   return (await db.select({ id: table.id }).from(table).where(inArray(table.id, wanted))).map((row) => row.id).sort();
 }
 
@@ -97,6 +97,17 @@ describe("runRetention", () => {
           .returning({ id: customerLoginLinks.id }),
       );
 
+      // Courier webhook log (K3): 12 months.
+      const [oldWebhook, newWebhook] = await ids(
+        tx
+          .insert(shippingWebhookEvents)
+          .values([
+            { event: "order.status", providerOrderId: "OLDWEBHOOK", payload: { order_id: "OLDWEBHOOK" }, bodyBytes: 26, receivedAt: ago(370 * DAY) },
+            { event: "order.status", providerOrderId: "NEWWEBHOOK", rawText: "odd", bodyBytes: 3, receivedAt: ago(300 * DAY) },
+          ])
+          .returning({ id: shippingWebhookEvents.id }),
+      );
+
       const summary = await runRetention(tx);
       expect(summary.failed).toEqual([]);
       expect(summary.truncated).toEqual([]);
@@ -116,6 +127,7 @@ describe("runRetention", () => {
       );
       expect(await remaining(tx, orderAccessTokens, [oldToken!, youngToken!])).toEqual([youngToken]);
       expect(await remaining(tx, customerLoginLinks, [oldLink!, oldUsedLink!, youngLink!])).toEqual([youngLink]);
+      expect(await remaining(tx, shippingWebhookEvents, [oldWebhook!, newWebhook!])).toEqual([newWebhook]);
 
       // A second run has nothing of these left to delete.
       await runRetention(tx);
