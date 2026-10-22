@@ -691,9 +691,13 @@ export async function pollShipments(db: Database, reader: ShipmentReader | null,
   const due = await db
     .select({ id: shipments.id })
     .from(shipments)
+    .innerJoin(orders, eq(orders.id, shipments.orderId))
     .where(
       and(
         readableCondition(),
+        // Staff already completed the order ("Tandai selesai", K4, owner 2026-10-22): the poll stops
+        // spending the daily budget on it; a webhook still reads it (and its re-read request below).
+        or(isNotNull(shipments.refetchRequestedAt), sql`${orders.status} <> 'completed'`),
         or(
           isNotNull(shipments.refetchRequestedAt),
           // Waiting for pickup: every run, unless its reads keep failing for good (then the 6-hour

@@ -254,7 +254,12 @@ and `/checkout/*` return not-found and the WhatsApp CTA stays primary).
   price more than Rp5.000 above the quote flags `shipping_cost_over_quote` (Ammari pays the
   difference); the label is **our own 120 x 100 mm PDF** with a Code 128 waybill barcode (Biteship
   has no label API); webhooks are hints that trigger a re-fetch, and a cron poll every 3 hours
-  re-reads open shipments at most every 6 hours (budget 60 reads a day).
+  re-reads open shipments at most every 6 hours (budget 60 reads a day). The buyer's "Lacak
+  pengiriman" shows the courier, the resi (copyable) and the courier timeline, latest on top, in
+  Indonesian and WIB, never the provider's name; no timeline while the order's resi differs from
+  the booked waybill (K4). Staff's "Tandai selesai" for a parcel the courier never reported
+  delivered sends no "sudah sampai" email, not even after a later courier report, and the poll
+  stops reading it (owner 2026-10-22).
 
 ## 4. Voucher & QR thank-you card program
 

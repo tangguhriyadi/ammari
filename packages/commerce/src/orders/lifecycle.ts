@@ -1,6 +1,6 @@
 import "server-only";
 import { and, desc, eq, notInArray, sql, type SQL } from "drizzle-orm";
-import { orderItems, orders, shipments, stockMovements, vouchers, MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
+import { orderItems, orderNotifications, orders, shipments, stockMovements, vouchers, MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
 import type { ChannelId, OrderStatus } from "@ammari/db/schema";
 import { valueDeltaForConsumption } from "../inventory/moving-average";
 import { lockVariantForUpdate } from "../stock/lock";
@@ -364,6 +364,41 @@ async function trackingMismatchUpdate(tx: Tx, order: { id: string; paymentStatus
   return flagged ? withoutAttentionFlag("tracking_number_mismatch") : null;
 }
 
+/** Staff's "Tandai selesai" on a checkout order the courier never reported delivered (Phase K4,
+ * owner 2026-10-22): the buyer gets no "Pesanan sudah sampai", not even when the courier reports the
+ * delivery later. The `delivered` email row is written already settled (`superseded`, the
+ * dispatcher's terminal "no longer due" mark, emails/dispatch.ts), so its claim never sends it. An
+ * order the courier did report delivered (its own move was refused, staff completed it by hand)
+ * keeps the email. Same transaction as the move. */
+async function settleDeliveredEmailForStaffCompletion(tx: Tx, orderId: string, actorStaffUserId: string): Promise<void> {
+  const [delivered] = await tx
+    .select({ id: shipments.id })
+    .from(shipments)
+    .where(and(eq(shipments.orderId, orderId), eq(shipments.status, "delivered")))
+    .limit(1);
+  if (delivered) return;
+  // A booking still on its way stops being polled (tracking.ts pollShipments): recorded, so a parcel
+  // that later goes wrong can be traced to this completion.
+  const [open] = await tx
+    .select({ id: shipments.id, status: shipments.status, providerStatus: shipments.providerStatus, lastEventAt: shipments.lastEventAt })
+    .from(shipments)
+    .where(and(eq(shipments.orderId, orderId), notInArray(shipments.status, ["cancelled", "failed", "returned"])))
+    .orderBy(desc(shipments.attempt))
+    .limit(1);
+  await writeAuditLog(tx, {
+    actorStaffUserId,
+    action: "complete_without_courier_delivery",
+    entityType: "order",
+    entityId: orderId,
+    after: { deliveredEmailSuppressed: true, openShipment: open ?? null },
+  });
+  // An unsent row (none is expected before a courier delivery) is settled too; a sent one stays.
+  await tx
+    .insert(orderNotifications)
+    .values({ orderId, kind: "delivered", error: "superseded" })
+    .onConflictDoUpdate({ target: [orderNotifications.orderId, orderNotifications.kind], set: { error: "superseded", updatedAt: sql`now()` }, setWhere: sql`${orderNotifications.sentAt} is null` });
+}
+
 /** The ONLY path allowed to move an order between statuses (status.ts's own doc comment) —
  * checks ORDER_STATUS_TRANSITIONS, stamps the matching timestamp column, and runs the matching
  * stock side effect (decrement on awaiting_payment -> to_ship, consuming a checkout order's
@@ -446,6 +481,7 @@ export async function transitionOrderStatus(
       .where(and(eq(orders.id, orderId), eq(orders.status, fromStatus)))
       .returning();
     if (!updated) throw new ActionError("Status pesanan sudah berubah. Muat ulang halaman.");
+    if (toStatus === "completed" && actorStaffUserId !== null && order.paymentStatus !== null) await settleDeliveredEmailForStaffCompletion(tx, orderId, actorStaffUserId);
 
     await writeAuditLog(tx, {
       actorStaffUserId,
@@ -504,5 +540,60 @@ export async function updateShipmentDetails(
       after: next,
     });
     return { changed: true };
+  });
+}
+
+export const BOOKED_WAYBILL_MESSAGES = {
+  notShipped: "Resi pesanan kurir bisa dipakai setelah pesanan dikirim.",
+  notCheckout: "Hanya untuk pesanan dari checkout website.",
+  noWaybill: "Belum ada resi dari pemesanan kurir yang aktif. Tekan Cek ulang pemesanan, atau perbaiki lewat Ubah resi.",
+  invalidWaybill: "Resi dari pemesanan kurir tidak sesuai format resi. Perbaiki lewat Ubah resi.",
+  alreadySame: "Resi pesanan sudah sama dengan resi pesanan kurir.",
+} as const;
+
+/** "Pakai resi pesanan kurir" on the admin order page (Phase K4, manual resi vs booking mismatch):
+ * the resi on a shipped checkout order becomes the waybill of its live courier booking, read here
+ * under the order's row lock (never a value the browser sent), with the same resi rule as "Ubah
+ * resi". The courier stays (the quoted label when none was typed). Clears `tracking_number_mismatch`
+ * and is audit logged. The buyer, who already got the "sudah dikirim" email, sees the new resi and
+ * the courier timeline on the order page. */
+export async function adoptBookedWaybill(orderId: string, actorStaffUserId: string, db: Database = defaultDb): Promise<{ trackingNumber: string }> {
+  return db.transaction(async (tx) => {
+    const [order] = await tx
+      .select({ id: orders.id, status: orders.status, paymentStatus: orders.paymentStatus, courier: orders.courier, courierLabel: orders.shippingCourierLabel, trackingNumber: orders.trackingNumber })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .for("update")
+      .limit(1);
+    if (!order) throw new ActionError("Pesanan tidak ditemukan.");
+    if (order.paymentStatus === null) throw new ActionError(BOOKED_WAYBILL_MESSAGES.notCheckout);
+    if (!SHIPMENT_DETAILS_EDITABLE_STATUSES.includes(order.status)) throw new ActionError(BOOKED_WAYBILL_MESSAGES.notShipped);
+    const [live] = await tx
+      .select({ awb: shipments.awb, status: shipments.status })
+      .from(shipments)
+      .where(and(eq(shipments.orderId, order.id), notInArray(shipments.status, ["cancelled", "failed"])))
+      .orderBy(desc(shipments.attempt))
+      .limit(1);
+    if (!live?.awb || live.status === "booking") throw new ActionError(BOOKED_WAYBILL_MESSAGES.noWaybill);
+    const parsed = parseShipmentDetails({ courier: order.courier ?? order.courierLabel, trackingNumber: live.awb }, { checkoutOrder: true });
+    // The waybill is the courier's, stored as sent: it must already be a clean resi, never a
+    // "cleaned" copy that would name another parcel.
+    if (!parsed.ok || parsed.value.trackingNumber !== live.awb.trim().toUpperCase()) throw new ActionError(BOOKED_WAYBILL_MESSAGES.invalidWaybill);
+    const next = parsed.value;
+    if (next.trackingNumber === order.trackingNumber && next.courier === order.courier) throw new ActionError(BOOKED_WAYBILL_MESSAGES.alreadySame);
+
+    await tx
+      .update(orders)
+      .set({ courier: next.courier, trackingNumber: next.trackingNumber, needsAttention: withoutAttentionFlag("tracking_number_mismatch"), updatedAt: sql`now()` })
+      .where(eq(orders.id, order.id));
+    await writeAuditLog(tx, {
+      actorStaffUserId,
+      action: "adopt_booked_waybill",
+      entityType: "order",
+      entityId: order.id,
+      before: { courier: order.courier, trackingNumber: order.trackingNumber },
+      after: next,
+    });
+    return { trackingNumber: next.trackingNumber! };
   });
 }

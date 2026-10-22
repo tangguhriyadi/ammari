@@ -662,6 +662,26 @@ describe("pollShipments", () => {
     });
   });
 
+  test("K4: a shipment of an order staff already completed is not polled; a webhook's re-read request still is", async () => {
+    await withRollback(async (tx) => {
+      await tx.update(shipments).set({ status: "cancelled", cancelledAt: new Date() }).where(sql`status not in ('cancelled', 'failed')`);
+      const completed = await bookedOrder(tx, { status: "in_transit", orderStatus: "shipped", trackingNumber: "WYB-1" });
+      await tx.update(orders).set({ status: "completed", completedAt: new Date() }).where(eq(orders.id, completed.orderId));
+      await tx.update(shipments).set({ lastEventAt: sql`now() - interval '7 hours'`, lastPolledAt: sql`now() - interval '7 hours'` }).where(eq(shipments.id, completed.shipmentId));
+      const waitingCompleted = await bookedOrder(tx);
+      await tx.update(orders).set({ status: "shipped", shippedAt: new Date() }).where(eq(orders.id, waitingCompleted.orderId));
+      await tx.update(orders).set({ status: "completed", completedAt: new Date() }).where(eq(orders.id, waitingCompleted.orderId));
+      const r = reader(new Map());
+      expect((await pollShipments(tx, r)).candidates).toBe(0);
+      expect(r.calls).toEqual([]);
+
+      await tx.update(shipments).set({ refetchRequestedAt: sql`now()` }).where(eq(shipments.id, completed.shipmentId));
+      const asked = reader(new Map([[completed.providerOrderId, snapshot(completed, "in_transit", [entry("in_transit", new Date())])]]));
+      await pollShipments(tx, asked);
+      expect(asked.calls).toEqual([completed.providerOrderId]);
+    });
+  });
+
   test("without a provider only the stale pass runs", async () => {
     await withRollback(async (tx) => {
       const summary = await pollShipments(tx, null);

@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { describe, expect, test, vi } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
-import { customers, orderAccessTokens, orderItems, orderNotifications, orders, payments, shipments, stockMovements, stockReservations, storeSettings } from "@ammari/db/schema";
+import { auditLog, customers, orderAccessTokens, orderItems, orderNotifications, orders, payments, shipments, stockMovements, stockReservations, storeSettings } from "@ammari/db/schema";
 import type { Tx } from "../db";
 import { hashOrderAccessToken } from "../checkout/access-token";
 import { formatRupiah } from "./format";
@@ -630,6 +630,47 @@ describe("dispatchOrderEmails", () => {
       await transitionOrderStatus(manual.orderId, "completed", staff.id, tx);
       await dispatchPendingOrderEmails(tx, deps);
       expect(forOrder(sent, manual.orderNo).filter((message) => message.subject.includes("sudah sampai"))).toEqual([]);
+    });
+  });
+
+  test("K4: staff's Tandai selesai on a booked order the courier never reported delivered: a later courier delivery still sends no \"sudah sampai\"", async () => {
+    await withRollback(async (tx) => {
+      quiet();
+      const { deps, sent } = recorder();
+      await setSupportEmail(tx, "pemilik@example.test");
+      const placed = await placedOrder(tx);
+      await applyPaymentStatus(tx, report(placed, "settlement"));
+      const booked = await bookedShipment(tx, placed.orderId, "JNE00099887766");
+      await applyShipmentSnapshot(tx, booked.id, courierRead(placed, booked, "picked", "JNE00099887766"), { source: "poll", actorStaffUserId: null, action: "track_shipment_poll" });
+      await dispatchPendingOrderEmails(tx, deps);
+      const staff = await insertStaffUser(tx);
+      await transitionOrderStatus(placed.orderId, "completed", staff.id, tx);
+      // The courier reports delivery days later.
+      await applyShipmentSnapshot(tx, booked.id, courierRead(placed, booked, "delivered", "JNE00099887766"), { source: "webhook", actorStaffUserId: null, action: "track_shipment_webhook" });
+      await dispatchOrderEmails(tx, deps, { orderNo: placed.orderNo });
+      await dispatchPendingOrderEmails(tx, deps);
+      expect(forOrder(sent, placed.orderNo).filter((message) => message.subject.includes("sudah sampai"))).toEqual([]);
+      const delivered = (await notificationRows(tx, placed.orderId)).find((row) => row.kind === "delivered");
+      expect(delivered).toMatchObject({ sentAt: null, error: "superseded" });
+      const [audit] = await tx.select().from(auditLog).where(and(eq(auditLog.entityId, placed.orderId), eq(auditLog.action, "complete_without_courier_delivery")));
+      expect(audit).toMatchObject({ actorStaffUserId: staff.id, after: { deliveredEmailSuppressed: true, openShipment: { id: booked.id, status: "picked_up" } } });
+    });
+  });
+
+  test("K4: staff completing an order the courier already reported delivered (its move was refused) keeps the \"sudah sampai\" email", async () => {
+    await withRollback(async (tx) => {
+      quiet();
+      const { deps, sent } = recorder();
+      await setSupportEmail(tx, "pemilik@example.test");
+      const placed = await placedOrder(tx);
+      await applyPaymentStatus(tx, report(placed, "settlement"));
+      const staff = await insertStaffUser(tx);
+      await transitionOrderStatus(placed.orderId, "shipped", staff.id, tx, { courier: "JNE", trackingNumber: "JNE00099887766" });
+      const booked = await bookedShipment(tx, placed.orderId, "JNE00099887766");
+      await tx.update(shipments).set({ status: "delivered", providerStatus: "delivered", deliveredAt: new Date() }).where(eq(shipments.id, booked.id));
+      await transitionOrderStatus(placed.orderId, "completed", staff.id, tx);
+      await dispatchPendingOrderEmails(tx, deps);
+      expect(forOrder(sent, placed.orderNo).filter((message) => message.subject.includes("sudah sampai"))).toHaveLength(1);
     });
   });
 

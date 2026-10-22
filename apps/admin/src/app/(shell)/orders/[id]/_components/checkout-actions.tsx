@@ -11,7 +11,7 @@ import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
 import type { ActionResult } from "@/lib/action-result";
 import { ShipmentDetailsDialog } from "@/components/orders/shipment-details-dialog";
 import { markShippedAction } from "../../../packing/actions";
-import { cancelCheckoutOrderAction, clearAttentionFlagAction, recordRefundAction, transitionOrderStatusAction } from "../../actions";
+import { adoptBookedWaybillAction, cancelCheckoutOrderAction, clearAttentionFlagAction, recordRefundAction, transitionOrderStatusAction } from "../../actions";
 
 // Staff actions on a web checkout order (docs/plans/cart-checkout.md §6.5, §7, session 16). Every
 // one is checked again on the server (orders.manage, and the order's state under its row lock);
@@ -62,15 +62,21 @@ export interface CheckoutStatusActionsProps {
   bookedWaybill?: string | null;
   /** ORDER_STATUS_TRANSITIONS for the current status. */
   allowedTransitions: OrderStatus[];
+  /** A courier booking reported the parcel delivered (K3): then the buyer gets "sudah sampai". */
+  courierDelivered?: boolean;
+  /** An open courier booking the poll still reads (it stops once staff complete the order). */
+  openBooking?: boolean;
 }
 
-export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus, totalAmount, quotedCourierLabel, bookedWaybill, allowedTransitions }: CheckoutStatusActionsProps) {
+export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus, totalAmount, quotedCourierLabel, bookedWaybill, allowedTransitions, courierDelivered = false, openBooking = false }: CheckoutStatusActionsProps) {
   const router = useRouter();
   const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   // "Dikirim" asks for the courier and resi first (required on a web order, 2026-10-21 sandbox run).
   const [shipping, setShipping] = useState(false);
+  // "Tandai selesai" asks first: the courier has not reported the delivery (K4).
+  const [confirmComplete, setConfirmComplete] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const unpaid = paymentStatus === "pending";
@@ -91,6 +97,8 @@ export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus,
         return;
       }
       if (!result.data.storefrontOk) toast.error(STOREFRONT_STALE_MESSAGE);
+      // The button that had focus is gone once the order moved on.
+      focusPageHeading();
       router.refresh();
     });
   }
@@ -122,9 +130,9 @@ export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus,
             type="button"
             variant={toStatus === "returned" ? "danger" : "secondary"}
             loading={pending}
-            onClick={() => (toStatus === "shipped" ? setShipping(true) : transition(toStatus))}
+            onClick={() => (toStatus === "shipped" ? setShipping(true) : toStatus === "completed" ? setConfirmComplete(true) : transition(toStatus))}
           >
-            {status === "awaiting_payment" && toStatus === "to_ship" ? "Proses" : ORDER_STATUS_LABELS[toStatus]}
+            {status === "awaiting_payment" && toStatus === "to_ship" ? "Proses" : toStatus === "completed" ? "Tandai selesai" : ORDER_STATUS_LABELS[toStatus]}
           </Button>
         ))}
         {canCancel && (
@@ -150,6 +158,24 @@ export function CheckoutStatusActions({ orderId, orderNo, status, paymentStatus,
           }}
         />
       )}
+      <Dialog
+        open={confirmComplete}
+        onOpenChange={setConfirmComplete}
+        title={`Tandai selesai: ${orderNo}?`}
+        description={
+          courierDelivered
+            ? "Kurir sudah melaporkan paket sampai. Pembeli mendapat email bahwa pesanannya sudah sampai."
+            : openBooking
+              ? "Kurir belum melaporkan paket sampai. Tandai selesai hanya kalau kamu sudah memastikan paket diterima pembeli (misalnya lewat WhatsApp atau cek resi di situs kurir). Pembeli tidak mendapat email \"sudah sampai\", dan pengecekan otomatis berkala untuk pesanan ini berhenti."
+              : "Tandai selesai kalau paket sudah diterima pembeli. Pembeli tidak mendapat email \"sudah sampai\"."
+        }
+        confirmLabel="Tandai selesai"
+        cancelLabel="Kembali"
+        onConfirm={() => {
+          setConfirmComplete(false);
+          transition("completed");
+        }}
+      />
       <Dialog
         open={confirmCancel}
         onOpenChange={setConfirmCancel}
@@ -189,9 +215,19 @@ export interface AttentionPanelProps {
    * with a recorded refund (the server refuses "Tandai beres" for them too). */
   refundOwed: boolean;
   canManage: boolean;
+  /** The live courier booking's waybill and the order's resi (K4: "Pakai resi pesanan kurir"). */
+  bookedWaybill?: string | null;
+  trackingNumber?: string | null;
 }
 
-export function AttentionPanel({ orderId, status, flags, refundableAttempts, refundOwed, canManage }: AttentionPanelProps) {
+/** Flags whose facts are in the Pengiriman section (K4). */
+const SHIPPING_FLAGS: ReadonlySet<string> = new Set(["tracking_stale", "delivery_problem", "tracking_number_mismatch", "shipping_cost_over_quote"]);
+
+function sameResi(a: string, b: string): boolean {
+  return a.replace(/\s+/g, "").toUpperCase() === b.replace(/\s+/g, "").toUpperCase();
+}
+
+export function AttentionPanel({ orderId, status, flags, refundableAttempts, refundOwed, canManage, bookedWaybill = null, trackingNumber = null }: AttentionPanelProps) {
   const router = useRouter();
   const toast = useToast();
   const noteId = useId();
@@ -207,6 +243,25 @@ export function AttentionPanel({ orderId, status, flags, refundableAttempts, ref
   const [pending, startTransition] = useTransition();
 
   if (flags.length === 0) return null;
+
+  // The booking's waybill can replace a different resi once the order has shipped (the server reads
+  // the waybill itself and checks every rule again).
+  const canAdoptWaybill = (status === "shipped" || status === "completed") && bookedWaybill !== null && (trackingNumber === null || !sameResi(bookedWaybill, trackingNumber));
+
+  function adoptWaybill() {
+    setError(null);
+    setBusy("adopt");
+    startTransition(async () => {
+      const result = await call(() => adoptBookedWaybillAction({ orderId }));
+      setBusy(null);
+      if (!result.ok) setError(result.error);
+      else {
+        toast.success(`Resi pesanan diganti ke ${result.data.trackingNumber}. Email "sudah dikirim" yang sudah terkirim masih berisi resi lama; halaman pesanan pembeli menampilkan resi baru.`);
+        focusPageHeading();
+      }
+      router.refresh();
+    });
+  }
 
   function clear(flag: OrderAttentionFlag) {
     setError(null);
@@ -262,8 +317,18 @@ export function AttentionPanel({ orderId, status, flags, refundableAttempts, ref
             <li key={flag} className="flex flex-col gap-2 rounded-md bg-white p-3">
               <p className="text-base font-semibold text-neutral-900">{copy.label}</p>
               <p className="text-base text-neutral-700">{copy.meaning}</p>
+              {SHIPPING_FLAGS.has(flag) && (
+                <a href="#pengiriman" className="inline-flex min-h-11 items-center self-start text-sm text-neutral-900 underline underline-offset-4">
+                  Lihat bagian Pengiriman
+                </a>
+              )}
               {canManage && (
                 <div className="flex flex-wrap gap-2">
+                  {flag === "tracking_number_mismatch" && canAdoptWaybill && (
+                    <Button type="button" loading={pending && busy === "adopt"} disabled={pending} onClick={adoptWaybill}>
+                      Pakai resi pesanan kurir ({bookedWaybill})
+                    </Button>
+                  )}
                   {flag === "refund_due" &&
                     refundableAttempts.map((target) => (
                       <Button

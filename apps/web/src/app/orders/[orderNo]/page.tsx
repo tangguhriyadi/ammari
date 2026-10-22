@@ -11,10 +11,13 @@ import { PaymentStatusCheck } from "@/components/checkout/payment-status-check";
 import { ReopenPaymentButton } from "@/components/checkout/reopen-payment-button";
 import { ReorderButton } from "@/components/orders/reorder-button";
 import { ShippingCostRows } from "@/components/shipping-cost-rows";
+import { CopyTextButton } from "@/components/orders/copy-text-button";
+import { TRACKING_DELAY_NOTES } from "@/lib/orders/tracking";
 
 // One order (docs/plans/cart-checkout.md §9.1, §9.2; docs/design/storefront.md §7): lines, totals,
 // address, status timeline, "Lanjutkan pembayaran" while payable, "Pesan lagi" when cancelled
-// unpaid, and "Lacak pengiriman" (courier and resi before Phase K). Shown to the session the order
+// unpaid, and "Lacak pengiriman" (courier and resi, then the courier timeline, latest on top, Phase
+// K4). Shown to the session the order
 // belongs to, or to the browser holding the order's "Lihat pesanan" cookie (the email link's token,
 // swapped by app/api/orders/[orderNo]/view before any page renders). Everyone else, an unknown
 // number included, gets the same not-found answer. Works with the cart flag off too (plan §14: the
@@ -144,9 +147,14 @@ export default async function OrderPage({
                   <dd className="text-ink">{order.shipment.courier}</dd>
                 </div>
               )}
-              <div className="flex justify-between gap-4">
-                <dt className="text-ink-muted">Nomor resi</dt>
-                <dd className="font-medium break-all text-ink">{order.shipment.trackingNumber}</dd>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="shrink-0 text-ink-muted">Nomor resi</dt>
+                <dd className="flex min-w-0 flex-wrap items-center justify-end gap-x-3">
+                  <span className="font-medium break-all text-ink" data-testid="order-tracking-number">
+                    {order.shipment.trackingNumber}
+                  </span>
+                  <CopyTextButton text={order.shipment.trackingNumber} label="nomor resi" testId="copy-tracking-number" />
+                </dd>
               </div>
             </dl>
           ) : (
@@ -155,6 +163,31 @@ export default async function OrderPage({
                 ? "Pesanan sudah dikirim. Nomor resinya belum tersedia di sini."
                 : "Nomor resi dikirim lewat email setelah pesanan dikirim."}
             </p>
+          )}
+          {order.tracking.delay && (
+            <p className="mt-1 bg-surface p-3 text-sm text-ink-soft" data-testid="tracking-delay">
+              {TRACKING_DELAY_NOTES[order.tracking.delay]}
+            </p>
+          )}
+          {order.tracking.events.length > 0 && (
+            <ol role="list" className="mt-2 flex flex-col" aria-label="Riwayat pengiriman" data-testid="tracking-timeline">
+              {order.tracking.events.map((entry, index) => (
+                <li key={`${entry.dateTime}-${index}`} className="relative flex flex-col gap-0.5 border-l border-line pb-4 pl-5 last:border-transparent last:pb-0">
+                  <span
+                    aria-hidden="true"
+                    className={`absolute top-[6px] -left-[4px] size-[7px] ${index === 0 ? "bg-brand" : "border border-ink-muted bg-bg"}`}
+                  />
+                  <span className={`text-sm ${index === 0 ? "font-medium text-ink" : "text-ink-soft"}`}>
+                    {index === 0 && <span className="sr-only">Terbaru: </span>}
+                    {entry.label}
+                  </span>
+                  <time dateTime={entry.dateTime} className="text-xs text-ink-muted">
+                    {entry.at}
+                  </time>
+                  {entry.note && <span className="text-xs break-words text-ink-muted">{entry.note}</span>}
+                </li>
+              ))}
+            </ol>
           )}
         </section>
       )}

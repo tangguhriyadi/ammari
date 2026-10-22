@@ -1,12 +1,15 @@
 # Checkout on PROD (ammari.id): deploy, prepare, launch on 1 Dec 2026
 
-For the owner, by hand, in three parts:
+For the owner, by hand, in three parts (plus Part 4, courier booking, in the first weeks after launch):
 
 1. **Deploy the checkout release with the flag off** (migrations 0030 to 0033; prod is at 0029
    today). Any time after the dev run in `checkout-dev.md` passed.
 2. **Pre-launch setup** (target ~15 Nov): production keys, cron secret, Midtrans production,
    Biteship Grow, store settings, legal pages. Still flag off.
 3. **Launch day, 1 Dec:** flag on, revalidate, smoke test, monitoring, rollback.
+4. **Courier booking and tracking (Phase K)**, after launch: live Order API, sender, live webhook,
+   balance. Until then staff book by hand and use "Dikirim" / "Tandai selesai". Dev setup, the
+   activation test orders and the label print check: `shipping-dev.md`.
 
 Background: `docs/plans/cart-checkout.md` (§12 variables, §14 launch), `docs/deploy-prod.md`
 (routine deploys, env changes, backups). No agent touched the VPS, GitHub, Cloudflare or any
@@ -536,3 +539,111 @@ exists** (check with `prodsql`: `select count(*) from orders where payment_statu
 The old code does not know payments, holds or the cancel rules for web orders. Fix forward instead
 (revert or patch on `dev`, let dev deploy, fast-forward `main`, deploy), with the flag off in the
 meantime.
+
+---
+
+## Part 4. Courier booking and tracking (Phase K), after launch
+
+Not a launch blocker (plan §15 Phase K): until this part is done, admin's "Pesan kurir" refuses
+with a message and staff book the quoted service by hand. Do it once `shipping-dev.md` E to G are
+done (activation form sent) and **Biteship has approved the Order API activation** for the live
+key. The release with K1 to K4 (migrations 0034 and 0035) must be on prod first (the usual
+`dev` → `main` fast-forward and the "Deploy (prod)" workflow).
+
+**4.1 [Dashboard: Biteship] Ready to book for real.**
+
+1. Grow plan active and the activation approved (Biteship's email or the dashboard says so).
+2. The six couriers active (2.5.2).
+3. **Balance:** top up (QRIS or bank transfer) enough for a few days of parcels. Courier fees are
+   taken from it at booking; a re-weigh can take a little more later. Too little balance: booking is
+   refused with "Saldo Biteship tidak cukup" and staff use the manual path.
+
+**4.2 [Mac] Live key and sender in prod-admin.env.** The key file from 2.5 was deleted; capture it
+again from the dashboard (Settings → API, the production key, Copy). One block: it stops at the
+first problem, and the clipboard is cleared whatever happens:
+
+```bash
+(
+  umask 077; pbpaste > ~/ammari-secrets/prod-biteship-key; pbcopy < /dev/null
+  f=~/ammari-secrets/prod-biteship-key
+  [ "$(grep -c . "$f")" -eq 1 ] && grep -qx 'biteship_live\.[^[:space:]]*' "$f" || { echo "STOPPED: not exactly one live Biteship key (biteship_live.) on the clipboard"; rm -f "$f"; exit 1; }
+  deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env BITESHIP_API_KEY < "$f" || { echo "STOPPED: write failed"; exit 1; }
+  rm -f "$f"
+  deploy/set-env-var.sh --same ~/ammari-secrets/prod-web.env ~/ammari-secrets/prod-admin.env BITESHIP_API_KEY
+  printf 'https://api.biteship.com\n' | deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env BITESHIP_BASE_URL
+  deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env BITESHIP_ORIGIN_AREA_ID < ~/ammari-secrets/biteship-origin-area-id
+  echo BITESHIP-ADMIN-KEY-SET
+)
+# The sender: each line asks for the value (type it, Enter); nothing is saved when it is empty.
+printf 'Nama pengirim (e.g. Ammari): '; IFS= read -r v; [ -n "$v" ] && printf '%s\n' "$v" | deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env BITESHIP_SHIPPER_NAME || echo "STOPPED: empty"
+printf 'No. HP pengirim (08...): '; IFS= read -r v; [ -n "$v" ] && printf '%s\n' "$v" | deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env BITESHIP_SHIPPER_PHONE || echo "STOPPED: empty"
+printf 'Alamat penjemputan (jalan, nomor, RT/RW, kelurahan): '; IFS= read -r v; [ -n "$v" ] && printf '%s\n' "$v" | deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env BITESHIP_SHIPPER_ADDRESS || echo "STOPPED: empty"; unset v
+```
+
+Expected `BITESHIP-ADMIN-KEY-SET` and `BITESHIP_API_KEY: MATCH` (web and admin use the same live key); any
+`STOPPED` line means nothing after it ran: fix and run the block again. The first label you print
+(4.7) shows the sender exactly as saved. Sender rules: name 2 to
+60 characters, an Indonesian mobile number, the real pickup address 10 to 300 characters.
+**`BITESHIP_REFERENCE_PREFIX` stays empty in prod** (references are `ORD-...-K1`; production refuses
+`DEV-`, `LOCAL-`, `E2E-`, `CT-` and `TEST-`). `BITESHIP_DAILY_ORDERS_BUDGET` stays unset in both
+files (60 reads a day, inside Grow's Tracking quota of 2.000 / 31), or the same value in both.
+Never set `SHIPPING_ORDER_PROVIDER`.
+
+**4.3 [Mac] Live webhook secrets in prod-web.env** (new values, never dev's):
+
+```bash
+# Created once; re-running never replaces them (that would break the registered webhook until 4.5 is redone).
+[ -s ~/ammari-secrets/prod-biteship-webhook-path ]   || (umask 077 && openssl rand -hex 32 > ~/ammari-secrets/prod-biteship-webhook-path)
+[ -s ~/ammari-secrets/prod-biteship-webhook-secret ] || (umask 077 && openssl rand -hex 32 > ~/ammari-secrets/prod-biteship-webhook-secret)
+deploy/set-env-var.sh ~/ammari-secrets/prod-web.env BITESHIP_WEBHOOK_PATH_TOKEN < ~/ammari-secrets/prod-biteship-webhook-path
+deploy/set-env-var.sh ~/ammari-secrets/prod-web.env BITESHIP_WEBHOOK_HEADER_SECRET < ~/ammari-secrets/prod-biteship-webhook-secret
+printf 'X-Ammari-Courier-Secret\n' | deploy/set-env-var.sh ~/ammari-secrets/prod-web.env BITESHIP_WEBHOOK_HEADER_NAME
+deploy/set-env-var.sh --check ~/ammari-secrets/prod-web.env BITESHIP_API_KEY BITESHIP_WEBHOOK_PATH_TOKEN BITESHIP_WEBHOOK_HEADER_NAME BITESHIP_WEBHOOK_HEADER_SECRET SHIPPING_ORDER_PROVIDER
+deploy/set-env-var.sh --check ~/ammari-secrets/prod-admin.env BITESHIP_API_KEY BITESHIP_BASE_URL BITESHIP_ORIGIN_AREA_ID BITESHIP_SHIPPER_NAME BITESHIP_SHIPPER_PHONE BITESHIP_SHIPPER_ADDRESS DEPLOY_ENV SHIPPING_ORDER_PROVIDER BITESHIP_REFERENCE_PREFIX
+```
+
+Expected: all `set` except `SHIPPING_ORDER_PROVIDER` `missing` and `BITESHIP_REFERENCE_PREFIX`
+`empty` or `missing` (never `set` in prod). Keep the two webhook files: they are
+needed for 4.5 and for a later rotation.
+
+**4.4 [Mac] Upload and restart:**
+
+```bash
+deploy-prod/upload-prod-env.sh
+prodssh 'cd /opt/ammari-prod && ./recreate-active-slot.sh admin && ./recreate-active-slot.sh web'
+```
+
+**4.5 [Dashboard: Biteship, Testing Mode OFF] Register the live webhook.** Same steps as
+`shipping-dev.md` C, with the prod files and URL:
+
+```bash
+{ printf 'https://ammari.id/api/shipping/biteship/webhook/'; tr -d '\n' < ~/ammari-secrets/prod-biteship-webhook-path; } | pbcopy
+# paste into "Webhook URL", then: pbcopy < /dev/null
+tr -d '\n' < ~/ammari-secrets/prod-biteship-webhook-secret | pbcopy
+# paste into "Headers Signature Secret", then: pbcopy < /dev/null
+```
+
+Header key `X-Ammari-Courier-Secret`; events **order.status**, **order.price**, **order.waybill_id**.
+Cloudflare: nothing new if 2.3 holds (no Access on prod); watch Security → Events for challenges on
+`/api/shipping/biteship/webhook/` after the first parcel, as in 2.3.2.
+
+**4.6 [Mac] Check:**
+
+```bash
+prodssh 'cd /opt/ammari-prod && docker compose logs --since 3h cron 2>&1 | grep shipping/poll | tail -3' | grep . || echo "NO MATCH: no poll in 3 hours (a failure: check the cron container)"
+prodssh 'cd /opt/ammari-prod && docker compose logs --since 30m 2>&1 | grep -E "\[shipping\] (courier webhook|courier tracking not configured|admin courier booking not configured)" | tail -20' | grep . || echo "NO MATCH: no webhook post and no configuration warning in 30 minutes"
+```
+
+Expected: `/api/internal/shipping/poll -> 200`; webhook lines with `auth: 'ok'` (once Biteship has
+sent something); no `not configured` line naming a `BITESHIP_*` variable. (`go-live-check.sh` does
+not cover the Phase K variables yet; 4.2 and 4.3's `--check` lines do.)
+
+**4.7 First real parcel.** Prod admin → a paid web order → **Pesan kurir** → **Cetak label** →
+print at 100% on the thermal printer (`shipping-dev.md` F) → hand it to the courier. Watch the order
+reach **Dikirim** (buyer email with the resi) and later **Selesai** on its own, and the buyer's
+"Lacak pengiriman" timeline fill. If it stays at "Menunggu kurir" past the cut-off hint's next
+working day, the order gets "Pelacakan berhenti" after 2 days; check with the courier.
+
+**4.8 Rollback of Phase K only:** clear `BITESHIP_API_KEY` in **prod-admin.env** (upload, recreate
+admin): "Pesan kurir" refuses and staff go back to the manual path; bookings already made keep being
+tracked by web. Rotating the webhook secrets: env first (4.3, 4.4), then the dashboard (4.5).

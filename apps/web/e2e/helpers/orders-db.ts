@@ -169,3 +169,13 @@ export async function orderState(orderId: string): Promise<{ status: string; nee
     return { status: row.status, needsAttention: row.needs_attention, trackingNumber: row.tracking_number };
   });
 }
+
+/** K4: the order's booking as a failed automatic read leaves it (`read:<reason>`), or cleared. */
+export async function setShipmentReadError(orderId: string, lastError: string | null): Promise<void> {
+  await withSql((sql) => sql`update shipments set last_error = ${lastError} where order_id = ${orderId} and status not in ('cancelled', 'failed')`);
+}
+
+/** K4: a resi on the order other than the booking's waybill (a mismatch staff have not fixed yet). */
+export async function setOrderTrackingNumber(orderId: string, trackingNumber: string): Promise<void> {
+  await withSql((sql) => sql`update orders set tracking_number = ${trackingNumber} where id = ${orderId}`);
+}

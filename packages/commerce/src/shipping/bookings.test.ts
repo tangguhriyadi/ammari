@@ -5,7 +5,7 @@ import { testDb, withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
 import { auditLog, fabricColors, fabrics, orderItems, orders, products, productVariants, shipmentEvents, shipments, staffUsers } from "@ammari/db/schema";
 import { ActionError } from "../errors";
-import { transitionOrderStatus, updateShipmentDetails } from "../orders/lifecycle";
+import { BOOKED_WAYBILL_MESSAGES, adoptBookedWaybill, transitionOrderStatus, updateShipmentDetails } from "../orders/lifecycle";
 import { STAFF_CANCEL_MESSAGES, cancelCheckoutOrderByStaff } from "../payments/staff";
 import { SHIPMENT_MESSAGES, bookShipment, cancelShipment, recheckBooking } from "./bookings";
 import { createFakeShipmentProvider, createFakeShipmentStore, type FakeShipmentStore } from "./fake-shipments";
@@ -418,6 +418,62 @@ describe("order rules around a booking", () => {
       const [otherRow] = await shipmentRows(tx, other.order.id);
       await transitionOrderStatus(other.order.id, "shipped", staff.id, tx, { courier: "JNE Reguler", trackingNumber: otherRow!.awb });
       expect((await orderRow(tx, other.order.id)).needsAttention).toEqual([]);
+    });
+  });
+});
+
+describe("K4: \"Pakai resi pesanan kurir\" (adoptBookedWaybill)", () => {
+  test("puts the booked waybill on the order as its resi, keeps the courier, clears the mismatch flag, audit logged", async () => {
+    await withRollback(async (tx) => {
+      const h = harness();
+      const staff = await insertStaffUser(tx);
+      const { order } = await paidOrder(tx);
+      await bookShipment(tx, h.runtime, order.id, staff.id);
+      const [row] = await shipmentRows(tx, order.id);
+      await transitionOrderStatus(order.id, "shipped", staff.id, tx, { courier: "JNE Reguler", trackingNumber: "JNE0000000001" });
+      expect((await orderRow(tx, order.id)).needsAttention).toEqual(["tracking_number_mismatch"]);
+
+      expect(await adoptBookedWaybill(order.id, staff.id, tx)).toEqual({ trackingNumber: row!.awb });
+      expect(await orderRow(tx, order.id)).toMatchObject({ status: "shipped", courier: "JNE Reguler", trackingNumber: row!.awb, needsAttention: [] });
+      const audits = await tx.select().from(auditLog).where(and(eq(auditLog.entityId, order.id), eq(auditLog.action, "adopt_booked_waybill")));
+      expect(audits).toHaveLength(1);
+      expect(audits[0]!.before).toEqual({ courier: "JNE Reguler", trackingNumber: "JNE0000000001" });
+      expect(audits[0]!.after).toEqual({ courier: "JNE Reguler", trackingNumber: row!.awb });
+
+      // Again: the resi already matches; nothing to do, the answer says so.
+      await expect(adoptBookedWaybill(order.id, staff.id, tx)).rejects.toThrow(BOOKED_WAYBILL_MESSAGES.alreadySame);
+    });
+  });
+
+  test("refused before the order ships, without a live booked waybill, and for a waybill that fails the resi rule", async () => {
+    await withRollback(async (tx) => {
+      const h = harness();
+      const staff = await insertStaffUser(tx);
+      const { order } = await paidOrder(tx);
+      await bookShipment(tx, h.runtime, order.id, staff.id);
+      await expect(adoptBookedWaybill(order.id, staff.id, tx)).rejects.toThrow(BOOKED_WAYBILL_MESSAGES.notShipped);
+
+      // Shipped by hand while the booking's answer is unknown: there is no waybill to take yet.
+      const unsettled = await paidOrder(tx);
+      h.next.create = () => Promise.reject(new ShipmentProviderError("unavailable", "timeout", { outcomeUnknown: true }));
+      await bookShipment(tx, h.runtime, unsettled.order.id, staff.id);
+      await transitionOrderStatus(unsettled.order.id, "shipped", staff.id, tx, { courier: "JNE Reguler", trackingNumber: "JNE0000000009" });
+      await expect(adoptBookedWaybill(unsettled.order.id, staff.id, tx)).rejects.toThrow(BOOKED_WAYBILL_MESSAGES.noWaybill);
+
+      // A cancelled booking is another parcel: never taken.
+      const cancelled = await paidOrder(tx);
+      h.next.create = undefined;
+      await bookShipment(tx, h.runtime, cancelled.order.id, staff.id);
+      await cancelShipment(tx, h.runtime, cancelled.order.id, { reasonCode: "others" }, staff.id);
+      await transitionOrderStatus(cancelled.order.id, "shipped", staff.id, tx, { courier: "JNE Reguler", trackingNumber: "JNE0000000010" });
+      await expect(adoptBookedWaybill(cancelled.order.id, staff.id, tx)).rejects.toThrow(BOOKED_WAYBILL_MESSAGES.noWaybill);
+
+      const odd = await paidOrder(tx);
+      await bookShipment(tx, h.runtime, odd.order.id, staff.id);
+      await tx.update(shipments).set({ awb: "WYB 12/34" }).where(eq(shipments.orderId, odd.order.id));
+      await transitionOrderStatus(odd.order.id, "shipped", staff.id, tx, { courier: "JNE Reguler", trackingNumber: "JNE0000000011" });
+      await expect(adoptBookedWaybill(odd.order.id, staff.id, tx)).rejects.toThrow(BOOKED_WAYBILL_MESSAGES.invalidWaybill);
+      expect((await orderRow(tx, odd.order.id)).trackingNumber).toBe("JNE0000000011");
     });
   });
 });

@@ -11,6 +11,7 @@ import { refundsOwed } from "@ammari/commerce/payments";
 import { AttentionPanel, CheckoutStatusActions, type RefundableAttempt } from "./_components/checkout-actions";
 import { ContactSection, PaymentSection, ShippingSection, VoucherAndEmailSection } from "./_components/checkout-sections";
 import { ShipmentDetailsSection } from "./_components/shipment-details-section";
+import { isOpenShipmentStatus } from "@/lib/orders/shipment-labels";
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission("orders.view");
@@ -63,6 +64,8 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
           refundableAttempts={refundableAttempts}
           refundOwed={refundsOwed(detail.status, refundableAttempts.length) > 0}
           canManage={canManage}
+          bookedWaybill={bookedWaybill}
+          trackingNumber={detail.trackingNumber}
         />
       )}
 
@@ -77,6 +80,8 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             quotedCourierLabel={checkout.quote?.courierLabel ?? null}
             bookedWaybill={bookedWaybill}
             allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]}
+            courierDelivered={checkout.shipments.some((shipment) => shipment.status === "delivered")}
+            openBooking={checkout.shipments.some((shipment) => isOpenShipmentStatus(shipment.status))}
           />
         ) : (
           <StatusActions orderId={detail.id} allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]} />
@@ -142,6 +147,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             orderNo={detail.orderNo}
             canBook={detail.status === "to_ship" && checkout.paymentStatus === "paid"}
             canManage={canManage}
+            orderStatus={detail.status}
           />
           <ContactSection checkout={checkout} fallbackAddress={detail.shippingAddress} />
           <VoucherAndEmailSection checkout={checkout} discountAmount={detail.discountAmount} />

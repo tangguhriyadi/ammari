@@ -1,4 +1,4 @@
-import type { ShipmentStatus } from "@ammari/db/schema";
+import type { ShipmentEventSource, ShipmentStatus } from "@ammari/db/schema";
 import type { BadgeVariant } from "@ammari/ui";
 import { pickupCutoffFor, shipmentPickupState, type ShipmentPickupState } from "@ammari/commerce/shipment-rules";
 
@@ -51,4 +51,21 @@ export function pickupCutoffHint(courierCode: string): string | null {
 /** The live attempt (not cancelled or failed), if any. */
 export function isLiveShipmentStatus(status: ShipmentStatus): boolean {
   return status !== "cancelled" && status !== "failed";
+}
+
+/** Where a courier history entry came from (K3 `shipment_events.source`). */
+export const SHIPMENT_EVENT_SOURCE_LABELS: Record<ShipmentEventSource, string> = {
+  webhook: "Webhook",
+  poll: "Cek berkala",
+  staff: "Staf (pesan kurir, cek ulang)",
+};
+
+/** A history entry's state in words; an undocumented courier status is named as such. */
+export function shipmentEventLabel(normalizedStatus: ShipmentStatus | null): string {
+  return normalizedStatus ? SHIPMENT_STATUS_LABELS[normalizedStatus] : "Status tidak dikenal";
+}
+
+/** Booked and still on its way (not ended, not final): the poll reads it. */
+export function isOpenShipmentStatus(status: ShipmentStatus): boolean {
+  return status === "pickup_requested" || status === "picked_up" || status === "in_transit" || status === "returning" || status === "problem";
 }

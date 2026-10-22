@@ -6,7 +6,7 @@ import type { OrderStatus } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/action-result";
-import { createOrder, transitionOrderStatus, updateShipmentDetails } from "@ammari/commerce/orders";
+import { adoptBookedWaybill, createOrder, transitionOrderStatus, updateShipmentDetails } from "@ammari/commerce/orders";
 import { REFUND_NOTE_MAX_LENGTH, cancelCheckoutOrderByStaff, clearAttentionFlag, recordManualRefund } from "@ammari/commerce/payments";
 import { defaultDb } from "@/lib/db";
 import { getAdminPaymentProvider } from "@/lib/payments/provider";
@@ -178,6 +178,21 @@ export async function updateShipmentDetailsAction(input: z.input<typeof shipment
   return runAction(async () => {
     const result = await updateShipmentDetails(parsed.data.orderId, { courier: parsed.data.courier, trackingNumber: parsed.data.trackingNumber }, session.staffUser.id);
     if (result.changed) revalidateAdmin("/orders");
+    return result;
+  });
+}
+
+const adoptWaybillSchema = z.object({ orderId: z.string().uuid() });
+
+/** "Pakai resi pesanan kurir" (Phase K4): the order's resi becomes its live courier booking's
+ * waybill, read on the server; clears "Resi beda dengan pesanan kurir". */
+export async function adoptBookedWaybillAction(input: z.input<typeof adoptWaybillSchema>): Promise<ActionResult<{ trackingNumber: string }>> {
+  const session = await requirePermission("orders.manage");
+  const parsed = adoptWaybillSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    const result = await adoptBookedWaybill(parsed.data.orderId, session.staffUser.id);
+    revalidateAdmin("/orders");
     return result;
   });
 }

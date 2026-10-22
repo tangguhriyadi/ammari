@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
   channels,
   customers,
@@ -8,6 +8,7 @@ import {
   orderNotifications,
   orders,
   payments,
+  shipmentEvents,
   shipments,
   products,
   productVariants,
@@ -16,7 +17,7 @@ import {
   thankYouCards,
   vouchers,
 } from "@ammari/db/schema";
-import type { ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus, ShipmentStatus } from "@ammari/db/schema";
+import type { ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus, ShipmentEventSource, ShipmentStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
 import { orderBuyerNameSql } from "./buyer-name";
@@ -287,6 +288,29 @@ export interface CheckoutShipment {
   cancelledAt: Date | null;
   failedAt: Date | null;
   createdAt: Date;
+  /** The provider's order id (Biteship's), for the activation form and support. */
+  providerOrderId: string | null;
+  deliveredAt: Date | null;
+  /** K3 poll bookkeeping: the newest courier event, the last read, the last stale mark. */
+  lastEventAt: Date | null;
+  lastPolledAt: Date | null;
+  staleFlaggedAt: Date | null;
+}
+
+/** One courier history entry of any attempt (K3 `shipment_events`), newest first on the order. */
+export interface CheckoutTrackingEvent {
+  id: string;
+  shipmentId: string;
+  attempt: number;
+  occurredAt: Date;
+  /** As stored: the documented status, or the raw text when undocumented. */
+  providerStatus: string;
+  normalizedStatus: ShipmentStatus | null;
+  description: string;
+  location: string | null;
+  source: ShipmentEventSource;
+  /** When we stored it (from a webhook re-fetch, a poll, or staff's "Cek ulang"). */
+  recordedAt: Date;
 }
 
 export interface CheckoutOrderDetail {
@@ -309,6 +333,8 @@ export interface CheckoutOrderDetail {
   trackingNumber: string | null;
   /** Courier booking attempts, newest first (Phase K2). */
   shipments: CheckoutShipment[];
+  /** Every attempt's courier history, newest first (Phase K4). */
+  trackingEvents: CheckoutTrackingEvent[];
 }
 
 function text(value: unknown): string | null {
@@ -330,6 +356,9 @@ function addressFromSnapshot(snapshot: unknown): CheckoutAddress | null {
   if (!recipientName || !phone || !addressLine || !district || !city || !province || !postalCode) return null;
   return { recipientName, phone, addressLine, district, city, province, postalCode, notes: text(value.notes) };
 }
+
+/** Courier history entries shown on the order page; a parcel has a handful, a rebooked one a few more. */
+const TRACKING_EVENTS_LIMIT = 200;
 
 async function getCheckoutOrderDetail(
   order: typeof orders.$inferSelect & { paymentStatus: OrderPaymentStatus },
@@ -386,6 +415,27 @@ async function getCheckoutOrderDetail(
         }
       : null;
 
+  const attemptById = new Map(shipmentRows.map((row) => [row.id, row.attempt]));
+  const eventRows =
+    shipmentRows.length === 0
+      ? []
+      : await db
+          .select({
+            id: shipmentEvents.id,
+            shipmentId: shipmentEvents.shipmentId,
+            occurredAt: shipmentEvents.occurredAt,
+            providerStatus: shipmentEvents.providerStatus,
+            normalizedStatus: shipmentEvents.normalizedStatus,
+            description: shipmentEvents.description,
+            location: shipmentEvents.location,
+            source: shipmentEvents.source,
+            recordedAt: shipmentEvents.createdAt,
+          })
+          .from(shipmentEvents)
+          .where(inArray(shipmentEvents.shipmentId, [...attemptById.keys()]))
+          .orderBy(desc(shipmentEvents.occurredAt), desc(shipmentEvents.createdAt))
+          .limit(TRACKING_EVENTS_LIMIT);
+
   // A voucher restored by a cancel is no longer linked to the order; the discount still shows it.
   const voucherRow = voucherRows[0];
   return {
@@ -431,7 +481,13 @@ async function getCheckoutOrderDetail(
       cancelledAt: row.cancelledAt,
       failedAt: row.failedAt,
       createdAt: row.createdAt,
+      providerOrderId: row.providerOrderId,
+      deliveredAt: row.deliveredAt,
+      lastEventAt: row.lastEventAt,
+      lastPolledAt: row.lastPolledAt,
+      staleFlaggedAt: row.staleFlaggedAt,
     })),
+    trackingEvents: eventRows.map((row) => ({ ...row, attempt: attemptById.get(row.shipmentId) ?? 0 })),
   };
 }
 

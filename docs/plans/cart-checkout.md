@@ -41,7 +41,10 @@ done 2026-10-22** (order client, fake, shipment config, Code 128 and our own lab
 see §15 Phase K). **K2 done 2026-10-22** (migration 0034 `shipments`, two new flags, "Pesan kurir"
 from admin, our label; see §15 Phase K "K2 as built"). **K3 done 2026-10-22** (migration 0035
 `shipment_tracking`, Biteship webhook, poller, status mapping, "sudah sampai" email; see §15 Phase K
-"K3 as built").
+"K3 as built"). **K4 done 2026-10-22** (no migration: buyer and admin tracking timelines, "Pakai resi
+pesanan kurir", "Tandai selesai" without the "sudah sampai" email, Biteship order id in admin,
+runbook `docs/launch/shipping-dev.md` and `checkout-prod.md` Part 4; see §15 Phase K "K4 as built").
+Phase K code is complete; next are the activation form and the prod go-live (runbooks).
 
 **Go-live:** 1 Dec 2026. Everything ships dark behind `STOREFRONT_CART_ENABLED` (already exists,
 `apps/web/src/lib/cart-flag.ts`, default off) until launch day.
@@ -1556,7 +1559,7 @@ the Order API on by default, simulated without pickup). No separate plan or key:
 | K1 | **DONE 2026-10-22.** Order client, fake, shipment config, Code 128 and our own label (as built below). | none | TDD; typescript, security, silent-failure-hunter |
 | K2 | **DONE 2026-10-22** (as built below). **0034:** `shipments` per §3 (attempts, partial UNIQUE for the one live shipment, `reference_id` UNIQUE, `provider_order_id` UNIQUE NULL) and the `shipping_cost_over_quote` flag. `@ammari/commerce` booking: `bookShipment` (transaction: lock the order, paid web order in `to_ship` with a quote, no live shipment, insert the attempt `booking`; outside any transaction `createShipment`; transaction: store id, waybill, tracking id, price, status; `failed` only on a clear refusal), `recheckBooking` (re-sends the **same** reference: booked now, or `duplicate_reference` recovered through `existingOrderId` + `getShipment`), `cancelShipment` (before pickup only; the attempt ends `cancelled`, a new attempt may follow). Destination from the order's snapshot (recipient, phone, street line, courier note) and `shipping_destination_id`; one item "Pakaian" with the goods value and `shipping_weight_grams`; never the buyer's email. Admin: **"Pesan kurir"** on the `/packing` row and the order page, "Cek ulang pemesanan", "Batalkan pengiriman", "Cetak label" (the K1 PDF, one page per order), "Pengiriman" with booking, pickup state ("Menunggu kurir" / "Kurir menuju lokasi" / "Sudah dijemput"), driver when sent, the cut-off hint, actual cost next to the quote (`finance.view_profit`). Permission `orders.manage` (no new key). Manual resi path unchanged. Env examples and `set-env-var.sh` (refuse `SHIPPING_ORDER_PROVIDER`). | 0034 | TDD, committed race (two "Pesan kurir" at once: one booking), admin e2e 390/1280 with the fake; database, security, react |
 | K3 | **DONE 2026-10-22** (as built below). **0035:** `shipment_events` (UNIQUE `(shipment_id, occurred_at, provider_status)`) and `shipping_webhook_events`. Webhook route in apps/web (path token + header secret, always 200, debounced re-fetch, §"Webhook vs polling"), `applyShipmentSnapshot` (status mapping below, `order.price`, waybill changes, both flags), poller route + `CRON_JOBS` key + the 3-hour block in both `cron.sh`, `delivered` email template and due rule, 12-month retention for webhook events, gated fake "advance shipment" test route posting through the real webhook route. | 0035 | TDD + replay, out-of-order, concurrency; security, silent-failure-hunter, database |
-| K4 | Buyer timeline in the "Lacak pengiriman" block (`/orders/[orderNo]`, latest on top, courier names only, never the provider's name), admin timeline, manual fallback polish (manual resi vs booked waybill), e2e both apps 390/1280. Runbook `docs/launch/shipping-dev.md`: env values to set (shipper, prefix, budget, webhook token and header secret), test webhooks, the two activation test orders (one delivered through Update Status, one cancelled through our "Batalkan pengiriman"), **print a label on the thermal printer at 100% and scan its barcode with a phone**, then go live. | none | react, e2e 390/1280 |
+| K4 | **DONE 2026-10-22** (as built below). Buyer timeline in the "Lacak pengiriman" block (`/orders/[orderNo]`, latest on top, courier names only, never the provider's name), admin timeline, manual fallback polish (manual resi vs booked waybill), e2e both apps 390/1280. Runbook `docs/launch/shipping-dev.md`: env values to set (shipper, prefix, budget, webhook token and header secret), test webhooks, the two activation test orders (one delivered through Update Status, one cancelled through our "Batalkan pengiriman"), **print a label on the thermal printer at 100% and scan its barcode with a phone**, then go live. | none | react, e2e 390/1280 |
 
 **K1 as built (2026-10-22).** `@ammari/commerce/shipment-rules` (pure, client-safe):
 `BITESHIP_ORDER_STATUSES`, `canonicalBiteshipStatus` (camelCase, upper case, spaces and hyphens to
@@ -1776,6 +1779,66 @@ ulang" goes through the same apply path, so it can ship or complete the order to
   `test/cron-auth-standalone.test.ts` now also posts to the webhook on the built server.
 - **For K4:** the buyer timeline reads `shipment_events` (latest first, `description` is the courier's
   text: escape it, never in emails); admin timeline; runbook steps below.
+
+**K4 as built (2026-10-22).** Owner decision this session: (56) **staff's "Tandai selesai" on a web
+order the courier never reported delivered sends no "Pesanan sudah sampai", not even when the courier
+reports the delivery later, and the 3-hourly poll stops reading that shipment** (webhooks and their
+re-read requests still read it, so the timeline can still finish). No migration.
+- **`@ammari/commerce`:** `transitionOrderStatus` writes the order's `delivered` notification row
+  already settled (`superseded`, the dispatcher's terminal mark) in the same transaction when staff
+  complete a checkout order with no delivered shipment (an order whose courier did report delivery
+  keeps the email); `pollShipments` skips shipments of `completed` orders unless a webhook asked for a
+  re-read; `adoptBookedWaybill` ("Pakai resi pesanan kurir": under the order lock, the live booking's
+  waybill (never a value from the browser) becomes the shipped order's resi under the checkout resi
+  rule, the courier kept or the quoted label, `tracking_number_mismatch` cleared, audit
+  `adopt_booked_waybill`; refused before shipping, without a settled live waybill, for a cancelled
+  attempt, for a waybill that fails the resi rule, and when nothing would change).
+- **apps/web:** `lib/orders/tracking.ts` (pure): our Indonesian words per documented status (then per
+  state, then "Kabar dari kurir"), latest first, at most 30, WIB times, the courier's note and place on
+  one line (dropped when it names the provider, capped at 200), no timeline and no note at all when the
+  order's resi is not the booking's waybill (another parcel), a gentle delay note only while the order
+  is in `to_ship` / `shipped` and the shipment open: a failed automatic read (`last_error` `read:*`)
+  "Kabar pengiriman terbaru belum bisa kami tampilkan..." or a stale spell (`stale_flagged_at` newer
+  than the last event) "Belum ada kabar baru dari kurir...". `queries.ts` reads the current booking
+  (not cancelled or failed) and its events with only those columns (never cost, driver or provider
+  ids). The order page: resi with "Salin" (`components/orders/copy-text-button.tsx`, a refused
+  clipboard says to copy by hand), the delay note, the timeline (square markers, the latest in the
+  brand colour, `<time>`).
+- **apps/admin:** "Pengiriman" shows **ID pesanan Biteship** with "Salin" for the live and every ended
+  attempt (`components/orders/copy-value.tsx`), "Kabar terakhir dari kurir", "Dicek otomatis
+  terakhir", **Riwayat pelacakan** (every attempt's events newest first: our state label or "Status
+  tidak dikenal", raw status, time, attempt number, courier note and place, source badge Webhook / Cek
+  berkala / Staf), and the shipping flags in context (stale: last courier news and last check; problem:
+  last courier status; mismatch: both resis, or "pemesanan belum pasti"). "Perlu dicek" links shipping
+  flags to `#pengiriman` and offers **"Pakai resi pesanan kurir (<waybill>)"** for a mismatch once the
+  order shipped. Web orders get **"Tandai selesai"** with a confirm dialog (courier not reported: no
+  "sudah sampai" email and the poll stops; no booking: no email).
+- **Tests:** `emails.test.ts` (staff completion then a late courier delivery sends nothing; a courier-
+  delivered order completed by staff keeps the email), `tracking.test.ts` (poll skips completed orders,
+  a webhook re-read request still reads), `bookings.test.ts` (`adoptBookedWaybill` paths), web
+  `tracking.test.ts` (labels, order, notes, provider name, cap, mismatch, delay rules); e2e admin
+  `courier-booking.spec.ts` (Biteship ids, history, flag context, adopt, "Tandai selesai", the
+  superseded email row, 390/1280) and web `shipment-tracking.spec.ts` (timeline, WIB, copy, delay
+  note, no provider name, mismatch hides the timeline, 390/1280, Chromium and WebKit).
+- **Reviews** (react, typescript, silent-failure-hunter): no Critical. Fixed: a staff completion that
+  stops the poll was invisible (High: now an audit row `complete_without_courier_delivery` with the
+  open shipment, and "Pengecekan otomatis berkala berhenti..." in Pengiriman), courier notes carrying
+  a phone number reached the buyer (dropped), a read that fails for good promised an automatic
+  re-check to the buyer (now the "Tim kami sedang mengeceknya" note; staff have `delivery_problem`),
+  a hidden buyer timeline was only visible through the flag (Pengiriman now says so while the resis
+  differ, flag or not), an unsent `delivered` row is settled too, focus after "Tandai selesai", copy
+  buttons' accessible names and the failure text layout, clipboard failures logged, the adopt toast
+  says the earlier email kept the old resi, runbook: prompts instead of placeholders for the sender,
+  greps that say NO MATCH, a key capture that stops and always clears the clipboard, webhook secrets
+  never regenerated on re-run.
+- **Known, not fixed (Low):** after "Pakai resi pesanan kurir" the buyer gets no new email (the page
+  shows the new resi; the toast tells staff); a parcel that goes wrong after staff completed the order
+  is only seen through a webhook or "Cek ulang" (owner decision 56; audited); the admin history shows
+  the newest 200 entries; `tracking.ts` takes status strings, not the schema types.
+- **Runbook:** `docs/launch/shipping-dev.md` (env, Cloudflare bypass, test webhook through the
+  clipboard, the two activation test orders, the print and scan check, the activation form, go-live
+  summary, day-to-day table) and `checkout-prod.md` Part 4 (live key and sender in prod-admin.env,
+  empty reference prefix, live webhook secrets, upload, registration, checks, first parcel, rollback).
 
 Notes from K1 for later sessions:
 - **K2 (booking safety):** any error with `outcomeUnknown` keeps the attempt `booking` (never
@@ -2080,6 +2143,12 @@ Owner decisions 2026-10-22 (K3):
     failing; flags only on change (`shipments.refetch_requested_at` and `stale_flagged_at` added in
     0035); the "sudah sampai" email only on courier delivery; staff's "Cek ulang" uses the same apply
     path.
+
+Owner decisions 2026-10-22 (K4):
+
+56. **Staff's "Tandai selesai" on a web order the courier never reported delivered sends no "sudah
+    sampai" email, not even after a later courier report, and the 3-hourly poll stops reading that
+    shipment** (webhooks still read it).
 
 Remaining small items to confirm with third parties (not owner decisions): the Biteship items in
 §15 "What to confirm with Biteship" (live Order API activation, Tracking quota use, six active

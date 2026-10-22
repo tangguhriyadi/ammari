@@ -1,12 +1,13 @@
 import "server-only";
-import { asc, count, desc, eq, inArray, sql } from "drizzle-orm";
-import { channels, fabricColors, orderItems, orders, payments, products, productVariants } from "@ammari/db/schema";
+import { and, asc, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { channels, fabricColors, orderItems, orders, payments, products, productVariants, shipmentEvents, shipments } from "@ammari/db/schema";
 import { defaultDb, type Database } from "@/lib/db";
 import { formatJakartaDate, formatJakartaDateTime } from "@/lib/format";
 import { isSafePaymentUrl } from "@/lib/checkout/navigate";
 import { siteOrigin } from "@/lib/site-origin";
 import { customerOrderStatus, type CustomerOrderStatus } from "./status";
 import { visibleToCustomerSql } from "./access";
+import { BUYER_TRACKING_MAX_EVENTS, buyerTracking, type BuyerTracking } from "./tracking";
 
 // Reads for "Pesanan saya" (`/orders`, `/orders/[orderNo]`, the /account list; docs/plans/
 // cart-checkout.md §9.1). Customer-facing: no cost column is ever selected (order_items.unit_cost
@@ -142,8 +143,11 @@ export interface CustomerOrderDetail extends CustomerOrderRow {
   address: string | null;
   /** Milestones with a time, oldest first ("Dipesan", "Dibayar", ...), in WIB. */
   timeline: { label: string; at: string }[];
-  /** "Lacak pengiriman": the courier and resi staff entered at "Tandai dikirim" (before Phase K). */
+  /** "Lacak pengiriman": the courier and resi on the order ("Tandai dikirim", or the courier booking
+   * once the parcel was picked up). */
   shipment: { courier: string | null; trackingNumber: string | null };
+  /** The courier timeline of the order's current booking (Phase K4), latest first. */
+  tracking: BuyerTracking;
   /** "21 Oktober 2026, 14.30 WIB", only while payable. */
   payBy: string | null;
   /** The stored payment page, only while payable; null when it could not be created. */
@@ -198,6 +202,8 @@ export async function loadCustomerOrderDetail(orderId: string, db: Database = de
     if (!paymentUrl) console.error("[orders] payable order without a usable payment page", { orderNo: order.orderNo, stored: stored !== null });
   }
 
+  const tracking = await loadBuyerTracking(order.id, order.status, order.trackingNumber, db);
+
   const milestones: [string, Date | null][] = [
     ["Dipesan", order.orderDate],
     ["Dibayar", order.paidAt],
@@ -224,9 +230,45 @@ export async function loadCustomerOrderDetail(orderId: string, db: Database = de
     address: order.address,
     timeline: milestones.filter((entry): entry is [string, Date] => entry[1] !== null).sort((a, b) => a[1].getTime() - b[1].getTime()).map(([label, at]) => ({ label, at: formatJakartaDateTime(at) })),
     shipment: { courier: order.courier ?? (order.trackingNumber ? order.courierLabel : null), trackingNumber: order.trackingNumber },
+    tracking,
     payBy: row.status.payable && order.paymentExpiresAt ? formatJakartaDateTime(order.paymentExpiresAt) : null,
     paymentUrl,
   };
+}
+
+/** The order's current courier booking (not cancelled or failed: an ended attempt was another
+ * parcel) and its newest events, as ./tracking.ts shows them. Only the columns the buyer's view
+ * needs: never the cost, the driver or the provider's ids. */
+async function loadBuyerTracking(orderId: string, orderStatus: string, trackingNumber: string | null, db: Database): Promise<BuyerTracking> {
+  const [shipment] = await db
+    .select({
+      id: shipments.id,
+      awb: shipments.awb,
+      status: shipments.status,
+      lastError: shipments.lastError,
+      staleFlaggedAt: shipments.staleFlaggedAt,
+      lastEventAt: shipments.lastEventAt,
+      bookedAt: shipments.bookedAt,
+      createdAt: shipments.createdAt,
+    })
+    .from(shipments)
+    .where(and(eq(shipments.orderId, orderId), notInArray(shipments.status, ["cancelled", "failed"])))
+    .orderBy(desc(shipments.attempt))
+    .limit(1);
+  if (!shipment) return buyerTracking({ orderStatus, trackingNumber, shipment: null, events: [] });
+  const events = await db
+    .select({
+      occurredAt: shipmentEvents.occurredAt,
+      providerStatus: shipmentEvents.providerStatus,
+      normalizedStatus: shipmentEvents.normalizedStatus,
+      description: shipmentEvents.description,
+      location: shipmentEvents.location,
+    })
+    .from(shipmentEvents)
+    .where(eq(shipmentEvents.shipmentId, shipment.id))
+    .orderBy(desc(shipmentEvents.occurredAt), desc(shipmentEvents.createdAt))
+    .limit(BUYER_TRACKING_MAX_EVENTS);
+  return buyerTracking({ orderStatus, trackingNumber, shipment, events });
 }
 
 /** "Pesan lagi": the SKUs and quantities of a cancelled, never-paid checkout order, or null when
