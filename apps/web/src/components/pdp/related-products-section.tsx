@@ -1,9 +1,9 @@
-import type { StorefrontProductTile } from "@ammari/db/storefront";
+import type { PricedProductTile } from "@/lib/content/storefront-price";
 import { ProductTile } from "@/components/product-tile";
 
 /** docs/design/storefront.md §6 item 10 — "Lengkapi koleksimu", same tile component as the
  * homepage grid. Renders nothing if there's simply no other published product yet. */
-export function RelatedProductsSection({ products }: { products: StorefrontProductTile[] }) {
+export function RelatedProductsSection({ products }: { products: PricedProductTile[] }) {
   if (products.length === 0) return null;
 
   return (

@@ -1,6 +1,7 @@
 import { CUTTING_SIZES, type CuttingSize } from "@ammari/db/schema";
 import { PRODUCT_HIGHLIGHT_KEYS, PRODUCT_HIGHLIGHT_LABELS, type ProductHighlightKey } from "@ammari/db/highlights";
 import type { StorefrontProduct, StorefrontSizeChartRow } from "@ammari/db/storefront";
+import type { StorefrontPrice } from "./storefront-price";
 
 // Pure data-mapping from the storefront read layer's `StorefrontProduct` shape into a
 // render-ready view model for `/products/[slug]` — no DB, no JSX, isomorphic (used by both the
@@ -35,7 +36,8 @@ export interface ProductView {
   id: string;
   name: string;
   slug: string;
-  basePrice: number;
+  /** Resolved for this request by the page (storefront-price.ts), never inside a cache. */
+  price: StorefrontPrice;
   storefrontDescription: string | null;
   careInstructions: string | null;
   allsizeFitNote: string | null;
@@ -69,7 +71,8 @@ function toGalleryImage(image: { id: string; storageKey: string; altText: string
   return { id: image.id, storageKey: image.storageKey, altText: image.altText ?? fallbackAlt };
 }
 
-export function buildProductView(product: StorefrontProduct): ProductView {
+/** `product.pricing` is ignored here: the page resolves it once per request and passes `price`. */
+export function buildProductView(product: Omit<StorefrontProduct, "pricing">, price: StorefrontPrice): ProductView {
   const imagesByColor: Record<string, ProductGalleryImage[]> = {};
   const generalImages: ProductGalleryImage[] = [];
   for (const image of [...product.images].sort((a, b) => a.sortOrder - b.sortOrder)) {
@@ -128,7 +131,7 @@ export function buildProductView(product: StorefrontProduct): ProductView {
     id: product.id,
     name: product.name,
     slug: product.slug,
-    basePrice: product.basePrice,
+    price,
     storefrontDescription: product.storefrontDescription,
     careInstructions: product.careInstructions,
     allsizeFitNote: product.allsizeFitNote,

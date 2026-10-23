@@ -19,6 +19,12 @@ export const DISCOUNT_PERCENT_MIN = 1;
 /** Largest percent the admin may type. */
 export const DISCOUNT_PERCENT_MAX = 99;
 
+/** The discount red (owner decision, plan §9): sale price text and the `N% OFF` badge background.
+ * The storefront uses it through its `--color-discount` theme token (apps/web globals.css, kept
+ * equal to this by apps/web's discount-token test); emails cannot use CSS variables and take it
+ * from here. */
+export const DISCOUNT_COLOR_HEX = "#D05D5C";
+
 /** The product columns the resolver needs, exactly as selected from `products`. */
 export interface ProductPricingInput {
   basePrice: number;

@@ -4,6 +4,7 @@ import { getDraftHomepageContent, getStorefrontProductTiles } from "@ammari/db/s
 import { verifyHomepagePreviewToken } from "@/lib/preview/token";
 import { buildHomepageView } from "@/lib/content/homepage-view";
 import { collectHomepageProductRefs, resolveHomepageView } from "@/lib/content/homepage-resolve";
+import { priceTiles } from "@/lib/content/storefront-price";
 import { HomepageSections } from "@/components/homepage/homepage-sections";
 
 // Draft content, gated by a short-lived signed token — must never be served from Next's data or
@@ -31,7 +32,7 @@ export default async function PreviewHomePage({
   const draftView = buildHomepageView(sections);
   const refs = collectHomepageProductRefs(draftView);
   const tiles = refs.length > 0 ? await getStorefrontProductTiles(refs) : [];
-  const view = resolveHomepageView(draftView, tiles);
+  const view = resolveHomepageView(draftView, priceTiles(tiles, new Date()));
 
   return (
     <div className="flex flex-col">

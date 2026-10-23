@@ -15,14 +15,14 @@ import { isValidRevalidateSecret } from "@/lib/revalidate/secret";
 // visitor would still reach this route via the normal reverse_proxy. The internal
 // admin -> web:3000 call bypasses Caddy entirely (same Docker network, no published port
 // involved), so it's never affected by that block.
-// `tags` exists alongside `paths` because `/` (app/page.tsx) is `dynamic = "force-dynamic"` —
-// it has no Full Route Cache entry for `revalidatePath` to invalidate at all, so the homepage's
-// own cached data (lib/content/homepage-data.ts's `unstable_cache` calls) can only be refreshed
-// on demand via its tag. `paths` stays for routes that DO still have a route-level ISR cache
-// entry (e.g. `/products/[slug]`). `layouts` revalidates a LAYOUT path and every page beneath it
+// `tags` exists alongside `paths` because `/` (app/page.tsx) and `/products/[slug]` are
+// `dynamic = "force-dynamic"` — they have no Full Route Cache entry for `revalidatePath` to
+// invalidate, so their cached data (lib/content/homepage-data.ts, lib/content/product-data.ts
+// `unstable_cache` calls) can only be refreshed on demand via tags. `paths` stays for any route
+// that does have a route-level cache entry (and for a rolled-back release where `/products/[slug]`
+// was still ISR). `layouts` revalidates a LAYOUT path and every page beneath it
 // (`revalidatePath(path, "layout")`): store settings render in the root layout (announcement bar,
-// footer contact) on every page, including the ISR-cached `/products/[slug]` pages, so a settings
-// save sends `layouts: ["/"]`.
+// footer contact) on every page, so a settings save sends `layouts: ["/"]`.
 const pathListSchema = z
   .array(z.string().min(1).startsWith("/", "Setiap path harus diawali \"/\"."))
   .min(1)

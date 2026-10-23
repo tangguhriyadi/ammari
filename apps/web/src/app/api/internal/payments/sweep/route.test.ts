@@ -127,7 +127,7 @@ describe("POST /api/internal/payments/sweep", () => {
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(await response.json()).toMatchObject({ finalized: expect.any(Number), results: { expired_locally: expect.any(Number) } });
       expect(await orderStatus(tx, fixture.orderId)).toEqual({ status: "cancelled", paymentStatus: "expired", cancelReason: "payment_expired" });
-      expect(revalidatePath).toHaveBeenCalledWith(`/products/${fixture.slug}`);
+      expect(revalidateTag).toHaveBeenCalledWith(`storefront:product:${fixture.slug}`, { expire: 0 });
     });
   });
 

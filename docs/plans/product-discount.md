@@ -1,7 +1,7 @@
 # Per-product discount ("launching price")
 
-Status: **owner answers in (2026-10-23, §12). Sessions 1 (database + price function) and 2 (admin)
-done; sessions 3 and 4 not started.**
+Status: **owner answers in (2026-10-23, §12). Sessions 1 (database + price function), 2 (admin) and
+3 (storefront display + caching) done; session 4 not started.**
 
 Scope: `packages/db`, `packages/commerce`, `apps/admin`, `apps/web`.
 
@@ -499,9 +499,30 @@ price next to it stays readable, and the screen-reader text carries both prices.
    pre-check with `validateDiscountPrice(newBase, before.discountPriceAmount)` and throw a
    `FieldError("basePrice", ...)` with the §3.2 message, and also map a 23514 on
    `products_discount_price_amount_check` (race backstop). Covered by an admin integration test.
-3. **Storefront display + caching.** Storefront queries return raw pricing, PDP to
+3. **Storefront display + caching. Done 2026-10-23.** Storefront queries return raw pricing, PDP to
    `force-dynamic` + tagged `unstable_cache`, revalidation callers to tags, PDP/tiles/related/
-   JSON-LD UI, the `#D05D5C` design token; e2e.
+   JSON-LD UI, the `#D05D5C` design token; e2e. Notes:
+   - `unstable_cache` stores results as JSON, so on a cache hit the discount window comes back as
+     ISO strings. `apps/web/src/lib/content/storefront-price.ts` accepts `Date | string` and
+     revives before `resolveUnitPrice`; an unparseable value fails closed (normal price).
+   - Tags: `storefront:product:<slug>` (one PDP's data) and `storefront:products` (every related
+     list), plus the existing `storefront:homepage`. Admin `revalidateProductSlug(s)` sends all
+     three (and still the path, harmless now, useful on a rolled-back ISR release); batches are 8
+     products per request (8 product tags + 2 shared = the route's 10-tag cap). Payment events and
+     `placeOrderAction` expire the product tag with `{ expire: 0 }` (fresh stock on the next PDP
+     request, as `revalidatePath` gave under ISR) and the shared tags with `"max"`.
+   - Token `--color-discount` in `apps/web/src/app/globals.css`; `DISCOUNT_COLOR_HEX` in
+     `@ammari/db/pricing` for emails; a unit test keeps the two equal.
+   - Tile badge `N% OFF`: bold, 19px (the smallest size that is WCAG "large text", so 3.89:1 passes
+     AA for it). The sold-out tile label keeps its existing text "Sold out" (design spec §6).
+   - JSON-LD `priceValidUntil` is the Asia/Jakarta date of the active discount's end.
+   - E2E: `apps/web/e2e/product-discount.spec.ts` with its own fixtures (own fabric, `created_at`
+     in 2000/2001 so they never appear in other specs' related lists), tiles checked in the PDP
+     related list (the homepage grid is left alone so other specs' counts stay). The time-flip test
+     sets a window a few seconds ahead, revalidates once like an admin save, then reloads across
+     start and end with nothing else called.
+   - Until session 4 ships, cart, checkout, `placeOrder` and the shipping quote's goods value still
+     use `base_price` (§11 last paragraph: do not switch a discount on in prod before session 4).
 4. **Cart, checkout, orders.** `getCart`, `placeOrder` snapshot (`list_unit_price`), payment lines,
    emails, buyer order pages, admin order detail; TDD; e2e worked example. (SPEC §8 already updated.)
 

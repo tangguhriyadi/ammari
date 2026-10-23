@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { buildHomepageView } from "@/lib/content/homepage-view";
 import { collectHomepageProductRefs, resolveHomepageView } from "@/lib/content/homepage-resolve";
 import { getCachedHomepageProductTiles, getCachedPublishedHomepageContent } from "@/lib/content/homepage-data";
+import { priceTiles } from "@/lib/content/storefront-price";
 import { HomepageSections } from "@/components/homepage/homepage-sections";
 import { getHomepageMeta } from "@/lib/store-settings";
 import { getSiteOgImage, siteOgImageMetadata } from "@/lib/content/site-og-image";
@@ -49,7 +50,8 @@ async function getHomepageView() {
   const view = buildHomepageView(sections);
   const refs = collectHomepageProductRefs(view);
   const tiles = refs.length > 0 ? await getCachedHomepageProductTiles(refs) : [];
-  return resolveHomepageView(view, tiles);
+  // Priced per request, never inside the cache: a discount shows exactly from its start.
+  return resolveHomepageView(view, priceTiles(tiles, new Date()));
 }
 
 /** The claimed notice's dates come from the signed-in buyer's own just-claimed voucher. Any

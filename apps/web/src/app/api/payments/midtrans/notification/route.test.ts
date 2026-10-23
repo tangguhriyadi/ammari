@@ -42,6 +42,7 @@ beforeEach(() => {
   Object.assign(process.env, ENV);
   jar.clear();
   revalidatePath.mockClear();
+  revalidateTag.mockClear();
 });
 afterEach(() => {
   for (const name of Object.keys(ENV)) delete process.env[name];
@@ -108,7 +109,7 @@ describe("POST /api/payments/midtrans/notification", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(await orderStatus(tx, fixture.orderId)).toEqual({ status: "to_ship", paymentStatus: "paid" });
-      expect(revalidatePath).toHaveBeenCalledWith(`/products/${fixture.slug}`);
+      expect(revalidateTag).toHaveBeenCalledWith(`storefront:product:${fixture.slug}`, { expire: 0 });
     });
   });
 
@@ -184,7 +185,7 @@ describe("finish page actions", () => {
       jar.set("ammari_checkout_order_v2", fixture.token);
       expect(await checkPaymentStatusAction(fixture.orderNo)).toEqual({ changed: true });
       expect(await orderStatus(tx, fixture.orderId)).toEqual({ status: "to_ship", paymentStatus: "paid" });
-      expect(revalidatePath).toHaveBeenCalledWith(`/products/${fixture.slug}`);
+      expect(revalidateTag).toHaveBeenCalledWith(`storefront:product:${fixture.slug}`, { expire: 0 });
       expect(await checkPaymentStatusAction(fixture.orderNo)).toEqual({ changed: false });
 
       process.env.STOREFRONT_CART_ENABLED = "false";

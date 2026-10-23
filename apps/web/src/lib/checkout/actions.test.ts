@@ -213,6 +213,8 @@ describe("placeOrderAction", () => {
     expect(token?.tokenHash).toBe(hashOrderAccessToken(cookie!.value));
 
     expect(revalidatePath).toHaveBeenCalledWith(`/products/${slug}`);
+    expect(revalidateTag).toHaveBeenCalledWith(`storefront:product:${slug}`, { expire: 0 });
+    expect(revalidateTag).toHaveBeenCalledWith("storefront:products", "max");
     expect(revalidateTag).toHaveBeenCalledWith("storefront:homepage", "max");
     // The guest's cart cookie stays (the cart row is kept, now empty).
     expect(deletedCookies.has("ammari_cart")).toBe(false);
@@ -229,6 +231,7 @@ describe("placeOrderAction", () => {
     expect(result.fieldErrors.map((error) => error.field)).toEqual(["contactEmail", "contactPhone", "termsAccepted"]);
     expect(await orderFor(body.checkoutAttemptId)).toBeUndefined();
     expect(revalidatePath).not.toHaveBeenCalled();
+    expect(revalidateTag).not.toHaveBeenCalled();
     expect(setCookies.has("ammari_checkout_order_v2")).toBe(false);
     expect(scheduleOrderEmails).not.toHaveBeenCalled();
   });

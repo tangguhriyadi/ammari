@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test } from "vitest";
-import type { StorefrontProductTile } from "@ammari/db/storefront";
+import type { PricedProductTile } from "@/lib/content/storefront-price";
 import type { ResolvedFeatureBlock } from "@/lib/content/homepage-resolve";
 import { FeatureBlockSection } from "./feature-block-section";
 
-const linkedProduct: StorefrontProductTile = {
+const linkedProduct: PricedProductTile = {
   productId: "p1",
   fabricColorId: null,
   name: "Haura Dress",
   slug: "haura-dress",
-  basePrice: 269_000,
+  price: { listPrice: 269_000, unitPrice: 269_000, discounted: false, percentOff: null },
   colorName: "Taupe",
   colorCount: 1,
   soldOut: false,

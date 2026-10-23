@@ -66,6 +66,39 @@ async function seedPublishedProduct(
 }
 
 describe("getStorefrontProductTiles", () => {
+  test("returns the raw pricing fields (no discount configured by default)", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await seedPublishedProduct(tx);
+      const [tile] = await getStorefrontProductTiles([{ productId: fixture.product.id, fabricColorId: null }], tx);
+      expect(tile?.pricing).toEqual({
+        basePrice: 269_000,
+        discountPriceAmount: null,
+        discountEnabled: false,
+        discountStartsAt: null,
+        discountEndsAt: null,
+      });
+    });
+  });
+
+  test("returns a configured discount raw and unresolved, an ended one included, so the caller decides per request", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await seedPublishedProduct(tx);
+      const endsAt = new Date(Date.now() - 60_000);
+      await tx
+        .update(products)
+        .set({ discountPriceAmount: 215_000, discountEnabled: true, discountEndsAt: endsAt })
+        .where(eq(products.id, fixture.product.id));
+      const [tile] = await getStorefrontProductTiles([{ productId: fixture.product.id, fabricColorId: null }], tx);
+      expect(tile?.pricing).toEqual({
+        basePrice: 269_000,
+        discountPriceAmount: 215_000,
+        discountEnabled: true,
+        discountStartsAt: null,
+        discountEndsAt: endsAt,
+      });
+    });
+  });
+
   test("a pinned-colour ref resolves that colour's name and image, no count semantics needed", async () => {
     await withRollback(async (tx) => {
       const fixture = await seedPublishedProduct(tx);

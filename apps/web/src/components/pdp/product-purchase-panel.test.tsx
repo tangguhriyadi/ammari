@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { StorefrontProduct } from "@ammari/db/storefront";
-import { buildProductView } from "@/lib/content/product-view";
+import { buildProductView, type ProductView } from "@/lib/content/product-view";
 import { ProductPurchasePanel } from "./product-purchase-panel";
 import { OPEN_ACCORDION_EVENT, type OpenAccordionDetail } from "./size-guide";
 
@@ -24,7 +24,7 @@ function product(variants: StorefrontProduct["variants"]): StorefrontProduct {
     id: "p1",
     name: "Haura",
     slug: "haura",
-    basePrice: 269_000,
+    pricing: { basePrice: 269_000, discountPriceAmount: null, discountEnabled: false, discountStartsAt: null, discountEndsAt: null },
     storefrontDescription: null,
     highlights: [],
     sizeMode: "sized",
@@ -37,9 +37,14 @@ function product(variants: StorefrontProduct["variants"]): StorefrontProduct {
   };
 }
 
-function renderPanel(variants: StorefrontProduct["variants"], { cartEnabled = false, sizeMode = "sized" as StorefrontProduct["sizeMode"], withChart = false } = {}) {
+const NORMAL_PRICE: ProductView["price"] = { listPrice: 269_000, unitPrice: 269_000, discounted: false, percentOff: null };
+
+function renderPanel(
+  variants: StorefrontProduct["variants"],
+  { cartEnabled = false, sizeMode = "sized" as StorefrontProduct["sizeMode"], withChart = false, price = NORMAL_PRICE } = {},
+) {
   const sizeChart = withChart ? [{ size: "M" as const, bustCm: 100, lengthCm: 140, sleeveLengthCm: 55, heightRecommendationMinCm: 155, heightRecommendationMaxCm: 165 }] : null;
-  const view = buildProductView({ ...product(variants), sizeMode, sizeChart });
+  const view = buildProductView({ ...product(variants), sizeMode, sizeChart }, price);
   return render(
     <ProductPurchasePanel
       view={view}
@@ -70,6 +75,29 @@ beforeEach(() => {
   // jsdom has no Element.scrollTo (the gallery effect resets its scroll position).
   Element.prototype.scrollTo = vi.fn() as unknown as Element["scrollTo"];
   window.history.replaceState(null, "", "/products/haura");
+});
+
+describe("PDP price (docs/plans/product-discount.md §9)", () => {
+  test("no discount: one plain price, nothing struck", () => {
+    renderPanel(mixed);
+    expect(screen.getByTestId("product-price")).toHaveTextContent("Rp269.000");
+    expect(screen.queryByTestId("product-price-list")).toBeNull();
+  });
+
+  for (const cartEnabled of [false, true]) {
+    test(`discounted (cart ${cartEnabled ? "on" : "off"}): normal price struck and muted, sale price in the discount red, one sentence for screen readers`, () => {
+      renderPanel(mixed, { cartEnabled, price: { listPrice: 350_000, unitPrice: 279_000, discounted: true, percentOff: 20 } });
+      const list = screen.getByTestId("product-price-list");
+      expect(list.tagName).toBe("S");
+      expect(list).toHaveTextContent("Rp350.000");
+      expect(list).toHaveClass("text-ink-muted");
+      expect(screen.getByTestId("product-price-sale")).toHaveTextContent("Rp279.000");
+      expect(screen.getByTestId("product-price-sale")).toHaveClass("text-discount");
+      expect(screen.getByText("Harga normal Rp350.000, harga diskon Rp279.000")).toHaveClass("sr-only");
+      // The PDP has no badge (plan §9: the badge is on catalog tiles).
+      expect(screen.queryByText(/% OFF/)).toBeNull();
+    });
+  }
 });
 
 describe("PDP size buttons", () => {

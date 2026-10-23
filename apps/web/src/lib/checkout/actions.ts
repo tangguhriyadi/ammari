@@ -10,6 +10,7 @@ import { getCartClientIp } from "@/lib/cart/ip";
 import { clearGuestCartCookie, readCartIdentity } from "@/lib/cart/identity";
 import { recordClaimAttemptAndCount } from "@/lib/claim/throttle";
 import { HOMEPAGE_CACHE_TAG } from "@/lib/content/homepage-data";
+import { PRODUCTS_CACHE_TAG, productCacheTag } from "@/lib/content/product-data";
 import { defaultDb } from "@/lib/db";
 import { scheduleOrderEmails } from "@/lib/emails/order-emails";
 import { getPaymentRuntime } from "@/lib/payments/runtime";
@@ -153,11 +154,18 @@ async function runPlaceOrder(input: PlaceOrderActionInput): Promise<PlaceOrderAc
     }
   }
   // The new holds change what the storefront may show as sold out (plan §7 "Revalidation"): the
-  // ISR product pages and the homepage tiles. revalidatePath here also refreshes this client's
-  // router; the homepage data goes stale-while-revalidate.
+  // product pages' cached data (expired outright, see lib/content/product-data.ts), the related
+  // lists and the homepage tiles (stale-while-revalidate). revalidatePath here also refreshes this
+  // client's router.
   try {
-    for (const slug of result.productSlugs) revalidatePath(`/products/${slug}`);
-    if (result.productSlugs.length > 0) revalidateTag(HOMEPAGE_CACHE_TAG, "max");
+    for (const slug of result.productSlugs) {
+      revalidatePath(`/products/${slug}`);
+      revalidateTag(productCacheTag(slug), { expire: 0 });
+    }
+    if (result.productSlugs.length > 0) {
+      revalidateTag(PRODUCTS_CACHE_TAG, "max");
+      revalidateTag(HOMEPAGE_CACHE_TAG, "max");
+    }
   } catch (error) {
     console.error("[checkout] order placed but product pages were not revalidated", { orderNo: result.orderNo, ...databaseErrorLogFields(error) });
   }

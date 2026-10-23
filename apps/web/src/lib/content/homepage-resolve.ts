@@ -1,13 +1,13 @@
-import type { StorefrontProductTile } from "@ammari/db/storefront";
+import type { PricedProductTile } from "./storefront-price";
 import type { FeatureBlockView, HeroView, HomepageProductRefView, HomepageView, ProductGridView, WhyAmmariView } from "./homepage-view";
 
-// Merges a (pure, DB-free) HomepageView with an already-resolved StorefrontProductTile[] (the
-// result of calling @ammari/db/storefront's getStorefrontProductTiles against the refs this
-// module itself collects) into the final render-ready model — hrefs computed, dangling
+// Merges a (pure, DB-free) HomepageView with already-resolved, priced tiles (the result of calling
+// @ammari/db/storefront's getStorefrontProductTiles against the refs this module itself collects,
+// then ./storefront-price.ts's priceTiles) into the final render-ready model — hrefs computed, dangling
 // references (a tile/CTA/linked-product pointing at a deleted/unpublished product) dropped. Kept
 // separate from homepage-view.ts (which has zero DB-shaped imports) so that module stays
 // trivially unit-testable without even a mock DB client; this one's own tests simply hand it a
-// canned `StorefrontProductTile[]` instead of hitting a real database.
+// canned `PricedProductTile[]` instead of hitting a real database.
 
 function refKey(ref: { productId: string; fabricColorId: string | null }): string {
   return `${ref.productId}:${ref.fabricColorId ?? ""}`;
@@ -39,11 +39,11 @@ export interface ResolvedHero extends Omit<HeroView, "ctaTarget"> {
 }
 
 export interface ResolvedProductGrid extends Omit<ProductGridView, "tiles"> {
-  tiles: StorefrontProductTile[];
+  tiles: PricedProductTile[];
 }
 
 export interface ResolvedFeatureBlock extends Omit<FeatureBlockView, "linkedProduct"> {
-  linkedProduct: StorefrontProductTile;
+  linkedProduct: PricedProductTile;
   href: string;
 }
 
@@ -54,18 +54,18 @@ export interface ResolvedHomepageView {
   whyAmmari: WhyAmmariView | null;
 }
 
-function productHref(tile: StorefrontProductTile): string {
+function productHref(tile: PricedProductTile): string {
   return tile.fabricColorId ? `/products/${tile.slug}?color=${tile.fabricColorId}` : `/products/${tile.slug}`;
 }
 
-/** `resolvedTiles` is whatever `getStorefrontProductTiles(collectHomepageProductRefs(view))`
+/** `resolvedTiles` is whatever `getStorefrontProductTiles(collectHomepageProductRefs(view))` (priced)
  * returned — a ref whose product no longer resolves (deleted, deactivated, unpublished since the
  * section was curated) is simply absent from it, per that function's own "skip, never crash"
  * contract. This function turns that into the final render decision: hero falls back its CTA to
  * the "#koleksi" anchor; a grid with zero resolvable tiles, or a feature block whose one linked
  * product didn't resolve, is treated as empty and not rendered at all — same "hidden/empty
  * sections not rendered" rule `buildHomepageView` already applies to the raw CMS content. */
-export function resolveHomepageView(view: HomepageView, resolvedTiles: StorefrontProductTile[]): ResolvedHomepageView {
+export function resolveHomepageView(view: HomepageView, resolvedTiles: PricedProductTile[]): ResolvedHomepageView {
   const tileByKey = new Map(resolvedTiles.map((tile) => [refKey({ productId: tile.productId, fabricColorId: tile.fabricColorId }), tile]));
 
   let hero: ResolvedHero | null = null;
@@ -77,7 +77,7 @@ export function resolveHomepageView(view: HomepageView, resolvedTiles: Storefron
 
   let productGrid: ResolvedProductGrid | null = null;
   if (view.productGrid) {
-    const tiles = view.productGrid.tiles.map((ref) => tileByKey.get(refKey(ref))).filter((tile): tile is StorefrontProductTile => tile !== undefined);
+    const tiles = view.productGrid.tiles.map((ref) => tileByKey.get(refKey(ref))).filter((tile): tile is PricedProductTile => tile !== undefined);
     if (tiles.length > 0) productGrid = { title: view.productGrid.title, tiles };
   }
 

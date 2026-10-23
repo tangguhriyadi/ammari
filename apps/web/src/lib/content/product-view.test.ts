@@ -1,13 +1,20 @@
 import { describe, expect, test } from "vitest";
 import type { StorefrontProduct } from "@ammari/db/storefront";
-import { buildProductView, getGalleryForColor, getPrimaryImage, resolveSelectedColorId } from "./product-view";
+import { buildProductView as buildProductViewPriced, getGalleryForColor, getPrimaryImage, resolveSelectedColorId } from "./product-view";
+
+const PRICE = { listPrice: 269_000, unitPrice: 269_000, discounted: false, percentOff: null };
+
+/** Most tests here are about images/sizes/colours, not price: build with a fixed normal price. */
+function buildProductView(product: StorefrontProduct) {
+  return buildProductViewPriced(product, PRICE);
+}
 
 function baseProduct(overrides: Partial<StorefrontProduct> = {}): StorefrontProduct {
   return {
     id: "product-1",
     name: "Gamis Flowy Straight",
     slug: "gamis-flowy-straight",
-    basePrice: 269_000,
+    pricing: { basePrice: 269_000, discountPriceAmount: null, discountEnabled: false, discountStartsAt: null, discountEndsAt: null },
     storefrontDescription: "<p>Deskripsi</p>",
     highlights: ["flowy", "breathable"],
     sizeMode: "sized",
@@ -22,6 +29,11 @@ function baseProduct(overrides: Partial<StorefrontProduct> = {}): StorefrontProd
 }
 
 describe("buildProductView", () => {
+  test("carries the price the page resolved for this request, not the raw pricing", () => {
+    const sale = { listPrice: 350_000, unitPrice: 279_000, discounted: true, percentOff: 20 };
+    expect(buildProductViewPriced(baseProduct(), sale).price).toEqual(sale);
+  });
+
   test("orders highlights by the canonical key order, not the stored array order", () => {
     const view = buildProductView(baseProduct({ highlights: ["not_see_through", "breathable"] }));
     expect(view.highlights.map((h) => h.key)).toEqual(["breathable", "not_see_through"]);

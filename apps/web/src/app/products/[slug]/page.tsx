@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getRelatedStorefrontProducts, getStorefrontProductBySlug } from "@ammari/db/storefront";
 import { sanitizeStorefrontDescriptionHtml } from "@ammari/content-sanitize";
 import { buildProductView, getPrimaryImage, resolveSelectedColorId } from "@/lib/content/product-view";
+import { getCachedRelatedProducts, getCachedStorefrontProduct } from "@/lib/content/product-data";
+import { priceTiles, priceValidUntil, resolveStorefrontPrice, toStorefrontPrice } from "@/lib/content/storefront-price";
 import { PRODUCT_PLACEHOLDER_OG_PATH } from "@/lib/content/product-placeholder";
 import { getStoragePublicBaseUrl, storageImageUrl } from "@/lib/storage/public-url";
 import { isCartEnabled } from "@/lib/cart-flag";
@@ -16,12 +17,14 @@ import { Accordions, type AccordionItemDef } from "@/components/pdp/accordions";
 import { SizeChartTable } from "@/components/pdp/size-chart-table";
 import { RelatedProductsSection } from "@/components/pdp/related-products-section";
 
-export const revalidate = 3600;
-// No generateStaticParams — every slug renders on first request and is then ISR-cached
-// (dynamicParams defaults true), which also means this route never needs database access during
-// `next build` itself (confirmed empirically: `next build` produces no HTML for any concrete
-// slug here, unlike `/`, which — before being switched to `dynamic = "force-dynamic"` — had no
-// dynamic segment and so WAS prerendered at build; see app/page.tsx's own comment).
+// Rendered per request (docs/plans/product-discount.md §7), no longer ISR: the price is resolved
+// with this request's `now`, so a product discount shows from the first request at its start time
+// and is gone from the first request at its end time, with no cron or revalidation involved. The
+// DB reads are cached instead (lib/content/product-data.ts, raw pricing fields, tag-revalidated by
+// admin saves and payments). Like before, this route never needs database access during
+// `next build`: there is no generateStaticParams, and force-dynamic never prerenders (see
+// app/page.tsx's own comment on the build-time-DB bug that `/` once had).
+export const dynamic = "force-dynamic";
 
 function siteOrigin(): string {
   return (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/+$/, "");
@@ -35,17 +38,18 @@ function primaryImageUrl(view: ReturnType<typeof buildProductView>): string {
 }
 
 async function loadProduct(slug: string) {
-  const product = await getStorefrontProductBySlug(slug);
+  const product = await getCachedStorefrontProduct(slug);
   if (!product) notFound();
   return product;
 }
 
 export async function generateMetadata({ params }: PageProps<"/products/[slug]">): Promise<Metadata> {
   const { slug } = await params;
-  const product = await getStorefrontProductBySlug(slug);
+  const product = await getCachedStorefrontProduct(slug);
   if (!product) return {};
 
-  const view = buildProductView(product);
+  // The metadata carries no price (only the OG image needs the view).
+  const view = buildProductView(product, toStorefrontPrice(resolveStorefrontPrice(product.pricing, new Date())));
   const description = product.storefrontDescription
     ? sanitizeStorefrontDescriptionHtml(product.storefrontDescription).replace(/<[^>]+>/g, " ").trim().slice(0, 160)
     : `${product.name}, Ammari syar'i gamis.`;
@@ -72,10 +76,13 @@ export default async function ProductPage({
   const requestedColor = typeof resolvedSearchParams.color === "string" ? resolvedSearchParams.color : null;
 
   const product = await loadProduct(slug);
-  const view = buildProductView(product);
+  // One instant for the product, its JSON-LD and the related tiles.
+  const now = new Date();
+  const price = resolveStorefrontPrice(product.pricing, now);
+  const view = buildProductView(product, toStorefrontPrice(price));
   const selectedColorId = resolveSelectedColorId(view, requestedColor);
   const [related, whatsappNumber, storeContact] = await Promise.all([
-    getRelatedStorefrontProducts({ excludeSlug: slug, limit: 2 }),
+    getCachedRelatedProducts(slug, 2).then((tiles) => priceTiles(tiles, now)),
     getWhatsappNumber(),
     getStoreContact(),
   ]);
@@ -158,7 +165,10 @@ export default async function ProductPage({
     offers: {
       "@type": "Offer",
       priceCurrency: "IDR",
-      price: product.basePrice,
+      // The price charged right now (product discount included); priceValidUntil only while a
+      // discount with an end time is active.
+      price: price.unitPrice,
+      priceValidUntil: priceValidUntil(price),
       availability: product.variants.some((variant) => variant.available)
         ? "https://schema.org/InStock"
         : "https://schema.org/OutOfStock",

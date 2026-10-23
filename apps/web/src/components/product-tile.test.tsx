@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test } from "vitest";
-import type { StorefrontProductTile } from "@ammari/db/storefront";
+import type { PricedProductTile } from "@/lib/content/storefront-price";
 import { ProductTile } from "./product-tile";
 
-function tile(overrides: Partial<StorefrontProductTile> = {}): StorefrontProductTile {
+function tile(overrides: Partial<PricedProductTile> = {}): PricedProductTile {
   return {
     productId: "p1",
     fabricColorId: null,
     name: "Haura Dress",
     slug: "haura-dress",
-    basePrice: 269_000,
+    price: { listPrice: 269_000, unitPrice: 269_000, discounted: false, percentOff: null },
     colorName: "Taupe",
     colorCount: 1,
     soldOut: false,
@@ -63,5 +63,34 @@ describe("ProductTile image fallback", () => {
     expect(screen.getByText("Sold out")).toBeInTheDocument();
     rerender(<ProductTile tile={tile({ soldOut: false })} />);
     expect(screen.queryByText("Sold out")).toBeNull();
+  });
+});
+
+describe("ProductTile discount (docs/plans/product-discount.md §9)", () => {
+  const sale = { listPrice: 350_000, unitPrice: 279_000, discounted: true, percentOff: 20 };
+
+  test("no discount: plain price, no badge", () => {
+    render(<ProductTile tile={tile()} />);
+    expect(screen.getByTestId("product-price")).toHaveTextContent("Rp269.000");
+    expect(screen.queryByTestId("discount-badge")).toBeNull();
+  });
+
+  test("discounted: N% OFF badge (bold 19px, white on the discount red), struck normal price, red sale price", () => {
+    render(<ProductTile tile={tile({ price: sale })} />);
+    const badge = screen.getByTestId("discount-badge");
+    expect(badge).toHaveTextContent(/^20% OFF$/);
+    expect(badge).toHaveClass("bg-discount", "text-white", "font-bold", "text-[19px]");
+    expect(screen.getByTestId("product-price-list")).toHaveTextContent("Rp350.000");
+    expect(screen.getByTestId("product-price-sale")).toHaveTextContent("Rp279.000");
+    expect(screen.getByRole("link")).toHaveTextContent("Harga normal Rp350.000, harga diskon Rp279.000");
+  });
+
+  test("sold out and discounted: only 'Sold out', never the badge; prices still struck + red (owner answer 7)", () => {
+    render(<ProductTile tile={tile({ price: sale, soldOut: true })} />);
+    expect(screen.getByText("Sold out")).toBeInTheDocument();
+    expect(screen.queryByTestId("discount-badge")).toBeNull();
+    expect(screen.queryByText(/% OFF/)).toBeNull();
+    expect(screen.getByTestId("product-price-list")).toHaveTextContent("Rp350.000");
+    expect(screen.getByTestId("product-price-sale")).toHaveTextContent("Rp279.000");
   });
 });

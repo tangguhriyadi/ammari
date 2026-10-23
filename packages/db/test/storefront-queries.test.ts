@@ -238,8 +238,32 @@ describe("getStorefrontProductBySlug", () => {
     await withRollback(async (tx) => {
       const fixture = await seedFullProductFixture(tx);
       const result = await getStorefrontProductBySlug(fixture.slug, tx);
-      expect(result?.basePrice).toBe(fixture.product.basePrice);
+      expect(result?.pricing.basePrice).toBe(fixture.product.basePrice);
       expect(JSON.stringify(result)).not.toContain("999999");
+    });
+  });
+
+  test("returns the raw discount fields, unresolved, even for a discount that has not started (plan §7)", async () => {
+    await withRollback(async (tx) => {
+      const fixture = await seedFullProductFixture(tx);
+      const startsAt = new Date(Date.now() + 86_400_000);
+      const endsAt = new Date(Date.now() + 2 * 86_400_000);
+      await tx
+        .update(products)
+        .set({ basePrice: 350_000, discountPriceAmount: 279_000, discountEnabled: true, discountStartsAt: startsAt, discountEndsAt: endsAt })
+        .where(eq(products.id, fixture.product.id));
+      const result = await getStorefrontProductBySlug(fixture.slug, tx);
+      expect(result?.pricing).toEqual({
+        basePrice: 350_000,
+        discountPriceAmount: 279_000,
+        discountEnabled: true,
+        discountStartsAt: startsAt,
+        discountEndsAt: endsAt,
+      });
+      const serialized = JSON.stringify(result);
+      for (const term of COST_LEAK_DENYLIST) {
+        expect(serialized).not.toContain(term);
+      }
     });
   });
 

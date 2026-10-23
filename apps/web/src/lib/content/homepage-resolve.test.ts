@@ -1,15 +1,15 @@
 import { describe, expect, test } from "vitest";
-import type { StorefrontProductTile } from "@ammari/db/storefront";
+import type { PricedProductTile } from "@/lib/content/storefront-price";
 import type { HomepageView } from "./homepage-view";
 import { collectHomepageProductRefs, resolveHomepageView } from "./homepage-resolve";
 
-function tile(overrides: Partial<StorefrontProductTile> = {}): StorefrontProductTile {
+function tile(overrides: Partial<PricedProductTile> = {}): PricedProductTile {
   return {
     productId: "p1",
     fabricColorId: null,
     name: "Gamis Flowy Straight",
     slug: "gamis-flowy-straight",
-    basePrice: 269_000,
+    price: { listPrice: 269_000, unitPrice: 269_000, discounted: false, percentOff: null },
     colorName: "Beige",
     colorCount: 1,
     soldOut: false,

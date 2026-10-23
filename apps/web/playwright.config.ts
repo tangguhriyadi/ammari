@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
+import { E2E_REVALIDATE_SECRET } from "./e2e/helpers/revalidate-secret";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
 
@@ -112,6 +113,7 @@ export default defineConfig({
       BITESHIP_WEBHOOK_HEADER_NAME: "X-Ammari-Courier-E2E",
       BITESHIP_WEBHOOK_HEADER_SECRET: E2E_WEBHOOK_HEADER_SECRET,
       STORE_WHATSAPP_NUMBER: E2E_WHATSAPP_NUMBER,
+      REVALIDATE_SECRET: E2E_REVALIDATE_SECRET,
     },
     timeout: 120_000,
   },

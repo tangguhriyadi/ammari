@@ -81,4 +81,7 @@ export default async function globalSetup(): Promise<void> {
   // product-page.spec.ts — a separate module, see its own doc comment.
   const { seedStorefrontFixtures } = await import("./storefront-fixtures");
   await seedStorefrontFixtures();
+  // Product discount fixtures (product-discount.spec.ts), kept out of every other spec's way.
+  const { seedDiscountFixtures } = await import("./discount-fixtures");
+  await seedDiscountFixtures();
 }

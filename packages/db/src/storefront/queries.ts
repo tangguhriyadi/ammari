@@ -20,6 +20,8 @@ import {
   type Size,
   type SizeMode,
 } from "../schema/constants";
+import type { ProductPricingInput } from "../pricing";
+import { productPricingColumns } from "../pricing-columns";
 import { qualifiedColumn } from "../sql-helpers";
 import { sellableQtySql } from "../stock-availability";
 
@@ -34,7 +36,10 @@ import { sellableQtySql } from "../stock-availability";
 // test/storefront-queries.test.ts's cost-leak denylist test and description-distinctness test,
 // which assert this against the *serialized output*, not just by reading this file.
 //
-// Price is always `products.base_price` — this module never reads
+// Price is always `products.base_price` plus the product's own discount fields
+// (docs/plans/product-discount.md §5.2), returned RAW as `pricing` and never resolved here: the
+// callers cache these results, so the effective price is decided per request with
+// `resolveUnitPrice` (@ammari/db/pricing), exact at a discount's start/end. This module never reads
 // `product_variants.price_override_amount`, and never joins any cost-bearing table
 // (`fabrics.price_amount`/`price_unit`, `cost_components`, `production_batch_costs`,
 // `accessory_movements.value_amount`, `stock_movements.value_amount` as a VALUE — only as a qty
@@ -42,6 +47,16 @@ import { sellableQtySql } from "../stock-availability";
 
 type Tx = Parameters<Parameters<typeof defaultDb.transaction>[0]>[0];
 type Database = typeof defaultDb | Tx;
+
+function pickPricing(row: ProductPricingInput): ProductPricingInput {
+  return {
+    basePrice: row.basePrice,
+    discountPriceAmount: row.discountPriceAmount,
+    discountEnabled: row.discountEnabled,
+    discountStartsAt: row.discountStartsAt,
+    discountEndsAt: row.discountEndsAt,
+  };
+}
 
 function byCanonicalHomepageKey<T extends { key: string }>(rows: T[]): T[] {
   return [...rows].sort(
@@ -139,7 +154,8 @@ export interface StorefrontProduct {
   id: string;
   name: string;
   slug: string;
-  basePrice: number;
+  /** Raw, unresolved: resolve with `resolveUnitPrice(pricing, now)` at render time. */
+  pricing: ProductPricingInput;
   storefrontDescription: string | null;
   highlights: string[];
   sizeMode: SizeMode;
@@ -160,7 +176,7 @@ export async function getStorefrontProductBySlug(slug: string, db: Database = de
       id: products.id,
       name: products.name,
       slug: products.slug,
-      basePrice: products.basePrice,
+      ...productPricingColumns,
       storefrontDescription: products.storefrontDescription,
       highlights: products.highlights,
       sizeMode: products.sizeMode,
@@ -252,7 +268,7 @@ export async function getStorefrontProductBySlug(slug: string, db: Database = de
     id: productRow.id,
     name: productRow.name,
     slug: productRow.slug,
-    basePrice: productRow.basePrice,
+    pricing: pickPricing(productRow),
     storefrontDescription: productRow.storefrontDescription,
     highlights: productRow.highlights,
     sizeMode: productRow.sizeMode,
@@ -278,7 +294,8 @@ export interface StorefrontProductTile {
   fabricColorId: string | null;
   name: string;
   slug: string;
-  basePrice: number;
+  /** Raw, unresolved: resolve with `resolveUnitPrice(pricing, now)` at render time. */
+  pricing: ProductPricingInput;
   /** The resolved colour name to show — the pinned colour's name, or (when `fabricColorId` is
    * null) the product's first colour's name. `null` only if the product has no colours at all. */
   colorName: string | null;
@@ -300,7 +317,7 @@ export interface StorefrontProductTile {
  * by `(productId, fabricColorId)` and drop whichever didn't come back.
  *
  * Same explicit-column-list, no-cost-data discipline as every other query in this module — only
- * `id`/`name`/`slug`/`basePrice` off `products`, nothing from `fabrics`/cost tables at all. */
+ * `id`/`name`/`slug` and the pricing columns off `products`, nothing from `fabrics`/cost tables at all. */
 export async function getStorefrontProductTiles(
   refs: StorefrontProductTileRef[],
   db: Database = defaultDb,
@@ -309,7 +326,7 @@ export async function getStorefrontProductTiles(
   if (productIds.length === 0) return [];
 
   const productRows = await db
-    .select({ id: products.id, name: products.name, slug: products.slug, basePrice: products.basePrice })
+    .select({ id: products.id, name: products.name, slug: products.slug, ...productPricingColumns })
     .from(products)
     .where(and(inArray(products.id, productIds), eq(products.isActive, true), eq(products.isPublishedOnStorefront, true)));
   const productById = new Map(productRows.map((row) => [row.id, row]));
@@ -428,7 +445,7 @@ export async function getStorefrontProductTiles(
       fabricColorId: ref.fabricColorId,
       name: product.name,
       slug: product.slug,
-      basePrice: product.basePrice,
+      pricing: pickPricing(product),
       colorName,
       colorCount,
       image,

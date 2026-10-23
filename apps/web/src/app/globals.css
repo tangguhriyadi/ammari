@@ -36,8 +36,12 @@
   --color-disabled: #8a7f7f;
   --color-error: #8c1d18;
   --color-error-border: #b3261e;
-  /* Header cart count badge (white text, 6.5:1); the only filled red on the storefront. */
+  /* Header cart count badge (white text, 6.5:1). */
   --color-badge: #b3261e;
+  /* Product discount (docs/plans/product-discount.md §9): sale price text and the `N% OFF` tile
+   * badge background, white text. 3.89:1 either way, so badge text is bold 19px (WCAG large
+   * text). Must equal DISCOUNT_COLOR_HEX in @ammari/db/pricing (emails use that constant). */
+  --color-discount: #d05d5c;
 
   /* Footer sits on --color-brand — its own text/divider/chip tones (docs/design/storefront.md
    * §3 "Footer (on --color-brand)"), distinct from the page-level neutral scale above. */

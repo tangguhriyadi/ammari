@@ -40,7 +40,7 @@ describe("revalidateHomepage / revalidateProductSlug", () => {
     expect(JSON.parse(init.body)).toEqual({ tags: ["storefront:homepage"] });
   });
 
-  test("revalidateProductSlug posts the product's slug path AND the homepage cache tag", async () => {
+  test("revalidateProductSlug posts the product's slug path, its own tag, the related-products tag and the homepage tag", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -49,7 +49,10 @@ describe("revalidateHomepage / revalidateProductSlug", () => {
 
     expect(result).toEqual({ ok: true });
     const [, init] = fetchMock.mock.calls[0]!;
-    expect(JSON.parse(init.body)).toEqual({ paths: ["/products/gamis-basic"], tags: ["storefront:homepage"] });
+    expect(JSON.parse(init.body)).toEqual({
+      paths: ["/products/gamis-basic"],
+      tags: ["storefront:product:gamis-basic", "storefront:products", "storefront:homepage"],
+    });
   });
 
   test("resolves ok:false (never throws) when apps/web responds with a non-2xx status", async () => {
@@ -93,7 +96,7 @@ describe("revalidateStorefrontLayout", () => {
 });
 
 describe("revalidateProductSlugs", () => {
-  test("deduplicates, posts every product path plus the homepage tag once, and batches by 10 paths", async () => {
+  test("deduplicates, posts every product path and tag plus the shared tags once per request, and batches by 8 products", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const { revalidateProductSlugs } = await import("./revalidate");
@@ -103,8 +106,20 @@ describe("revalidateProductSlugs", () => {
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(fetchMock.mock.calls[0]![1].body).paths).toHaveLength(10);
-    expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({ paths: ["/products/produk-10", "/products/produk-11"], tags: ["storefront:homepage"] });
+    const first = JSON.parse(fetchMock.mock.calls[0]![1].body);
+    expect(first.paths).toHaveLength(8);
+    expect(first.tags).toHaveLength(10);
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({
+      paths: ["/products/produk-8", "/products/produk-9", "/products/produk-10", "/products/produk-11"],
+      tags: [
+        "storefront:product:produk-8",
+        "storefront:product:produk-9",
+        "storefront:product:produk-10",
+        "storefront:product:produk-11",
+        "storefront:products",
+        "storefront:homepage",
+      ],
+    });
   });
 
   test("makes no request for an empty list, and reports ok:false (never throws) if a batch fails", async () => {
@@ -119,13 +134,13 @@ describe("revalidateProductSlugs", () => {
 });
 
 describe("revalidateProductSlugs path cap", () => {
-  test("exactly 10 products fit one request; 11 need two (apps/web accepts at most 10 paths)", async () => {
+  test("exactly 8 products fit one request; 9 need two (apps/web accepts at most 10 tags: 8 product tags + 2 shared)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const { revalidateProductSlugs } = await import("./revalidate");
-    await revalidateProductSlugs(Array.from({ length: 10 }, (_, i) => `p-${i}`));
+    await revalidateProductSlugs(Array.from({ length: 8 }, (_, i) => `p-${i}`));
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    await revalidateProductSlugs(Array.from({ length: 11 }, (_, i) => `q-${i}`));
+    await revalidateProductSlugs(Array.from({ length: 9 }, (_, i) => `q-${i}`));
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

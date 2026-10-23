@@ -6,6 +6,7 @@ import {
   getStorefrontProductTiles,
   type StorefrontProductTileRef,
 } from "@ammari/db/storefront";
+import type { CachedProductTile } from "./storefront-price";
 
 // `/` (app/page.tsx) is `dynamic = "force-dynamic"` — Next never attempts to prerender it at
 // `next build` (where the DB is unreachable, see apps/web/Dockerfile), so there is no stale
@@ -32,8 +33,12 @@ export const getCachedPublishedHomepageContent = unstable_cache(
 // reusing one shared tag here preserves that same conservative "any product save refreshes the
 // homepage" behavior without the admin side needing to know which products the homepage
 // currently references.
+//
+// The tiles carry RAW pricing (docs/plans/product-discount.md §7), typed `CachedProductTile`
+// because a cache hit returns the discount window as ISO strings; the page prices them per request
+// (storefront-price.ts's priceTiles), so a discount starting or ending needs no revalidation.
 export const getCachedHomepageProductTiles = unstable_cache(
-  (refs: StorefrontProductTileRef[]) => getStorefrontProductTiles(refs),
+  (refs: StorefrontProductTileRef[]): Promise<CachedProductTile[]> => getStorefrontProductTiles(refs),
   ["storefront-homepage-tiles"],
   { tags: [HOMEPAGE_CACHE_TAG], revalidate: HOMEPAGE_CACHE_REVALIDATE_SECONDS },
 );

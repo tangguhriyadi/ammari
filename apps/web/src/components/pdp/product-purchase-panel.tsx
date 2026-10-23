@@ -7,7 +7,6 @@ import { MessageCircle } from "lucide-react";
 import { cn } from "@ammari/ui";
 import { getGalleryForColor, type ProductView } from "@/lib/content/product-view";
 import { buildImageUrl } from "@/lib/storage/public-url";
-import { formatPriceIdr } from "@/lib/format";
 import { buildProductWhatsappMessage, buildWhatsappUrl } from "@/lib/whatsapp";
 import { addToCartAction, buyNowAction } from "@/lib/cart/actions";
 import { announceCartCount, CART_CALL_FAILED_MESSAGE, liveRegionText } from "@/lib/cart/count-event";
@@ -16,6 +15,7 @@ import { OutlineButton, PrimaryButton, PrimaryLink, SoldOutButton } from "@/comp
 import { PendingOrderNotice } from "@/components/pdp/pending-order-notice";
 import { OPEN_ACCORDION_EVENT, SIZE_CHART_HEADING_ID, SIZE_GUIDE_ACCORDION_ID, type OpenAccordionDetail } from "@/components/pdp/size-guide";
 import { ProductImage } from "@/components/product-image";
+import { ProductPrice } from "@/components/product-price";
 import { Curtain } from "@/components/curtain";
 import { failedCallMessage } from "@/lib/stale-deployment";
 
@@ -245,7 +245,7 @@ export function ProductPurchasePanel({ view, initialColorId, cartEnabled, whatsa
       <div className="flex flex-col gap-6 md:sticky md:top-20">
         <div className="flex flex-col gap-1">
           <h1 className="font-serif text-[30px] font-normal text-ink">{view.name}</h1>
-          <p className="text-[17px] font-medium text-ink">{formatPriceIdr(view.basePrice)}</p>
+          <ProductPrice price={view.price} className="text-[17px] font-medium" />
         </div>
 
         {view.colors.length > 0 && (
