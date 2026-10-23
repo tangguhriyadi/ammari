@@ -40,6 +40,13 @@ export function buildImageUrl(base: string, storageKey: string, size: ImageSize 
   return `${base}/${storageKey}/${size}.webp`;
 }
 
+/** A `srcset` over the pre-generated sizes, for an `<img>` the browser picks the file for itself
+ * (next/image can't: `images.unoptimized` makes it emit no srcset and drop a passed one, see
+ * docs/plans/pdp-gallery.md §5). Pure, same as `buildImageUrl`. */
+export function buildImageSrcSet(base: string, storageKey: string, sizes: readonly ImageSize[]): string {
+  return sizes.map((size) => `${buildImageUrl(base, storageKey, size)} ${size}w`).join(", ");
+}
+
 /** Convenience for Server Components (the homepage sections, the PDP's own static metadata/
  * JSON-LD, the related-products tiles) — resolves the base URL AND builds the full URL in one
  * call. Never call this from a Client Component (see this module's own doc comment). */

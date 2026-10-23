@@ -1,6 +1,13 @@
 import { describe, expect, test } from "vitest";
 import type { StorefrontProduct } from "@ammari/db/storefront";
-import { buildProductView as buildProductViewPriced, getGalleryForColor, getPrimaryImage, resolveSelectedColorId } from "./product-view";
+import {
+  buildProductGallery,
+  buildProductView as buildProductViewPriced,
+  getGalleryForColor,
+  getPrimaryImage,
+  initialGalleryIndex,
+  resolveSelectedColorId,
+} from "./product-view";
 
 const PRICE = { listPrice: 269_000, unitPrice: 269_000, discounted: false, percentOff: null };
 
@@ -165,6 +172,103 @@ describe("buildProductView", () => {
 
     const withoutColors = buildProductView(baseProduct({ colors: [] }));
     expect(withoutColors.defaultColorId).toBeNull();
+  });
+});
+
+describe("buildProductGallery", () => {
+  type Image = StorefrontProduct["images"][number];
+  const image = (id: string, fabricColorId: string | null, sortOrder: number): Image => ({
+    id,
+    storageKey: `key/${id}`,
+    fabricColorId,
+    altText: null,
+    sortOrder,
+    width: 800,
+    height: 1200,
+  });
+  // Swatch order (creation date, as the storefront query returns it): navy before beige, so the
+  // gallery's colour groups follow it, not alphabetical order.
+  const colors = [
+    { id: "navy", name: "Navy", hex: null },
+    { id: "beige", name: "Beige", hex: null },
+    { id: "taupe", name: "Taupe", hex: null },
+  ];
+
+  test("general photos first, then each colour's photos in swatch order, each group by sortOrder", () => {
+    const view = buildProductView(
+      baseProduct({
+        colors,
+        images: [
+          image("beige-2", "beige", 1),
+          image("general-2", null, 1),
+          image("navy-1", "navy", 0),
+          image("beige-1", "beige", 0),
+          image("general-1", null, 0),
+        ],
+      }),
+    );
+    const gallery = buildProductGallery(view);
+    expect(gallery.images.map((i) => [i.id, i.colorId])).toEqual([
+      ["general-1", null],
+      ["general-2", null],
+      ["navy-1", "navy"],
+      ["beige-1", "beige"],
+      ["beige-2", "beige"],
+    ]);
+    // Taupe has no photo of its own: no start index.
+    expect(gallery.colorStartIndex).toEqual({ navy: 2, beige: 3 });
+  });
+
+  test("carries alt text (product name as fallback) and the photo's own width and height", () => {
+    const view = buildProductView(
+      baseProduct({ colors, images: [{ ...image("general-1", null, 0), width: 1000, height: 1250 }, { ...image("navy-1", "navy", 0), altText: "Navy depan" }] }),
+    );
+    const [general, navy] = buildProductGallery(view).images;
+    expect(general).toMatchObject({ altText: "Gamis Flowy Straight", width: 1000, height: 1250, storageKey: "key/general-1" });
+    expect(navy?.altText).toBe("Navy depan");
+  });
+
+  test("photos of a colour without a swatch (deactivated) are left out", () => {
+    const view = buildProductView(baseProduct({ colors, images: [image("general-1", null, 0), image("old-1", "deactivated", 0)] }));
+    const gallery = buildProductGallery(view);
+    expect(gallery.images.map((i) => i.id)).toEqual(["general-1"]);
+    expect(gallery.colorStartIndex).toEqual({});
+  });
+
+  test("...unless they are the product's only photos: never empty while any photo exists", () => {
+    const view = buildProductView(baseProduct({ colors, images: [image("old-1", "deactivated", 0)] }));
+    expect(buildProductGallery(view).images.map((i) => i.id)).toEqual(["old-1"]);
+  });
+
+  test("no photo at all: an empty gallery; one photo: a gallery of one", () => {
+    expect(buildProductGallery(buildProductView(baseProduct({ colors }))).images).toEqual([]);
+    expect(buildProductGallery(buildProductView(baseProduct({ colors, images: [image("navy-1", "navy", 0)] }))).images).toHaveLength(1);
+  });
+});
+
+describe("initialGalleryIndex", () => {
+  const view = buildProductView(
+    baseProduct({
+      colors: [
+        { id: "navy", name: "Navy", hex: null },
+        { id: "beige", name: "Beige", hex: null },
+      ],
+      images: [
+        { id: "general-1", storageKey: "g/1", fabricColorId: null, altText: null, sortOrder: 0, width: 800, height: 1200 },
+        { id: "beige-1", storageKey: "b/1", fabricColorId: "beige", altText: null, sortOrder: 0, width: 800, height: 1200 },
+      ],
+    }),
+  );
+  const gallery = buildProductGallery(view);
+
+  test("a valid ?color= with photos starts on that colour's first photo", () => {
+    expect(initialGalleryIndex(view, gallery, "beige")).toBe(1);
+  });
+
+  test("no ?color=, an unknown one, or a colour without photos starts on the first photo", () => {
+    expect(initialGalleryIndex(view, gallery, null)).toBe(0);
+    expect(initialGalleryIndex(view, gallery, "deactivated-color-id")).toBe(0);
+    expect(initialGalleryIndex(view, gallery, "navy")).toBe(0);
   });
 });
 

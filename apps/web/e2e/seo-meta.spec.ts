@@ -64,6 +64,14 @@ test.describe("Open Graph image", () => {
     expect(await meta(page, "property", "og:title")).toBe(E2E_PRODUCT_NAME);
     await expect(page).toHaveTitle(`${E2E_PRODUCT_NAME} | Ammari`);
   });
+
+  test("a product page's canonical URL never carries ?color=", async ({ page }) => {
+    for (const path of [`/products/${E2E_PRODUCT_SLUG}`, `/products/${E2E_PRODUCT_SLUG}?color=any-colour-id`]) {
+      await page.goto(path);
+      const canonical = await page.locator('link[rel="canonical"]').getAttribute("href");
+      expect(canonical).toMatch(new RegExp(`^https?://[^/]+/products/${E2E_PRODUCT_SLUG}$`));
+    }
+  });
 });
 
 test.describe("homepage meta title and description", () => {

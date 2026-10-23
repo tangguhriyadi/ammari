@@ -12,6 +12,23 @@ export interface ProductGalleryImage {
   id: string;
   storageKey: string;
   altText: string;
+  /** As uploaded, after EXIF rotation: the full-screen viewer shows the whole photo at its own
+   * ratio (the page gallery always crops to 2:3). */
+  width: number;
+  height: number;
+}
+
+/** One entry of the PDP's flat gallery (docs/plans/pdp-gallery.md §2). */
+export interface ProductGalleryItem extends ProductGalleryImage {
+  /** `null` = general image (shown for every colour). */
+  colorId: string | null;
+}
+
+export interface ProductGallery {
+  /** General images first, then each colour's images in swatch order, each group by `sortOrder`. */
+  images: ProductGalleryItem[];
+  /** Index of each colour's first image in `images`; absent for a colour with no photo. */
+  colorStartIndex: Record<string, number>;
 }
 
 export interface ProductColorOption {
@@ -67,8 +84,11 @@ export interface ProductView {
   soldOut: boolean;
 }
 
-function toGalleryImage(image: { id: string; storageKey: string; altText: string | null }, fallbackAlt: string): ProductGalleryImage {
-  return { id: image.id, storageKey: image.storageKey, altText: image.altText ?? fallbackAlt };
+function toGalleryImage(
+  image: { id: string; storageKey: string; altText: string | null; width: number; height: number },
+  fallbackAlt: string,
+): ProductGalleryImage {
+  return { id: image.id, storageKey: image.storageKey, altText: image.altText ?? fallbackAlt, width: image.width, height: image.height };
 }
 
 /** `product.pricing` is ignored here: the page resolves it once per request and passes `price`. */
@@ -169,6 +189,36 @@ export function getGalleryForColor(view: ProductView, colorId: string | null): P
   const colorImages = colorId ? (view.imagesByColor[colorId] ?? []) : [];
   const gallery = [...colorImages, ...view.generalImages];
   return gallery.length > 0 ? gallery : firstColorWithImages(view);
+}
+
+/** The PDP's flat gallery (docs/plans/pdp-gallery.md §2): general images, then each colour's
+ * images in swatch order (`view.colors`). Images of a colour without a swatch (deactivated) are
+ * left out, unless they are the product's only photos: the gallery is never empty while the
+ * product has any photo. Derived from the view rather than stored on it, so the client props
+ * don't carry every image twice; pure, so server and client compute the same indexes. */
+export function buildProductGallery(view: ProductView): ProductGallery {
+  const images: ProductGalleryItem[] = view.generalImages.map((image) => ({ ...image, colorId: null }));
+  const colorStartIndex: Record<string, number> = {};
+  const appendColor = (colorId: string) => {
+    const colorImages = view.imagesByColor[colorId];
+    if (!colorImages || colorImages.length === 0) return;
+    colorStartIndex[colorId] = images.length;
+    images.push(...colorImages.map((image) => ({ ...image, colorId })));
+  };
+
+  for (const color of view.colors) appendColor(color.id);
+  if (images.length === 0) {
+    for (const colorId of Object.keys(view.imagesByColor)) appendColor(colorId);
+  }
+  return { images, colorStartIndex };
+}
+
+/** Where the gallery starts on page load (owner decision, docs/plans/pdp-gallery.md §13 #2): a
+ * valid `?color=` whose colour has photos starts on that colour's first photo; anything else
+ * (no `?color=`, an unknown one, a colour without photos) starts on the first photo overall. */
+export function initialGalleryIndex(view: ProductView, gallery: ProductGallery, requestedColorId: string | null): number {
+  if (!requestedColorId || !view.colors.some((color) => color.id === requestedColorId)) return 0;
+  return gallery.colorStartIndex[requestedColorId] ?? 0;
 }
 
 /** The product's one representative photo (OG image, JSON-LD): the first general image, else the

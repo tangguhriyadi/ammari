@@ -59,6 +59,9 @@ export async function generateMetadata({ params }: PageProps<"/products/[slug]">
     description,
     // DEPLOY_ENV convention matches app/robots.ts — only "production" is ever indexable.
     robots: { index: process.env.DEPLOY_ENV === "production", follow: process.env.DEPLOY_ENV === "production" },
+    // Every `?color=` link is the same product page: one canonical URL without it (owner answer,
+    // docs/plans/pdp-gallery.md §13 #7). Relative, resolved against the layout's `metadataBase`.
+    alternates: { canonical: `/products/${slug}` },
     openGraph: {
       title: product.name,
       description,
