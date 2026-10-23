@@ -35,6 +35,8 @@ set -uo pipefail # NOT -e: every check must run and report, even if an earlier o
 # works when invoked as `./go-live-check.sh` from elsewhere or via a relative path.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REMOTE_SCRIPT_FILE="$SCRIPT_DIR/go-live-check-remote.sh"
+# shellcheck source=deploy-prod/go-live-check-lib.sh
+. "$SCRIPT_DIR/go-live-check-lib.sh"
 
 WEB_HOST="ammari.id"
 ADMIN_HOST="admin.ammari.id"
@@ -174,7 +176,7 @@ check_aop_rejected "$ADMIN_HOST"
 # below (ground truth from inside the VPS) is what actually verifies this.
 CONTROL_PORT=$((40000 + RANDOM % 20000))
 NETWORK_INTERCEPTS_TCP=0
-if nc -z -w 5 "$VPS_IP" "$CONTROL_PORT" 2>/dev/null; then
+if nc_probe "$VPS_IP" "$CONTROL_PORT" 2>/dev/null; then
   NETWORK_INTERCEPTS_TCP=1
   info "control probe: TCP connect to ${VPS_IP}:${CONTROL_PORT} (an unassigned high port, nothing listens there) SUCCEEDED — this network intercepts/accepts outbound TCP regardless of destination port, so nc-based port-closed checks below cannot be trusted from this machine. Skipping them; see the SSH-side authoritative listening/published-port check instead."
 fi
@@ -185,7 +187,7 @@ check_port_closed() {
     skip "TCP port ${port} on ${VPS_IP} reachability from outside — nc is unreliable on this network (control probe on port ${CONTROL_PORT} also 'connected'); see the SSH-side authoritative port check below"
     return
   fi
-  if nc -z -w 5 "$VPS_IP" "$port" 2>/dev/null; then
+  if nc_probe "$VPS_IP" "$port" 2>/dev/null; then
     fail "TCP port ${port} on ${VPS_IP} IS reachable from outside (expected closed/filtered)"
   else
     pass "TCP port ${port} on ${VPS_IP} is not reachable from outside"
@@ -694,41 +696,9 @@ run_ssh_checks() {
   fi
 
   local pub_violations=()
-  while IFS= read -r rest; do
-    [ -z "$rest" ] && continue
-    # Pipe-delimited (name|compose-service-label|ports) — see go-live-check-remote.sh's own
-    # comment for why: {{.Ports}} contains spaces, and the container NAME on the real VPS is
-    # "ammari-prod-caddy-1" (compose's project-name prefix), never literally "caddy". The compose
-    # service label is what's actually checked below, not the name.
-    local cname service cports
-    cname="${rest%%|*}"
-    rest="${rest#*|}"
-    service="${rest%%|*}"
-    cports="${rest#*|}"
-    local mappings=() m hostpart hostport
-    IFS=',' read -ra mappings <<<"$cports"
-    # Same host port is listed once per address family (IPv4 "0.0.0.0:80->80/tcp" AND IPv6
-    # "[::]:80->80/tcp" for one real published port) — de-dupe per container so one actually-
-    # published port doesn't produce two identical violation lines. bash 3.2 has no associative
-    # arrays (added in bash 4), so "seen" is tracked as a space-padded string checked with a glob,
-    # not declare -A.
-    local seen_ports=""
-    for m in "${mappings[@]}"; do
-      m="$(tr -d '[:space:]' <<<"$m")"
-      [[ "$m" == *"->"* ]] || continue
-      hostpart="${m%%->*}"
-      hostport="${hostpart##*:}"
-      case " $seen_ports " in
-        *" $hostport "*) continue ;;
-      esac
-      seen_ports="$seen_ports $hostport"
-      if [ "$hostport" != "80" ] && [ "$hostport" != "443" ]; then
-        pub_violations+=("$cname publishes $hostport")
-      elif [ "$service" != "caddy" ]; then
-        pub_violations+=("$cname (not caddy) publishes $hostport")
-      fi
-    done
-  done < <(grep '^PUBPORT ' <<<"$output" | sed 's/^PUBPORT //')
+  while IFS= read -r v; do
+    [ -n "$v" ] && pub_violations+=("$v")
+  done < <(grep '^PUBPORT ' <<<"$output" | sed 's/^PUBPORT //' | pubport_violations)
 
   if [ "$portaudit_done" -ne 1 ]; then
     fail "could not get an authoritative published-port audit from the VPS (no PORTAUDIT_DONE marker — remote output missing or truncated)"
@@ -751,12 +721,12 @@ echo "PASS: $PASS_COUNT   FAIL: $FAIL_COUNT   WARN: $WARN_COUNT   SKIP: $SKIP_CO
 if [ "$WARN_COUNT" -gt 0 ]; then
   echo
   echo "Warned checks (inconclusive, re-run once network access is confirmed):"
-  printf '  - %s\n' "${WARNED_CHECKS[@]}"
+  printf '  - %s\n' ${WARNED_CHECKS[@]+"${WARNED_CHECKS[@]}"}
 fi
 if [ "$FAIL_COUNT" -gt 0 ]; then
   echo
   echo "Failed checks:"
-  printf '  - %s\n' "${FAILED_CHECKS[@]}"
+  printf '  - %s\n' ${FAILED_CHECKS[@]+"${FAILED_CHECKS[@]}"}
   exit 1
 fi
 exit 0
