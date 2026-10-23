@@ -123,5 +123,10 @@ for (const viewport of [
     // The line total and the subtotal are what was paid.
     await expect(line).toContainText("Rp 558.000");
     await expect(page.getByText("Rp 553.000").first()).toBeVisible();
+    // The summary adds the normal total and the product discount above the unchanged subtotal.
+    await expect(page.getByTestId("order-list-total")).toHaveText("Rp 700.000");
+    await expect(page.getByTestId("order-product-discount")).toHaveText("- Rp 142.000");
+    await expect(page.getByTestId("order-list-total").locator("..")).toContainText("Harga normal");
+    await expect(page.getByTestId("order-product-discount").locator("..")).toContainText("Diskon produk");
   });
 }

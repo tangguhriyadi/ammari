@@ -11,6 +11,7 @@ import { refundsOwed } from "@ammari/commerce/payments";
 import { AttentionPanel, CheckoutStatusActions, type RefundableAttempt } from "./_components/checkout-actions";
 import { ContactSection, PaymentSection, ShippingSection, VoucherAndEmailSection } from "./_components/checkout-sections";
 import { ShipmentDetailsSection } from "./_components/shipment-details-section";
+import { productDiscountSummary } from "@/lib/orders/product-discount-summary";
 import { isOpenShipmentStatus } from "@/lib/orders/shipment-labels";
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -26,6 +27,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   // Web checkout order data (docs/plans/cart-checkout.md §7, session 16); null for manual and
   // marketplace orders, which render exactly as before.
   const checkout = detail.checkout;
+  const discountSummary = productDiscountSummary(detail.items, detail.subtotalAmount);
   const refundableAttempts: RefundableAttempt[] = (checkout?.attempts ?? [])
     .filter((attempt) => attempt.status === "paid" || attempt.status === "partially_refunded")
     .map((attempt) => ({ paymentId: attempt.id, attempt: attempt.attempt, amount: attempt.grossAmount - attempt.refundedAmount }));
@@ -137,6 +139,12 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
       </div>
 
       <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
+        {discountSummary && (
+          <>
+            <Row label="Harga normal" value={formatRupiah(discountSummary.listTotal)} testId="order-list-total" />
+            <Row label="Diskon produk" value={`- ${formatRupiah(discountSummary.discount)}`} testId="order-product-discount" />
+          </>
+        )}
         <Row label="Subtotal" value={formatRupiah(detail.subtotalAmount)} />
         <Row label={checkout ? "Ongkir (dibayar pembeli)" : "Ongkos kirim"} value={formatRupiah(detail.shippingAmount)} />
         <Row label={checkout ? "Voucher" : "Diskon"} value={`- ${formatRupiah(detail.discountAmount)}`} />
@@ -177,11 +185,11 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value, testId }: { label: string; value: string; testId?: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-sm text-neutral-600">{label}</span>
-      <span className="text-base text-neutral-900">{value}</span>
+      <span className="text-base text-neutral-900" data-testid={testId}>{value}</span>
     </div>
   );
 }
