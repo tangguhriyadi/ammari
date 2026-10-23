@@ -343,6 +343,12 @@ Full column-level detail lives in `packages/db` migrations; this is the conceptu
   in grams, used for shipping quotes; required when a product goes from hidden to published, and
   cannot be cleared while it is published (plan §4.5.3). Products published before 0031 stay
   published without one and carry a "Berat kirim belum diisi" badge in the admin list.
+  Per-product discount (migration 0036, [plan](plans/product-discount.md)):
+  `discount_price_amount` (the sale price in whole rupiah, the source of truth; the percent is
+  derived), `discount_enabled`, optional `discount_starts_at` / `discount_ends_at`. Active only
+  when enabled and now is in `[start, end)`; applies to every variant. CHECKs: sale price above
+  Rp0, below `base_price`, and at least 1% off. Every price read goes through
+  `@ammari/db/pricing`'s `resolveUnitPrice`.
 - `product_variants` — `sku` is the primary key; unique on `(product, fabric_color_id, size)`;
   sizes XS–XL, plus `ALLSIZE` for `size_mode = 'all_size'` products (a `sized` product may only
   have XS–XL variants, an `all_size` product only an `ALLSIZE` variant — enforced in a DB trigger
@@ -528,7 +534,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   later if cost assumptions change); unique on `(order_id, sku)`. If a marketplace export has
   several rows for the same SKU in one order, the importer **merges them into one line** before
   inserting: `qty` summed, `unit_price` the weighted average rounded to the nearest whole
-  rupiah.
+  rupiah. `unit_price` is always what was charged; `list_unit_price` (migration 0036, nullable)
+  is the undiscounted price, snapshotted for checkout lines (NULL on older rows, imports and
+  manual orders; never below `unit_price`).
 - `order_settlements` — actual payout data from the marketplace, arrives after `orders`.
 - `import_batches` — tracks each Shopee/TikTok export upload.
 - `payments` — one row per payment attempt (Midtrans); unique on `provider_order_id`
@@ -641,7 +649,10 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 
 ## 8. Open decisions (defaults — use until explicitly changed)
 
-- Vouchers cannot be combined with other promos.
+- Vouchers **stack with per-product discounts** (owner decision 2026-10-23,
+  [docs/plans/product-discount.md](plans/product-discount.md)): the voucher applies to the
+  already-discounted goods subtotal (`discount_amount = min(voucher, subtotal)`, never ongkir).
+  Vouchers still cannot be combined with any other promo.
 - A voucher is **voided** if its source order is cancelled or returned before the voucher is
   used.
 - A voucher is **restored** if the main-site order that used it is cancelled or its payment

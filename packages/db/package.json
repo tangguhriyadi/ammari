@@ -13,6 +13,8 @@
     "./storefront": "./src/storefront/queries.ts",
     "./storefront-settings": "./src/storefront/settings.ts",
     "./sql-helpers": "./src/sql-helpers.ts",
+    "./pricing": "./src/pricing.ts",
+    "./pricing-columns": "./src/pricing-columns.ts",
     "./stock-availability": "./src/stock-availability.ts",
     "./test-utils": "./test/helpers.ts",
     "./test-fixtures": "./test/fixtures.ts",

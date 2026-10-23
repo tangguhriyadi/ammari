@@ -204,6 +204,16 @@ export const products = pgTable(
     // hidden to published (lib/products/storefront.ts); checkout refuses an order with a line
     // whose product has none.
     shippingWeightGrams: integer("shipping_weight_grams"),
+    // Per-product discount ("launching price", docs/plans/product-discount.md, migration 0036),
+    // applying to every variant. The sale price in whole rupiah is the source of truth; the
+    // percentage is always derived (@ammari/db/pricing). Active only when enabled AND now is
+    // inside [starts_at, ends_at), a NULL bound meaning open on that side. Every reader resolves
+    // the price through resolveUnitPrice, never by reading these columns ad hoc. A sale price may
+    // stay stored with the toggle off.
+    discountPriceAmount: bigint("discount_price_amount", { mode: "number" }),
+    discountEnabled: boolean("discount_enabled").notNull().default(false),
+    discountStartsAt: timestamp("discount_starts_at", { withTimezone: true, mode: "date" }),
+    discountEndsAt: timestamp("discount_ends_at", { withTimezone: true, mode: "date" }),
     ...timestamps(),
   },
   (table) => [
@@ -245,6 +255,18 @@ export const products = pgTable(
     check(
       "products_shipping_weight_grams_check",
       sql`${table.shippingWeightGrams} is null or ${table.shippingWeightGrams} between ${sql.raw(String(PRODUCT_SHIPPING_WEIGHT_MIN_GRAMS))} and ${sql.raw(String(PRODUCT_SHIPPING_WEIGHT_MAX_GRAMS))}`,
+    ),
+    // Same three rules as pricing.ts's validateDiscountPrice: above Rp0, below the base price, and
+    // at least 1% off. Reads base_price too, so a base price edit that would break a stored
+    // discount is refused here as well (the admin shows a friendly message first).
+    check(
+      "products_discount_price_amount_check",
+      sql`${table.discountPriceAmount} is null or (${table.discountPriceAmount} > 0 and ${table.discountPriceAmount} < ${table.basePrice} and (${table.basePrice} - ${table.discountPriceAmount}) * 100 >= ${table.basePrice})`,
+    ),
+    check("products_discount_enabled_price_check", sql`not ${table.discountEnabled} or ${table.discountPriceAmount} is not null`),
+    check(
+      "products_discount_window_check",
+      sql`${table.discountStartsAt} is null or ${table.discountEndsAt} is null or ${table.discountEndsAt} > ${table.discountStartsAt}`,
     ),
     // Referenced by product_variants' composite FK below (product_id, fabric_id, closure) ->
     // (id, fabric_id, closure) — this is what makes "a product's fabric OR closure can't change

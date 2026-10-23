@@ -253,6 +253,13 @@
       "when": 1792635053950,
       "tag": "0035_shipment_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792758551367,
+      "tag": "0036_product_discount",
+      "breakpoints": true
     }
   ]
 }

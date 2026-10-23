@@ -281,6 +281,11 @@ export const orderItems = pgTable(
     qty: integer("qty").notNull(),
     unitPrice: bigint("unit_price", { mode: "number" }).notNull(),
     unitCost: bigint("unit_cost", { mode: "number" }).notNull(),
+    // The undiscounted unit price at order time (docs/plans/product-discount.md §4, migration
+    // 0036); `unit_price` stays what was actually charged. Written by placeOrder for every
+    // checkout line (equal to unit_price when no discount was active). NULL on rows from before
+    // 0036, marketplace imports and manual orders.
+    listUnitPrice: bigint("list_unit_price", { mode: "number" }),
     ...createdAtOnly(),
   },
   (table) => [
@@ -297,6 +302,7 @@ export const orderItems = pgTable(
     check("order_items_qty_check", sql`${table.qty} > 0`),
     check("order_items_unit_price_check", sql`${table.unitPrice} >= 0`),
     check("order_items_unit_cost_check", sql`${table.unitCost} >= 0`),
+    check("order_items_list_unit_price_check", sql`${table.listUnitPrice} is null or ${table.listUnitPrice} >= ${table.unitPrice}`),
   ],
 );
 
