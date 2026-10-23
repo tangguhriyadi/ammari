@@ -2,7 +2,7 @@
 
 Status: **owner answers in (2026-10-23, §13, all recommendations accepted). Session 1 done
 (2026-10-23): data layer, index math, responsive `ProductImage` mode, canonical URL, design spec.
-Sessions 2 (page gallery) and 3 (viewer) to do.**
+Session 2 done (2026-10-23): page gallery (§14). Session 3 (viewer) to do.**
 
 Scope: `apps/web` only (PDP). No schema, migration, admin, pricing, cart or checkout change.
 
@@ -375,3 +375,42 @@ commits.
 9. **Desktop prev/next arrows** on the page gallery show on hover and keyboard focus only.
 
 No open questions remain.
+
+## 14. Session 2 notes (2026-10-23)
+
+- `components/pdp/product-gallery.tsx` replaces both old galleries; `getGalleryForColor` is gone.
+  The panel computes `buildProductGallery(view)` once and calls the gallery's imperative
+  `showColor(colorId)` from `handleSelectColor` (before the early return, so a re-tap jumps too);
+  the old scroll-reset effect and its `eslint-disable` are gone.
+- The swipe decision is a pure module, `lib/gallery/swipe.ts` (+ test), for session 3 to reuse.
+- Clicking the main image calls the optional `onOpenViewer(index)` prop; nothing passes it yet.
+  Session 3 opens the lightbox there (and writes the closing index back).
+- `ProductImage` now forwards `fetchPriority` (and eager loading) on its next/image path too, so
+  the no-photo placeholder is the prioritised image. No `priority` on the PDP any more.
+- Preload: React 19 itself emits one `<link rel="preload" as="image" imagesrcset>` for the
+  eager, high-priority main `<img>`. That is the single preload; e2e 10 asserts exactly one
+  product-photo preload. (The footer's payment logos have their own preloads, unrelated.)
+- Thumbnail placeholder uses the 800 file (there is no 400 placeholder).
+- E2E fixture: `e2e/gallery-fixtures.ts` (own fabric, old `created_at`, like
+  `discount-fixtures.ts`) instead of extending `storefront-fixtures.ts`, so no other spec's
+  related list or homepage changes. It carries an active discount, used by e2e 11 instead of the
+  discount fixtures (those have no photos).
+- E2E added beyond the list: 3b (arrows on hover/focus only, hidden on phones), 3c (strip keys).
+
+### Owner feedback round (2026-10-23, before commit)
+
+- **Slide on every change.** Arrows, thumbnails, colour jumps and page keys slide too (before,
+  only the swipe did). Next and wrap-around from the last photo come in from the right, previous
+  from the left, and a jump slides once toward the target's side. All slides, including a swipe's
+  finish and snap-back, use one Web Animations slide (`GALLERY_SLIDE_MS` 300, ease-out, in
+  `lib/gallery/swipe.ts`). The index updates at once and the leaving photo slides out beside the
+  new one. A newer change cancels the running slide and starts from the track's live offset, so
+  the latest target wins with no queue. A drag takes over a running slide. Reduced motion: instant.
+- **Left/Right anywhere on the page** step the photo (wrap, slide, announced). Ignored with a
+  modifier, during IME composition, mid-drag, in text fields, contenteditable and arrow-key ARIA
+  widgets, inside anything that scrolls sideways (the size chart), while a `dialog[open]` or
+  `[aria-modal=true]` is open (the session 3 viewer), and when the thumbnail strip already used
+  the key (it moves focus there, so the photo never moves twice).
+- E2E 12, 12b, 12c (slide direction, wrap, rapid clicks, reduced motion), 13 and 13b (page keys
+  and the ignored cases).
+

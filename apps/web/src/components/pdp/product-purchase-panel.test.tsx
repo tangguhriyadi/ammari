@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { StorefrontProduct } from "@ammari/db/storefront";
-import { buildProductView, type ProductView } from "@/lib/content/product-view";
+import { buildProductGallery, buildProductView, initialGalleryIndex, type ProductView } from "@/lib/content/product-view";
 import { ProductPurchasePanel } from "./product-purchase-panel";
 import { OPEN_ACCORDION_EVENT, type OpenAccordionDetail } from "./size-guide";
 
 const routerPush = vi.fn();
-vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn(), push: routerPush }), usePathname: () => "/products/haura" }));
+const routerReplace = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: routerReplace, push: routerPush }), usePathname: () => "/products/haura" }));
 const addToCartAction = vi.fn();
 const buyNowAction = vi.fn();
 vi.mock("@/lib/cart/actions", () => ({ addToCartAction: (input: unknown) => addToCartAction(input), buyNowAction: (input: unknown) => buyNowAction(input) }));
@@ -41,14 +42,15 @@ const NORMAL_PRICE: ProductView["price"] = { listPrice: 269_000, unitPrice: 269_
 
 function renderPanel(
   variants: StorefrontProduct["variants"],
-  { cartEnabled = false, sizeMode = "sized" as StorefrontProduct["sizeMode"], withChart = false, price = NORMAL_PRICE } = {},
+  { cartEnabled = false, sizeMode = "sized" as StorefrontProduct["sizeMode"], withChart = false, price = NORMAL_PRICE, images = [] as StorefrontProduct["images"] } = {},
 ) {
   const sizeChart = withChart ? [{ size: "M" as const, bustCm: 100, lengthCm: 140, sleeveLengthCm: 55, heightRecommendationMinCm: 155, heightRecommendationMaxCm: 165 }] : null;
-  const view = buildProductView({ ...product(variants), sizeMode, sizeChart }, price);
+  const view = buildProductView({ ...product(variants), sizeMode, sizeChart, images }, price);
   return render(
     <ProductPurchasePanel
       view={view}
       initialColorId="sage"
+      initialGalleryIndex={initialGalleryIndex(view, buildProductGallery(view), "sage")}
       cartEnabled={cartEnabled}
       whatsappNumber="6281234567890"
       pageUrl="https://example.test/products/haura"
@@ -70,9 +72,10 @@ beforeEach(() => {
   addToCartAction.mockReset();
   buyNowAction.mockReset();
   routerPush.mockReset();
+  routerReplace.mockReset();
   pendingOrderBody.mockImplementation(() => ({ order: null }));
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(pendingOrderBody()), { status: 200, headers: { "content-type": "application/json" } })));
-  // jsdom has no Element.scrollTo (the gallery effect resets its scroll position).
+  // jsdom has no Element.scrollTo (the gallery scrolls its thumbnail strip).
   Element.prototype.scrollTo = vi.fn() as unknown as Element["scrollTo"];
   window.history.replaceState(null, "", "/products/haura");
 });
@@ -378,5 +381,55 @@ describe("the visitor's own order waiting for payment (cart on)", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/checkout/pending-order", expect.anything()));
     await act(async () => {});
     expect(screen.queryByText(/menunggu pembayaran/)).toBeNull();
+  });
+});
+
+describe("PDP gallery and colour (docs/plans/pdp-gallery.md §3.1)", () => {
+  // General, then sage (swatch order), then mocca.
+  const images: StorefrontProduct["images"] = [
+    { id: "g1", storageKey: "p/g1", fabricColorId: null, altText: "Haura umum", sortOrder: 0, width: 800, height: 1200 },
+    { id: "s1", storageKey: "p/s1", fabricColorId: "sage", altText: "Haura sage 1", sortOrder: 0, width: 800, height: 1200 },
+    { id: "s2", storageKey: "p/s2", fabricColorId: "sage", altText: "Haura sage 2", sortOrder: 1, width: 800, height: 1200 },
+    { id: "m1", storageKey: "p/m1", fabricColorId: "mocca", altText: "Haura mocca 1", sortOrder: 0, width: 800, height: 1200 },
+  ];
+  const mainAlt = () => within(screen.getByTestId("gallery-current")).getByRole("img").getAttribute("alt");
+
+  test("lands on the selected colour's first photo", () => {
+    renderPanel(mixed, { images });
+    expect(mainAlt()).toBe("Haura sage 1");
+  });
+
+  test("a colour click sets ?color= (replace), resets the size AND jumps the gallery; a re-tap jumps back", () => {
+    renderPanel(mixed, { images });
+    fireEvent.click(screen.getByRole("button", { name: "M" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mocca" }));
+    expect(mainAlt()).toBe("Haura mocca 1");
+    expect(routerReplace).toHaveBeenCalledWith("/products/haura?color=mocca", { scroll: false });
+    expect(screen.getByText("Ukuran", { selector: "p" })).toHaveTextContent(/^Ukuran$/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Foto berikutnya" }));
+    expect(mainAlt()).toBe("Haura umum");
+    routerReplace.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Mocca" }));
+    expect(mainAlt()).toBe("Haura mocca 1");
+    // Re-tapping changes nothing else.
+    expect(routerReplace).not.toHaveBeenCalled();
+  });
+
+  test("browsing photos never changes the colour, the size, the URL or the price", () => {
+    renderPanel(mixed, { images, price: { listPrice: 350_000, unitPrice: 279_000, discounted: true, percentOff: 20 } });
+    fireEvent.click(screen.getByRole("button", { name: "M" }));
+    const priceBefore = screen.getByTestId("product-price").outerHTML;
+
+    for (const thumb of within(screen.getByRole("group", { name: "Foto produk" })).getAllByRole("button")) fireEvent.click(thumb);
+    fireEvent.click(screen.getByRole("button", { name: "Foto berikutnya" }));
+    fireEvent.click(screen.getByRole("button", { name: "Foto sebelumnya" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Perbesar foto/ }));
+
+    expect(mainAlt()).toBe("Haura mocca 1");
+    expect(screen.getByText("Warna: Sage")).toBeInTheDocument();
+    expect(screen.getByText("Ukuran: M")).toBeInTheDocument();
+    expect(routerReplace).not.toHaveBeenCalled();
+    expect(screen.getByTestId("product-price").outerHTML).toBe(priceBefore);
   });
 });

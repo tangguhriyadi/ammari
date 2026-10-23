@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { sanitizeStorefrontDescriptionHtml } from "@ammari/content-sanitize";
-import { buildProductView, getPrimaryImage, resolveSelectedColorId } from "@/lib/content/product-view";
+import { buildProductGallery, buildProductView, getPrimaryImage, initialGalleryIndex, resolveSelectedColorId } from "@/lib/content/product-view";
 import { getCachedRelatedProducts, getCachedStorefrontProduct } from "@/lib/content/product-data";
 import { priceTiles, priceValidUntil, resolveStorefrontPrice, toStorefrontPrice } from "@/lib/content/storefront-price";
 import { PRODUCT_PLACEHOLDER_OG_PATH } from "@/lib/content/product-placeholder";
@@ -186,6 +186,7 @@ export default async function ProductPage({
         <ProductPurchasePanel
           view={view}
           initialColorId={selectedColorId}
+          initialGalleryIndex={initialGalleryIndex(view, buildProductGallery(view), requestedColor)}
           cartEnabled={isCartEnabled()}
           storageBaseUrl={getStoragePublicBaseUrl()}
           whatsappNumber={whatsappNumber}

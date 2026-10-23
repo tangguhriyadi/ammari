@@ -34,12 +34,13 @@ test.describe("/products/[slug]", () => {
     await page.getByRole("link", { name: /Gamis Flowy Straight E2E/ }).first().click();
     await expect(page).toHaveURL(new RegExp(`/products/${E2E_PRODUCT_SLUG}$`));
 
-    const mobileGallery = page.locator(".md\\:hidden img").first();
-    await expect(mobileGallery).toHaveAttribute("alt", "Gamis Flowy Straight Beige");
+    // No ?color=: the first photo overall, the general one (docs/plans/pdp-gallery.md §13 #2).
+    const mainPhoto = page.getByTestId("gallery-current").locator("img");
+    await expect(mainPhoto).toHaveAttribute("alt", "Gamis Flowy Straight");
 
     await page.getByRole("button", { name: "Navy E2E" }).click();
     await expect(page).toHaveURL(/\?color=/);
-    await expect(mobileGallery).toHaveAttribute("alt", "Gamis Flowy Straight Navy");
+    await expect(mainPhoto).toHaveAttribute("alt", "Gamis Flowy Straight Navy");
 
     // "replace", not "push" — going back once must leave the PDP entirely (back to "/"), not land
     // on an earlier ?color= state of the same page.

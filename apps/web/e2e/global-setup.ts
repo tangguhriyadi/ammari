@@ -85,6 +85,9 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   // Product discount fixtures (product-discount.spec.ts), kept out of every other spec's way.
   const { seedDiscountFixtures } = await import("./discount-fixtures");
   await seedDiscountFixtures();
+  // The PDP gallery fixture (pdp-gallery.spec.ts), same isolation as the discount fixtures.
+  const { seedGalleryFixtures } = await import("./gallery-fixtures");
+  await seedGalleryFixtures();
 
   // The PDP's data cache (lib/content/product-data.ts, unstable_cache) lives on disk under .next and
   // outlives the dev server, while the seed above gives the variants new SKUs every run: a PDP entry

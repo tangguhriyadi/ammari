@@ -3,7 +3,6 @@ import type { StorefrontProduct } from "@ammari/db/storefront";
 import {
   buildProductGallery,
   buildProductView as buildProductViewPriced,
-  getGalleryForColor,
   getPrimaryImage,
   initialGalleryIndex,
   resolveSelectedColorId,
@@ -46,7 +45,7 @@ describe("buildProductView", () => {
     expect(view.highlights.map((h) => h.key)).toEqual(["breathable", "not_see_through"]);
   });
 
-  test("groups images by colour, falling back general images for any colour", () => {
+  test("groups images by colour and keeps general images apart", () => {
     const product = baseProduct({
       colors: [
         { id: "beige", name: "Beige", hex: "#E8DCD3" },
@@ -59,20 +58,20 @@ describe("buildProductView", () => {
     });
     const view = buildProductView(product);
 
-    // Beige has its own photo, THEN the general one appended.
-    expect(getGalleryForColor(view, "beige").map((i) => i.id)).toEqual(["img-beige", "img-general"]);
-    // Navy has no colour-specific photo — falls back to the general ones only.
-    expect(getGalleryForColor(view, "navy").map((i) => i.id)).toEqual(["img-general"]);
+    expect(view.generalImages.map((i) => i.id)).toEqual(["img-general"]);
+    expect(view.imagesByColor.beige?.map((i) => i.id)).toEqual(["img-beige"]);
+    // Navy has no colour-specific photo: no group at all.
+    expect(view.imagesByColor.navy).toBeUndefined();
   });
 
   test("a product with zero images of any kind gets an empty gallery (placeholder), never throws", () => {
     const product = baseProduct({ colors: [{ id: "beige", name: "Beige", hex: null }], images: [] });
     const view = buildProductView(product);
-    expect(getGalleryForColor(view, "beige")).toEqual([]);
+    expect(buildProductGallery(view).images).toEqual([]);
     expect(getPrimaryImage(view)).toBeNull();
   });
 
-  test("a colour with no photo and no general photo falls back to the first other colour's photos", () => {
+  test("the primary image falls back to the first colour (swatch order) with photos", () => {
     const product = baseProduct({
       colors: [
         { id: "taupe", name: "Taupe", hex: null },
@@ -87,10 +86,7 @@ describe("buildProductView", () => {
     });
     const view = buildProductView(product);
 
-    // Taupe has nothing: Beige comes first in canonical colour order, so its photos are used.
-    expect(getGalleryForColor(view, "taupe").map((i) => i.id)).toEqual(["img-beige-1", "img-beige-2"]);
-    // A colour WITH its own photos still only shows its own.
-    expect(getGalleryForColor(view, "navy").map((i) => i.id)).toEqual(["img-navy"]);
+    // Taupe has nothing: Beige comes first in swatch order.
     expect(getPrimaryImage(view)?.id).toBe("img-beige-1");
   });
 

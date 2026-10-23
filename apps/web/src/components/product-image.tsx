@@ -23,8 +23,9 @@ export interface ProductImageProps {
    * no srcset and drop a passed one (docs/plans/pdp-gallery.md §5). The placeholder still goes
    * through next/image. */
   srcSet?: string;
-  /** Responsive mode only: `"high"` for the one LCP photo (also loads it eagerly); every other
-   * photo stays lazy. */
+  /** `"high"` for the one LCP photo (also loads it eagerly); every other photo stays lazy. Applies
+   * in both modes, so a placeholder standing in for the LCP photo keeps the priority (next/image's
+   * `priority` is deprecated in Next 16 and ignored in responsive mode). */
   fetchPriority?: "high" | "auto";
   className?: string;
 }
@@ -63,6 +64,8 @@ export function ProductImage({ src, alt, placeholderAlt = PRODUCT_PLACEHOLDER_AL
       alt={showPlaceholder ? placeholderAlt : alt}
       fill
       priority={priority}
+      fetchPriority={fetchPriority}
+      loading={fetchPriority === "high" ? "eager" : undefined}
       sizes={sizes}
       onError={showPlaceholder ? undefined : () => setFailedSrc(src)}
       className={className}

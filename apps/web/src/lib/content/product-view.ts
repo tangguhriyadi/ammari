@@ -68,8 +68,8 @@ export interface ProductView {
   /** Images tagged to one specific colour, keyed by `fabricColorId`, each already sorted by
    * `sortOrder`. */
   imagesByColor: Record<string, ProductGalleryImage[]>;
-  /** General images (`fabricColorId: null`) — shown for every colour, appended after that
-   * colour's own images (see `getGalleryForColor`). */
+  /** General images (`fabricColorId: null`): first in the PDP gallery, before every colour's own
+   * images (see `buildProductGallery`). */
   generalImages: ProductGalleryImage[];
   /** `sizeMode: 'sized'` only — per-colour size availability, in `CUTTING_SIZES` canonical order.
    * `null` for an `all_size` product (nothing to tabulate; see `allsizeAvailableByColor`). */
@@ -176,19 +176,6 @@ function firstColorWithImages(view: ProductView): ProductGalleryImage[] {
     if (images && images.length > 0) return images;
   }
   return Object.values(view.imagesByColor).find((images) => images.length > 0) ?? [];
-}
-
-/** The gallery for the selected colour, with a fallback chain so it's never empty while the
- * product has ANY photo (a colour's variants can be active before its own photo exists):
- *   1. the colour's own images (sortOrder), then the product's general images;
- *   2. neither exists: the first other colour's images (canonical colour order);
- *   3. the product has no photo at all: `[]`, and the caller renders the static placeholder.
- * An unknown/null `colorId` (e.g. a tile that doesn't pin a colour) starts from step 1 with just
- * the general images. */
-export function getGalleryForColor(view: ProductView, colorId: string | null): ProductGalleryImage[] {
-  const colorImages = colorId ? (view.imagesByColor[colorId] ?? []) : [];
-  const gallery = [...colorImages, ...view.generalImages];
-  return gallery.length > 0 ? gallery : firstColorWithImages(view);
 }
 
 /** The PDP's flat gallery (docs/plans/pdp-gallery.md §2): general images, then each colour's
