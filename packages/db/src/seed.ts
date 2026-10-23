@@ -4,9 +4,11 @@ import {
   channels,
   costAssumptions,
   costComponents,
+  DEFAULT_PRODUCT_TYPE_CODE,
   HOMEPAGE_SECTION_KEYS,
   infoPages,
   permissions,
+  productTypes,
   rolePermissions,
   roles,
   staffUsers,
@@ -199,6 +201,16 @@ async function seedCostComponentDefaults(db: Database) {
   }
 }
 
+// Same "migration ships it, seed.ts also keeps a truncate-and-reseed test db in sync" dual
+// mechanism as seedHomepageSections: migration 0037 inserts DRESS/"Gamis" for dev/prod (the
+// products.product_type_code default depends on it), and packages/db/test/e2e-db.ts's TRUNCATE
+// relies on THIS function to restore it. Insert-only, no conflict target: an existing row may
+// carry the owner's rename, and a different type that already took the name "Gamis" must not
+// make the seed fail.
+async function seedDefaultProductType(db: Database) {
+  await db.insert(productTypes).values({ code: DEFAULT_PRODUCT_TYPE_CODE, name: "Gamis", sortOrder: 0 }).onConflictDoNothing();
+}
+
 async function seedStaffUserFromEnv(db: Database, emailVar: string, nameVar: string, roleKey: string) {
   const email = process.env[emailVar];
   const name = process.env[nameVar];
@@ -232,6 +244,7 @@ export async function seed(db: Database = defaultDb) {
   await seedSystemRoles(db);
   await seedInitialCostAssumptions(db);
   await seedCostComponentDefaults(db);
+  await seedDefaultProductType(db);
   await seedStaffUsers(db);
 }
 

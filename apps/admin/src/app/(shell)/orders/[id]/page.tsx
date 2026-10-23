@@ -4,6 +4,7 @@ import { formatDate, formatDateTime, formatRupiah, formatShortDate } from "@amma
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getOrderDetail, stripOrderDetailCost } from "@/lib/orders/queries";
 import { ORDER_STATUS_TRANSITIONS } from "@ammari/commerce/order-status";
+import { sizeLabel } from "@ammari/commerce/size-label";
 import { ORDER_STATUS_BADGE_VARIANT, ORDER_STATUS_LABELS } from "@/lib/orders/status-labels";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { StatusActions } from "./_components/status-actions";
@@ -117,7 +118,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             <li key={item.id} className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200 p-3">
               <div>
                 <p className="text-base text-neutral-900">
-                  {item.productName} <span className="text-sm text-neutral-600">{item.colorName} · {item.size}</span>
+                  {item.productName} <span className="text-sm text-neutral-600">{item.colorName} · {sizeLabel(item.size)}</span>
                 </p>
                 <p className="text-sm text-neutral-600">
                   {item.qty} x{" "}

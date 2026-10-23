@@ -6,6 +6,7 @@ import { discountStatus } from "@ammari/db/pricing";
 import { requireAnyPermission } from "@/lib/auth/require-any-permission";
 import { getProductDetail, getCurrentCostAssumption } from "@/lib/products/queries";
 import { listFabricColors, listAllFabricsWithUsage } from "@/lib/products/fabric-queries";
+import { listActiveProductTypeOptions } from "@/lib/product-types/queries";
 import { listProductColorGroups, listProductImages } from "@/lib/products/image-queries";
 import { calculateBatasHpp } from "@/lib/products/batas-hpp";
 import { listActiveAccessories, listDistinctSizeGroups } from "@/lib/inventory/accessories";
@@ -34,9 +35,10 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
   const { id } = await params;
   const detail = await getProductDetail(id);
   if (!detail) notFound();
-  const { product, variants } = detail;
+  const { product, productType, variants } = detail;
 
   const fabrics = canManageProducts ? await listAllFabricsWithUsage() : [];
+  const productTypes = canManageProducts ? await listActiveProductTypeOptions() : [];
   const availableColors = canManageProducts ? await listFabricColors(product.fabricId, { activeOnly: true }) : [];
   const colorGroups = canManageProducts ? await listProductColorGroups(product.id) : [];
   const images = await listProductImages(product.id);
@@ -76,6 +78,8 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
             <ProductForm
               productId={product.id}
               fabrics={fabrics}
+              productTypes={productTypes}
+              currentProductType={productType}
               hasVariants={variants.length > 0}
               initialValues={{
                 name: product.name,
@@ -91,6 +95,7 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
                 // already guarantee every stored element is one of PRODUCT_HIGHLIGHT_KEYS.
                 highlights: product.highlights as ProductHighlightKey[],
                 shippingWeightGrams: product.shippingWeightGrams === null ? "" : String(product.shippingWeightGrams),
+                productTypeCode: product.productTypeCode,
               }}
             />
           </div>

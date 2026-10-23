@@ -145,6 +145,9 @@ const E2E_LOST_ANSWER_AREA = "E2EGANGGUAN40333";
 // Rp350.000 with one variant, so the plan's 350.000 -> 279.000 = "20,2" example works as written
 // and the manual-order picker has a SKU to prefill.
 export const E2E_PRODUCT_DISCOUNT_EMAIL = "product-discount@e2e.ammari.test";
+// product-types.spec.ts (docs/plans/product-types.md): a dedicated owner email, same "fresh email,
+// clean OTP throttle" reasoning. Owner holds products.manage, which is all the type master needs.
+export const E2E_PRODUCT_TYPES_EMAIL = "product-types@e2e.ammari.test";
 export const E2E_DISCOUNT_PRODUCT_NAME = "E2E Gamis Diskon";
 export const E2E_DISCOUNT_SKU = "E2E-DISKON-M";
 /** A web checkout order placed while that product's discount was active (session 4): one line,
@@ -345,6 +348,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_VARIANT_PHOTOS_EMAIL, "E2E Variant Photos", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_FRESH_AFTER_SAVE_EMAIL, "E2E Fresh After Save", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_PRODUCT_DISCOUNT_EMAIL, "E2E Product Discount", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_PRODUCT_TYPES_EMAIL, "E2E Product Types", OWNER_ROLE_KEY);
 
   await ensureLimitedRole(E2E_SUPPLIERS_ROLE_KEY, ["inventory.view", "inventory.manage"]);
   await ensureStaffFixture(E2E_SUPPLIERS_EMAIL, "E2E Suppliers", E2E_SUPPLIERS_ROLE_KEY);
@@ -706,6 +710,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_VARIANT_PHOTOS_EMAIL,
         E2E_FRESH_AFTER_SAVE_EMAIL,
         E2E_PRODUCT_DISCOUNT_EMAIL,
+        E2E_PRODUCT_TYPES_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);

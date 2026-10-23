@@ -31,6 +31,8 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   const code = await page.getByLabel("Kode produk").inputValue();
   await page.getByRole("switch", { name: "Aktif" }).click(); // product left inactive; variants are created active either way
@@ -293,6 +295,8 @@ test("a batch whose remaining output will never arrive is short-closed with a re
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   const code = await page.getByLabel("Kode produk").inputValue();
   await page.getByRole("switch", { name: "Aktif" }).click();

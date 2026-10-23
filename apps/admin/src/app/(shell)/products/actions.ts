@@ -16,6 +16,7 @@ import { parseRupiah } from "@/lib/products/money";
 import * as imageQueries from "@/lib/products/image-queries";
 import * as storefrontQueries from "@/lib/products/storefront";
 import * as recipeQueries from "@/lib/inventory/recipes";
+import { isProductTypeCode } from "@/lib/product-types/codes";
 import { revalidateProductSlug } from "@/lib/revalidate";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
 
@@ -92,6 +93,13 @@ const createProductSchema = z.object({
   // existed) keeps the stored value. Required only to publish (lib/products/storefront.ts), never
   // to save.
   shippingWeightGrams: shippingWeightString.optional(),
+  // "Jenis produk" (docs/plans/product-types.md): required. Whether the type exists and is
+  // active is checked against the locked row in productQueries, not here.
+  productTypeCode: z
+    .string({ error: "Pilih jenis produk." })
+    .trim()
+    .toUpperCase()
+    .refine(isProductTypeCode, "Pilih jenis produk."),
 });
 
 const updateProductSchema = createProductSchema.omit({ code: true, sizeMode: true });
@@ -116,6 +124,7 @@ export async function createProductAction(
         isActive: parsed.data.isActive,
         highlights: parsed.data.highlights,
         shippingWeightGrams: parsed.data.shippingWeightGrams,
+        productTypeCode: parsed.data.productTypeCode,
       },
       session.staffUser.id,
     );
@@ -144,6 +153,7 @@ export async function updateProductAction(
         isActive: parsed.data.isActive,
         highlights: parsed.data.highlights,
         shippingWeightGrams: parsed.data.shippingWeightGrams,
+        productTypeCode: parsed.data.productTypeCode,
       },
       session.staffUser.id,
     );

@@ -7,6 +7,7 @@ import { buildPaymentLines, providerOrderId, type PaymentProductLine } from "./l
 import { errorLogFields } from "../errors";
 import { OPEN_PAYMENT_STATUSES, applyPaymentStatus, type ApplyResult } from "./apply-status";
 import { PAYMENT_STATUS_TIMEOUT_MS, PaymentProviderError, type PaymentLine, type PaymentStatusReport } from "./provider";
+import { sizeLabel } from "../size-label";
 
 // Payment pages for an attempt (docs/plans/cart-checkout.md §4.4, §5 step 11, D7). placeOrder asks
 // for attempt 1's page after its order commits; when that failed (gateway down, timeout), the
@@ -98,10 +99,6 @@ export async function requestPaymentPage(db: Database, runtime: PaymentRuntime, 
     console.error("[checkout] payment page created but not stored", { ...where, error: error instanceof Error ? error.name : typeof error, code: cause.code });
   }
   return created.redirectUrl;
-}
-
-function sizeLabel(size: string): string {
-  return size === "ALLSIZE" ? "All Size" : size;
 }
 
 /** The product lines of an order as the gateway shows them (same names as placeOrder). */

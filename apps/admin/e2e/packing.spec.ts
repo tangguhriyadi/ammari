@@ -26,6 +26,8 @@ test("a staffer prints a card and ships one order, then cancelling a second (alr
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   const code = await page.getByLabel("Kode produk").inputValue();
   await page.getByRole("switch", { name: "Aktif" }).click();
@@ -135,6 +137,8 @@ test("the packing queue renders correctly on a desktop-width browser: rows visib
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   const code = await page.getByLabel("Kode produk").inputValue();
   await page.getByRole("switch", { name: "Aktif" }).click();

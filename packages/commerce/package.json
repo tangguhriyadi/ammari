@@ -22,6 +22,7 @@
     "./shipment-rules": "./src/shipping/shipment-rules.ts",
     "./shipping": "./src/shipping/index.ts",
     "./shipping-rules": "./src/shipping/rules.ts",
+    "./size-label": "./src/size-label.ts",
     "./stock": "./src/stock/index.ts",
     "./thank-you-cards": "./src/thank-you-cards.ts"
   },

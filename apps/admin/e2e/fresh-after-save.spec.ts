@@ -57,6 +57,8 @@ async function runFlows(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/products\/new$/, NAV);
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   await page.getByRole("button", { name: "Simpan", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/products/${UUID}$`), NAV);
@@ -75,9 +77,14 @@ async function runFlows(page: Page): Promise<void> {
   await expect(page.getByRole("status")).toContainText("Perubahan berhasil disimpan");
   await expect(visibleLink(page, renamedProduct)).toBeVisible();
   await expect(visibleLink(page, productName)).toHaveCount(0);
-  // The storefront revalidation (apps/web, stubbed here) still fires for the product's own page.
+  // The storefront revalidation (apps/web, stubbed here) still fires for the product's own page:
+  // its PDP data tag, the related-products tag and the homepage tag (lib/revalidate.ts productTags).
   const calls = await storefrontRevalidateCalls(page.request);
-  expect(calls).toContainEqual({ paths: [`/products/${slug}`], tags: ["storefront:homepage"], secretMatched: true });
+  expect(calls).toContainEqual({
+    paths: [`/products/${slug}`],
+    tags: [`storefront:product:${slug}`, "storefront:products", "storefront:homepage"],
+    secretMatched: true,
+  });
 
   // ---- Supplier: create -> the list, showing the new supplier ----
   const supplierName = sortsFirst("Supplier Segar");

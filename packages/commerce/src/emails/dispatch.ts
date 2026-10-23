@@ -37,6 +37,7 @@ import {
   type RenderedEmail,
 } from "./templates";
 import { deriveOrderEmailAccessToken, deriveOrderEmailLoginToken } from "./token";
+import { sizeLabel } from "../size-label";
 
 // Transactional order emails (docs/plans/cart-checkout.md D14, §8; session 13).
 //
@@ -264,10 +265,6 @@ interface LoadedOrder {
   paymentUrl: string | null;
   supportEmail: string | null;
   whatsappNumber: string | null;
-}
-
-function sizeLabel(size: string): string {
-  return size === "ALLSIZE" ? "All Size" : size;
 }
 
 async function loadOrder(db: Database, orderId: string): Promise<LoadedOrder | null> {

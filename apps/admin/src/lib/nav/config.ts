@@ -14,6 +14,7 @@ import {
   Receipt,
   Ruler,
   Settings,
+  Shapes,
   ShieldCheck,
   ShoppingBag,
   Store,
@@ -112,6 +113,15 @@ export const NAV_ITEMS: readonly NavItem[] = [
     // Supplier too, which is master data rather than anything in the product catalog. Group
     // labels are derived from this file only — nothing asserts the string, and rootCrumbs()
     // reads it straight back out for the breadcrumb.
+    group: "Data Master",
+    permissionKeys: ["products.manage"],
+    mobilePrimary: false,
+  },
+  {
+    // docs/plans/product-types.md: same permission as Produk (owner decision), no new key.
+    label: "Jenis Produk",
+    href: "/product-types",
+    icon: Shapes,
     group: "Data Master",
     permissionKeys: ["products.manage"],
     mobilePrimary: false,

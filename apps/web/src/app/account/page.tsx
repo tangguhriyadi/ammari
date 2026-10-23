@@ -9,6 +9,7 @@ import { isCartEnabled } from "@/lib/cart-flag";
 import { listCustomerOrders } from "@/lib/orders/queries";
 import { OrderList } from "@/components/orders/order-list";
 import { CUSTOMER_PLACEHOLDER_NAME } from "@ammari/auth/customer";
+import { orderItemsSummary } from "@/lib/account/order-items-summary";
 import { AccountName } from "./account-name";
 import { ContactOfferCard } from "./contact-offer-card";
 import { LogoutButton } from "./logout-button";
@@ -97,7 +98,7 @@ export default async function AccountPage() {
                 </div>
                 <p className="text-sm text-neutral-600">{formatDate(order.orderDate)}</p>
                 <p className="text-sm text-neutral-700">
-                  {order.items.map((item) => `${item.productName} (${item.colorName}, ${item.size}) x${item.qty}`).join(", ")}
+                  {orderItemsSummary(order.items)}
                 </p>
               </li>
             ))}

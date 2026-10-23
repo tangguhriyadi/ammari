@@ -6,6 +6,7 @@ import { ActionError, FieldError } from "../errors";
 import type { Tx } from "../db";
 import { lockVariantForUpdate } from "./lock";
 import { currentBalanceForSkuLocked } from "./ledger";
+import { sizeLabel } from "../size-label";
 
 // Stock held for unpaid checkout orders (docs/plans/cart-checkout.md D3, §5 step 7). The ledger
 // (stock_movements) keeps recording real sales only: a hold is a stock_reservations row, the
@@ -25,10 +26,6 @@ export interface ReserveStockLine {
 }
 
 export type StockReservation = typeof stockReservations.$inferSelect;
-
-function sizeLabel(size: string): string {
-  return size === "ALLSIZE" ? "All Size" : size;
-}
 
 /** "Stok Gamis Basic warna Black ukuran M tidak cukup." Names the product, colour and size (plan
  * §5 step 7) but never a count (plan §4.2). */

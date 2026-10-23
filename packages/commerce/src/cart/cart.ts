@@ -7,6 +7,7 @@ import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { sellableQtySql } from "@ammari/db/stock-availability";
 import type { Database, Tx } from "../db";
 import { CART_MAX_PIECES, CART_MAX_QTY_PER_LINE, type CartLineStatus, type CartRefusal } from "./limits";
+import { sizeLabel } from "../size-label";
 
 // The database-backed storefront cart (docs/plans/cart-checkout.md D2, §4.1, §4.2). A guest cart
 // is found by the sha256 of its httpOnly cookie (`carts.token_hash`, customer_id NULL); a
@@ -97,10 +98,6 @@ class CartRefused extends Error {
     super(reason);
     this.name = "CartRefused";
   }
-}
-
-function sizeLabel(size: string): string {
-  return size === "ALLSIZE" ? "All Size" : size;
 }
 
 function isValidLineQty(qty: number): boolean {

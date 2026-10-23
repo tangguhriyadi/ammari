@@ -68,6 +68,7 @@ async function createProductFixture(
       basePrice: 269_000,
       isActive: true,
       highlights: [],
+      productTypeCode: "DRESS",
       ...overrides,
     },
     ACTOR_ID,
@@ -207,6 +208,21 @@ describe("addVariants", () => {
       );
       expect(created).toHaveLength(1);
       expect(created[0]?.size).toBe("ALLSIZE");
+    });
+  });
+
+  test("adding the same color twice to an 'all_size' product names the size as \"All Size\", not ALLSIZE", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const color = await createFabricColorFixture(tx, fabric.id);
+      const product = await createProductFixture(tx, fabric.id, { sizeMode: "all_size" });
+      const selections = [{ fabricColorId: color.id, sizes: ["ALLSIZE" as const] }];
+      await addVariants({ productId: product.id, selections }, ACTOR_ID, tx);
+
+      await expect(addVariants({ productId: product.id, selections }, ACTOR_ID, tx)).rejects.toMatchObject({
+        field: "fabricColorId",
+        message: `Warna "${color.name}": ukuran All Size sudah ada untuk produk ini.`,
+      });
     });
   });
 
@@ -611,8 +627,8 @@ describe("listProducts pagination", () => {
         });
       }
 
-      const page1 = await listProducts(prefix, "1", undefined, tx);
-      const page2 = await listProducts(prefix, "2", undefined, tx);
+      const page1 = await listProducts({ q: prefix }, "1", undefined, tx);
+      const page2 = await listProducts({ q: prefix }, "2", undefined, tx);
 
       expect(page1.pagination.totalCount).toBe(21);
       expect(page1.pagination.totalPages).toBe(2);
@@ -684,7 +700,7 @@ describe("shipping weight (docs/plans/cart-checkout.md §4.5.3)", () => {
       await createProductFixture(tx, fabric.id, { name: `${prefix} B`, slug: `${prefix.toLowerCase()}-b` });
       await createProductFixture(tx, fabric.id, { name: `${prefix} C`, slug: `${prefix.toLowerCase()}-c`, isActive: false });
 
-      const { rows } = await listProducts(prefix, "1", undefined, tx);
+      const { rows } = await listProducts({ q: prefix }, "1", undefined, tx);
       expect(rows.map((row) => [row.name, row.missingShippingWeight])).toEqual([
         [`${prefix} A`, false],
         [`${prefix} B`, true],

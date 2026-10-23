@@ -43,6 +43,8 @@ test("owner creates a fabric, adds colors, creates a product with variants, and 
   // By id, not getByLabel("Bahan") — the required-field asterisk is appended inside the same
   // <label>, which also computes an accessible name substring collision risk elsewhere.
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   const code = await page.getByLabel("Kode produk").inputValue();
   // Created inactive (this test is about SKU generation and Batas HPP visibility); variants are
@@ -151,6 +153,8 @@ test("editing two variant rows saves both in one atomic call; a validation error
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   await page.getByRole("switch", { name: "Aktif" }).click();
   await page.getByRole("button", { name: "Simpan" }).click();
@@ -229,6 +233,8 @@ test("toggling a row's Aktif switch while it has an unsaved price/stock edit doe
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   await page.getByRole("switch", { name: "Aktif" }).click(); // product left inactive; variants are created active either way
   await page.getByRole("button", { name: "Simpan" }).click();

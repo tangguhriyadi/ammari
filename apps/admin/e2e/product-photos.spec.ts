@@ -33,6 +33,8 @@ test("upload photos, reorder, set thumbnail; a photo-less color only gets a remi
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   // Switch, not a checkbox — role="switch" has no check()/uncheck(), click to toggle it off.
   await page.getByRole("switch", { name: "Aktif" }).click();
@@ -143,6 +145,8 @@ test("staged photos can be removed individually, and Batal discards the rest aft
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   await page.getByRole("switch", { name: "Aktif" }).click();
   await page.getByRole("button", { name: "Simpan" }).click();

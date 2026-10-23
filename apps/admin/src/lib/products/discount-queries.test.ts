@@ -191,7 +191,7 @@ describe("listProducts discount chip", () => {
       );
       const plain = await productAt(tx, 370_000);
 
-      const { rows } = await listProducts("Contoh Gamis Diskon", undefined, "100", tx, NOW);
+      const { rows } = await listProducts({ q: "Contoh Gamis Diskon" }, undefined, "100", tx, NOW);
       const byId = new Map(rows.map((row) => [row.id, row]));
       expect(byId.get(active.id)).toMatchObject({ discountStatus: "active", basePrice: 350_000, effectivePrice: 279_000 });
       expect(byId.get(scheduled.id)).toMatchObject({ discountStatus: "scheduled", effectivePrice: 360_000 });

@@ -123,6 +123,34 @@ export const fabricColors = pgTable(
   ],
 );
 
+// The owner's master list of product types ("Jenis Produk": Gamis, later e.g. Khimar) —
+// migration 0037, docs/plans/product-types.md. `code` is the natural key, like channels.id:
+// uppercase, immutable once created (prevent_product_type_code_change trigger, hand-authored in
+// 0037), and what products.product_type_code stores. A type drives nothing else (sizes, size
+// chart, SKU); it only groups products. Never hard-deleted — "delete" in the UI is is_active =
+// false, and an inactive type stays shown on the products that already use it.
+export const productTypes = pgTable(
+  "product_types",
+  {
+    code: text("code").primaryKey(),
+    // Indonesian display name. citext UNIQUE so "Gamis" and "gamis" can't be two types.
+    name: citext("name").notNull().unique(),
+    isActive: boolean("is_active").notNull().default(true),
+    // Same convention as cost_components.sort_order: lists order by (sort_order, name).
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps(),
+  },
+  (table) => [
+    check("product_types_code_check", sql`${table.code} ~ '^[A-Z][A-Z0-9_]{0,29}$'`),
+    check("product_types_name_check", sql`btrim(${table.name}) <> ''`),
+  ],
+);
+
+/** The type every product had before types existed, and the column default an older release
+ * relies on (it inserts products without naming the column). Inserted by migration 0037 and,
+ * insert-only, by seed.ts. */
+export const DEFAULT_PRODUCT_TYPE_CODE = "DRESS";
+
 export const products = pgTable(
   "products",
   {
@@ -214,10 +242,22 @@ export const products = pgTable(
     discountEnabled: boolean("discount_enabled").notNull().default(false),
     discountStartsAt: timestamp("discount_starts_at", { withTimezone: true, mode: "date" }),
     discountEndsAt: timestamp("discount_ends_at", { withTimezone: true, mode: "date" }),
+    // "Jenis produk" (docs/plans/product-types.md, migration 0037). NOT NULL with a constant
+    // DEFAULT 'DRESS' rather than nullable + backfill: the ADD COLUMN backfills every existing
+    // row in the same statement, and a previous release that inserts without naming this column
+    // still gets a valid type, so no reader ever sees NULL. The admin always sends a type and
+    // requires it to be active (lib/products/queries.ts); the default exists only for older
+    // releases and could be dropped once none is left running.
+    productTypeCode: text("product_type_code")
+      .notNull()
+      .default(DEFAULT_PRODUCT_TYPE_CODE)
+      .references(() => productTypes.code, { onDelete: "restrict", onUpdate: "restrict" }),
     ...timestamps(),
   },
   (table) => [
     index("products_fabric_id_idx").on(table.fabricId),
+    // ON DELETE RESTRICT FK, and the product list filters by it.
+    index("products_product_type_code_idx").on(table.productTypeCode),
     // products_thumbnail_image_id_fk's RESTRICT check runs this column against product_images
     // every time ANY image is deleted (including cascaded deletes when a product itself is
     // removed) — without this index that check seq-scans all of `products` (database-reviewer

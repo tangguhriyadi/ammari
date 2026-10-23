@@ -15,6 +15,16 @@ export interface Fabric {
   name: string;
 }
 
+export interface ProductTypeChoice {
+  code: string;
+  name: string;
+}
+
+/** The product's saved type, so one deactivated since still shows (marked) and re-saves. */
+export interface CurrentProductType extends ProductTypeChoice {
+  isActive: boolean;
+}
+
 export interface ProductFormValues {
   name: string;
   code: string;
@@ -28,6 +38,8 @@ export interface ProductFormValues {
   highlights: ProductHighlightKey[];
   /** Whole grams as typed, "" when not filled in yet. */
   shippingWeightGrams: string;
+  /** "" until one is picked (create). */
+  productTypeCode: string;
 }
 
 const EMPTY_VALUES: ProductFormValues = {
@@ -42,16 +54,22 @@ const EMPTY_VALUES: ProductFormValues = {
   isActive: true,
   highlights: [],
   shippingWeightGrams: "",
+  productTypeCode: "",
 };
 
 export function ProductForm({
   productId,
   fabrics,
+  productTypes,
+  currentProductType = null,
   initialValues,
   hasVariants = false,
 }: {
   productId?: string;
   fabrics: Fabric[];
+  /** ACTIVE types only (listActiveProductTypeOptions) — an inactive type is never a new choice. */
+  productTypes: ProductTypeChoice[];
+  currentProductType?: CurrentProductType | null;
   initialValues?: ProductFormValues;
   /** Once true, the fabric AND closure selects are disabled — neither can change once the
    * product has a variant (the composite FK in migration 0007 enforces this at the DB level;
@@ -72,6 +90,10 @@ export function ProductForm({
   // update, cleared again on the next save attempt.
   const [revalidationWarning, setRevalidationWarning] = useState(false);
   const [retryPending, startRetry] = useTransition();
+  // A type deactivated after this product picked it isn't in `productTypes` any more; it's still
+  // this product's value, so it's rendered (marked) instead of the select silently showing blank.
+  const currentTypeIsMissing =
+    currentProductType !== null && !productTypes.some((productType) => productType.code === currentProductType.code);
 
   function handleNameChange(name: string) {
     setValues((prev) => ({
@@ -102,6 +124,7 @@ export function ProductForm({
         isActive: values.isActive,
         highlights: values.highlights,
         shippingWeightGrams: values.shippingWeightGrams,
+        productTypeCode: values.productTypeCode,
       };
       const result = productId
         ? await updateProductAction(productId, common)
@@ -217,6 +240,31 @@ export function ProductForm({
           error={fieldErrors.slug}
           required
         />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="product-type" required>
+          Jenis produk
+        </Label>
+        <Select
+          id="product-type"
+          value={values.productTypeCode}
+          onChange={(event) => set("productTypeCode", event.target.value)}
+          error={fieldErrors.productTypeCode}
+          required
+        >
+          <option value="">Pilih jenis produk</option>
+          {currentTypeIsMissing && (
+            <option value={currentProductType.code}>
+              {currentProductType.isActive ? currentProductType.name : `${currentProductType.name} (nonaktif)`}
+            </option>
+          )}
+          {productTypes.map((productType) => (
+            <option key={productType.code} value={productType.code}>
+              {productType.name}
+            </option>
+          ))}
+        </Select>
       </div>
 
       <div className="flex flex-col gap-1.5">

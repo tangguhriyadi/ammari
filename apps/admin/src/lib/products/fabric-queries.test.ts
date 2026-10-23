@@ -37,6 +37,7 @@ async function createProductFixture(tx: TestTx, fabricId: string) {
       basePrice: 269_000,
       isActive: true,
       highlights: [],
+      productTypeCode: "DRESS",
     },
     ACTOR_ID,
     tx,

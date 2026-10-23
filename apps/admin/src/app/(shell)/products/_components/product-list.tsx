@@ -37,13 +37,18 @@ function DiscountChip({ product }: { product: Product }) {
   );
 }
 
+/** The type's name, marked when it has been deactivated since (the product keeps it). */
+function productTypeLabel(product: Product): string {
+  return product.productTypeIsActive ? product.productTypeName : `${product.productTypeName} (nonaktif)`;
+}
+
 function highlightLabels(keys: readonly string[]): string[] {
   return PRODUCT_HIGHLIGHTS.filter((h) => keys.includes(h.key)).map((h) => h.label);
 }
 
 export function ProductList({ products }: { products: Product[] }) {
   if (products.length === 0) {
-    return <EmptyState title="Tidak ada produk yang cocok" description="Coba ubah kata kunci pencarian." />;
+    return <EmptyState title="Tidak ada produk yang cocok" description="Coba ubah kata kunci atau jenis produk." />;
   }
 
   return (
@@ -61,6 +66,9 @@ export function ProductList({ products }: { products: Product[] }) {
                       {product.isActive ? "Aktif" : "Nonaktif"}
                     </Badge>
                   </div>
+                  <span className="text-sm text-neutral-600" data-testid="product-type">
+                    {productTypeLabel(product)}
+                  </span>
                   <span className="text-sm text-neutral-600">
                     {product.fabricName} · {CLOSURE_LABELS[product.closure] ?? product.closure}
                   </span>
@@ -94,6 +102,7 @@ export function ProductList({ products }: { products: Product[] }) {
             <span className="sr-only">Thumbnail</span>
           </Th>
           <Th>Nama</Th>
+          <Th>Jenis</Th>
           <Th>Bahan</Th>
           <Th>Model resleting</Th>
           <Th>Harga</Th>
@@ -115,6 +124,9 @@ export function ProductList({ products }: { products: Product[] }) {
                   {product.missingPhotos && <Badge variant="warning">Belum ada foto</Badge>}
                   {product.missingShippingWeight && <Badge variant="warning">Berat kirim belum diisi</Badge>}
                 </div>
+              </Td>
+              <Td className="text-neutral-700" data-testid="product-type">
+                {productTypeLabel(product)}
               </Td>
               <Td className="text-neutral-700">{product.fabricName}</Td>
               <Td className="text-neutral-700">{CLOSURE_LABELS[product.closure] ?? product.closure}</Td>

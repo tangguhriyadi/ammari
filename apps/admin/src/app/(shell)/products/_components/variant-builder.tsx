@@ -7,6 +7,7 @@ import { Check, Copy } from "lucide-react";
 import { Badge, Button, Checkbox, ColorSwatch, Input, Label, Switch } from "@ammari/ui";
 import { formatNumber, formatRupiah } from "@ammari/ui/lib";
 import type { Size, SizeMode } from "@ammari/db/schema";
+import { sizeLabel } from "@ammari/commerce/size-label";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import { addVariantsAction, bulkUpdateVariantsAction, setVariantActiveAction } from "../actions";
 import { buildNewVariantSelections } from "./variant-selection";
@@ -94,7 +95,7 @@ function VariantActiveSwitch({
   return (
     <Switch
       label="Aktif"
-      accessibleLabel={`Aktif untuk ukuran ${size}`}
+      accessibleLabel={`Aktif untuk ukuran ${sizeLabel(size)}`}
       checked={isActive}
       onCheckedChange={onToggle}
       pending={pending}
@@ -320,7 +321,7 @@ function VariantColorGroup({
             {rows.map((row) => (
               <tr key={row.sku} className="border-b border-neutral-100 last:border-0">
                 <th scope="row" className="px-3 py-2 text-left align-top font-semibold text-neutral-900">
-                  {row.size}
+                  {sizeLabel(row.size)}
                 </th>
                 <td className="px-3 py-2 align-top">
                   <div className="flex items-center gap-1 pt-2">
@@ -334,7 +335,7 @@ function VariantColorGroup({
                       Rp
                     </span>
                     <Input
-                      aria-label={`Harga khusus untuk ukuran ${row.size}`}
+                      aria-label={`Harga khusus untuk ukuran ${sizeLabel(row.size)}`}
                       inputMode="numeric"
                       value={effectivePrice(row)}
                       onChange={(event) => changePrice(row, event.target.value)}
@@ -347,7 +348,7 @@ function VariantColorGroup({
                 </td>
                 <td className="px-3 py-2 align-top">
                   <Input
-                    aria-label={`Stok minimum untuk ukuran ${row.size}`}
+                    aria-label={`Stok minimum untuk ukuran ${sizeLabel(row.size)}`}
                     inputMode="numeric"
                     value={effectiveMinStock(row)}
                     onChange={(event) => changeMinStock(row, event.target.value)}
@@ -377,7 +378,7 @@ function VariantColorGroup({
           <li key={row.sku} className="rounded-md border border-neutral-200 p-3">
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-1.5">
-                <span className="font-semibold text-neutral-900">{row.size}</span>
+                <span className="font-semibold text-neutral-900">{sizeLabel(row.size)}</span>
                 <span className="text-neutral-400" aria-hidden="true">
                   ·
                 </span>
@@ -400,7 +401,7 @@ function VariantColorGroup({
                     Rp
                   </span>
                   <Input
-                    aria-label={`Harga khusus untuk ukuran ${row.size}`}
+                    aria-label={`Harga khusus untuk ukuran ${sizeLabel(row.size)}`}
                     inputMode="numeric"
                     value={effectivePrice(row)}
                     onChange={(event) => changePrice(row, event.target.value)}
@@ -414,7 +415,7 @@ function VariantColorGroup({
               <div className="w-24">
                 <Label className="text-xs font-normal text-neutral-600">Stok min.</Label>
                 <Input
-                  aria-label={`Stok minimum untuk ukuran ${row.size}`}
+                  aria-label={`Stok minimum untuk ukuran ${sizeLabel(row.size)}`}
                   inputMode="numeric"
                   value={effectiveMinStock(row)}
                   onChange={(event) => changeMinStock(row, event.target.value)}

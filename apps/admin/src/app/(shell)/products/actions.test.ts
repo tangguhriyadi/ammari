@@ -44,6 +44,7 @@ describe("every product server action requires products.manage", () => {
         basePrice: "269.000",
         isActive: true,
         highlights: [],
+        productTypeCode: "DRESS",
       }),
     ).rejects.toThrow();
   });
@@ -59,6 +60,7 @@ describe("every product server action requires products.manage", () => {
         basePrice: "269.000",
         isActive: true,
         highlights: [],
+        productTypeCode: "DRESS",
       }),
     ).rejects.toThrow();
   });
@@ -86,6 +88,7 @@ describe("every product server action requires products.manage", () => {
         basePrice: "269.000",
         isActive: true,
         highlights: [],
+        productTypeCode: "DRESS",
       }),
     ).rejects.toThrow();
   });

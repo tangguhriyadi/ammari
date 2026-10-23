@@ -1,10 +1,11 @@
 import "server-only";
-import { and, count, desc, eq, ilike, lte } from "drizzle-orm";
-import { costAssumptions, fabricColors, fabrics, productImages, products, productVariants } from "@ammari/db/schema";
+import { and, count, desc, eq, ilike, lte, type SQL } from "drizzle-orm";
+import { costAssumptions, fabricColors, fabrics, productImages, products, productTypes, productVariants } from "@ammari/db/schema";
 import type { ProductClosure, Size, SizeMode } from "@ammari/db/schema";
 import { generateSku } from "@ammari/db/catalog";
 import { discountStatus, resolveUnitPrice, validateDiscountPrice, type DiscountStatus } from "@ammari/db/pricing";
 import { productPricingColumns } from "@ammari/db/pricing-columns";
+import { sizeLabel } from "@ammari/commerce/size-label";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from "./errors";
 import { basePriceBreaksDiscountMessage } from "./discount";
@@ -13,6 +14,7 @@ import { buildImageSizeUrl, listProductIdsMissingPhotos, syncAltTextsForProductR
 import { todayInJakarta } from "./jakarta-date";
 import { SHIPPING_WEIGHT_REQUIRED_WHILE_PUBLISHED_MESSAGE } from "./shipping-weight";
 import { defaultDb, lockProductForUpdate, writeAuditLog, type Database } from "./db";
+import { lockSelectableProductType } from "@/lib/product-types/queries";
 
 const PRODUCT_CONSTRAINT_FIELDS = {
   products_slug_unique: { field: "slug", message: "Slug ini sudah dipakai, gunakan slug lain." },
@@ -36,6 +38,8 @@ export interface CreateProductInput {
   highlights: string[];
   /** "Berat kirim (gram)", one packed piece; optional (docs/plans/cart-checkout.md §4.5.3). */
   shippingWeightGrams?: number | null;
+  /** "Jenis produk" (docs/plans/product-types.md) — must be an existing, ACTIVE type. */
+  productTypeCode: string;
 }
 
 export interface UpdateProductInput {
@@ -50,10 +54,20 @@ export interface UpdateProductInput {
   /** `undefined` keeps the stored weight; `null` clears it, refused while the product is
    * published (a product only goes live with a weight, storefront.ts). */
   shippingWeightGrams?: number | null;
+  /** `undefined` keeps the stored type (the admin form always sends it; older callers may not).
+   * A CHANGED type must be active; re-saving the product's
+   * current, since-deactivated type is allowed (it stays shown on products that use it). */
+  productTypeCode?: string;
+}
+
+export interface ProductListFilters {
+  q?: string;
+  /** Exact product_types.code; already validated by the caller (unknown codes simply match nothing). */
+  productTypeCode?: string;
 }
 
 export async function listProducts(
-  q: string | undefined,
+  filters: ProductListFilters,
   rawPage: string | undefined,
   rawPerPage: string | undefined,
   db: Database = defaultDb,
@@ -78,7 +92,11 @@ export async function listProducts(
   })[];
   pagination: Pagination;
 }> {
-  const where = q ? ilike(products.name, `%${q}%`) : undefined;
+  const conditions = [
+    filters.q ? ilike(products.name, `%${filters.q}%`) : undefined,
+    filters.productTypeCode ? eq(products.productTypeCode, filters.productTypeCode) : undefined,
+  ].filter((condition) => condition !== undefined);
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
 
   const [totalCountRow] = await db
     .select({ totalCount: count() })
@@ -107,7 +125,7 @@ export async function listProducts(
   return { rows, pagination };
 }
 
-function queryProductsPage(db: Database, where: ReturnType<typeof ilike> | undefined, pagination: Pagination) {
+function queryProductsPage(db: Database, where: SQL | undefined, pagination: Pagination) {
   return db
     .select({
       id: products.id,
@@ -119,15 +137,19 @@ function queryProductsPage(db: Database, where: ReturnType<typeof ilike> | undef
       highlights: products.highlights,
       shippingWeightGrams: products.shippingWeightGrams,
       fabricName: fabrics.name,
+      productTypeCode: products.productTypeCode,
+      productTypeName: productTypes.name,
+      productTypeIsActive: productTypes.isActive,
       activeVariantCount: count(productVariants.sku),
       thumbnailStorageKey: productImages.storageKey,
     })
     .from(products)
     .innerJoin(fabrics, eq(fabrics.id, products.fabricId))
+    .innerJoin(productTypes, eq(productTypes.code, products.productTypeCode))
     .leftJoin(productVariants, and(eq(productVariants.productId, products.id), eq(productVariants.isActive, true)))
     .leftJoin(productImages, eq(productImages.id, products.thumbnailImageId))
     .where(where)
-    .groupBy(products.id, fabrics.name, productImages.storageKey)
+    .groupBy(products.id, fabrics.name, productTypes.code, productImages.storageKey)
     .orderBy(products.name, products.id)
     .limit(pagination.limit)
     .offset(pagination.offset);
@@ -155,6 +177,11 @@ export async function getProductDetail(id: string, db: Database = defaultDb) {
   const product = await getProductById(id, db);
   if (!product) return null;
   const [fabric] = await db.select().from(fabrics).where(eq(fabrics.id, product.fabricId)).limit(1);
+  const [productType] = await db
+    .select({ code: productTypes.code, name: productTypes.name, isActive: productTypes.isActive })
+    .from(productTypes)
+    .where(eq(productTypes.code, product.productTypeCode))
+    .limit(1);
   const variants = await db
     .select({
       sku: productVariants.sku,
@@ -170,7 +197,7 @@ export async function getProductDetail(id: string, db: Database = defaultDb) {
     .innerJoin(fabricColors, eq(fabricColors.id, productVariants.fabricColorId))
     .where(eq(productVariants.productId, id))
     .orderBy(fabricColors.name, productVariants.size);
-  return { product, fabric: fabric ?? null, variants };
+  return { product, fabric: fabric ?? null, productType: productType ?? null, variants };
 }
 
 export async function createProduct(
@@ -179,6 +206,9 @@ export async function createProduct(
   db: Database = defaultDb,
 ) {
   return db.transaction(async (tx) => {
+    // Friendly, field-scoped refusal of a missing/inactive type, and a FOR SHARE lock so the type
+    // can't be deactivated between this check and the insert. The FK is the existence backstop.
+    await lockSelectableProductType(tx, input.productTypeCode);
     try {
       const [product] = await tx.insert(products).values(input).returning();
       if (!product) throw new Error("failed to insert product");
@@ -236,6 +266,10 @@ export async function updateProduct(
     const storedSalePrice = before.discountPriceAmount;
     if (storedSalePrice !== null && validateDiscountPrice(input.basePrice, storedSalePrice) !== null) {
       throw new FieldError("basePrice", basePriceBreaksDiscountMessage(storedSalePrice));
+    }
+
+    if (input.productTypeCode !== undefined && input.productTypeCode !== before.productTypeCode) {
+      await lockSelectableProductType(tx, input.productTypeCode);
     }
 
     const fabricChanged = input.fabricId !== before.fabricId;
@@ -374,7 +408,7 @@ export async function addVariants(input: AddVariantsInput, actorStaffUserId: str
     for (const row of rows) {
       if (existingKeys.has(`${row.fabricColorId}:${row.size}`)) {
         const colorName = colorNameById.get(row.fabricColorId) ?? row.fabricColorId;
-        throw new FieldError("fabricColorId", `Warna "${colorName}": ukuran ${row.size} sudah ada untuk produk ini.`);
+        throw new FieldError("fabricColorId", `Warna "${colorName}": ukuran ${sizeLabel(row.size)} sudah ada untuk produk ini.`);
       }
     }
 

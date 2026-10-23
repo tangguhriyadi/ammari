@@ -44,6 +44,7 @@ import {
   UNPAID_ORDER_WINDOW_MINUTES,
   type PlaceOrderRefusal,
 } from "./messages";
+import { sizeLabel } from "../size-label";
 
 // placeOrder (docs/plans/cart-checkout.md §5, D3, D9, D10, D17): turns the buyer's cart into an
 // `awaiting_payment` checkout order with its stock held, its shipping quote locked and one payment
@@ -182,10 +183,6 @@ function refusal(
   missingSkus?: string[],
 ): PlaceOrderOutcome {
   return { ok: false, reason, message: message ?? PLACE_ORDER_MESSAGES[reason], fieldErrors, ...(missingSkus ? { missingSkus } : {}) };
-}
-
-function sizeLabel(size: string): string {
-  return size === "ALLSIZE" ? "All Size" : size;
 }
 
 interface ValidatedInput {

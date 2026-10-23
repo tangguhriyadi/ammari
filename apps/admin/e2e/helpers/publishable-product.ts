@@ -29,6 +29,8 @@ export async function createPublishablePhotoReadyProduct(
   await page.goto("/products/new");
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
+  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
+  await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
   if (shippingWeightGrams) await page.getByLabel("Berat kirim (gram)").fill(shippingWeightGrams);
   await page.getByRole("button", { name: "Simpan", exact: true }).click();
