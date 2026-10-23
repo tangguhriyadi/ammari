@@ -1,6 +1,8 @@
 import "server-only";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
+import { resolveUnitPrice } from "@ammari/db/pricing";
+import { productPricingColumns } from "@ammari/db/pricing-columns";
 import {
   cartItems,
   carts,
@@ -104,6 +106,9 @@ export interface PlaceOrderDeps {
    * the shipping provider asked: the caller's rate limit (`checkout_submit`), so correcting a form
    * never spends it. False refuses with `rate_limited`. */
   admit?: () => Promise<boolean>;
+  /** The clock every line is priced at (docs/plans/product-discount.md §5.2): read once for the
+   * quote and once inside the order transaction. Tests inject it; production leaves it unset. */
+  now?: () => Date;
 }
 
 export interface PlaceOrderFieldError {
@@ -153,6 +158,11 @@ export { PAYMENT_PAGE_TIMEOUT_MS };
 
 /** `lock_timeout` inside the order transaction. */
 const ORDER_LOCK_TIMEOUT_SECONDS = 5;
+
+/** The pricing clock: the injected one in tests, the real one otherwise. */
+function clockOf(deps: PlaceOrderDeps): () => Date {
+  return deps.now ?? (() => new Date());
+}
 
 class PlaceOrderRefused extends Error {
   constructor(
@@ -341,7 +351,11 @@ function quoteRefusal(reason: ShippingQuoteRefusal): PlaceOrderRefusal {
 interface LockedLine {
   sku: string;
   qty: number;
+  /** What is charged per piece (`order_items.unit_price`). */
   unitPrice: number;
+  /** The normal price when a product discount lowered `unitPrice`, else null
+   * (`order_items.list_unit_price`). */
+  listUnitPrice: number | null;
   weightGrams: number | null;
   purchasable: boolean;
   productName: string;
@@ -350,12 +364,13 @@ interface LockedLine {
   size: string;
 }
 
-async function lockedCartLines(tx: Tx, cartId: string): Promise<LockedLine[]> {
+/** The cart's lines, each priced at `now` (one instant for the whole order). */
+async function lockedCartLines(tx: Tx, cartId: string, now: Date): Promise<LockedLine[]> {
   const rows = await tx
     .select({
       sku: cartItems.sku,
       qty: cartItems.qty,
-      unitPrice: products.basePrice,
+      ...productPricingColumns,
       weightGrams: products.shippingWeightGrams,
       productActive: products.isActive,
       published: products.isPublishedOnStorefront,
@@ -372,17 +387,21 @@ async function lockedCartLines(tx: Tx, cartId: string): Promise<LockedLine[]> {
     .where(eq(cartItems.cartId, cartId))
     .orderBy(asc(cartItems.addedAt), asc(cartItems.sku));
   return mergeBySku(
-    rows.map((row) => ({
-      sku: row.sku,
-      qty: row.qty,
-      unitPrice: row.unitPrice,
-      weightGrams: row.weightGrams,
-      purchasable: row.productActive && row.published && row.variantActive,
-      productName: row.productName,
-      productSlug: row.productSlug,
-      colorName: row.colorName,
-      size: row.size,
-    })),
+    rows.map((row) => {
+      const price = resolveUnitPrice(row, now);
+      return {
+        sku: row.sku,
+        qty: row.qty,
+        unitPrice: price.unitPrice,
+        listUnitPrice: price.discounted ? price.listPrice : null,
+        weightGrams: row.weightGrams,
+        purchasable: row.productActive && row.published && row.variantActive,
+        productName: row.productName,
+        productSlug: row.productSlug,
+        colorName: row.colorName,
+        size: row.size,
+      };
+    }),
   );
 }
 
@@ -493,7 +512,10 @@ async function placeInTransaction(tx: Tx, ctx: Context): Promise<PlacedOrder | {
   const prior = await findOrderByAttempt(tx, input.checkoutAttemptId);
   if (prior) return { kind: "replay", order: prior };
 
-  const lines = await lockedCartLines(tx, ctx.cartId);
+  // Priced here, under the cart lock, at one instant: a discount that started or ended since the
+  // buyer's page was rendered changes the total, which the expectedTotal check below refuses
+  // ("Harga, ongkir atau voucher berubah"), so nobody is charged a price they did not see.
+  const lines = await lockedCartLines(tx, ctx.cartId, clockOf(deps)());
   if (lines.length === 0) throw new PlaceOrderRefused("cart_empty");
   if (!sameLines(lines, ctx.quotedLines)) throw new PlaceOrderRefused("cart_changed");
   if (lines.some((line) => !line.purchasable)) throw new PlaceOrderRefused("cart_unavailable");
@@ -582,7 +604,7 @@ async function placeInTransaction(tx: Tx, ctx: Context): Promise<PlacedOrder | {
   // payments/apply-status.ts).
   const items = await tx
     .insert(orderItems)
-    .values(lines.map((line) => ({ orderId: order.id, sku: line.sku, qty: line.qty, unitPrice: line.unitPrice, unitCost: 0 })))
+    .values(lines.map((line) => ({ orderId: order.id, sku: line.sku, qty: line.qty, unitPrice: line.unitPrice, listUnitPrice: line.listUnitPrice, unitCost: 0 })))
     .returning({ id: orderItems.id, sku: orderItems.sku, qty: orderItems.qty });
 
   try {
@@ -684,7 +706,7 @@ async function placeInTransaction(tx: Tx, ctx: Context): Promise<PlacedOrder | {
       discountAmount,
       totalAmount,
       voucherId: input.voucherId,
-      items: lines.map((line) => ({ sku: line.sku, qty: line.qty, unitPrice: line.unitPrice })),
+      items: lines.map((line) => ({ sku: line.sku, qty: line.qty, unitPrice: line.unitPrice, listUnitPrice: line.listUnitPrice })),
       shipping: {
         courierCode: quote.courierCode,
         serviceCode: quote.serviceCode,
@@ -759,7 +781,7 @@ async function placeOrderSteps(db: Database, deps: PlaceOrderDeps, input: PlaceO
   if (quotedLines.length === 0) return orRefuse("cart_empty");
 
   // Outside the transaction: this may call the shipping provider (plan §4.5.4).
-  const quoted = await quoteShipping(db, deps.shipping, { areaId: value.address.shippingAreaId, lines: quotedLines });
+  const quoted = await quoteShipping(db, deps.shipping, { areaId: value.address.shippingAreaId, lines: quotedLines, now: clockOf(deps)() });
   if (!quoted.ok) {
     const reason = quoteRefusal(quoted.reason);
     const fieldErrors = reason === "unknown_area" ? [{ field: "shippingAreaId", message: PLACE_ORDER_MESSAGES.unknown_area }] : [];

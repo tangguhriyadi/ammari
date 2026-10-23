@@ -14,6 +14,7 @@ const EMPTY_CART: CartView = {
   lines: [],
   pieceCount: 0,
   subtotal: 0,
+  savings: 0,
   canCheckout: false,
   clearGuestCookie: false,
   mergeTrimmed: false,

@@ -40,6 +40,38 @@ describe("buildPaymentLines", () => {
     expect(() => buildPaymentLines({ products: [product], shippingAmount: -1, discountAmount: 0, grossAmount: 517_999 })).toThrow(RangeError);
   });
 
+  test("product discount worked example (docs/plans/product-discount.md §8): net line prices, Ongkir 15.000, Voucher -20.000 = 852.000", () => {
+    const lines = buildPaymentLines({
+      products: [
+        { sku: "A-SKU", name: "Gamis A Black M", unitPrice: 279_000, qty: 2 },
+        { sku: "B-SKU", name: "Gamis B Black M", unitPrice: 299_000, qty: 1 },
+      ],
+      // Ongkir 35.000 minus the 20.000 subsidy; the voucher on the discounted subtotal 857.000.
+      shippingAmount: 35_000 - 20_000,
+      discountAmount: Math.min(20_000, 857_000),
+      grossAmount: 852_000,
+    });
+    expect(lines).toEqual([
+      { id: "A-SKU", name: "Gamis A Black M", price: 279_000, quantity: 2 },
+      { id: "B-SKU", name: "Gamis B Black M", price: 299_000, quantity: 1 },
+      { id: "SHIPPING", name: "Ongkir", price: 15_000, quantity: 1 },
+      { id: "VOUCHER", name: "Voucher", price: -20_000, quantity: 1 },
+    ]);
+    expect(lines.reduce((sum, line) => sum + line.price * line.quantity, 0)).toBe(852_000);
+    // Charging the normal price for A with the same gross would not add up, and is refused.
+    expect(() =>
+      buildPaymentLines({
+        products: [
+          { sku: "A-SKU", name: "Gamis A Black M", unitPrice: 350_000, qty: 2 },
+          { sku: "B-SKU", name: "Gamis B Black M", unitPrice: 299_000, qty: 1 },
+        ],
+        shippingAmount: 15_000,
+        discountAmount: 20_000,
+        grossAmount: 852_000,
+      }),
+    ).toThrow(RangeError);
+  });
+
   test("item names are cut to 50 characters", () => {
     const [line] = buildPaymentLines({ products: [{ ...product, qty: 1, name: "x".repeat(80) }], shippingAmount: 0, discountAmount: 0, grossAmount: 259_000 });
     expect(line?.name).toHaveLength(50);

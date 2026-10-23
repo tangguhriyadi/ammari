@@ -245,11 +245,22 @@ describe("Pesanan saya reads", () => {
     expect(JSON.stringify(detail)).not.toMatch(/7654321|unitCost|unitPrice/i);
   });
 
+  // docs/plans/product-discount.md §5.2: the struck normal price and "Hemat" come from the snapshot.
+  test("the detail: a line snapshotted below its normal price carries the struck total and Hemat; NULL carries neither", async () => {
+    const { order } = await checkoutOrder();
+    await testDb.update(orderItems).set({ listUnitPrice: 350_000 }).where(eq(orderItems.orderId, order.id));
+    const discounted = await loadCustomerOrderDetail(order.id, testDb);
+    expect(discounted).toMatchObject({ lines: [{ qty: 1, lineTotal: 259_000, listLineTotal: 350_000 }], totals: { subtotal: 259_000, savings: 91_000 } });
+
+    const plain = (await checkoutOrder()).order;
+    expect(await loadCustomerOrderDetail(plain.id, testDb)).toMatchObject({ lines: [{ lineTotal: 259_000, listLineTotal: null }], totals: { savings: 0 } });
+  });
+
   test("a shipped marketplace order: courier and resi, no prices", async () => {
     const owner = await customer();
     const order = await marketplaceOrder(owner.id);
     const detail = await loadCustomerOrderDetail(order.id, testDb);
-    expect(detail).toMatchObject({ totals: null, shipment: { courier: "J&T", trackingNumber: "JT123" }, lines: [{ qty: 2, lineTotal: null }], paymentUrl: null });
+    expect(detail).toMatchObject({ totals: null, shipment: { courier: "J&T", trackingNumber: "JT123" }, lines: [{ qty: 2, lineTotal: null, listLineTotal: null }], paymentUrl: null });
     expect(detail?.timeline.map((entry) => entry.label)).toEqual(["Dipesan", "Dikirim"]);
   });
 

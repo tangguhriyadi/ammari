@@ -1,5 +1,5 @@
 import { randomInt, randomUUID } from "node:crypto";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { testDb } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant, insertThankYouCard, shippingQuoteValues } from "@ammari/db/test-fixtures";
@@ -112,6 +112,17 @@ describe("loadFinishOrder", () => {
     });
     expect(view?.payBy).toMatch(/ WIB$/);
     expect(JSON.stringify(view)).not.toMatch(/unitCost|unit_cost/);
+  });
+
+  test("a line snapshotted below its normal price: struck total and Hemat from list_unit_price; NULL shows neither", async () => {
+    const { order, token } = await checkoutOrder();
+    await testDb.update(orderItems).set({ listUnitPrice: 350_000 }).where(eq(orderItems.orderId, order.id));
+    const view = await loadFinishOrder({ orderNo: order.orderNo, sessionCustomerId: null, accessTokens: [token] }, testDb);
+    expect(view).toMatchObject({ subtotal: 259_000, savings: 91_000, lines: [{ lineTotal: 259_000, listLineTotal: 350_000 }] });
+
+    const plain = await checkoutOrder();
+    const plainView = await loadFinishOrder({ orderNo: plain.order.orderNo, sessionCustomerId: null, accessTokens: [plain.token] }, testDb);
+    expect(plainView).toMatchObject({ savings: 0, lines: [{ lineTotal: 259_000, listLineTotal: null }] });
   });
 
   test("no proof, a wrong or malformed token, an expired token, or a bad order number: null", async () => {

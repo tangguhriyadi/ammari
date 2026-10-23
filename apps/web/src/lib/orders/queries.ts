@@ -7,6 +7,7 @@ import { isSafePaymentUrl } from "@/lib/checkout/navigate";
 import { siteOrigin } from "@/lib/site-origin";
 import { customerOrderStatus, type CustomerOrderStatus } from "./status";
 import { visibleToCustomerSql } from "./access";
+import { snapshotListLineTotal, snapshotSavings } from "./line-savings";
 import { BUYER_TRACKING_MAX_EVENTS, buyerTracking, type BuyerTracking } from "./tracking";
 
 // Reads for "Pesanan saya" (`/orders`, `/orders/[orderNo]`, the /account list; docs/plans/
@@ -90,8 +91,10 @@ function toRow(row: { id: string; orderNo: string; orderDate: Date; channelName:
   };
 }
 
-async function itemsForOrders(orderIds: string[], db: Database): Promise<Map<string, (CustomerOrderItem & { sku: string; unitPrice: number })[]>> {
-  const map = new Map<string, (CustomerOrderItem & { sku: string; unitPrice: number })[]>();
+type OrderItemSnapshot = CustomerOrderItem & { sku: string; unitPrice: number; listUnitPrice: number | null };
+
+async function itemsForOrders(orderIds: string[], db: Database): Promise<Map<string, OrderItemSnapshot[]>> {
+  const map = new Map<string, OrderItemSnapshot[]>();
   if (orderIds.length === 0) return map;
   const rows = await db
     .select({
@@ -102,6 +105,7 @@ async function itemsForOrders(orderIds: string[], db: Database): Promise<Map<str
       size: productVariants.size,
       qty: orderItems.qty,
       unitPrice: orderItems.unitPrice,
+      listUnitPrice: orderItems.listUnitPrice,
     })
     .from(orderItems)
     .innerJoin(productVariants, eq(productVariants.sku, orderItems.sku))
@@ -111,7 +115,7 @@ async function itemsForOrders(orderIds: string[], db: Database): Promise<Map<str
     .orderBy(asc(orderItems.createdAt), asc(orderItems.sku));
   for (const row of rows) {
     const list = map.get(row.orderId) ?? [];
-    list.push({ sku: row.sku, name: row.productName, variant: `${row.colorName} · ${sizeLabel(row.size)}`, qty: row.qty, unitPrice: row.unitPrice });
+    list.push({ sku: row.sku, name: row.productName, variant: `${row.colorName} · ${sizeLabel(row.size)}`, qty: row.qty, unitPrice: row.unitPrice, listUnitPrice: row.listUnitPrice });
     map.set(row.orderId, list);
   }
   return map;
@@ -127,11 +131,15 @@ function linesAddUp(orderNo: string, items: readonly { qty: number; unitPrice: n
 }
 
 export interface CustomerOrderDetail extends CustomerOrderRow {
-  lines: (CustomerOrderItem & { sku: string; lineTotal: number | null })[];
+  /** `lineTotal` and `listLineTotal` (the struck normal price, when a product discount lowered the
+   * line) are checkout orders only. */
+  lines: (CustomerOrderItem & { sku: string; lineTotal: number | null; listLineTotal: number | null })[];
   /** Checkout orders only. `shipping` is the buyer's share of ongkir as paid; `shippingCost` and
    * `shippingSubsidy` the locked quote (courier cost, Ammari's subsidy). */
   totals: {
     subtotal: number;
+    /** "Hemat": the product discounts on the lines (0 when none). */
+    savings: number;
     shipping: number;
     shippingCost: number | null;
     shippingSubsidy: number | null;
@@ -215,10 +223,15 @@ export async function loadCustomerOrderDetail(orderId: string, db: Database = de
 
   return {
     ...row,
-    lines: items.map(({ unitPrice, ...item }) => ({ ...item, lineTotal: row.isCheckout ? item.qty * unitPrice : null })),
+    lines: items.map(({ unitPrice, listUnitPrice, ...item }) => ({
+      ...item,
+      lineTotal: row.isCheckout ? item.qty * unitPrice : null,
+      listLineTotal: row.isCheckout ? snapshotListLineTotal({ qty: item.qty, unitPrice, listUnitPrice }) : null,
+    })),
     totals: row.isCheckout
       ? {
           subtotal: order.subtotal,
+          savings: snapshotSavings(items),
           shipping: order.shipping,
           shippingCost: order.shippingCost,
           shippingSubsidy: order.shippingSubsidy,

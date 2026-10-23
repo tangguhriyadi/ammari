@@ -1,5 +1,7 @@
 import "server-only";
 import { eq, inArray } from "drizzle-orm";
+import { resolveUnitPrice } from "@ammari/db/pricing";
+import { productPricingColumns } from "@ammari/db/pricing-columns";
 import { products, productVariants } from "@ammari/db/schema";
 import type { Database } from "../db";
 import { loadShippingArea } from "./areas";
@@ -69,16 +71,16 @@ function assertLines(lines: readonly QuoteLine[]): void {
   }
 }
 
-/** Weight per SKU and the goods value, from the current product rows (base_price is the public
- * price; nothing cost-related is read). */
-async function loadLineFacts(db: Database, lines: readonly QuoteLine[]) {
+/** Weight per SKU and the price the buyer pays for it at `now` (the public price, discount
+ * included: docs/plans/product-discount.md §5.2; nothing cost-related is read). */
+async function loadLineFacts(db: Database, lines: readonly QuoteLine[], now: Date) {
   const skus = [...new Set(lines.map((line) => line.sku))];
   const rows = await db
-    .select({ sku: productVariants.sku, weightGrams: products.shippingWeightGrams, basePrice: products.basePrice })
+    .select({ sku: productVariants.sku, weightGrams: products.shippingWeightGrams, ...productPricingColumns })
     .from(productVariants)
     .innerJoin(products, eq(products.id, productVariants.productId))
     .where(inArray(productVariants.sku, skus));
-  return new Map(rows.map((row) => [row.sku, row]));
+  return new Map(rows.map((row) => [row.sku, { weightGrams: row.weightGrams, unitPrice: resolveUnitPrice(row, now).unitPrice }]));
 }
 
 /** Quotes the cheapest allowlisted service for these cart lines to this area, from the cache
@@ -88,7 +90,7 @@ async function loadLineFacts(db: Database, lines: readonly QuoteLine[]) {
 export async function quoteShipping(
   db: Database,
   deps: ShippingQuoteDeps,
-  input: { areaId: string; lines: readonly QuoteLine[] },
+  input: { areaId: string; lines: readonly QuoteLine[]; now?: Date },
 ): Promise<QuoteShippingResult> {
   const allowlist = deps.allowlist ?? SHIPPING_SERVICE_ALLOWLIST;
   assertLines(input.lines);
@@ -101,7 +103,7 @@ export async function quoteShipping(
     return { ok: false, reason: "unknown_area" };
   }
 
-  const facts = await loadLineFacts(db, input.lines);
+  const facts = await loadLineFacts(db, input.lines, input.now ?? new Date());
   const weight = parcelWeightGrams(
     input.lines.map((line) => ({ sku: line.sku, qty: line.qty, weightGrams: facts.get(line.sku)?.weightGrams ?? null })),
   );
@@ -114,7 +116,7 @@ export async function quoteShipping(
   }
   // Every SKU has a row here (a missing one was refused as missing_weight above). Biteship needs a
   // whole-rupiah item value; a non-integer sum is a bug, never sent.
-  const goodsValue = input.lines.reduce((sum, line) => sum + line.qty * (facts.get(line.sku)?.basePrice ?? 0), 0);
+  const goodsValue = input.lines.reduce((sum, line) => sum + line.qty * (facts.get(line.sku)?.unitPrice ?? 0), 0);
   if (!Number.isSafeInteger(goodsValue) || goodsValue < 0) throw new RangeError(`goods value must be whole rupiah, got ${goodsValue}`);
 
   const key: RateCacheKey = {

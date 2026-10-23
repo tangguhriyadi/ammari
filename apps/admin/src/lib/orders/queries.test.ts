@@ -36,10 +36,26 @@ describe("getOrderDetail", () => {
       expect(detail?.createdByName).toBe(staff.name);
       expect(detail?.cardClaimedAt).toBeNull();
       expect(detail?.items).toHaveLength(1);
-      expect(detail?.items[0]).toMatchObject({ sku: variant.sku, size: variant.size, qty: 2, unitPrice: 259_000, unitCost: 100_000 });
+      expect(detail?.items[0]).toMatchObject({ sku: variant.sku, size: variant.size, qty: 2, unitPrice: 259_000, listUnitPrice: null, unitCost: 100_000 });
 
       expect(stripOrderDetailCost(detail!, true).items[0]!.unitCost).toBe(100_000);
       expect(stripOrderDetailCost(detail!, false).items[0]!.unitCost).toBeNull();
+    });
+  });
+
+  test("a line charged below its normal price carries list_unit_price for the struck \"Harga normal\" (product-discount plan §5.2)", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      await tx.insert(stockMovements).values({ sku: variant.sku, qty: 10, valueAmount: 1_000_000, type: "production", refType: "manual" });
+      const order = await createOrder(
+        { channelId: "whatsapp", orderDate: "2026-10-09", items: [{ sku: variant.sku, qty: 1, unitPrice: 200_000 }], discountAmount: 0, shippingAmount: 0, status: "to_ship" },
+        staff.id,
+        tx,
+      );
+      const detail = await getOrderDetail(order.id, tx);
+      expect(detail?.items[0]).toMatchObject({ unitPrice: 200_000, listUnitPrice: 259_000 });
+      expect(detail?.subtotalAmount).toBe(200_000);
     });
   });
 

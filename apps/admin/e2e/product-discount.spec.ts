@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
-import { E2E_DISCOUNT_PRODUCT_NAME, E2E_DISCOUNT_SKU, E2E_PRODUCT_DISCOUNT_EMAIL } from "./global-setup";
+import { E2E_DISCOUNT_ORDER_NO, E2E_DISCOUNT_PRODUCT_NAME, E2E_DISCOUNT_SKU, E2E_PRODUCT_DISCOUNT_EMAIL } from "./global-setup";
 
 // docs/plans/product-discount.md session 2: the "Diskon" section on the product page (linked Rp
 // and % inputs, validation while typing, save, status chip), the base price guard against a
@@ -102,3 +102,26 @@ test("owner sets a discount with linked Rp/% inputs, sees the chip on the produc
   await expect(section.getByLabel("Harga setelah diskon")).toHaveValue("");
   await expect(section.getByRole("button", { name: "Hapus diskon" })).toHaveCount(0);
 });
+
+// Session 4: a checkout order placed during a discount keeps both prices on its line snapshot; the
+// order detail shows the normal price struck next to the price paid (plan §5.2), at both widths.
+for (const viewport of [
+  { name: "390px", width: 390, height: 844 },
+  { name: "1280px", width: 1280, height: 900 },
+]) {
+  test(`order detail: a discounted line shows the normal price struck and the paid price (${viewport.name})`, async ({ page }) => {
+    await loginAs(page, E2E_PRODUCT_DISCOUNT_EMAIL);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto(`/orders?q=${encodeURIComponent(E2E_DISCOUNT_ORDER_NO)}`);
+    await page.getByRole("link", { name: E2E_DISCOUNT_ORDER_NO }).filter({ visible: true }).first().click();
+    await expect(page.getByRole("heading", { level: 1, name: E2E_DISCOUNT_ORDER_NO })).toBeVisible();
+
+    const line = page.getByRole("listitem").filter({ hasText: E2E_DISCOUNT_PRODUCT_NAME });
+    await expect(line.getByTestId("order-item-list-price")).toHaveText("Rp 350.000");
+    await expect(line.getByTestId("order-item-list-price")).toHaveCSS("text-decoration-line", "line-through");
+    await expect(line.getByTestId("order-item-unit-price")).toHaveText("Rp 279.000");
+    // The line total and the subtotal are what was paid.
+    await expect(line).toContainText("Rp 558.000");
+    await expect(page.getByText("Rp 553.000").first()).toBeVisible();
+  });
+}

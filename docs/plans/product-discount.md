@@ -1,7 +1,8 @@
 # Per-product discount ("launching price")
 
-Status: **owner answers in (2026-10-23, §12). Sessions 1 (database + price function), 2 (admin) and
-3 (storefront display + caching) done; session 4 not started.**
+Status: **owner answers in (2026-10-23, §12). All four sessions done (2026-10-23): 1 (database +
+price function), 2 (admin), 3 (storefront display + caching), 4 (cart, checkout, orders, payment,
+emails).**
 
 Scope: `packages/db`, `packages/commerce`, `apps/admin`, `apps/web`.
 
@@ -224,8 +225,9 @@ check("order_items_list_unit_price_check",
 
 - `order_items.unit_price` keeps its meaning: **the unit price actually charged** (revenue,
   Overview metrics, `linesAddUp`, Midtrans all keep working unchanged). `list_unit_price` is the
-  pre-discount price, written by `placeOrder` for every checkout line (equal to `unit_price` when
-  no discount was active). Manual orders (non-marketplace channels) write it only for a line
+  pre-discount price, written by `placeOrder` only for a line a product discount lowered, NULL
+  otherwise (owner, session 4 instructions: same rule as manual orders, so "NULL = nothing to
+  strike" everywhere). Manual orders (non-marketplace channels) write it only for a line
   charged below the SKU's normal price (override, else base), else NULL. NULL for pre-migration
   rows and marketplace orders.
 - No new `orders` column: `orders.discount_amount` stays **voucher only**. The product discount is
@@ -409,7 +411,7 @@ discount). Voucher Rp20.000. Courier quote Rp35.000, subsidy Rp20.000.
 
 Midtrans `item_details`: `A-sku 279.000 x 2`, `B-sku 299.000 x 1`, `SHIPPING 15.000 x 1`,
 `VOUCHER -20.000 x 1` = 852.000 = `gross_amount`.
-`order_items`: A `unit_price 279.000, list_unit_price 350.000`; B `299.000, 299.000`.
+`order_items`: A `unit_price 279.000, list_unit_price 350.000`; B `299.000, NULL`.
 Catalog badge for A: `floor(71.000 * 100 / 350.000) = 20` -> `20% OFF`.
 
 The existing guard "total must be > 0" still applies (a voucher can never make a Rp0 charge).
@@ -523,8 +525,30 @@ price next to it stays readable, and the screen-reader text carries both prices.
      start and end with nothing else called.
    - Until session 4 ships, cart, checkout, `placeOrder` and the shipping quote's goods value still
      use `base_price` (§11 last paragraph: do not switch a discount on in prod before session 4).
-4. **Cart, checkout, orders.** `getCart`, `placeOrder` snapshot (`list_unit_price`), payment lines,
-   emails, buyer order pages, admin order detail; TDD; e2e worked example. (SPEC §8 already updated.)
+4. **Cart, checkout, orders. Done 2026-10-23.** `getCartView`, `placeOrder` snapshot
+   (`list_unit_price`), shipping quote goods value, emails, buyer order/finish pages, admin order
+   detail; TDD; e2e worked example. (SPEC §8 already updated.) Notes:
+   - Every price is resolved on the server: `getCartView(db, identity, now)` per render;
+     `placeOrder` once inside its transaction (`PlaceOrderDeps.now`, injected by tests; the quote
+     before it uses the same clock); `quoteShipping` takes `now` too, so the goods value sent to the
+     courier is the price paid. A discount that starts or ends between the summary and the submit
+     changes the total, and the existing `expectedTotal` check refuses with `total_changed`.
+   - `list_unit_price` is NULL for undiscounted checkout lines (see §4). "Hemat" and the struck
+     price are derived from the snapshot only (`list_unit_price > unit_price`), never from the
+     current product price: `apps/web/src/lib/orders/line-savings.ts` (order page, finish page),
+     `commerce/emails/templates.ts` (every customer email and the owner's paid email, red from
+     `DISCOUNT_COLOR_HEX`), admin order detail (struck "Harga normal" before the paid unit price).
+   - Payment retries ("Buka halaman pembayaran", "Ganti metode pembayaran") already rebuilt
+     `item_details` from `order_items`; now covered by a test that switches the discount off first.
+   - Cart UI: `CartLine` gained `listUnitPrice` / `listLineTotal`, `CartView` gained `savings`
+     (buyable lines only, like the subtotal); the optimistic cart updates both. Shared
+     `components/line-price.tsx` (`LinePrice`, `SavingsRow`). The "Hemat" row uses the discount red
+     (same 3.89:1 contrast note as §9).
+   - E2E: `apps/web/e2e/discount-checkout.spec.ts` (worked example incl. the new fake area
+     "Kecamatan E2E Sedang", Rp35.000; drift both directions), `apps/admin/e2e/product-discount.spec.ts`
+     (order detail, seeded order `ORD-E2E-WEB-DISKON`). `apps/web/e2e/global-setup.ts` now expires
+     every product cache tag after seeding: the PDP's `unstable_cache` (session 3) persists on disk
+     across e2e runs while the seed gives new SKUs, which broke `cart.spec.ts` on a second run.
 
 Sessions 3 and 4 can ship in either order, but the discount must not be switched on in production
 until **both** are deployed (otherwise the storefront could show a price checkout does not charge,

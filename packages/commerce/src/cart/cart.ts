@@ -1,5 +1,7 @@
 import "server-only";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { resolveUnitPrice } from "@ammari/db/pricing";
+import { productPricingColumns } from "@ammari/db/pricing-columns";
 import { cartItems, carts, fabricColors, productImages, products, productVariants } from "@ammari/db/schema";
 import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { sellableQtySql } from "@ammari/db/stock-availability";
@@ -25,8 +27,10 @@ import { CART_MAX_PIECES, CART_MAX_QTY_PER_LINE, type CartLineStatus, type CartR
 //
 // Stock checks here are advisory (a cart holds nothing; placeOrder reserves, session 9): they
 // use the shared sellable rule (physical minus active, unexpired holds) and never return the
-// number itself (plan §4.2). Prices are always `products.base_price`, read at render; nothing
-// here selects a cost or value column.
+// number itself (plan §4.2). Prices are resolved at render from the product's base price and its
+// discount (@ammari/db/pricing, docs/plans/product-discount.md §5.2); a cart row stores no price,
+// so a discount that starts or ends shows on the next render. Nothing here selects a cost or value
+// column.
 
 /** Who is asking. `guestTokenHash` is the sha256 of the cart cookie (see ./token.ts); for a
  * guest's write the caller passes the hash of the cookie it is about to set when there is none
@@ -64,8 +68,13 @@ export interface CartLine {
   colorName: string;
   sizeLabel: string;
   qty: number;
+  /** What one piece costs now (the discounted price while a discount is active). */
   unitPrice: number;
+  /** The normal price; equal to `unitPrice` when no discount is active. */
+  listUnitPrice: number;
   lineTotal: number;
+  /** `listUnitPrice * qty`: shown struck through when above `lineTotal`. */
+  listLineTotal: number;
   status: CartLineStatus;
   image: CartLineImage | null;
 }
@@ -76,6 +85,8 @@ export interface CartView extends CartResolution {
   /** Lines that can still be bought (`ok` and `insufficient`); sold-out and unavailable lines are
    * left out. */
   subtotal: number;
+  /** "Hemat": what the product discounts take off the same lines' normal prices (0 when none). */
+  savings: number;
   /** At least one line, every line `ok`, and within the piece cap (plan §4.2: checkout refuses
    * while any line is unavailable). */
   canCheckout: boolean;
@@ -514,10 +525,10 @@ function lineStatus(row: { productActive: boolean; published: boolean; variantAc
 }
 
 /** The cart page (plan §4.2), re-read uncached on every render: current prices and availability
- * per line, never a stock count. */
-export async function getCartView(db: Database, identity: CartIdentity): Promise<CartView> {
+ * per line, never a stock count. Every line is priced at the one instant `now` (the request's). */
+export async function getCartView(db: Database, identity: CartIdentity, now: Date = new Date()): Promise<CartView> {
   const resolution = await resolveCart(db, identity);
-  if (!resolution.cartId) return { ...resolution, lines: [], pieceCount: 0, subtotal: 0, canCheckout: false };
+  if (!resolution.cartId) return { ...resolution, lines: [], pieceCount: 0, subtotal: 0, savings: 0, canCheckout: false };
 
   const rows = await db
     .select({
@@ -526,7 +537,7 @@ export async function getCartView(db: Database, identity: CartIdentity): Promise
       productId: products.id,
       productName: products.name,
       productSlug: products.slug,
-      basePrice: products.basePrice,
+      ...productPricingColumns,
       thumbnailImageId: products.thumbnailImageId,
       productActive: products.isActive,
       published: products.isPublishedOnStorefront,
@@ -571,23 +582,28 @@ export async function getCartView(db: Database, identity: CartIdentity): Promise
     return image ? { storageKey: image.storageKey, altText: image.altText, width: image.width, height: image.height } : null;
   };
 
-  const lines: CartLine[] = rows.map((row) => ({
-    sku: row.sku,
-    productName: row.productName,
-    productSlug: row.productSlug,
-    colorName: row.colorName,
-    sizeLabel: sizeLabel(row.size),
-    qty: row.qty,
-    unitPrice: row.basePrice,
-    lineTotal: row.basePrice * row.qty,
-    status: lineStatus({ ...row, sellable: Number(row.sellable) }),
-    image: pickImage(row),
-  }));
+  const lines: CartLine[] = rows.map((row) => {
+    const price = resolveUnitPrice(row, now);
+    return {
+      sku: row.sku,
+      productName: row.productName,
+      productSlug: row.productSlug,
+      colorName: row.colorName,
+      sizeLabel: sizeLabel(row.size),
+      qty: row.qty,
+      unitPrice: price.unitPrice,
+      listUnitPrice: price.listPrice,
+      lineTotal: price.unitPrice * row.qty,
+      listLineTotal: price.listPrice * row.qty,
+      status: lineStatus({ ...row, sellable: Number(row.sellable) }),
+      image: pickImage(row),
+    };
+  });
 
   const pieceCount = lines.reduce((sum, line) => sum + line.qty, 0);
-  const subtotal = lines
-    .filter((line) => line.status === "ok" || line.status === "insufficient")
-    .reduce((sum, line) => sum + line.lineTotal, 0);
+  const buyable = lines.filter((line) => line.status === "ok" || line.status === "insufficient");
+  const subtotal = buyable.reduce((sum, line) => sum + line.lineTotal, 0);
+  const savings = buyable.reduce((sum, line) => sum + (line.listLineTotal - line.lineTotal), 0);
   const canCheckout = lines.length > 0 && pieceCount <= CART_MAX_PIECES && lines.every((line) => line.status === "ok");
-  return { ...resolution, lines, pieceCount, subtotal, canCheckout };
+  return { ...resolution, lines, pieceCount, subtotal, savings, canCheckout };
 }

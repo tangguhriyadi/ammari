@@ -5,6 +5,7 @@ import { formatShippingAreaLabel } from "@ammari/commerce/shipping-rules";
 import { findAccessibleOrder, ORDER_NO_PATTERN } from "@/lib/orders/access";
 import { defaultDb, type Database } from "@/lib/db";
 import { formatJakartaDate, formatJakartaDateTime } from "@/lib/format";
+import { snapshotListLineTotal, snapshotSavings } from "@/lib/orders/line-savings";
 import type { CheckoutVoucherOption, SavedCheckoutAddress } from "./form";
 
 // Reads for the checkout and finish pages (docs/plans/cart-checkout.md §4.3, §4.4).
@@ -79,6 +80,8 @@ export interface FinishOrderLine {
   variant: string;
   qty: number;
   lineTotal: number;
+  /** The line at its normal price when a product discount lowered it (struck through), else null. */
+  listLineTotal: number | null;
 }
 
 export interface FinishOrderView {
@@ -90,6 +93,8 @@ export interface FinishOrderView {
   guestContactEmail: string | null;
   lines: FinishOrderLine[];
   subtotal: number;
+  /** "Hemat": the product discounts on the lines (0 when none). */
+  savings: number;
   shipping: number;
   /** The locked quote: courier cost and Ammari's subsidy (shown struck through and highlighted). */
   shippingCost: number | null;
@@ -188,6 +193,7 @@ export async function loadFinishOrder(
       size: productVariants.size,
       qty: orderItems.qty,
       unitPrice: orderItems.unitPrice,
+      listUnitPrice: orderItems.listUnitPrice,
     })
     .from(orderItems)
     .innerJoin(productVariants, eq(productVariants.sku, orderItems.sku))
@@ -228,8 +234,10 @@ export async function loadFinishOrder(
       variant: `${item.colorName} · ${sizeLabel(item.size)}`,
       qty: item.qty,
       lineTotal: item.qty * item.unitPrice,
+      listLineTotal: snapshotListLineTotal(item),
     })),
     subtotal: order.subtotal,
+    savings: snapshotSavings(items),
     shipping: order.shipping,
     shippingCost: order.shippingCost,
     shippingSubsidy: order.shippingSubsidy,

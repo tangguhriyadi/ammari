@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { CartLine } from "@ammari/commerce/cart";
 import { CART_COUNT_EVENT, CART_STATUS_EVENT } from "@/lib/cart/count-event";
 import { CartLineItem } from "./cart-line-item";
-import { CartPieceCount, CartSubtotal, OptimisticCartProvider } from "./optimistic-cart";
+import { CartPieceCount, CartSavingsRow, CartSubtotal, OptimisticCartProvider, cartFigures } from "./optimistic-cart";
 const updateCartItemQtyAction = vi.fn();
 const removeCartItemAction = vi.fn();
 vi.mock("@/lib/cart/actions", () => ({
@@ -21,7 +21,9 @@ function cartLine(overrides: Partial<CartLine> = {}): CartLine {
     sizeLabel: "M",
     qty: 2,
     unitPrice: 269_000,
+    listUnitPrice: 269_000,
     lineTotal: 538_000,
+    listLineTotal: 538_000,
     status: "ok",
     image: null,
     ...overrides,
@@ -57,6 +59,9 @@ function renderCart(lines: CartLine[]) {
       <p data-testid="pieces">
         <CartPieceCount fallback={0} />
       </p>
+      <dl>
+        <CartSavingsRow fallback={0} />
+      </dl>
     </OptimisticCartProvider>,
   );
 }
@@ -73,6 +78,43 @@ describe("CartLineItem", () => {
     expect(screen.getByText("Sage · M")).toBeInTheDocument();
     expect(screen.getByText("Rp538.000")).toBeInTheDocument();
     expect(screen.getByTestId("cart-line-qty")).toHaveTextContent("Jumlah 2");
+  });
+
+  test("a discounted line shows the normal total struck and the paid total; an undiscounted one only its total", () => {
+    renderLine(cartLine({ unitPrice: 279_000, listUnitPrice: 350_000, lineTotal: 558_000, listLineTotal: 700_000 }));
+    expect(screen.getByTestId("line-price-list")).toHaveTextContent("Rp700.000");
+    expect(screen.getByTestId("line-price-sale")).toHaveTextContent("Rp558.000");
+    expect(screen.getByTestId("line-price-sale")).toHaveClass("text-discount");
+    expect(screen.getByText("Harga normal Rp700.000, harga diskon Rp558.000")).toBeInTheDocument();
+  });
+
+  test("optimistic: '+' on a discounted line moves both totals, the subtotal and Hemat at once", async () => {
+    let resolveCall: (value: unknown) => void = () => {};
+    updateCartItemQtyAction.mockReturnValueOnce(new Promise((resolve) => (resolveCall = resolve)));
+    renderCart([
+      cartLine({ unitPrice: 279_000, listUnitPrice: 350_000, lineTotal: 558_000, listLineTotal: 700_000 }),
+      cartLine({ sku: "SAGE-L", sizeLabel: "L", qty: 1, unitPrice: 299_000, listUnitPrice: 299_000, lineTotal: 299_000, listLineTotal: 299_000 }),
+    ]);
+    expect(screen.getByTestId("subtotal")).toHaveTextContent("Rp857.000");
+    expect(screen.getByTestId("cart-savings")).toHaveTextContent("Rp142.000");
+
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Tambah jumlah Haura, Sage, M" })));
+    expect(screen.getAllByTestId("line-price-list")[0]).toHaveTextContent("Rp1.050.000");
+    expect(screen.getAllByTestId("line-price-sale")[0]).toHaveTextContent("Rp837.000");
+    expect(screen.getByTestId("subtotal")).toHaveTextContent("Rp1.136.000");
+    expect(screen.getByTestId("cart-savings")).toHaveTextContent("Rp213.000");
+    await act(async () => resolveCall({ ok: true, pieceCount: 4, mergeTrimmed: false }));
+  });
+
+  test("no Hemat row without a discount; a sold-out discounted line counts toward neither the subtotal nor Hemat", () => {
+    renderCart([cartLine()]);
+    expect(screen.queryByTestId("cart-savings")).toBeNull();
+    expect(
+      cartFigures([
+        cartLine({ status: "sold_out", unitPrice: 279_000, listUnitPrice: 350_000, lineTotal: 558_000, listLineTotal: 700_000 }),
+        cartLine({ sku: "SAGE-L", qty: 1, lineTotal: 269_000, listLineTotal: 269_000 }),
+      ]),
+    ).toEqual({ pieceCount: 3, subtotal: 269_000, savings: 0 });
   });
 
   test("'+' sets qty + 1, then announces the count and status", async () => {

@@ -60,9 +60,11 @@ export default async function CheckoutPage() {
             variant: `${line.colorName} · ${line.sizeLabel}`,
             qty: line.qty,
             lineTotal: line.lineTotal,
+            listLineTotal: line.listLineTotal,
             imageUrl: line.image ? buildImageUrl(storageBaseUrl, line.image.storageKey, 400) : null,
           })),
           subtotal: cart.subtotal,
+          savings: cart.savings,
           pieceCount: cart.pieceCount,
           canCheckout: cart.canCheckout,
         }}

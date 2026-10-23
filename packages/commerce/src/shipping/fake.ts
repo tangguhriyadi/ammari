@@ -42,6 +42,16 @@ export const FAKE_SHIPPING_AREAS: readonly FakeArea[] = [
     ],
   },
   {
+    providerAreaId: "E2ESEDANG40444",
+    province: "Provinsi E2E",
+    city: "Kota E2E",
+    district: "Kecamatan E2E Sedang",
+    subdistrict: null,
+    postalCode: "40444",
+    // Rp35.000: buyer pays Rp15.000 (the product discount plan's worked example, §8).
+    rates: [{ courierCode: "jne", serviceCode: "reg", cost: 35_000 }],
+  },
+  {
     providerAreaId: "E2ETANPALAYANAN40222",
     province: "Provinsi E2E",
     city: "Kota E2E",

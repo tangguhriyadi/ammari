@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useOptimistic, useRef, type ReactNode } from "react";
 import type { CartLine } from "@ammari/commerce/cart";
 import { formatPriceIdr } from "@/lib/format";
+import { SavingsRow } from "@/components/line-price";
 
 // The `/cart` page's optimistic layer (owner request after the 2026-10-21 sandbox run: the
 // stepper felt slow). A tap on "+" / "-" / × changes the quantity, the line total, the subtotal
@@ -23,6 +24,8 @@ interface OptimisticCart {
   lines: CartLine[];
   pieceCount: number;
   subtotal: number;
+  /** "Hemat": the product discounts on the lines that count toward the subtotal. */
+  savings: number;
   /** The latest server-rendered piece count (what the header shows again after a refusal). Read
    * when called, so a tap's late refusal never brings back a count from before a newer render. */
   serverPieceCount: () => number;
@@ -40,14 +43,16 @@ const OptimisticCartContext = createContext<OptimisticCart | null>(null);
 function reduce(lines: CartLine[], update: OptimisticCartUpdate): CartLine[] {
   if (update.qty === null) return lines.filter((line) => line.sku !== update.sku);
   const qty = update.qty;
-  return lines.map((line) => (line.sku === update.sku ? { ...line, qty, lineTotal: line.unitPrice * qty } : line));
+  return lines.map((line) => (line.sku === update.sku ? { ...line, qty, lineTotal: line.unitPrice * qty, listLineTotal: line.listUnitPrice * qty } : line));
 }
 
 /** Same rules as the server's cart view (@ammari/commerce/cart `loadCartView`). */
-export function cartFigures(lines: readonly CartLine[]): { pieceCount: number; subtotal: number } {
+export function cartFigures(lines: readonly CartLine[]): { pieceCount: number; subtotal: number; savings: number } {
+  const buyable = lines.filter((line) => line.status === "ok" || line.status === "insufficient");
   return {
     pieceCount: lines.reduce((sum, line) => sum + line.qty, 0),
-    subtotal: lines.filter((line) => line.status === "ok" || line.status === "insufficient").reduce((sum, line) => sum + line.lineTotal, 0),
+    subtotal: buyable.reduce((sum, line) => sum + line.lineTotal, 0),
+    savings: buyable.reduce((sum, line) => sum + (line.listLineTotal - line.lineTotal), 0),
   };
 }
 
@@ -82,6 +87,12 @@ export function useOptimisticCart(): OptimisticCart | null {
 export function CartSubtotal({ fallback }: { fallback: number }) {
   const cart = useOptimisticCart();
   return <>{formatPriceIdr(cart?.subtotal ?? fallback)}</>;
+}
+
+/** The "Hemat RpX" row under the subtotal; follows a stepper tap like the subtotal. */
+export function CartSavingsRow({ fallback }: { fallback: number }) {
+  const cart = useOptimisticCart();
+  return <SavingsRow amount={cart?.savings ?? fallback} testId="cart-savings" />;
 }
 
 export function CartPieceCount({ fallback }: { fallback: number }) {

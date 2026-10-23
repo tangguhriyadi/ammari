@@ -9,6 +9,7 @@ import { PLACE_ORDER_MESSAGES } from "@ammari/commerce/checkout-messages";
 import { signOutFromCheckoutAction } from "@/app/checkout/actions";
 import { PrimaryLink } from "@/components/buttons";
 import { Curtain } from "@/components/curtain";
+import { LinePrice, SavingsRow } from "@/components/line-price";
 import { ProductImage } from "@/components/product-image";
 import { placeOrderAction, type PlaceOrderActionResult } from "@/lib/checkout/actions";
 import {
@@ -50,13 +51,16 @@ export interface CheckoutLine {
   variant: string;
   qty: number;
   lineTotal: number;
+  /** The line at its normal price (struck through when above `lineTotal`). */
+  listLineTotal: number;
   imageUrl: string | null;
 }
 
 export interface CheckoutFormProps {
   /** One per page load (orders.checkout_attempt_id): a double submit answers with the same order. */
   checkoutAttemptId: string;
-  cart: { lines: CheckoutLine[]; subtotal: number; pieceCount: number; canCheckout: boolean };
+  /** `savings`: the "Hemat" row (product discounts, server-resolved; display only). */
+  cart: { lines: CheckoutLine[]; subtotal: number; savings: number; pieceCount: number; canCheckout: boolean };
   /** The session customer (email from the account, locked); null for a guest. */
   customer: { email: string | null; phone: string | null; name: string } | null;
   /** Usable vouchers, best first (logged in only). */
@@ -624,7 +628,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
                   {line.variant} · {line.qty}×
                 </p>
               </div>
-              <p className="shrink-0 text-sm text-ink">{formatPriceIdr(line.lineTotal)}</p>
+              <LinePrice total={line.lineTotal} listTotal={line.listLineTotal} className="shrink-0 flex-col items-end text-sm" />
             </li>
           ))}
         </ul>
@@ -636,6 +640,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
             <dt>Subtotal</dt>
             <dd data-testid="summary-subtotal">{formatPriceIdr(cart.subtotal)}</dd>
           </div>
+          <SavingsRow amount={cart.savings} testId="summary-savings" />
           <ShippingCostRows
             buyerAmount={buyerShipping}
             costAmount={quote.status === "ok" ? quote.quote.costAmount : null}

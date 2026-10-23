@@ -86,6 +86,36 @@ export async function seedCheckoutProduct(params: { label: string; stock?: numbe
   });
 }
 
+/** Sets a product's discount (docs/plans/product-discount.md) straight in ammari_e2e. Cart, checkout
+ * and placeOrder read prices uncached, so no revalidation is needed for them. */
+export async function setCheckoutDiscount(
+  slug: string,
+  discount: { salePrice: number; enabled: boolean; startsAt?: Date | null; endsAt?: Date | null },
+): Promise<void> {
+  await withSql(async (sql) => {
+    const rows = await sql`
+      update products set
+        discount_price_amount = ${discount.salePrice},
+        discount_enabled = ${discount.enabled},
+        discount_starts_at = ${discount.startsAt ?? null},
+        discount_ends_at = ${discount.endsAt ?? null}
+      where slug = ${slug}
+      returning id`;
+    if (rows.length !== 1) throw new Error(`no e2e product with slug ${slug}`);
+  });
+}
+
+/** The latest checkout order's lines for a contact email: what was charged and the normal price. */
+export async function orderLinesFor(email: string): Promise<{ sku: string; qty: number; unitPrice: number; listUnitPrice: number | null }[]> {
+  return withSql(async (sql) => {
+    return sql<{ sku: string; qty: number; unitPrice: number; listUnitPrice: number | null }[]>`
+      select i.sku, i.qty, i.unit_price::int as "unitPrice", i.list_unit_price::int as "listUnitPrice"
+      from order_items i
+      where i.order_id = (select id from orders where contact_email = ${email} and payment_status is not null order by created_at desc limit 1)
+      order by i.sku`;
+  });
+}
+
 /** Takes every remaining physical piece of `sku` out of stock (an append-only adjustment row,
  * like a staff recount), e.g. a marketplace sale while the buyer is on the checkout page. */
 export async function sellOut(sku: string): Promise<void> {

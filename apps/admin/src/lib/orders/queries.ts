@@ -188,6 +188,9 @@ export interface OrderItemRow {
   size: string;
   qty: number;
   unitPrice: number;
+  /** `order_items.list_unit_price`: the normal price when the line was charged less (a product
+   * discount at checkout, or a lower manual price); null otherwise. Shown struck through. */
+  listUnitPrice: number | null;
   /** `null` when stripped for a viewer without finance.view_profit (see stripOrderItemCost) —
    * never `null` because the value is genuinely unknown. */
   unitCost: number | null;
@@ -547,6 +550,7 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
       size: productVariants.size,
       qty: orderItems.qty,
       unitPrice: orderItems.unitPrice,
+      listUnitPrice: orderItems.listUnitPrice,
       unitCost: orderItems.unitCost,
     })
     .from(orderItems)

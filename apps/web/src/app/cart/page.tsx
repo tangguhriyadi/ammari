@@ -11,7 +11,7 @@ import { PrimaryButton, PrimaryLink } from "@/components/buttons";
 import { CartLineItem } from "@/components/cart/cart-line-item";
 import { PendingOrderBanner } from "@/components/checkout/pending-order-banner";
 import { CartLiveRegion } from "@/components/cart/cart-live-region";
-import { CartPieceCount, CartSubtotal, OptimisticCartProvider } from "@/components/cart/optimistic-cart";
+import { CartPieceCount, CartSavingsRow, CartSubtotal, OptimisticCartProvider } from "@/components/cart/optimistic-cart";
 import { CART_HEADING_ID } from "@/lib/cart/count-event";
 
 // The cart page (docs/plans/cart-checkout.md §4.2, docs/design/storefront.md §7,
@@ -91,6 +91,7 @@ export default async function CartPage() {
                     <CartSubtotal fallback={cart.subtotal} />
                   </dd>
                 </div>
+                <CartSavingsRow fallback={cart.savings} />
                 <div className="flex items-center justify-between gap-4">
                   <dt>Ongkir</dt>
                   <dd>Dihitung saat checkout</dd>

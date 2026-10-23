@@ -33,8 +33,9 @@ function props(overrides: Partial<CheckoutFormProps> = {}): CheckoutFormProps {
   return {
     checkoutAttemptId: ATTEMPT_ID,
     cart: {
-      lines: [{ sku: "SKU-1", name: "Gamis Haura", variant: "Beige · M", qty: 1, lineTotal: 250_000, imageUrl: null }],
+      lines: [{ sku: "SKU-1", name: "Gamis Haura", variant: "Beige · M", qty: 1, lineTotal: 250_000, listLineTotal: 250_000, imageUrl: null }],
       subtotal: 250_000,
+      savings: 0,
       pieceCount: 1,
       canCheckout: true,
     },
@@ -127,7 +128,7 @@ describe("CheckoutForm", () => {
     quoteShippingAction.mockResolvedValue({ ...JAUH_QUOTE, subtotal: 500_000, cartKey: "SKU-1:2|500000" });
     rerender(
       <CheckoutForm
-        {...props({ cart: { lines: [{ sku: "SKU-1", name: "Gamis Haura", variant: "Beige · M", qty: 2, lineTotal: 500_000, imageUrl: null }], subtotal: 500_000, pieceCount: 2, canCheckout: true } })}
+        {...props({ cart: { lines: [{ sku: "SKU-1", name: "Gamis Haura", variant: "Beige · M", qty: 2, lineTotal: 500_000, listLineTotal: 500_000, imageUrl: null }], subtotal: 500_000, savings: 0, pieceCount: 2, canCheckout: true } })}
       />,
     );
     expect(await screen.findByTestId("shipping-buyer-amount")).toHaveTextContent("Rp75.000");
@@ -287,8 +288,41 @@ describe("CheckoutForm", () => {
     expect(within(alert).getAllByText("Voucher tidak bisa dipakai.").length).toBeGreaterThan(0);
   });
 
+  test("a discounted line: normal total struck, paid total, and a Hemat row under the subtotal; none without a discount", () => {
+    const { unmount } = render(
+      <CheckoutForm
+        {...props({
+          cart: {
+            lines: [
+              { sku: "A", name: "Gamis A", variant: "Black · M", qty: 2, lineTotal: 558_000, listLineTotal: 700_000, imageUrl: null },
+              { sku: "B", name: "Gamis B", variant: "Black · M", qty: 1, lineTotal: 299_000, listLineTotal: 299_000, imageUrl: null },
+            ],
+            subtotal: 857_000,
+            savings: 142_000,
+            pieceCount: 3,
+            canCheckout: true,
+          },
+        })}
+      />,
+    );
+    const [lineA, lineB] = screen.getAllByTestId("checkout-line");
+    expect(within(lineA!).getByTestId("line-price-list")).toHaveTextContent("Rp700.000");
+    expect(within(lineA!).getByTestId("line-price-sale")).toHaveTextContent("Rp558.000");
+    expect(within(lineA!).getByText("Harga normal Rp700.000, harga diskon Rp558.000")).toBeInTheDocument();
+    expect(within(lineB!).queryByTestId("line-price-list")).toBeNull();
+    expect(within(lineB!).getByTestId("line-price")).toHaveTextContent("Rp299.000");
+    expect(screen.getByTestId("summary-subtotal")).toHaveTextContent("Rp857.000");
+    expect(screen.getByTestId("summary-savings")).toHaveTextContent("Rp142.000");
+    expect(screen.getByTestId("summary-savings").closest("div")).toHaveTextContent(/^HematRp142\.000$/);
+    unmount();
+
+    render(<CheckoutForm {...props()} />);
+    expect(screen.queryByTestId("summary-savings")).toBeNull();
+    expect(screen.queryByTestId("line-price-list")).toBeNull();
+  });
+
   test("an empty cart and a cart that cannot be checked out show their notices instead of the form", () => {
-    const { unmount } = render(<CheckoutForm {...props({ cart: { lines: [], subtotal: 0, pieceCount: 0, canCheckout: false } })} />);
+    const { unmount } = render(<CheckoutForm {...props({ cart: { lines: [], subtotal: 0, savings: 0, pieceCount: 0, canCheckout: false } })} />);
     expect(screen.getByText("Keranjangmu masih kosong.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Bayar sekarang" })).toBeNull();
     unmount();

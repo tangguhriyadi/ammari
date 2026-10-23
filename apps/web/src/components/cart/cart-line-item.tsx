@@ -8,7 +8,7 @@ import type { CartLine } from "@ammari/commerce/cart";
 import { CART_LINE_STATUS_MESSAGES, CART_MAX_PIECES, CART_MAX_QTY_PER_LINE } from "@ammari/commerce/cart-limits";
 import { removeCartItemAction, updateCartItemQtyAction, type CartActionResult } from "@/lib/cart/actions";
 import { announceCartCount, announceCartStatus, CART_CALL_FAILED_MESSAGE, CART_HEADING_ID } from "@/lib/cart/count-event";
-import { formatPriceIdr } from "@/lib/format";
+import { LinePrice } from "@/components/line-price";
 import { ProductImage } from "@/components/product-image";
 import { useOptimisticCart, type OptimisticCartUpdate } from "./optimistic-cart";
 import { failedCallMessage } from "@/lib/stale-deployment";
@@ -139,7 +139,7 @@ export function CartLineItem({ line: serverLine, imageUrl, canAddPieces }: CartL
           )}
         </div>
         <p className="mt-2 text-xs text-ink-muted">{variantLabel}</p>
-        {buyable && <p className="mt-1 text-sm font-medium text-ink">{formatPriceIdr(line.lineTotal)}</p>}
+        {buyable && <LinePrice total={line.lineTotal} listTotal={line.listLineTotal} className="mt-1 text-sm font-medium" />}
         {line.status !== "ok" && (
           <p className={cn("mt-1 text-xs", line.status === "insufficient" ? "text-error" : "text-ink-muted")}>{CART_LINE_STATUS_MESSAGES[line.status]}</p>
         )}

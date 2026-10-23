@@ -28,6 +28,7 @@ import {
 import { hashCartToken } from "../cart/token";
 import type { Database } from "../db";
 import { transitionOrderStatus } from "../orders/lifecycle";
+import { changePaymentMethod, reopenPaymentPage } from "../payments/attempts";
 import { createFakePaymentProvider } from "../payments/fake";
 import type { CreatePaymentInput, PaymentProvider } from "../payments/provider";
 import { searchShippingAreas } from "../shipping/areas";
@@ -52,6 +53,8 @@ interface StubArea extends ShippingArea {
 
 const stubAreas = new Map<string, StubArea>();
 let beforeQuote: (() => Promise<void>) | null = null;
+/** The goods value of every quote asked from the stub (the price actually paid, discount included). */
+const quotedGoodsValues: number[] = [];
 
 const shippingProvider: ShippingRateProvider = {
   name: "fake",
@@ -60,6 +63,7 @@ const shippingProvider: ShippingRateProvider = {
     return area ? [area] : [];
   },
   async quoteRates(input) {
+    quotedGoodsValues.push(input.goodsValue);
     if (beforeQuote) await beforeQuote();
     const area = stubAreas.get(input.destinationAreaId);
     if (!area) return [];
@@ -103,8 +107,9 @@ function recordingPaymentProvider(base: PaymentProvider = createFakePaymentProvi
   return { provider, calls };
 }
 
-function deps(payment: PaymentProvider = recordingPaymentProvider().provider): PlaceOrderDeps {
+function deps(payment: PaymentProvider = recordingPaymentProvider().provider, now?: Date): PlaceOrderDeps {
   return {
+    ...(now ? { now: () => now } : {}),
     shipping: { provider: shippingProvider, originAreaId: "TESTORIGIN", cacheMinutes: 360 },
     payment: { provider: payment, orderIdPrefix: "TEST-", paymentExpiryMinutes: 60, stockHoldMinutes: 75 },
     finishUrl: (orderNo) => `http://localhost:3000/checkout/finish?order=${orderNo}`,
@@ -827,6 +832,191 @@ describe("placeOrder", () => {
       const sale = await tx.select().from(stockMovements).where(and(eq(stockMovements.sku, variant.sku), eq(stockMovements.type, "sale")));
       expect(sale).toMatchObject([{ qty: -2, valueAmount: -2 * UNIT_COST, refId: item?.id }]);
       expect((await tx.select().from(stockReservations).where(eq(stockReservations.orderId, result.orderId)))[0]?.status).toBe("consumed");
+    });
+  });
+});
+
+// docs/plans/product-discount.md §6, §8, §10: the price is decided inside the order transaction at
+// one injected instant, snapshotted on order_items, and never re-read afterwards.
+describe("placeOrder with a product discount", () => {
+  const START = new Date("2026-11-01T00:00:00Z");
+  const END = new Date("2026-11-08T00:00:00Z");
+  const INSIDE = new Date("2026-11-03T05:00:00Z");
+  /** The plan's worked example (§8): 2 x 279.000 + 1 x 299.000, ongkir 35.000 - subsidi 20.000,
+   * voucher 20.000. */
+  const DISCOUNTED_TOTAL = 852_000;
+  const NORMAL_TOTAL = 999_000 + 15_000 - 20_000;
+
+  async function workedExample(tx: TestDatabase) {
+    const a = await sellableSku(tx, { price: 350_000 });
+    await tx
+      .update(products)
+      .set({ discountPriceAmount: 279_000, discountEnabled: true, discountStartsAt: START, discountEndsAt: END })
+      .where(eq(products.id, a.product.id));
+    const b = await sellableSku(tx, { price: 299_000 });
+    const customer = await insertCustomer(tx);
+    const voucher = await voucherFor(tx, customer.id);
+    const cartId = await customerCart(tx, customer.id, [
+      { sku: a.variant.sku, qty: 2 },
+      { sku: b.variant.sku, qty: 1 },
+    ]);
+    const areaId = await areaQuoting(tx, 35_000);
+    const input = (expectedTotal: number): PlaceOrderInput => ({
+      ...guestInput({ shippingAreaId: areaId, guestTokenHash: null, expectedTotal }),
+      customer: { id: customer.id, email: customer.email },
+      voucherId: voucher.id,
+    });
+    return { a, b, customer, voucher, cartId, input };
+  }
+
+  test("the worked example: discounted subtotal, voucher on it, ongkir subsidy unchanged, item_details sum exactly to gross_amount", async () => {
+    await withRollback(async (tx) => {
+      const { a, b, voucher, input } = await workedExample(tx);
+      const { provider, calls } = recordingPaymentProvider();
+      quotedGoodsValues.length = 0;
+
+      const result = await placeOrder(tx, deps(provider, INSIDE), input(DISCOUNTED_TOTAL));
+      if (!result.ok) throw new Error(`expected an order, got ${result.reason}`);
+
+      const [order] = await tx.select().from(orders).where(eq(orders.id, result.orderId));
+      expect(order).toMatchObject({
+        subtotalAmount: 857_000,
+        shippingCostAmount: 35_000,
+        shippingSubsidyAmount: 20_000,
+        shippingAmount: 15_000,
+        discountAmount: 20_000,
+        totalAmount: DISCOUNTED_TOTAL,
+      });
+      expect((await tx.select().from(vouchers).where(eq(vouchers.id, voucher.id)))[0]).toMatchObject({ status: "used", usedOrderId: result.orderId });
+
+      // unit_price is what was charged; list_unit_price only where a discount lowered it.
+      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, result.orderId));
+      const bySku = Object.fromEntries(items.map((item) => [item.sku, item]));
+      expect(bySku[a.variant.sku]).toMatchObject({ qty: 2, unitPrice: 279_000, listUnitPrice: 350_000 });
+      expect(bySku[b.variant.sku]).toMatchObject({ qty: 1, unitPrice: 299_000, listUnitPrice: null });
+
+      // The gateway's item_details: net product prices, Ongkir, Voucher; no separate discount line.
+      // (Both lines were added at the same instant, so their order is the SKUs'.)
+      expect(calls[0]?.grossAmount).toBe(DISCOUNTED_TOTAL);
+      expect(calls[0]?.lines).toHaveLength(4);
+      expect(calls[0]?.lines.slice(0, 2)).toEqual(
+        expect.arrayContaining([
+          { id: a.variant.sku, name: "Gamis Basic Black M", price: 279_000, quantity: 2 },
+          { id: b.variant.sku, name: "Gamis Basic Black M", price: 299_000, quantity: 1 },
+        ]),
+      );
+      expect(calls[0]?.lines.slice(2)).toEqual([
+        { id: "SHIPPING", name: "Ongkir", price: 15_000, quantity: 1 },
+        { id: "VOUCHER", name: "Voucher", price: -20_000, quantity: 1 },
+      ]);
+      expect(calls[0]!.lines.reduce((sum, line) => sum + line.price * line.quantity, 0)).toBe(DISCOUNTED_TOTAL);
+      const [payment] = await tx.select().from(payments).where(eq(payments.orderId, result.orderId));
+      expect(payment?.grossAmount).toBe(DISCOUNTED_TOTAL);
+
+      // The courier is told the value actually paid for the goods.
+      expect(quotedGoodsValues).toEqual([857_000]);
+
+      const [audit] = await tx.select().from(auditLog).where(and(eq(auditLog.entityId, result.orderId), eq(auditLog.action, "web_checkout")));
+      expect((audit?.after as { items: unknown[] }).items).toEqual(
+        expect.arrayContaining([
+          { sku: a.variant.sku, qty: 2, unitPrice: 279_000, listUnitPrice: 350_000 },
+          { sku: b.variant.sku, qty: 1, unitPrice: 299_000, listUnitPrice: null },
+        ]),
+      );
+    });
+  });
+
+  test("the discount ends between the summary and the submit: \"Harga, ongkir atau voucher berubah\", nothing written; the resubmit pays the normal price", async () => {
+    await withRollback(async (tx) => {
+      const { a, voucher, cartId, input } = await workedExample(tx);
+      // The buyer's summary was rendered inside the window (852.000); the submit lands at the end.
+      const refused = await placeOrder(tx, deps(undefined, END), input(DISCOUNTED_TOTAL));
+      expect(refused).toMatchObject({ ok: false, reason: "total_changed", message: "Harga, ongkir atau voucher berubah. Cek ringkasan lagi." });
+      expect((await tx.select().from(vouchers).where(eq(vouchers.id, voucher.id)))[0]).toMatchObject({ status: "active", usedOrderId: null });
+      expect(await activeHolds(tx, a.variant.sku)).toHaveLength(0);
+      expect(await tx.select().from(cartItems).where(eq(cartItems.cartId, cartId))).toHaveLength(2);
+
+      // The page re-reads the summary at the new price; the resubmit goes through.
+      const placed = await placeOrder(tx, deps(undefined, END), input(NORMAL_TOTAL));
+      if (!placed.ok) throw new Error(`expected an order, got ${placed.reason}`);
+      const [order] = await tx.select().from(orders).where(eq(orders.id, placed.orderId));
+      expect(order).toMatchObject({ subtotalAmount: 999_000, discountAmount: 20_000, totalAmount: NORMAL_TOTAL });
+      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, placed.orderId));
+      expect(items.find((item) => item.sku === a.variant.sku)).toMatchObject({ unitPrice: 350_000, listUnitPrice: null });
+    });
+  });
+
+  test("the discount starts between the summary and the submit: refused the same way; the resubmit pays the discounted price", async () => {
+    await withRollback(async (tx) => {
+      const { a, input } = await workedExample(tx);
+      const refused = await placeOrder(tx, deps(undefined, START), input(NORMAL_TOTAL));
+      expect(refused).toMatchObject({ ok: false, reason: "total_changed" });
+
+      const placed = await placeOrder(tx, deps(undefined, START), input(DISCOUNTED_TOTAL));
+      if (!placed.ok) throw new Error(`expected an order, got ${placed.reason}`);
+      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, placed.orderId));
+      expect(items.find((item) => item.sku === a.variant.sku)).toMatchObject({ unitPrice: 279_000, listUnitPrice: 350_000 });
+    });
+  });
+
+  test("an unpaid order keeps its snapshot price after the discount ends: a payment retry and a new payment page charge the same", async () => {
+    await withRollback(async (tx) => {
+      const { a, b, input } = await workedExample(tx);
+      // Attempt 1's page fails, so the finish page's retry has to build a new one.
+      const base = createFakePaymentProvider({ baseUrl: "http://localhost:3000" });
+      const failingOnce = createFakePaymentProvider({ baseUrl: "http://localhost:3000", failWith: "unavailable" });
+      const { provider, calls } = recordingPaymentProvider(base);
+      let firstCall = true;
+      const flaky: PaymentProvider = {
+        ...provider,
+        createPayment: async (request) => {
+          if (firstCall) {
+            firstCall = false;
+            return failingOnce.createPayment(request);
+          }
+          return provider.createPayment(request);
+        },
+      };
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const result = await placeOrder(tx, deps(flaky, INSIDE), input(DISCOUNTED_TOTAL));
+      if (!result.ok) throw new Error(`expected an order, got ${result.reason}`);
+      expect(result.redirectUrl).toBeNull();
+
+      // The discount is switched off (and would be over anyway) before the buyer pays.
+      await tx.update(products).set({ discountEnabled: false }).where(eq(products.id, a.product.id));
+
+      const runtime = { provider: flaky, orderIdPrefix: "TEST-", paymentExpiryMinutes: 60, stockHoldMinutes: 75 };
+      const finishUrl = (orderNo: string) => `http://localhost:3000/checkout/finish?order=${orderNo}`;
+      const expectedLines = [
+        { id: a.variant.sku, name: "Gamis Basic Black M", price: 279_000, quantity: 2 },
+        { id: b.variant.sku, name: "Gamis Basic Black M", price: 299_000, quantity: 1 },
+      ]
+        .sort((x, y) => (x.id < y.id ? -1 : 1))
+        .concat([
+          { id: "SHIPPING", name: "Ongkir", price: 15_000, quantity: 1 },
+          { id: "VOUCHER", name: "Voucher", price: -20_000, quantity: 1 },
+        ]);
+      // Attempt 1's page request is long over (inside this one test transaction now() stands still).
+      await withTriggerDisabled(tx, "payments", "set_updated_at", () =>
+        tx.update(payments).set({ updatedAt: sql`now() - interval '1 minute'` }).where(eq(payments.orderId, result.orderId)),
+      );
+
+      // "Buka halaman pembayaran": attempt 2, rebuilt from order_items.
+      const reopened = await reopenPaymentPage(tx, runtime, { orderId: result.orderId, finishUrl });
+      expect(reopened).toEqual({ ok: true, redirectUrl: expect.any(String) });
+      expect(calls.at(-1)).toMatchObject({ providerOrderId: `TEST-${result.orderNo}-2`, grossAmount: DISCOUNTED_TOTAL, lines: expectedLines });
+
+      // "Ganti metode pembayaran": attempt 3, a new page, still the snapshot price.
+      const changed = await changePaymentMethod(tx, runtime, { orderId: result.orderId, finishUrl });
+      expect(changed).toMatchObject({ ok: true });
+      expect(calls.at(-1)).toMatchObject({ providerOrderId: `TEST-${result.orderNo}-3`, grossAmount: DISCOUNTED_TOTAL, lines: expectedLines });
+
+      const attempts = await tx.select().from(payments).where(eq(payments.orderId, result.orderId));
+      expect(attempts.map((attempt) => attempt.grossAmount)).toEqual([DISCOUNTED_TOTAL, DISCOUNTED_TOTAL, DISCOUNTED_TOTAL]);
+      const [order] = await tx.select().from(orders).where(eq(orders.id, result.orderId));
+      expect(order).toMatchObject({ subtotalAmount: 857_000, totalAmount: DISCOUNTED_TOTAL });
+      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, result.orderId));
+      expect(items.find((item) => item.sku === a.variant.sku)).toMatchObject({ unitPrice: 279_000, listUnitPrice: 350_000 });
     });
   });
 });

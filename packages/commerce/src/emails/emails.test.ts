@@ -6,6 +6,7 @@ import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant,
 import { auditLog, customers, orderAccessTokens, orderItems, orderNotifications, orders, payments, shipments, stockMovements, stockReservations, storeSettings } from "@ammari/db/schema";
 import type { Tx } from "../db";
 import { hashOrderAccessToken } from "../checkout/access-token";
+import { DISCOUNT_COLOR_HEX } from "@ammari/db/pricing";
 import { formatRupiah } from "./format";
 import { transitionOrderStatus, updateShipmentDetails } from "../orders/lifecycle";
 import { applyPaymentStatus } from "../payments/apply-status";
@@ -143,8 +144,8 @@ const baseView: CustomerOrderEmailView = {
   orderNo: "ORD-202612-0007",
   greetingName: "Siti <Aminah>",
   lines: [
-    { productName: "Haura Dress", colorName: "Beige", sizeLabel: "M", qty: 2, lineTotal: 518_000 },
-    { productName: "Khimar Syar'i", colorName: "Hitam", sizeLabel: "All Size", qty: 1, lineTotal: 129_000 },
+    { productName: "Haura Dress", colorName: "Beige", sizeLabel: "M", qty: 2, lineTotal: 518_000, listLineTotal: null },
+    { productName: "Khimar Syar'i", colorName: "Hitam", sizeLabel: "All Size", qty: 1, lineTotal: 129_000, listLineTotal: null },
   ],
   totals: { subtotal: 647_000, shipping: 75_000, shippingCost: 95_000, shippingSubsidy: 20_000, discount: 20_000, total: 702_000 },
   courierLabel: "JNE Reguler",
@@ -306,6 +307,61 @@ describe("templates", () => {
     expect(shipped.subject).toBe("Pesanan ORD-202612-0007 sudah dikirim");
     expect(shipped.text).toContain("Kurir: JNE\nNomor resi: JNE123456789");
   });
+
+  // docs/plans/product-discount.md §5.2, §9 (owner answer 8).
+  test("a discounted line: normal price struck through, the paid price in the discount red, and a Hemat row; none of it without a discount", () => {
+    const discounted: CustomerOrderEmailView = {
+      ...baseView,
+      lines: [
+        { productName: "Gamis A", colorName: "Black", sizeLabel: "M", qty: 2, lineTotal: 558_000, listLineTotal: 700_000 },
+        { productName: "Gamis B", colorName: "Black", sizeLabel: "M", qty: 1, lineTotal: 299_000, listLineTotal: null },
+        // A list price that is not above the paid one is never shown.
+        { productName: "Khimar", colorName: "Hitam", sizeLabel: "All Size", qty: 1, lineTotal: 129_000, listLineTotal: 129_000 },
+      ],
+      totals: { subtotal: 986_000, shipping: 15_000, shippingCost: 35_000, shippingSubsidy: 20_000, discount: 20_000, total: 981_000 },
+    };
+    const emails = [
+      renderCreatedEmail({ ...discounted, paymentDeadline: deadline, paymentUrl: "https://pay.example/x" }),
+      renderPaidEmail(discounted, "confirmed"),
+      renderPaidEmail(discounted, "review"),
+      renderCancelledEmail({ ...discounted, reason: "payment_expired", paymentDeadline: deadline }),
+      renderShippedEmail({ ...discounted, courier: "JNE", trackingNumber: "JNE1" }),
+      renderDeliveredEmail({ ...discounted, returnsUrl: "https://ammari.example/returns-exchange" }),
+    ];
+    for (const email of emails) {
+      expect(email.text).toContain("Gamis A\nBlack, M x 2: Rp558.000 (harga normal Rp700.000)");
+      expect(email.text).toContain("Gamis B\nBlack, M x 1: Rp299.000\n");
+      expect(email.text).toContain("Khimar\nHitam, All Size x 1: Rp129.000\n");
+      expect(email.text).toContain("Subtotal: Rp986.000\nHemat: Rp142.000\n");
+      expect(email.html).toContain(`<s style="font-size:13px;color:#6B6161;">Rp700.000</s><br><span style="color:${DISCOUNT_COLOR_HEX};">Rp558.000</span>`);
+      expect(email.html.match(/Rp\d[\d.]*<\/s><br>/g)).toHaveLength(1);
+      expect(email.html).toMatch(new RegExp(`color:${DISCOUNT_COLOR_HEX};">Hemat</td><td[^>]*>Rp142\\.000</td>`));
+      expect(email.html).not.toContain("Rp299.000</s>");
+      for (const part of [email.subject, email.text, email.html]) expect(part).not.toMatch(/[—–]/);
+    }
+    // The owner's email carries the same lines and the Hemat row.
+    const owner = renderOwnerPaidEmail({
+      orderNo: baseView.orderNo,
+      variant: "paid",
+      lines: discounted.lines,
+      totals: discounted.totals,
+      courierLabel: null,
+      paidAt: deadline,
+      buyer: { name: null, email: null, phone: null },
+      address: null,
+      adminOrderUrl: null,
+      logoUrl: null,
+    });
+    expect(owner.text).toContain("Hemat: Rp142.000");
+
+    // No discounted line (list price NULL everywhere): no struck price, no Hemat row.
+    for (const email of [renderCreatedEmail({ ...baseView, paymentDeadline: deadline, paymentUrl: null }), renderPaidEmail(baseView, "confirmed")]) {
+      expect(email.text).not.toContain("Hemat");
+      expect(email.text).not.toContain("harga normal");
+      expect(email.html).not.toContain("</s><br>");
+      expect(email.html).not.toContain(DISCOUNT_COLOR_HEX);
+    }
+  });
 });
 
 describe("deriveOrderEmailAccessToken", () => {
@@ -344,7 +400,7 @@ function orderNo(): string {
 }
 
 /** A placed checkout order with one line, its stock held and one payment attempt. */
-async function placedOrder(db: TestDatabase, options: { window?: "open" | "over"; stock?: number; voucher?: boolean } = {}): Promise<Placed> {
+async function placedOrder(db: TestDatabase, options: { window?: "open" | "over"; stock?: number; voucher?: boolean; listUnitPrice?: number | null } = {}): Promise<Placed> {
   const { variant } = await insertProductVariant(db);
   const stock = options.stock ?? 3;
   if (stock > 0) await db.insert(stockMovements).values({ sku: variant.sku, qty: stock, valueAmount: stock * 100_000, type: "production", refType: "manual" });
@@ -369,7 +425,7 @@ async function placedOrder(db: TestDatabase, options: { window?: "open" | "over"
     shippingAddressSnapshot: { version: 2, recipientName: "Siti Aminah", phone: "+6281299990000", addressLine: "Jl. Melati 5", notes: "Pagar hijau", district: "Kecamatan E2E", city: "Kota Contoh", province: "Provinsi Contoh", postalCode: "40111" },
     paymentExpiresAt: new Date(Date.now() + windowEnd),
   });
-  const [item] = await db.insert(orderItems).values({ orderId: order.id, sku: variant.sku, qty: 1, unitPrice: PRICE, unitCost: 0 }).returning();
+  const [item] = await db.insert(orderItems).values({ orderId: order.id, sku: variant.sku, qty: 1, unitPrice: PRICE, listUnitPrice: options.listUnitPrice ?? null, unitCost: 0 }).returning();
   if (!item) throw new Error("item fixture");
   await reserveStockForOrder(db as Tx, order.id, [{ orderItemId: item.id, sku: variant.sku, qty: 1 }], 75);
   await db.update(stockReservations).set({ expiresAt: new Date(Date.now() + windowEnd + 15 * 60_000) }).where(eq(stockReservations.orderId, order.id));
@@ -479,6 +535,23 @@ describe("dispatchOrderEmails", () => {
       expect(stored!.expiresAt.getTime() - stored!.createdAt.getTime()).toBe(120 * 24 * 60 * 60 * 1000);
       expect(await notificationRows(tx, placed.orderId)).toMatchObject([{ kind: "created", error: null }]);
       expect((await notificationRows(tx, placed.orderId))[0]!.sentAt).not.toBeNull();
+    });
+  });
+
+  test("a line snapshotted below its normal price: the created email shows it struck and Hemat; a NULL list price shows neither", async () => {
+    await withRollback(async (tx) => {
+      const { deps, sent } = recorder();
+      const discounted = await placedOrder(tx, { listUnitPrice: 350_000 });
+      const plain = await placedOrder(tx, { listUnitPrice: null });
+      await dispatchOrderEmails(tx, deps, { orderId: discounted.orderId });
+      await dispatchOrderEmails(tx, deps, { orderId: plain.orderId });
+      const [withDiscount] = forOrder(sent, discounted.orderNo);
+      const [without] = forOrder(sent, plain.orderNo);
+      expect(withDiscount!.body).toContain(`x 1: ${formatRupiah(PRICE)} (harga normal Rp350.000)`);
+      expect(withDiscount!.body).toContain(`Hemat: ${formatRupiah(350_000 - PRICE)}`);
+      expect(withDiscount!.html).toContain(DISCOUNT_COLOR_HEX);
+      expect(without!.body).not.toContain("Hemat");
+      expect(without!.body).not.toContain("harga normal");
     });
   });
 

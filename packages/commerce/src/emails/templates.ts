@@ -1,3 +1,4 @@
+import { DISCOUNT_COLOR_HEX } from "@ammari/db/pricing";
 import { SHIPPING_DISPLAY_LABELS, shippingDisplay } from "../shipping/rules";
 import { escapeHtml, formatRupiah, formatWib } from "./format";
 
@@ -18,6 +19,9 @@ export interface OrderEmailLine {
   sizeLabel: string;
   qty: number;
   lineTotal: number;
+  /** The line at its normal price, when a product discount made it cheaper
+   * (`order_items.list_unit_price`); null otherwise. Shown struck through next to `lineTotal`. */
+  listLineTotal: number | null;
 }
 
 export interface OrderEmailTotals {
@@ -114,25 +118,38 @@ type Block =
   | { kind: "button"; label: string; url: string }
   | { kind: "link"; label: string; url: string }
   | { kind: "lines"; lines: OrderEmailLine[] }
-  | { kind: "totals"; totals: OrderEmailTotals }
+  | { kind: "totals"; totals: OrderEmailTotals; savings: number }
   | { kind: "details"; title: string; rows: { label: string; value: string }[] }
   | { kind: "divider" };
 
-const COLOR = { brand: "#695A5A", text: "#000000", muted: "#6B6161", line: "#E7E2E2", page: "#F6F4F4", white: "#FFFFFF", highlight: "#F6F3F1" };
+const COLOR = { brand: "#695A5A", text: "#000000", muted: "#6B6161", line: "#E7E2E2", page: "#F6F4F4", white: "#FFFFFF", highlight: "#F6F3F1", discount: DISCOUNT_COLOR_HEX };
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
 function lineLabel(line: OrderEmailLine): string {
   return `${line.colorName}, ${line.sizeLabel} x ${line.qty}`;
 }
 
-/** `struck`: the courier cost (shown struck through); `highlight`: the subsidy (owner request after
- * the 2026-10-21 sandbox run: the subsidy must be clearly visible, same rows as the storefront). */
-type TotalRow = { label: string; value: string; style?: "strong" | "struck" | "highlight" };
+/** The line's normal price when a product discount made it cheaper, else null. */
+function struckLineTotal(line: OrderEmailLine): number | null {
+  return line.listLineTotal !== null && line.listLineTotal > line.lineTotal ? line.listLineTotal : null;
+}
 
-function totalRows(totals: OrderEmailTotals): TotalRow[] {
+/** "Hemat" (docs/plans/product-discount.md §9, owner answer 8): what the product discounts took off
+ * the normal prices of these lines. The voucher is its own row, not part of this. */
+function productSavings(lines: readonly OrderEmailLine[]): number {
+  return lines.reduce((sum, line) => sum + ((struckLineTotal(line) ?? line.lineTotal) - line.lineTotal), 0);
+}
+
+/** `struck`: the courier cost (shown struck through); `highlight`: the subsidy (owner request after
+ * the 2026-10-21 sandbox run: the subsidy must be clearly visible, same rows as the storefront);
+ * `savings`: the "Hemat" row, in the discount red. */
+type TotalRow = { label: string; value: string; style?: "strong" | "struck" | "highlight" | "savings" };
+
+function totalRows(totals: OrderEmailTotals, savings: number): TotalRow[] {
   const shipping = shippingDisplay({ buyerAmount: totals.shipping, costAmount: totals.shippingCost, subsidyAmount: totals.shippingSubsidy });
   return [
     { label: "Subtotal", value: formatRupiah(totals.subtotal) },
+    ...(savings > 0 ? [{ label: "Hemat", value: formatRupiah(savings), style: "savings" as const }] : []),
     ...(shipping.subsidy
       ? [
           { label: SHIPPING_DISPLAY_LABELS.courierCost, value: formatRupiah(shipping.subsidy.courierCost), style: "struck" as const },
@@ -156,9 +173,15 @@ function blockText(block: Block): string {
     case "link":
       return `${block.label}:\n${block.url}`;
     case "lines":
-      return block.lines.map((line) => `${line.productName}\n${lineLabel(line)}: ${formatRupiah(line.lineTotal)}`).join("\n\n");
+      return block.lines
+        .map((line) => {
+          const struck = struckLineTotal(line);
+          const normal = struck === null ? "" : ` (harga normal ${formatRupiah(struck)})`;
+          return `${line.productName}\n${lineLabel(line)}: ${formatRupiah(line.lineTotal)}${normal}`;
+        })
+        .join("\n\n");
     case "totals":
-      return totalRows(block.totals)
+      return totalRows(block.totals, block.savings)
         .map((row) => `${row.label}: ${row.value}`)
         .join("\n");
     case "details":
@@ -188,17 +211,31 @@ function blockHtml(block: Block): string {
       return cell(`padding:0 0 16px;${text}`, `<a href="${escapeHtml(block.url)}" style="color:${COLOR.brand};text-decoration:underline;">${escapeHtml(block.label)}</a>`);
     case "lines": {
       const rows = block.lines
-        .map(
-          (line) =>
+        .map((line) => {
+          const struck = struckLineTotal(line);
+          // Discounted: the normal price struck through and muted above the paid price in the
+          // discount red (the storefront's look; no CSS variables in email).
+          const price =
+            struck === null
+              ? escapeHtml(formatRupiah(line.lineTotal))
+              : `<s style="font-size:13px;color:${COLOR.muted};">${escapeHtml(formatRupiah(struck))}</s><br><span style="color:${COLOR.discount};">${escapeHtml(formatRupiah(line.lineTotal))}</span>`;
+          return (
             `<tr><td style="padding:10px 0;border-bottom:1px solid ${COLOR.line};${text}">${escapeHtml(line.productName)}<br><span style="font-size:13px;color:${COLOR.muted};">${escapeHtml(lineLabel(line))}</span></td>` +
-            `<td style="padding:10px 0 10px 12px;border-bottom:1px solid ${COLOR.line};${text}text-align:right;white-space:nowrap;vertical-align:top;">${escapeHtml(formatRupiah(line.lineTotal))}</td></tr>`,
-        )
+            `<td style="padding:10px 0 10px 12px;border-bottom:1px solid ${COLOR.line};${text}text-align:right;white-space:nowrap;vertical-align:top;">${price}</td></tr>`
+          );
+        })
         .join("");
       return cell("padding:0 0 8px;", `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>`);
     }
     case "totals": {
-      const rows = totalRows(block.totals)
+      const rows = totalRows(block.totals, block.savings)
         .map((row) => {
+          if (row.style === "savings") {
+            return (
+              `<tr><td style="padding:4px 0;${text}color:${COLOR.discount};">${escapeHtml(row.label)}</td>` +
+              `<td style="padding:4px 0 4px 12px;${text}color:${COLOR.discount};text-align:right;white-space:nowrap;">${escapeHtml(row.value)}</td></tr>`
+            );
+          }
           if (row.style === "highlight") {
             const highlight = `font-family:${FONT};font-size:15px;line-height:1.6;color:${COLOR.brand};font-weight:600;background-color:${COLOR.highlight};`;
             return (
@@ -272,7 +309,10 @@ function greeting(view: CustomerOrderEmailView): Block {
 }
 
 function orderBlocks(view: CustomerOrderEmailView): Block[] {
-  return [{ kind: "lines", lines: view.lines }, { kind: "totals", totals: view.totals }];
+  return [
+    { kind: "lines", lines: view.lines },
+    { kind: "totals", totals: view.totals, savings: productSavings(view.lines) },
+  ];
 }
 
 function addressBlock(view: CustomerOrderEmailView): Block[] {
@@ -479,7 +519,7 @@ export function renderOwnerPaidEmail(view: OwnerPaidEmailView): RenderedEmail {
     ...(view.adminOrderUrl ? [{ kind: "button" as const, label: "Buka di admin", url: view.adminOrderUrl }] : []),
     { kind: "divider" },
     { kind: "lines", lines: view.lines },
-    { kind: "totals", totals: view.totals },
+    { kind: "totals", totals: view.totals, savings: productSavings(view.lines) },
     ...(buyerRows.length > 0 ? [{ kind: "details" as const, title: "Pembeli", rows: buyerRows }] : []),
     ...(view.address
       ? [

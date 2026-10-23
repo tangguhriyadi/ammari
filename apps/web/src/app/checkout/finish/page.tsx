@@ -6,6 +6,7 @@ import { readOrderAccessCookie } from "@/lib/checkout/order-access-cookie";
 import { loadFinishOrder, type FinishOrderView } from "@/lib/checkout/queries";
 import { formatPriceIdr } from "@/lib/format";
 import { Container } from "@/components/container";
+import { LinePrice, SavingsRow } from "@/components/line-price";
 import { OutlineLink, PrimaryLink } from "@/components/buttons";
 import { LoginPrefillLink } from "@/components/checkout/login-prefill-link";
 import { ChangePaymentMethodButton } from "@/components/checkout/change-payment-method-button";
@@ -122,7 +123,7 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
                   {line.variant} · {line.qty}×
                 </p>
               </div>
-              <p className="shrink-0 text-ink">{formatPriceIdr(line.lineTotal)}</p>
+              <LinePrice total={line.lineTotal} listTotal={line.listLineTotal} className="shrink-0 flex-col items-end" />
             </li>
           ))}
         </ul>
@@ -131,6 +132,7 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
             <dt>Subtotal</dt>
             <dd>{formatPriceIdr(view.subtotal)}</dd>
           </div>
+          <SavingsRow amount={view.savings} testId="finish-savings" />
           <ShippingCostRows
             buyerAmount={view.shipping}
             costAmount={view.shippingCost}

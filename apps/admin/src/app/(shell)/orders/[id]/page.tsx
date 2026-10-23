@@ -118,7 +118,15 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                   {item.productName} <span className="text-sm text-neutral-600">{item.colorName} · {item.size}</span>
                 </p>
                 <p className="text-sm text-neutral-600">
-                  {item.qty} x {formatRupiah(item.unitPrice)}
+                  {item.qty} x{" "}
+                  {item.listUnitPrice !== null && item.listUnitPrice > item.unitPrice && (
+                    <>
+                      <span className="sr-only">Harga normal </span>
+                      <s data-testid="order-item-list-price">{formatRupiah(item.listUnitPrice)}</s>{" "}
+                      <span className="sr-only">harga dibayar </span>
+                    </>
+                  )}
+                  <span data-testid="order-item-unit-price">{formatRupiah(item.unitPrice)}</span>
                   {item.unitCost !== null && <span className="ml-2">· HPP {formatRupiah(item.unitCost)}/pcs</span>}
                 </p>
               </div>

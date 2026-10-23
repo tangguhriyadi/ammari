@@ -588,7 +588,7 @@ describe("getCartView", () => {
     await withRollback(async (tx) => {
       const { variant } = await sellableVariant(tx);
       const identity = guest();
-      expect(await getCartView(tx, identity)).toEqual({ cartId: null, lines: [], pieceCount: 0, subtotal: 0, canCheckout: false, clearGuestCookie: false, mergeTrimmed: false });
+      expect(await getCartView(tx, identity)).toEqual({ cartId: null, lines: [], pieceCount: 0, subtotal: 0, savings: 0, canCheckout: false, clearGuestCookie: false, mergeTrimmed: false });
 
       await expectAdded(await addCartItem(tx, identity, variant.sku, 2));
       const view = await getCartView(tx, identity);
@@ -611,6 +611,66 @@ describe("getCartView", () => {
       }
       // 7 in stock must not appear as a number anywhere (qty is 1, prices are 259000).
       expect(view.lines[0] && Object.values(view.lines[0])).not.toContain(7);
+    });
+  });
+
+  // docs/plans/product-discount.md §5.2, §10: the cart prices every line at the request's instant.
+  describe("product discount", () => {
+    const START = new Date("2026-11-01T00:00:00Z");
+    const END = new Date("2026-11-08T00:00:00Z");
+
+    async function discountedCart(tx: TestDatabase) {
+      const a = await sellableVariant(tx, 10);
+      await tx
+        .update(products)
+        .set({ basePrice: 350_000, discountPriceAmount: 279_000, discountEnabled: true, discountStartsAt: START, discountEndsAt: END })
+        .where(eq(products.id, a.product.id));
+      const otherColor = await insertFabricColor(tx, a.fabric.id, { name: "Beige" });
+      const b = await insertVariantForProduct(tx, a.fabric.id, otherColor.id, { isPublishedOnStorefront: true, basePrice: 299_000 });
+      await seedStock(tx, b.variant.sku, 10);
+      const identity = guest();
+      const cartId = await expectAdded(await addCartItem(tx, identity, a.variant.sku, 2));
+      await tx.insert(cartItems).values({ cartId, sku: b.variant.sku, qty: 1 });
+      return { identity, a, b };
+    }
+
+    test("inside the window: discounted unit price, struck list price, subtotal and Hemat from the discounted lines", async () => {
+      await withRollback(async (tx) => {
+        const { identity, a, b } = await discountedCart(tx);
+        const view = await getCartView(tx, identity, new Date("2026-11-03T05:00:00Z"));
+        const bySku = Object.fromEntries(view.lines.map((line) => [line.sku, line]));
+        expect(bySku[a.variant.sku]).toMatchObject({ unitPrice: 279_000, listUnitPrice: 350_000, lineTotal: 558_000, listLineTotal: 700_000 });
+        expect(bySku[b.variant.sku]).toMatchObject({ unitPrice: 299_000, listUnitPrice: 299_000, lineTotal: 299_000, listLineTotal: 299_000 });
+        expect(view.subtotal).toBe(857_000);
+        expect(view.savings).toBe(142_000);
+      });
+    });
+
+    test("before the start, exactly at the end, or switched off: the normal price and no Hemat", async () => {
+      await withRollback(async (tx) => {
+        const { identity, a } = await discountedCart(tx);
+        const atStart = await getCartView(tx, identity, START);
+        expect(atStart.subtotal).toBe(857_000);
+        for (const now of [new Date(START.getTime() - 1), END]) {
+          const view = await getCartView(tx, identity, now);
+          expect(view.lines.find((line) => line.sku === a.variant.sku)).toMatchObject({ unitPrice: 350_000, listUnitPrice: 350_000, lineTotal: 700_000, listLineTotal: 700_000 });
+          expect(view).toMatchObject({ subtotal: 999_000, savings: 0 });
+        }
+        await tx.update(products).set({ discountEnabled: false }).where(eq(products.id, a.product.id));
+        expect(await getCartView(tx, identity, new Date("2026-11-03T05:00:00Z"))).toMatchObject({ subtotal: 999_000, savings: 0 });
+      });
+    });
+
+    test("a sold-out discounted line counts toward neither the subtotal nor Hemat", async () => {
+      await withRollback(async (tx) => {
+        const { identity, a } = await discountedCart(tx);
+        const soldOut = await siblingVariant(tx, a, "L", 0);
+        const cartId = (await resolveCart(tx, identity)).cartId!;
+        await tx.insert(cartItems).values({ cartId, sku: soldOut.sku, qty: 1 });
+        const view = await getCartView(tx, identity, new Date("2026-11-03T05:00:00Z"));
+        expect(view.lines.find((line) => line.sku === soldOut.sku)).toMatchObject({ status: "sold_out", lineTotal: 279_000, listLineTotal: 350_000 });
+        expect(view).toMatchObject({ subtotal: 857_000, savings: 142_000 });
+      });
     });
   });
 });

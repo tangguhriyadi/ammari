@@ -6,6 +6,7 @@ import { formatPriceIdr } from "@/lib/format";
 import { loadCustomerOrderDetail } from "@/lib/orders/queries";
 import { loadOrderPageAccess } from "@/lib/orders/visitor-access";
 import { Container } from "@/components/container";
+import { LinePrice, SavingsRow } from "@/components/line-price";
 import { ChangePaymentMethodButton } from "@/components/checkout/change-payment-method-button";
 import { PaymentStatusCheck } from "@/components/checkout/payment-status-check";
 import { ReopenPaymentButton } from "@/components/checkout/reopen-payment-button";
@@ -202,7 +203,7 @@ export default async function OrderPage({
                   {line.variant} · {line.qty}×
                 </p>
               </div>
-              {line.lineTotal !== null && <p className="shrink-0 text-ink">{formatPriceIdr(line.lineTotal)}</p>}
+              {line.lineTotal !== null && <LinePrice total={line.lineTotal} listTotal={line.listLineTotal} className="shrink-0 flex-col items-end" />}
             </li>
           ))}
         </ul>
@@ -212,6 +213,7 @@ export default async function OrderPage({
               <dt>Subtotal</dt>
               <dd>{formatPriceIdr(order.totals.subtotal)}</dd>
             </div>
+            <SavingsRow amount={order.totals.savings} testId="order-savings" />
             <ShippingCostRows
               buyerAmount={order.totals.shipping}
               costAmount={order.totals.shippingCost}

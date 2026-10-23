@@ -147,6 +147,10 @@ const E2E_LOST_ANSWER_AREA = "E2EGANGGUAN40333";
 export const E2E_PRODUCT_DISCOUNT_EMAIL = "product-discount@e2e.ammari.test";
 export const E2E_DISCOUNT_PRODUCT_NAME = "E2E Gamis Diskon";
 export const E2E_DISCOUNT_SKU = "E2E-DISKON-M";
+/** A web checkout order placed while that product's discount was active (session 4): one line,
+ * 2 x Rp279.000 charged, normal Rp350.000 (`order_items.list_unit_price`). The order detail shows
+ * the normal price struck next to the paid one. */
+export const E2E_DISCOUNT_ORDER_NO = "ORD-E2E-WEB-DISKON";
 
 // A product published before migration 0031 made "Berat kirim" a publish rule (like prod's first
 // published product): live, active, no weight. product-shipping-weight.spec.ts reads it; nothing
@@ -498,6 +502,66 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       .returning({ id: products.id, closure: products.closure });
     if (!product) throw new Error("failed to seed the e2e discount product");
     await tx.insert(productVariants).values({ productId: product.id, fabricId: fabric.id, fabricColorId: color.id, closure: product.closure, sku: E2E_DISCOUNT_SKU, size: "M" });
+
+    // An unpaid checkout order with a discounted line (see E2E_DISCOUNT_ORDER_NO above). Nothing
+    // is held or sold for it: the detail page is all the spec reads.
+    const placedAt = new Date();
+    const [order] = await tx
+      .insert(orders)
+      .values({
+        channelId: "web",
+        orderNo: E2E_DISCOUNT_ORDER_NO,
+        status: "awaiting_payment",
+        paymentStatus: "pending",
+        checkoutAttemptId: crypto.randomUUID(),
+        termsAcceptedAt: placedAt,
+        promoOptIn: false,
+        placedWithSession: false,
+        orderDate: placedAt,
+        subtotalAmount: 558_000,
+        shippingAmount: 15_000,
+        discountAmount: 20_000,
+        totalAmount: 553_000,
+        contactEmail: "pembeli-diskon@e2e.ammari.test",
+        contactPhone: "+6281234567890",
+        recipientName: "Siti Aminah",
+        shippingAddress: "Siti Aminah, +6281298765432, Jl. Mawar 1, Coblong, Kota Bandung, Jawa Barat 40132",
+        shippingAddressSnapshot: {
+          version: 2,
+          recipientName: "Siti Aminah",
+          phone: "+6281298765432",
+          addressLine: "Jl. Mawar 1, RT 01/RW 02, Kel. Sukamaju",
+          notes: null,
+          shippingAreaId: null,
+          providerAreaId: "e2e-destination",
+          province: "Jawa Barat",
+          city: "Kota Bandung",
+          district: "Coblong",
+          subdistrict: null,
+          postalCode: "40132",
+        },
+        paymentExpiresAt: new Date(placedAt.getTime() + 60 * 60_000),
+        shippingCostAmount: 35_000,
+        shippingSubsidyAmount: 20_000,
+        shippingCourierCode: "jne",
+        shippingServiceCode: "reg",
+        shippingCourierLabel: "JNE Reguler",
+        shippingWeightGrams: 1_500,
+        shippingDestinationId: "e2e-destination",
+        shippingQuotedAt: placedAt,
+      })
+      .returning({ id: orders.id });
+    if (!order) throw new Error("failed to seed the e2e discount order");
+    await tx.insert(orderItems).values({ orderId: order.id, sku: E2E_DISCOUNT_SKU, qty: 2, unitPrice: 279_000, listUnitPrice: 350_000, unitCost: 0 });
+    await tx.insert(payments).values({
+      orderId: order.id,
+      provider: "midtrans",
+      providerOrderId: `E2E-${E2E_DISCOUNT_ORDER_NO}-1`,
+      attempt: 1,
+      grossAmount: 553_000,
+      status: "pending",
+      expiresAt: new Date(placedAt.getTime() + 60 * 60_000),
+    });
   });
 
   // Web checkout orders for checkout-orders.spec.ts (see E2E_CHECKOUT_ORDERS_EMAIL above).

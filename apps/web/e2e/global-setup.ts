@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import type { FullConfig } from "@playwright/test";
 
 // Fixed, distinctive text the spec asserts on directly — if the preview page ever showed
 // PUBLISHED content instead of DRAFT content, this string would simply never appear (nothing
@@ -25,7 +26,7 @@ function assertSafeTarget(): void {
   }
 }
 
-export default async function globalSetup(): Promise<void> {
+export default async function globalSetup(config: FullConfig): Promise<void> {
   // Loaded here, and @ammari/db imported dynamically below — see apps/admin/e2e/global-setup.ts's
   // own doc comment on why a static import would evaluate (and throw) before this line ran.
   if (existsSync(".env")) process.loadEnvFile(".env");
@@ -84,4 +85,27 @@ export default async function globalSetup(): Promise<void> {
   // Product discount fixtures (product-discount.spec.ts), kept out of every other spec's way.
   const { seedDiscountFixtures } = await import("./discount-fixtures");
   await seedDiscountFixtures();
+
+  // The PDP's data cache (lib/content/product-data.ts, unstable_cache) lives on disk under .next and
+  // outlives the dev server, while the seed above gives the variants new SKUs every run: a PDP entry
+  // from the previous run would offer SKUs that no longer exist ("Produk ini tidak tersedia lagi").
+  // The dev server is already up (Playwright starts it before this), so expire every product's tag
+  // through /api/revalidate, like an admin save does, 8 per request (the route's 10-tag cap).
+  const { products } = await import("@ammari/db/schema");
+  const { E2E_REVALIDATE_SECRET } = await import("./helpers/revalidate-secret");
+  // The dev server's origin, from playwright.config.ts's own webServer.url (one source of truth).
+  const webServers = config.webServer ? [config.webServer].flat() : [];
+  const healthUrl = webServers[0]?.url;
+  if (!healthUrl) throw new Error("e2e cache reset: playwright.config.ts has no webServer.url");
+  const serverOrigin = new URL(healthUrl).origin;
+  const slugs = (await db.select({ slug: products.slug }).from(products)).map((row) => row.slug);
+  for (let index = 0; index < slugs.length; index += 8) {
+    const tags = [...slugs.slice(index, index + 8).map((slug) => `storefront:product:${slug}`), "storefront:products", "storefront:homepage"];
+    const response = await fetch(new URL("/api/revalidate", serverOrigin), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-revalidate-secret": E2E_REVALIDATE_SECRET },
+      body: JSON.stringify({ tags }),
+    });
+    if (!response.ok) throw new Error(`e2e cache reset: /api/revalidate answered ${response.status}`);
+  }
 }

@@ -302,14 +302,30 @@ async function loadOrder(db: Database, orderId: string): Promise<LoadedOrder | n
   if (!order) return null;
 
   const items = await db
-    .select({ productName: products.name, colorName: fabricColors.name, size: productVariants.size, qty: orderItems.qty, unitPrice: orderItems.unitPrice })
+    .select({
+      productName: products.name,
+      colorName: fabricColors.name,
+      size: productVariants.size,
+      qty: orderItems.qty,
+      unitPrice: orderItems.unitPrice,
+      listUnitPrice: orderItems.listUnitPrice,
+    })
     .from(orderItems)
     .innerJoin(productVariants, eq(productVariants.sku, orderItems.sku))
     .innerJoin(products, eq(products.id, productVariants.productId))
     .innerJoin(fabricColors, eq(fabricColors.id, productVariants.fabricColorId))
     .where(eq(orderItems.orderId, orderId))
     .orderBy(asc(orderItems.createdAt), asc(orderItems.sku));
-  const lines = items.map((item) => ({ productName: item.productName, colorName: item.colorName, sizeLabel: sizeLabel(item.size), qty: item.qty, lineTotal: item.qty * item.unitPrice }));
+  // The snapshot only: what was charged, and the normal price when a product discount lowered it
+  // (NULL on older orders, marketplace orders and undiscounted lines).
+  const lines = items.map((item) => ({
+    productName: item.productName,
+    colorName: item.colorName,
+    sizeLabel: sizeLabel(item.size),
+    qty: item.qty,
+    lineTotal: item.qty * item.unitPrice,
+    listLineTotal: item.listUnitPrice !== null && item.listUnitPrice > item.unitPrice ? item.qty * item.listUnitPrice : null,
+  }));
   if (lines.reduce((sum, line) => sum + line.lineTotal, 0) !== order.subtotal) {
     console.error("[emails] order lines do not add up to the subtotal", { orderNo: order.orderNo, lines: lines.length });
   }
