@@ -1,25 +1,38 @@
 "use client";
 
-import {
-  useEffect,
-  useEffectEvent,
-  useImperativeHandle,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-  type PointerEvent,
-  type Ref,
-} from "react";
+import { useEffect, useEffectEvent, useImperativeHandle, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type Ref } from "react";
+import dynamic from "next/dynamic";
 import { ChevronLeft, ChevronRight, ZoomIn } from "lucide-react";
 import { cn } from "@ammari/ui";
 import type { ProductGallery, ProductGalleryItem } from "@/lib/content/product-view";
 import { colorJumpIndex, nextIndex, prevIndex } from "@/lib/gallery/index-math";
-import { GALLERY_SLIDE_EASING, GALLERY_SLIDE_MS, SWIPE_CLICK_CANCEL_PX, swipeDirection } from "@/lib/gallery/swipe";
+import { SWIPE_CLICK_CANCEL_PX } from "@/lib/gallery/swipe";
+import { prefersReducedMotion, useSlideTrack } from "@/lib/gallery/use-slide-track";
 import { buildImageSrcSet, buildImageUrl } from "@/lib/storage/public-url";
 import { liveRegionText } from "@/lib/cart/count-event";
 import { ProductImage } from "@/components/product-image";
+
+// The full-screen viewer (gesture code included) loads on first open, prefetched when the shopper
+// points at or focuses the main photo, so it costs nothing on first paint (docs/plans/pdp-gallery.md §5).
+const loadLightbox = () => import("./gallery-lightbox");
+const GalleryLightbox = dynamic(
+  () =>
+    loadLightbox().then(
+      (module) => module.GalleryLightbox,
+      // The chunk failed to load (a flaky connection, a deploy in between): never take the whole
+      // product page down with it. The tap simply did nothing; the next one tries again.
+      (error: unknown) => {
+        console.error("[gallery] viewer failed to load", error);
+        return ViewerUnavailable;
+      },
+    ),
+  { ssr: false },
+);
+
+function ViewerUnavailable({ initialIndex, onClose }: { initialIndex: number; onClose: (lastIndex: number) => void }) {
+  useEffect(() => onClose(initialIndex), [initialIndex, onClose]);
+  return null;
+}
 
 /** What the purchase panel may do to the gallery: show a colour's photos. Nothing flows back: the
  * gallery gets no colour setter at all, so browsing can never change the colour (owner decision 3,
@@ -37,9 +50,6 @@ export interface ProductGalleryProps {
   initialIndex: number;
   /** See ProductPurchasePanelProps.storageBaseUrl. */
   storageBaseUrl: string;
-  /** Called with the current index when the shopper clicks the main image. Placeholder until the
-   * full-screen viewer lands (docs/plans/pdp-gallery.md §11, session 3). */
-  onOpenViewer?: (index: number) => void;
   ref?: Ref<ProductGalleryHandle>;
 }
 
@@ -49,10 +59,6 @@ const MAIN_SIZES = "(min-width: 768px) 40vw, 100vw";
 const MAIN_FILES = [800, 1600] as const;
 // The strip's padding (p-1): room for the active outline and the focus ring inside its overflow.
 const STRIP_PADDING_PX = 4;
-
-function prefersReducedMotion(): boolean {
-  return typeof window !== "undefined" && (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-}
 
 /** Elements whose own Left/Right keys must win over the page-wide photo keys (§3.1, owner
  * feedback 2026-10-23): text entry, widgets that use arrow keys themselves, and anything that
@@ -69,47 +75,21 @@ function keepsArrowKeys(target: EventTarget | null): boolean {
   return false;
 }
 
-/** A drag in progress on the main image. Refs, not state: only the offset needs a re-render. */
-interface DragTrack {
-  pointerId: number;
-  startX: number;
-  lastX: number;
-  lastTime: number;
-  velocity: number;
-}
-
-/** The track follows the finger: shifted by `offset` px, with the neighbour on `side` (`1` =
- * next, `-1` = previous) peeking in. */
-interface DragState {
-  offset: number;
-  side: -1 | 0 | 1;
-}
-
-/** One slide of the track from `from` to rest (Web Animations), with `others` (the photo leaving,
- * or the neighbour a snap-back hides again) beside the current one meanwhile. `direction`: `1` =
- * the new photo comes in from the right, `-1` = from the left, `0` = snap back. */
-interface Motion {
-  id: number;
-  from: string;
-  /** Photos beside the current one while it slides: the one leaving, and on an interrupted slide
-   * the one that was still leaving before it (so no gap opens up). Position in widths. */
-  others: { index: number; position: number }[];
-  direction: -1 | 0 | 1;
-}
-
 /** The PDP photo gallery (docs/plans/pdp-gallery.md §3.1, §3.2, §7): one main 2:3 photo with a
  * counter and a magnifier, a thumbnail strip of every photo (general first, then each colour's
  * group), prev/next arrows on desktop (hover and keyboard focus only), swipe on phones, Left/Right
  * anywhere on the page. Every change slides the photo in from the side it comes from (next and
  * wrap-around from the right, previous from the left, a jump toward the target's side), straight
  * to the target. Only the main photo loads eagerly; thumbnails use the 400 file, lazily (their
- * placeholder is the smallest one, 800). */
-export function ProductGallery({ productName, gallery, initialIndex, storageBaseUrl, onOpenViewer, ref }: ProductGalleryProps) {
+ * placeholder is the smallest one, 800). Tapping the main photo opens the full-screen viewer
+ * (gallery-lightbox.tsx) there; closing it leaves this gallery on the photo last viewed. */
+export function ProductGallery({ productName, gallery, initialIndex, storageBaseUrl, ref }: ProductGalleryProps) {
   const images = gallery.images;
   const count = images.length;
   const [index, setIndex] = useState(() => (Number.isInteger(initialIndex) ? Math.min(Math.max(initialIndex, 0), Math.max(count - 1, 0)) : 0));
-  const [drag, setDrag] = useState<DragState | null>(null);
-  const [motion, setMotion] = useState<Motion | null>(null);
+  // The index the full-screen viewer opened at; `null` = closed.
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const track = useSlideTrack(images, index);
   // The thumbnail that holds the strip's one tab stop while arrow keys move focus (roving
   // tabindex); `null` = the active thumbnail holds it.
   const [focusIndex, setFocusIndex] = useState<number | null>(null);
@@ -118,29 +98,10 @@ export function ProductGallery({ productName, gallery, initialIndex, storageBase
   const [announcement, setAnnouncement] = useState({ text: "", sequence: 0 });
 
   const stripRef = useRef<HTMLDivElement>(null);
-  const trackRef = useRef<HTMLSpanElement>(null);
+  const mainRef = useRef<HTMLButtonElement>(null);
   const thumbRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const dragRef = useRef<DragTrack | null>(null);
   const suppressClickRef = useRef(false);
-  const motionIdRef = useRef(0);
   const warmedRef = useRef(new Set<string>());
-
-  // Runs the slide once its frames (`other` beside the current photo) are in the DOM, before the
-  // browser paints them at rest. A newer slide cancels this one in the cleanup: the latest target
-  // always wins, nothing queues.
-  useLayoutEffect(() => {
-    if (!motion) return;
-    const id = motion.id;
-    const finish = () => setMotion((current) => (current?.id === id ? null : current));
-    const track = trackRef.current;
-    if (!track || typeof track.animate !== "function") {
-      const timer = window.setTimeout(finish, 0);
-      return () => window.clearTimeout(timer);
-    }
-    const animation = track.animate([{ transform: motion.from }, { transform: "translateX(0)" }], { duration: GALLERY_SLIDE_MS, easing: GALLERY_SLIDE_EASING });
-    animation.onfinish = finish;
-    return () => animation.cancel();
-  }, [motion]);
 
   // Landing on a colour's photo (`?color=`): bring its thumbnail into view once, after mount.
   // Only the strip's own scroll position changes, never the page's or any layout.
@@ -152,13 +113,13 @@ export function ProductGallery({ productName, gallery, initialIndex, storageBase
 
   // Left/Right anywhere on the page: previous/next photo. Not with a modifier (browser
   // shortcuts), not where the keys already mean something (see keepsArrowKeys), not while a
-  // dialog (the session 3 viewer) is open, and not when something already handled the key (the
+  // dialog (the full-screen viewer) is open, and not when something already handled the key (the
   // thumbnail strip moves its focus with them instead: one move per key press, never two).
   const handlePageKeyDown = useEffectEvent((event: globalThis.KeyboardEvent) => {
     if (count < 2 || event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     // A finger or mouse still holding the photo owns it until release.
-    if (dragRef.current || document.querySelector("dialog[open], [aria-modal='true']") || keepsArrowKeys(event.target)) return;
+    if (track.isDragging() || document.querySelector("dialog[open], [aria-modal='true']") || keepsArrowKeys(event.target)) return;
     event.preventDefault();
     step(event.key === "ArrowRight" ? 1 : -1);
   });
@@ -213,43 +174,14 @@ export function ProductGallery({ productName, gallery, initialIndex, storageBase
     }
   }
 
-  /** Where a slide still running has the track right now (px), so an interrupting slide starts
-   * from there instead of jumping: the photo on screen keeps its place. */
-  function trackOffsetNow(): number {
-    const track = trackRef.current;
-    if (!motion || !track || typeof DOMMatrixReadOnly === "undefined") return 0;
-    const transform = getComputedStyle(track).transform;
-    return transform && transform !== "none" ? new DOMMatrixReadOnly(transform).m41 : 0;
-  }
-
-  /** The only way the photo changes. Never touches colour, size, URL or purchase state. Slides in
+  /** The way the photo changes (the viewer handing back its last photo aside). Never touches colour, size, URL or purchase state. Slides in
    * from `direction` (default: toward the target's side of the list), or from `from` when a swipe
    * hands over the track mid-way; instant under reduced motion. */
   function goTo(
     target: number,
     { announce = true, align = "nearest", direction, from }: { announce?: boolean; align?: "nearest" | "start"; direction?: -1 | 1; from?: string } = {},
   ) {
-    const side = direction ?? Math.sign(target - index);
-    if (target !== index && side !== 0 && !prefersReducedMotion()) {
-      motionIdRef.current += 1;
-      const leaving = side === 1 ? -1 : 1;
-      setMotion({
-        id: motionIdRef.current,
-        from: from ?? `translateX(calc(${side * 100}% + ${trackOffsetNow()}px))`,
-        // An interrupted slide's own leaving photo keeps its place next to the one on screen.
-        others: [{ index, position: leaving }, ...(motion?.others ?? []).map((other) => ({ index: other.index, position: leaving + other.position }))].filter(
-          // Only on the leaving side, and only what can still be on screen (a held key chains
-          // interrupts). After a reversal the old leaving photo sits where the new one comes in:
-          // the new photo covers that place, so it goes.
-          (other) => Math.sign(other.position) === leaving && Math.abs(other.position) <= 2,
-        ),
-        direction: side === 1 ? 1 : -1,
-      });
-    } else if (target !== index) {
-      setMotion(null);
-    }
-    dragRef.current = null;
-    setDrag(null);
+    track.slide(target, { direction, from });
     setIndex(target);
     if (announce) setAnnouncement((previous) => ({ text: `Foto ${target + 1} dari ${count}`, sequence: previous.sequence + 1 }));
     revealThumb(target, align);
@@ -266,48 +198,18 @@ export function ProductGallery({ productName, gallery, initialIndex, storageBase
     if (count < 2 || (event.pointerType === "mouse" && event.button !== 0)) return;
     // A new drag takes over from a slide still running: it lands at rest under the finger. A
     // plain tap that stops a slide is not a tap on the photo either (no viewer).
-    suppressClickRef.current = motion !== null;
-    setMotion(null);
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, lastX: event.clientX, lastTime: event.timeStamp, velocity: 0 };
+    suppressClickRef.current = track.pointerDown(event);
     warmNeighbours(index);
   }
 
   function handlePointerMove(event: PointerEvent<HTMLButtonElement>) {
-    const track = dragRef.current;
-    if (!track || track.pointerId !== event.pointerId) return;
-    const elapsed = event.timeStamp - track.lastTime;
-    if (elapsed > 0) track.velocity = (event.clientX - track.lastX) / elapsed;
-    track.lastX = event.clientX;
-    track.lastTime = event.timeStamp;
-    const offset = event.clientX - track.startX;
-    if (Math.abs(offset) > SWIPE_CLICK_CANCEL_PX) suppressClickRef.current = true;
-    setDrag({ offset, side: offset < 0 ? 1 : offset > 0 ? -1 : 0 });
+    const offset = track.pointerMove(event);
+    if (offset !== null && Math.abs(offset) > SWIPE_CLICK_CANCEL_PX) suppressClickRef.current = true;
   }
 
   function handlePointerEnd(event: PointerEvent<HTMLButtonElement>) {
-    const track = dragRef.current;
-    if (!track || track.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    const offset = event.type === "pointercancel" ? 0 : event.clientX - track.startX;
-    // A finger that stopped before lifting has no flick left in it.
-    const velocity = event.timeStamp - track.lastTime > 100 ? 0 : track.velocity;
-    const width = event.currentTarget.clientWidth;
-    const direction = swipeDirection(offset, width, velocity);
-
-    if (direction === 0) {
-      const side = drag?.side ?? 0;
-      setDrag(null);
-      // Snap back with the same slide as every other change; the neighbour slides out again.
-      if (side !== 0 && offset !== 0 && !prefersReducedMotion()) {
-        motionIdRef.current += 1;
-        setMotion({ id: motionIdRef.current, from: `translateX(${offset}px)`, others: [{ index: side === 1 ? nextIndex(index, count) : prevIndex(index, count), position: side }], direction: 0 });
-      }
-      return;
-    }
-    // Carry on from where the finger left the track: the incoming photo sits `offset` px short
-    // of the edge it comes from.
-    goTo(direction === 1 ? nextIndex(index, count) : prevIndex(index, count), { direction, from: `translateX(${offset + direction * width}px)` });
+    const swipe = track.pointerEnd(event);
+    if (swipe) goTo(swipe.direction === 1 ? nextIndex(index, count) : prevIndex(index, count), swipe);
   }
 
   function handleMainClick(event: MouseEvent<HTMLButtonElement>) {
@@ -316,8 +218,40 @@ export function ProductGallery({ productName, gallery, initialIndex, storageBase
     const endsSwipe = suppressClickRef.current && event.detail > 0;
     suppressClickRef.current = false;
     // Mid-slide: no viewer at a photo that is still moving in.
-    if (endsSwipe || motion) return;
-    onOpenViewer?.(index);
+    if (endsSwipe || track.sliding) return;
+    setViewerIndex(index);
+  }
+
+  /** The viewer is closing on photo `last`: show it here at once (no slide, the shopper already
+   * saw it), with its thumbnail in view, so the photo shrinking back lands on the same photo. The
+   * colour stays as it was: the gallery has no way to change it. */
+  function handleViewerClosing(last: number) {
+    track.stop();
+    if (last !== index && last >= 0 && last < count) {
+      setIndex(last);
+      revealThumb(last, "nearest", "auto");
+    }
+  }
+
+  /** The viewer has closed: unmount it and put focus back on the main photo, its opener. */
+  function handleViewerClose(last: number) {
+    handleViewerClosing(last);
+    setViewerIndex(null);
+    mainRef.current?.focus({ preventScroll: true });
+  }
+
+  function mainPhotoBox(): DOMRect | null {
+    return mainRef.current?.getBoundingClientRect() ?? null;
+  }
+
+  /** Loads the viewer's code, and the large (1600) file of the photo it would open at, so the
+   * photo growing out of the page is already there. */
+  function prefetchViewer() {
+    void loadLightbox();
+    const image = images[index];
+    if (!image || warmedRef.current.has(`viewer:${image.id}`)) return;
+    warmedRef.current.add(`viewer:${image.id}`);
+    new Image().src = mainSrc(image);
   }
 
   function handleStripKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -352,43 +286,35 @@ export function ProductGallery({ productName, gallery, initialIndex, storageBase
     );
   }
 
-  const current = images[index] ?? images[0]!;
-  const others = drag
-    ? drag.side === 0
-      ? []
-      : [{ index: drag.side === 1 ? nextIndex(index, count) : prevIndex(index, count), position: drag.side }]
-    : (motion?.others ?? []);
-  // Keyed by image id: the photo sliding in keeps its DOM node (and loaded file) when it comes to
-  // rest, and a swipe's neighbour becomes the current photo in place, so nothing flashes. A photo
-  // shows once (the first place wins); anything more than two widths away is off screen anyway.
-  const slots = [{ image: current, position: 0 }];
-  for (const other of others) {
-    const image = images[other.index];
-    if (image && Math.abs(other.position) <= 2 && !slots.some((slot) => slot.image.id === image.id)) slots.push({ image, position: other.position });
-  }
-
   return (
     <div className="flex w-full flex-col gap-2 md:sticky md:top-20 md:mx-auto md:w-[min(100%,calc((100svh-15rem)*2/3))]">
       <div className="group relative">
         <button
+          ref={mainRef}
           type="button"
           data-testid="gallery-main"
           aria-label={count > 1 ? `Perbesar foto ${index + 1} dari ${count}` : "Perbesar foto"}
+          aria-haspopup="dialog"
           onClick={handleMainClick}
-          onPointerDown={handlePointerDown}
+          onPointerEnter={prefetchViewer}
+          onFocus={prefetchViewer}
+          onPointerDown={(event) => {
+            prefetchViewer();
+            handlePointerDown(event);
+          }}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerEnd}
           onPointerCancel={handlePointerEnd}
           className="relative block aspect-[2/3] w-full cursor-zoom-in touch-pan-y overflow-hidden bg-image-bg select-none [&_img]:pointer-events-none"
         >
           <span
-            ref={trackRef}
+            ref={track.trackRef}
             data-testid="gallery-track"
-            data-slide={motion ? (motion.direction === 1 ? "next" : motion.direction === -1 ? "prev" : "back") : undefined}
+            data-slide={track.slideName}
             className="absolute inset-0 block"
-            style={drag && drag.offset !== 0 ? { transform: `translateX(${drag.offset}px)` } : undefined}
+            style={track.trackStyle}
           >
-            {slots.map(({ image, position }) => (
+            {track.slots.map(({ image, position }) => (
               <span
                 key={image.id}
                 data-testid={position === 0 ? "gallery-current" : undefined}
@@ -481,6 +407,18 @@ export function ProductGallery({ productName, gallery, initialIndex, storageBase
       <p role="status" className="sr-only">
         {liveRegionText(announcement.text, announcement.sequence)}
       </p>
+
+      {viewerIndex !== null && (
+        <GalleryLightbox
+          productName={productName}
+          images={images}
+          initialIndex={viewerIndex}
+          storageBaseUrl={storageBaseUrl}
+          getOrigin={mainPhotoBox}
+          onClosing={handleViewerClosing}
+          onClose={handleViewerClose}
+        />
+      )}
     </div>
   );
 }

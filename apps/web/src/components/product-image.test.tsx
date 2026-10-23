@@ -44,6 +44,15 @@ describe("ProductImage responsive mode", () => {
     expect(image).toHaveAttribute("fetchpriority", "high");
   });
 
+  test("loading overrides the mode fetchPriority implies, without claiming the priority (the viewer)", () => {
+    const { container } = render(<ProductImage src={src} srcSet={srcSet} alt="" placeholderSize={1600} sizes="100vw" loading="eager" />);
+    const image = container.querySelector("img")!;
+    expect(image).toHaveAttribute("loading", "eager");
+    expect(image).not.toHaveAttribute("fetchpriority");
+    const { container: plain } = render(<ProductImage src={src} alt="" placeholderSize={1600} sizes="100vw" loading="eager" />);
+    expect(plain.querySelector("img")).toHaveAttribute("loading", "eager");
+  });
+
   test("a failed load swaps to the placeholder, with no srcset left behind", () => {
     const { container } = render(
       <ProductImage src={src} srcSet={srcSet} alt="Beige depan" placeholderAlt="Foto belum tersedia" placeholderSize={1600} sizes="100vw" />,

@@ -6,6 +6,42 @@ import type { ProductGallery as Gallery, ProductGalleryItem } from "@/lib/conten
 import { GALLERY_SLIDE_EASING, GALLERY_SLIDE_MS } from "@/lib/gallery/swipe";
 import { ProductGallery, type ProductGalleryHandle } from "./product-gallery";
 
+// The viewer itself has its own tests (gallery-lightbox.test.tsx); here a stand-in shows where it
+// opened and hands the close back.
+const viewer = vi.hoisted(() => ({
+  close: null as ((lastIndex: number) => void) | null,
+  closing: null as ((lastIndex: number) => void) | null,
+  origin: null as (() => DOMRect | null) | null,
+}));
+vi.mock("./gallery-lightbox", () => ({
+  GalleryLightbox({
+    initialIndex,
+    onClose,
+    onClosing,
+    getOrigin,
+  }: {
+    initialIndex: number;
+    onClose: (lastIndex: number) => void;
+    onClosing: (lastIndex: number) => void;
+    getOrigin: () => DOMRect | null;
+  }) {
+    viewer.close = onClose;
+    viewer.closing = onClosing;
+    viewer.origin = getOrigin;
+    return <div data-testid="viewer-stub" data-index={initialIndex} />;
+  },
+}));
+
+/** Where the viewer opened, or `null` when it is not open. next/dynamic resolves the (mocked)
+ * module on a later tick, so this waits for it first. */
+async function openedViewerAt(): Promise<number | null> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  const stub = screen.queryByTestId("viewer-stub");
+  return stub ? Number(stub.getAttribute("data-index")) : null;
+}
+
 const BASE = "https://cdn.example.test";
 
 function item(id: string, colorId: string | null): ProductGalleryItem {
@@ -63,10 +99,10 @@ beforeEach(() => {
   } as unknown as Element["animate"];
 });
 
-function renderGallery(gallery: Gallery = GALLERY, { initialIndex = 0, onOpenViewer = vi.fn() } = {}) {
+function renderGallery(gallery: Gallery = GALLERY, { initialIndex = 0 } = {}) {
   const ref = createRef<ProductGalleryHandle>();
-  const view = render(<ProductGallery ref={ref} productName="Haura" gallery={gallery} initialIndex={initialIndex} storageBaseUrl={BASE} onOpenViewer={onOpenViewer} />);
-  return { ...view, ref, onOpenViewer };
+  const view = render(<ProductGallery ref={ref} productName="Haura" gallery={gallery} initialIndex={initialIndex} storageBaseUrl={BASE} />);
+  return { ...view, ref };
 }
 
 function mainImage(): HTMLImageElement {
@@ -187,12 +223,54 @@ describe("ProductGallery", () => {
     expect(mainImage()).toHaveAttribute("alt", "Foto g1");
   });
 
-  test("clicking the main image opens the viewer at the current index", () => {
-    const { onOpenViewer } = renderGallery();
+  test("clicking the main image opens the viewer at the current index", async () => {
+    renderGallery();
     fireEvent.click(thumbnails()[2]!);
     finishSlide();
     fireEvent.click(screen.getByTestId("gallery-main"));
-    expect(onOpenViewer).toHaveBeenCalledWith(2);
+    expect(await openedViewerAt()).toBe(2);
+  });
+
+  test("closing the viewer shows its last photo here at once (no slide), in the strip, with focus back on the main photo", async () => {
+    renderGallery();
+    fireEvent.click(screen.getByTestId("gallery-main"));
+    expect(await openedViewerAt()).toBe(0);
+    scrollTo.mockReset();
+    act(() => viewer.close!(4));
+    expect(screen.queryByTestId("viewer-stub")).toBeNull();
+    expect(mainImage()).toHaveAttribute("alt", "Foto m1");
+    expect(thumbnails()[4]).toHaveAttribute("aria-current", "true");
+    expect(screen.getByTestId("gallery-counter")).toHaveTextContent("5 / 6");
+    expect(slides).toHaveLength(0);
+    expect(screen.getByTestId("gallery-track")).not.toHaveAttribute("data-slide");
+    expect(document.activeElement).toBe(screen.getByTestId("gallery-main"));
+    // The page's own announcement stays quiet: the viewer already announced every change.
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  test("when the viewer starts closing, the main photo already shows its last photo (the shrink lands on it); the viewer stays until closed", async () => {
+    renderGallery();
+    fireEvent.click(screen.getByTestId("gallery-main"));
+    expect(await openedViewerAt()).toBe(0);
+    // The box the photo grows out of and shrinks back into: the main photo's.
+    expect(viewer.origin!()).toEqual(screen.getByTestId("gallery-main").getBoundingClientRect());
+    act(() => viewer.closing!(5));
+    expect(mainImage()).toHaveAttribute("alt", "Foto m2");
+    expect(slides).toHaveLength(0);
+    expect(screen.getByTestId("viewer-stub")).toBeInTheDocument();
+    act(() => viewer.close!(5));
+    expect(screen.queryByTestId("viewer-stub")).toBeNull();
+    expect(mainImage()).toHaveAttribute("alt", "Foto m2");
+    expect(document.activeElement).toBe(screen.getByTestId("gallery-main"));
+  });
+
+  test("closing the viewer on the photo it opened at changes nothing", async () => {
+    renderGallery(GALLERY, { initialIndex: 3 });
+    fireEvent.click(screen.getByTestId("gallery-main"));
+    expect(await openedViewerAt()).toBe(3);
+    act(() => viewer.close!(3));
+    expect(mainImage()).toHaveAttribute("alt", "Foto s2");
+    expect(document.activeElement).toBe(screen.getByTestId("gallery-main"));
   });
 
   describe("swipe", () => {
@@ -207,14 +285,14 @@ describe("ProductGallery", () => {
       return main;
     }
 
-    test("a swipe left goes to the next photo, sliding on from where the finger let go, and never opens the viewer", () => {
-      const { onOpenViewer } = renderGallery();
+    test("a swipe left goes to the next photo, sliding on from where the finger let go, and never opens the viewer", async () => {
+      renderGallery();
       swipe(300, 100);
       expect(mainImage()).toHaveAttribute("alt", "Foto g2");
       // Dragged 200 px of 390: the incoming photo is 190 px short of the left edge.
       expect(lastSlide().keyframes).toEqual([{ transform: "translateX(190px)" }, { transform: "translateX(0)" }]);
       expect(screen.getByTestId("gallery-track")).toHaveAttribute("data-slide", "next");
-      expect(onOpenViewer).not.toHaveBeenCalled();
+      expect(await openedViewerAt()).toBeNull();
     });
 
     test("a swipe right on the first photo wraps to the last, coming in from the left", () => {
@@ -244,18 +322,18 @@ describe("ProductGallery", () => {
       expect(within(screen.getByTestId("gallery-track")).getAllByRole("img")).toHaveLength(1);
     });
 
-    test("reduced motion: no slide at all, the photo swaps at once, the drag's click opens nothing", () => {
+    test("reduced motion: no slide at all, the photo swaps at once, the drag's click opens nothing", async () => {
       reduceMotion = true;
-      const { onOpenViewer } = renderGallery();
+      renderGallery();
       swipe(300, 100);
       expect(slides).toHaveLength(0);
       expect(screen.getByTestId("gallery-track")).not.toHaveAttribute("data-slide");
       expect(mainImage()).toHaveAttribute("alt", "Foto g2");
-      expect(onOpenViewer).not.toHaveBeenCalled();
+      expect(await openedViewerAt()).toBeNull();
     });
 
-    test("a keyboard activation after a touch swipe still opens the viewer", () => {
-      const { onOpenViewer } = renderGallery();
+    test("a keyboard activation after a touch swipe still opens the viewer", async () => {
+      renderGallery();
       const main = screen.getByTestId("gallery-main");
       Object.defineProperty(main, "clientWidth", { configurable: true, value: 390 });
       pointer("pointerDown", main, 300, 0);
@@ -264,7 +342,7 @@ describe("ProductGallery", () => {
       finishSlide();
       // Enter/Space: a click with detail 0.
       fireEvent.click(main, { detail: 0 });
-      expect(onOpenViewer).toHaveBeenCalledWith(1);
+      expect(await openedViewerAt()).toBe(1);
     });
 
     test("a thumbnail tap during the slide wins: the swipe's slide is cancelled", () => {
@@ -391,29 +469,29 @@ describe("ProductGallery", () => {
       expect(within(screen.getByTestId("gallery-track")).getAllByRole("img").map((img) => img.getAttribute("alt"))).toEqual(["Foto s2", "Foto m2"]);
     });
 
-    test("a plain tap that stops a slide does not open the viewer", () => {
-      const { onOpenViewer } = renderGallery();
+    test("a plain tap that stops a slide does not open the viewer", async () => {
+      renderGallery();
       next();
       const main = screen.getByTestId("gallery-main");
       pointer("pointerDown", main, 200, 0);
       pointer("pointerUp", main, 200, 20);
       fireEvent.click(main, { detail: 1 });
-      expect(onOpenViewer).not.toHaveBeenCalled();
+      expect(await openedViewerAt()).toBeNull();
       // The next plain tap does.
       pointer("pointerDown", main, 200, 100);
       pointer("pointerUp", main, 200, 120);
       fireEvent.click(main, { detail: 1 });
-      expect(onOpenViewer).toHaveBeenCalledWith(1);
+      expect(await openedViewerAt()).toBe(1);
     });
 
-    test("the main image does not open the viewer mid-slide", () => {
-      const { onOpenViewer } = renderGallery();
+    test("the main image does not open the viewer mid-slide", async () => {
+      renderGallery();
       next();
       fireEvent.click(screen.getByTestId("gallery-main"));
-      expect(onOpenViewer).not.toHaveBeenCalled();
+      expect(await openedViewerAt()).toBeNull();
       finishSlide();
       fireEvent.click(screen.getByTestId("gallery-main"));
-      expect(onOpenViewer).toHaveBeenCalledWith(1);
+      expect(await openedViewerAt()).toBe(1);
     });
 
     test("reduced motion: arrows, thumbnails and colour jumps swap instantly", () => {
@@ -517,13 +595,13 @@ describe("ProductGallery", () => {
     });
   });
 
-  test("one photo: main image only, no strip, arrows or counter; still opens the viewer", () => {
-    const { onOpenViewer } = renderGallery({ images: [item("g1", null)], colorStartIndex: {} });
+  test("one photo: main image only, no strip, arrows or counter; still opens the viewer", async () => {
+    renderGallery({ images: [item("g1", null)], colorStartIndex: {} });
     expect(screen.queryByRole("group", { name: "Foto produk" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Foto berikutnya" })).toBeNull();
     expect(screen.queryByTestId("gallery-counter")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Perbesar foto" }));
-    expect(onOpenViewer).toHaveBeenCalledWith(0);
+    expect(await openedViewerAt()).toBe(0);
   });
 
   test("no photo: the placeholder, high priority, with no button at all", () => {

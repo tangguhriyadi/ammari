@@ -2,7 +2,8 @@
 
 Status: **owner answers in (2026-10-23, §13, all recommendations accepted). Session 1 done
 (2026-10-23): data layer, index math, responsive `ProductImage` mode, canonical URL, design spec.
-Session 2 done (2026-10-23): page gallery (§14). Session 3 (viewer) to do.**
+Session 2 done (2026-10-23): page gallery (§14). Session 3 done (2026-10-23): viewer (§15),
+pending the owner's real-iPhone check.**
 
 Scope: `apps/web` only (PDP). No schema, migration, admin, pricing, cart or checkout change.
 
@@ -414,3 +415,41 @@ No open questions remain.
 - E2E 12, 12b, 12c (slide direction, wrap, rapid clicks, reduced motion), 13 and 13b (page keys
   and the ignored cases).
 
+## 15. Session 3 notes (2026-10-23)
+
+- `components/pdp/gallery-lightbox.tsx` (native `<dialog>`, `showModal()` on mount) is owned by
+  the page gallery: tapping the main photo (or Enter/Space) opens it at the current index; its
+  `onClose(lastIndex)` sets that index on the page gallery without a slide, reveals its thumbnail
+  and focuses the main photo. The `onOpenViewer` placeholder prop is gone. Loaded with
+  `next/dynamic` on first open, prefetched on pointer enter, focus and pointer down of the main photo.
+- The slide machinery moved out of `product-gallery.tsx` into `lib/gallery/use-slide-track.ts`
+  (drag, Web Animations slide, interruption, slots); page gallery and viewer both use it, so the
+  viewer slides with the same `GALLERY_SLIDE_MS`/easing and is instant under reduced motion.
+- Zoom math is `lib/gallery/zoom.ts` (pure, tested). Zoom reacts to `pointerType === "touch"`
+  only, so mouse/trackpad never zooms (§13 #6); a touchscreen laptop or tablet at desktop width
+  does get pinch and double-tap. The stage is `touch-action: none`, and `gesturestart` is
+  prevented while open (iOS page zoom).
+- Scroll lock: `overflow: hidden` on `<html>`, plus `scrollbar-gutter: stable` while open when
+  the page has a classic scrollbar, so nothing behind moves sideways. Previous inline values are
+  restored on close.
+- `ProductImage` gained an optional `loading` override: the viewer's photos are eager without
+  claiming `fetchPriority="high"`. The viewer uses the 1600 file and preloads only the two neighbours.
+- E2E: 6, 6b (tab order, buttons, same slide timing), 6c (reduced motion), 7 (swipe; Chromium
+  pinch and pan via CDP touch; double-tap via `touchscreen.tap` in both engines; desktop mouse
+  never zooms), 8 (one-photo product); `visual-screenshots.spec.ts` captures the gallery and the
+  open viewer at both widths. WebKit tabs with Option+Tab (Safari's Tab skips buttons by default).
+
+### Owner feedback round (2026-10-23, before commit): open/close transition
+
+- Open: the stage grows from the main photo's box to full screen (one transform on the stage,
+  `GALLERY_SLIDE_MS`/easing) while a white backdrop layer and the controls fade in; the dialog
+  itself is transparent. Close (X, Esc, back gesture via `cancel`): the page gallery switches to
+  the last photo at once (`onClosing`), the photo shrinks back into the main photo, and only then
+  the dialog closes and focus returns. A main photo off screen or without size: the whole viewer
+  fades instead. A close the browser already did (uncancellable Esc): no animation.
+- `data-state` on the dialog: `opening` / `open` / `closing`; no input except X/Esc outside
+  `open`. Esc during the opening reverses the opening in place. Safety timers end a transition that
+  never reports its end. Reduced motion: instant open and close.
+- Known approximation: a non-2:3 photo's contained box does not exactly match the 2:3 cover crop
+  on the page, so its first and last frames are slightly off. Closing while zoomed shrinks the
+  zoomed photo.

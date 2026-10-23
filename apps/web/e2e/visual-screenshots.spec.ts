@@ -1,4 +1,5 @@
 import { test } from "@playwright/test";
+import { E2E_GALLERY_SLUG } from "./gallery-fixtures";
 import { E2E_PRODUCT_SLUG } from "./storefront-fixtures";
 
 // Not a correctness check (no assertions) — captures the current render of `/` and the PDP at
@@ -39,4 +40,19 @@ test.describe("visual QA screenshots", () => {
     await page.waitForLoadState("networkidle");
     await page.screenshot({ path: `${SCREENS_DIR}/product-1280.png`, fullPage: true });
   });
+
+  // The PDP gallery and its open full-screen viewer (docs/plans/pdp-gallery.md §10).
+  for (const width of [390, 1280]) {
+    test(`product gallery and viewer — ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      await page.goto(`/products/${E2E_GALLERY_SLUG}`);
+      await page.waitForLoadState("networkidle");
+      await page.screenshot({ path: `${SCREENS_DIR}/product-gallery-${width}.png` });
+
+      await page.getByTestId("gallery-main").click();
+      await page.locator('dialog[data-state="open"]').waitFor({ timeout: 20_000 });
+      await page.waitForLoadState("networkidle");
+      await page.screenshot({ path: `${SCREENS_DIR}/product-viewer-${width}.png` });
+    });
+  }
 });

@@ -27,6 +27,9 @@ export interface ProductImageProps {
    * in both modes, so a placeholder standing in for the LCP photo keeps the priority (next/image's
    * `priority` is deprecated in Next 16 and ignored in responsive mode). */
   fetchPriority?: "high" | "auto";
+  /** Overrides the loading mode `fetchPriority` implies: the full-screen viewer's photos are on
+   * screen the moment they render, so they load eagerly without claiming the LCP priority. */
+  loading?: "eager" | "lazy";
   className?: string;
 }
 
@@ -36,7 +39,7 @@ export interface ProductImageProps {
  * caller's own aspect-[2/3] box, so the swap never shifts layout. The failure is remembered per
  * `src` (not as a plain boolean), so a new `src` (e.g. the shopper picks another colour) gets a
  * fresh attempt, and the placeholder's own src never changes again once shown: no retry loop. */
-export function ProductImage({ src, alt, placeholderAlt = PRODUCT_PLACEHOLDER_ALT, placeholderSize, sizes, priority = false, srcSet, fetchPriority, className }: ProductImageProps) {
+export function ProductImage({ src, alt, placeholderAlt = PRODUCT_PLACEHOLDER_ALT, placeholderSize, sizes, priority = false, srcSet, fetchPriority, loading, className }: ProductImageProps) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const showPlaceholder = src === null || failedSrc === src;
 
@@ -48,7 +51,7 @@ export function ProductImage({ src, alt, placeholderAlt = PRODUCT_PLACEHOLDER_AL
         srcSet={srcSet}
         sizes={sizes}
         alt={alt}
-        loading={fetchPriority === "high" ? "eager" : "lazy"}
+        loading={loading ?? (fetchPriority === "high" ? "eager" : "lazy")}
         fetchPriority={fetchPriority}
         decoding="async"
         onError={() => setFailedSrc(src)}
@@ -65,7 +68,7 @@ export function ProductImage({ src, alt, placeholderAlt = PRODUCT_PLACEHOLDER_AL
       fill
       priority={priority}
       fetchPriority={fetchPriority}
-      loading={fetchPriority === "high" ? "eager" : undefined}
+      loading={loading ?? (fetchPriority === "high" ? "eager" : undefined)}
       sizes={sizes}
       onError={showPlaceholder ? undefined : () => setFailedSrc(src)}
       className={className}
