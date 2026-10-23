@@ -140,6 +140,14 @@ export function e2eCheckoutOrderNo(kind: "pending" | "paid" | "short" | "flagged
 const E2E_BOOKING_AREA = "E2EMURAH40111";
 const E2E_LOST_ANSWER_AREA = "E2EGANGGUAN40333";
 
+// product-discount.spec.ts (docs/plans/product-discount.md session 2): a dedicated owner email (same
+// "fresh email, clean OTP throttle" reasoning as every fixture above) and a product priced at
+// Rp350.000 with one variant, so the plan's 350.000 -> 279.000 = "20,2" example works as written
+// and the manual-order picker has a SKU to prefill.
+export const E2E_PRODUCT_DISCOUNT_EMAIL = "product-discount@e2e.ammari.test";
+export const E2E_DISCOUNT_PRODUCT_NAME = "E2E Gamis Diskon";
+export const E2E_DISCOUNT_SKU = "E2E-DISKON-M";
+
 // A product published before migration 0031 made "Berat kirim" a publish rule (like prod's first
 // published product): live, active, no weight. product-shipping-weight.spec.ts reads it; nothing
 // in the admin UI can create this state any more, so it is seeded here.
@@ -332,6 +340,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_STOREFRONT_EMAIL, "E2E Storefront", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_VARIANT_PHOTOS_EMAIL, "E2E Variant Photos", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_FRESH_AFTER_SAVE_EMAIL, "E2E Fresh After Save", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_PRODUCT_DISCOUNT_EMAIL, "E2E Product Discount", OWNER_ROLE_KEY);
 
   await ensureLimitedRole(E2E_SUPPLIERS_ROLE_KEY, ["inventory.view", "inventory.manage"]);
   await ensureStaffFixture(E2E_SUPPLIERS_EMAIL, "E2E Suppliers", E2E_SUPPLIERS_ROLE_KEY);
@@ -477,6 +486,20 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     }
   });
 
+  // The discount product for product-discount.spec.ts (see E2E_PRODUCT_DISCOUNT_EMAIL above).
+  await db.transaction(async (tx) => {
+    const [fabric] = await tx.insert(fabrics).values({ name: "E2E Diskon Fabric" }).returning({ id: fabrics.id });
+    if (!fabric) throw new Error("failed to seed the e2e discount fabric");
+    const [color] = await tx.insert(fabricColors).values({ fabricId: fabric.id, name: "Dusty" }).returning({ id: fabricColors.id });
+    if (!color) throw new Error("failed to seed the e2e discount colour");
+    const [product] = await tx
+      .insert(products)
+      .values({ name: E2E_DISCOUNT_PRODUCT_NAME, code: "E2EDISKON", slug: "e2e-gamis-diskon", fabricId: fabric.id, closure: "front_zip", sizeMode: "sized", basePrice: 350_000 })
+      .returning({ id: products.id, closure: products.closure });
+    if (!product) throw new Error("failed to seed the e2e discount product");
+    await tx.insert(productVariants).values({ productId: product.id, fabricId: fabric.id, fabricColorId: color.id, closure: product.closure, sku: E2E_DISCOUNT_SKU, size: "M" });
+  });
+
   // Web checkout orders for checkout-orders.spec.ts (see E2E_CHECKOUT_ORDERS_EMAIL above).
   await db.transaction(async (tx) => {
     const [fabric] = await tx.insert(fabrics).values({ name: "E2E Web Fabric" }).returning({ id: fabrics.id });
@@ -618,6 +641,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_DISPOSITIONS_EMAIL,
         E2E_VARIANT_PHOTOS_EMAIL,
         E2E_FRESH_AFTER_SAVE_EMAIL,
+        E2E_PRODUCT_DISCOUNT_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { PageHeader, Button, Breadcrumb } from "@ammari/ui";
 import type { ProductHighlightKey } from "@ammari/db/highlights";
+import { discountStatus } from "@ammari/db/pricing";
 import { requireAnyPermission } from "@/lib/auth/require-any-permission";
 import { getProductDetail, getCurrentCostAssumption } from "@/lib/products/queries";
 import { listFabricColors, listAllFabricsWithUsage } from "@/lib/products/fabric-queries";
@@ -18,6 +19,8 @@ import { ProductPhotosSection } from "../_components/product-photos-section";
 import { ProductThumbnail } from "../_components/product-thumbnail";
 import { AccessoryRecipeSection } from "../_components/accessory-recipe-section";
 import { StorefrontSection } from "../_components/storefront-section";
+import { DiscountSection } from "../_components/discount-section";
+import { formatRupiahInput, utcToJakartaLocal } from "@/lib/products/discount";
 
 export default async function ProdukDetailPage({ params }: { params: Promise<{ id: string }> }) {
   // Either permission is enough to reach this page at all — which SECTIONS render below is then
@@ -96,6 +99,24 @@ export default async function ProdukDetailPage({ params }: { params: Promise<{ i
               <ProductBatasHpp basePrice={product.basePrice} />
             </div>
           )}
+        </div>
+      )}
+
+      {canManageProducts && (
+        <div className="mt-8">
+          <DiscountSection
+            productId={product.id}
+            basePrice={product.basePrice}
+            // docs/plans/product-discount.md §3.3: the chip reflects the saved discount at this render.
+            status={discountStatus(product, new Date())}
+            hasStoredDiscount={product.discountPriceAmount !== null || product.discountEnabled || product.discountStartsAt !== null || product.discountEndsAt !== null}
+            initialValues={{
+              priceText: product.discountPriceAmount === null ? "" : formatRupiahInput(product.discountPriceAmount),
+              enabled: product.discountEnabled,
+              startsAt: product.discountStartsAt ? utcToJakartaLocal(product.discountStartsAt) : "",
+              endsAt: product.discountEndsAt ? utcToJakartaLocal(product.discountEndsAt) : "",
+            }}
+          />
         </div>
       )}
 

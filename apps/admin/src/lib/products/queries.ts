@@ -3,8 +3,12 @@ import { and, count, desc, eq, ilike, lte } from "drizzle-orm";
 import { costAssumptions, fabricColors, fabrics, productImages, products, productVariants } from "@ammari/db/schema";
 import type { ProductClosure, Size, SizeMode } from "@ammari/db/schema";
 import { generateSku } from "@ammari/db/catalog";
+import { discountStatus, resolveUnitPrice, validateDiscountPrice, type DiscountStatus } from "@ammari/db/pricing";
+import { productPricingColumns } from "@ammari/db/pricing-columns";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from "./errors";
+import { basePriceBreaksDiscountMessage } from "./discount";
+import { mapDiscountConstraintViolation } from "./discount-queries";
 import { buildImageSizeUrl, listProductIdsMissingPhotos, syncAltTextsForProductRename } from "./image-queries";
 import { todayInJakarta } from "./jakarta-date";
 import { SHIPPING_WEIGHT_REQUIRED_WHILE_PUBLISHED_MESSAGE } from "./shipping-weight";
@@ -53,8 +57,12 @@ export async function listProducts(
   rawPage: string | undefined,
   rawPerPage: string | undefined,
   db: Database = defaultDb,
+  now: Date = new Date(),
 ): Promise<{
-  rows: (Omit<Awaited<ReturnType<typeof queryProductsPage>>[number], "thumbnailStorageKey" | "shippingWeightGrams"> & {
+  rows: (Omit<
+    Awaited<ReturnType<typeof queryProductsPage>>[number],
+    "thumbnailStorageKey" | "shippingWeightGrams" | "discountPriceAmount" | "discountEnabled" | "discountStartsAt" | "discountEndsAt"
+  > & {
     thumbnailUrl: string | null;
     /** At least one active color has no photo of its own yet — the list's non-blocking
      * "Belum ada foto" reminder badge (see image-queries.ts's listProductIdsMissingPhotos). */
@@ -62,6 +70,11 @@ export async function listProducts(
     /** An active product without "Berat kirim": it cannot go live, and if it is already live
      * (published before the rule) checkout refuses it. The "Berat kirim belum diisi" badge. */
     missingShippingWeight: boolean;
+    /** The discount chip (docs/plans/product-discount.md §9); null when no sale price is stored. */
+    discountStatus: DiscountStatus | null;
+    /** What the storefront charges right now: the sale price while the discount is active,
+     * otherwise the base price. */
+    effectivePrice: number;
   })[];
   pagination: Pagination;
 }> {
@@ -78,12 +91,19 @@ export async function listProducts(
   // Built from a plain column (storage_key), not a query — a thumbnail-less product's row is
   // excluded from the join (LEFT JOIN), not merely an empty string, so `null` here always means
   // "no thumbnail set", matching products.thumbnail_image_id's own null-ness exactly.
-  const rows = rawRows.map(({ thumbnailStorageKey, shippingWeightGrams, ...row }) => ({
-    ...row,
-    thumbnailUrl: thumbnailStorageKey ? buildImageSizeUrl(thumbnailStorageKey, 400) : null,
-    missingPhotos: missingPhotoIds.has(row.id),
-    missingShippingWeight: row.isActive && shippingWeightGrams === null,
-  }));
+  const rows = rawRows.map(
+    ({ thumbnailStorageKey, shippingWeightGrams, discountPriceAmount, discountEnabled, discountStartsAt, discountEndsAt, ...row }) => {
+      const pricing = { basePrice: row.basePrice, discountPriceAmount, discountEnabled, discountStartsAt, discountEndsAt };
+      return {
+        ...row,
+        thumbnailUrl: thumbnailStorageKey ? buildImageSizeUrl(thumbnailStorageKey, 400) : null,
+        missingPhotos: missingPhotoIds.has(row.id),
+        missingShippingWeight: row.isActive && shippingWeightGrams === null,
+        discountStatus: discountPriceAmount === null ? null : discountStatus(pricing, now),
+        effectivePrice: resolveUnitPrice(pricing, now).unitPrice,
+      };
+    },
+  );
   return { rows, pagination };
 }
 
@@ -94,7 +114,7 @@ function queryProductsPage(db: Database, where: ReturnType<typeof ilike> | undef
       name: products.name,
       slug: products.slug,
       closure: products.closure,
-      basePrice: products.basePrice,
+      ...productPricingColumns,
       isActive: products.isActive,
       highlights: products.highlights,
       shippingWeightGrams: products.shippingWeightGrams,
@@ -210,6 +230,14 @@ export async function updateProduct(
       throw new FieldError("shippingWeightGrams", SHIPPING_WEIGHT_REQUIRED_WHILE_PUBLISHED_MESSAGE);
     }
 
+    // A stored sale price must stay valid against the new base price (docs/plans/product-discount.md
+    // §3.2): below it and at least 1% off, toggle on or off. products_discount_price_amount_check
+    // enforces the same; this turns it into the plan's message on the base price field.
+    const storedSalePrice = before.discountPriceAmount;
+    if (storedSalePrice !== null && validateDiscountPrice(input.basePrice, storedSalePrice) !== null) {
+      throw new FieldError("basePrice", basePriceBreaksDiscountMessage(storedSalePrice));
+    }
+
     const fabricChanged = input.fabricId !== before.fabricId;
     const closureChanged = input.closure !== before.closure;
     if (fabricChanged || closureChanged) {
@@ -238,6 +266,8 @@ export async function updateProduct(
         if (fabricChanged) throw new FieldError("fabricId", FABRIC_IMMUTABLE_MESSAGE);
         throw new FieldError("closure", CLOSURE_IMMUTABLE_MESSAGE);
       }
+      // Backstop for the discount pre-check above (the row is locked, so this should not fire).
+      if (storedSalePrice !== null) mapDiscountConstraintViolation(error, { from: "basePrice", discountPriceAmount: storedSalePrice });
       mapUniqueViolation(error, PRODUCT_CONSTRAINT_FIELDS);
     }
   });

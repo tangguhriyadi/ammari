@@ -10,6 +10,9 @@ import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { shippingWeightString } from "@/lib/products/shipping-weight";
 import { runAction, type ActionResult } from "@/lib/products/action-result";
 import * as productQueries from "@/lib/products/queries";
+import * as discountQueries from "@/lib/products/discount-queries";
+import { DISCOUNT_DATETIME_FORMAT_MESSAGE, DISCOUNT_PRICE_FORMAT_MESSAGE, jakartaLocalToUtc } from "@/lib/products/discount";
+import { parseRupiah } from "@/lib/products/money";
 import * as imageQueries from "@/lib/products/image-queries";
 import * as storefrontQueries from "@/lib/products/storefront";
 import * as recipeQueries from "@/lib/inventory/recipes";
@@ -147,6 +150,90 @@ export async function updateProductAction(
     revalidateAdmin(...PRODUCT_SECTIONS);
     const revalidationOk = (await revalidateProductSlug(product.slug)).ok;
     return { id: product.id, revalidationOk };
+  });
+}
+
+// ---------- Discount (docs/plans/product-discount.md, session 2) ----------
+//
+// Same permission as editing the base price (products.manage). Only the Rp sale price is
+// accepted: the "Diskon (%)" field is display only and never sent. Datetimes arrive as the
+// datetime-local value ("2026-11-01T00:00"), meant in WIB. The business rules (below the base
+// price, at least 1%, window order, end not passed) are checked again in
+// discountQueries.updateProductDiscount against the locked row, not here.
+
+const discountPriceString = z.string().transform((value, ctx) => {
+  if (value.trim() === "") return null;
+  const parsed = parseRupiah(value);
+  if (parsed === null) {
+    ctx.addIssue({ code: "custom", message: DISCOUNT_PRICE_FORMAT_MESSAGE });
+    return z.NEVER;
+  }
+  return parsed;
+});
+
+const jakartaDateTimeString = z.string().transform((value, ctx) => {
+  if (value.trim() === "") return null;
+  const parsed = jakartaLocalToUtc(value);
+  if (parsed === null) {
+    ctx.addIssue({ code: "custom", message: DISCOUNT_DATETIME_FORMAT_MESSAGE });
+    return z.NEVER;
+  }
+  return parsed;
+});
+
+const updateProductDiscountSchema = z.object({
+  discountPrice: discountPriceString,
+  discountEnabled: z.boolean(),
+  discountStartsAt: jakartaDateTimeString,
+  discountEndsAt: jakartaDateTimeString,
+});
+
+const DISCOUNT_FIELD_BY_INPUT_KEY: Record<string, string> = {
+  discountPrice: "discountPriceAmount",
+  discountStartsAt: "discountStartsAt",
+  discountEndsAt: "discountEndsAt",
+};
+
+export async function updateProductDiscountAction(
+  productId: string,
+  input: z.input<typeof updateProductDiscountSchema>,
+): Promise<ActionResult<{ revalidationOk: boolean }>> {
+  const session = await requirePermission("products.manage");
+  const parsedId = z.string().uuid().safeParse(productId);
+  if (!parsedId.success) return { ok: false, error: "Produk tidak ditemukan." };
+  const parsed = updateProductDiscountSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = typeof issue?.path[0] === "string" ? DISCOUNT_FIELD_BY_INPUT_KEY[issue.path[0]] : undefined;
+    const error = issue?.message ?? "Input tidak valid.";
+    return { ok: false, error, fieldErrors: field ? { [field]: error } : undefined };
+  }
+  return runAction(async () => {
+    const product = await discountQueries.updateProductDiscount(
+      parsedId.data,
+      {
+        discountPriceAmount: parsed.data.discountPrice,
+        discountEnabled: parsed.data.discountEnabled,
+        discountStartsAt: parsed.data.discountStartsAt,
+        discountEndsAt: parsed.data.discountEndsAt,
+      },
+      session.staffUser.id,
+    );
+    revalidateAdmin(...PRODUCT_SECTIONS);
+    return { revalidationOk: (await revalidateProductSlug(product.slug)).ok };
+  });
+}
+
+/** "Hapus diskon": clears the sale price and dates and switches the discount off, audit logged
+ * like any other discount save. */
+export async function clearProductDiscountAction(productId: string): Promise<ActionResult<{ revalidationOk: boolean }>> {
+  const session = await requirePermission("products.manage");
+  const parsedId = z.string().uuid().safeParse(productId);
+  if (!parsedId.success) return { ok: false, error: "Produk tidak ditemukan." };
+  return runAction(async () => {
+    const product = await discountQueries.updateProductDiscount(parsedId.data, discountQueries.CLEARED_DISCOUNT, session.staffUser.id);
+    revalidateAdmin(...PRODUCT_SECTIONS);
+    return { revalidationOk: (await revalidateProductSlug(product.slug)).ok };
   });
 }
 

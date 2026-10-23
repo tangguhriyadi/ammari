@@ -1,7 +1,7 @@
 # Per-product discount ("launching price")
 
-Status: **owner answers in (2026-10-23, §12). Session 1 (database + price function) done; sessions
-2 to 4 not started.**
+Status: **owner answers in (2026-10-23, §12). Sessions 1 (database + price function) and 2 (admin)
+done; sessions 3 and 4 not started.**
 
 Scope: `packages/db`, `packages/commerce`, `apps/admin`, `apps/web`.
 
@@ -173,6 +173,9 @@ codes to messages.
 | `ends_at` in the future at save time when toggle is on | n/a | "Waktu selesai sudah lewat." | app only (time-relative) |
 | Editing `base_price` so the discount breaks one of the first three rules | n/a | "Harga normal harus lebih besar dari harga diskon (Rp279.000) dan diskon minimal 1%. Ubah atau hapus diskon dulu." | yes (same CHECK) |
 
+The admin renders every rupiah amount in these messages with its own `formatRupiah` ("Rp 0",
+"Rp 1.000", "Rp 279.000"), like the rest of the admin (owner, 2026-10-23).
+
 Datetimes come from `<input type="datetime-local">`, interpreted as Asia/Jakarta (UTC+7, no DST),
 converted to UTC `timestamptz` on the server, and shown back in Jakarta time. Precision is minutes
 (seconds zeroed). A start in the past is allowed (it simply means "already started").
@@ -222,7 +225,9 @@ check("order_items_list_unit_price_check",
 - `order_items.unit_price` keeps its meaning: **the unit price actually charged** (revenue,
   Overview metrics, `linesAddUp`, Midtrans all keep working unchanged). `list_unit_price` is the
   pre-discount price, written by `placeOrder` for every checkout line (equal to `unit_price` when
-  no discount was active). NULL for pre-migration rows, marketplace imports and manual orders.
+  no discount was active). Manual orders (non-marketplace channels) write it only for a line
+  charged below the SKU's normal price (override, else base), else NULL. NULL for pre-migration
+  rows and marketplace orders.
 - No new `orders` column: `orders.discount_amount` stays **voucher only**. The product discount is
   already inside `subtotal_amount` (sum of `qty * unit_price`); "Hemat" is derived from the line
   snapshots. `orders_total_amount_balance_check` is untouched.
@@ -321,7 +326,7 @@ checkout never pass it.
 | Buyer order pages, pending order banner | Same: snapshot only, struck list price when present and higher. |
 | Admin order detail | Show "Harga normal" (struck) and "Harga" for lines with `list_unit_price > unit_price`. |
 | Admin product list + detail | Status chip (Aktif / Terjadwal / Berakhir / Nonaktif) and the effective price. |
-| Admin manual-order picker (`listOrderableVariants`) | Owner answer 2: prefill `resolveUnitPrice(product, now, { variantPriceOverride }).unitPrice` (still editable per line). Manual orders keep `list_unit_price` NULL unless session 2 decides to fill it. Marketplace imports are never affected. |
+| Admin manual-order picker (`listOrderableVariants`) | Owner answer 2: prefill `resolveUnitPrice(product, now, { variantPriceOverride }).unitPrice` (still editable per line). `createOrder`/`updateOrderItems` snapshot `list_unit_price` when a line is charged below the normal price (session 2). Marketplace imports are never affected. |
 
 The browser never sends a price anywhere: the cart stores only SKU and qty, and `placeOrder`
 already treats `expectedTotal` as a drift detector only. That stays true.
@@ -486,7 +491,8 @@ price next to it stays readable, and the screen-reader text carries both prices.
 
 1. **Schema + resolver. Done 2026-10-23.** Migration `0036_product_discount.sql`,
    `@ammari/db/pricing`, `@ammari/db/pricing-columns`, CHECK and upgrade tests. No UI.
-2. **Admin.** "Diskon" section, linked inputs, `updateProductDiscount` + audit + revalidation,
+2. **Admin. Done 2026-10-23.** Manual orders snapshot `list_unit_price` when a line is
+   charged below the normal price (NULL otherwise and for marketplace channels). "Diskon" section, linked inputs, `updateProductDiscount` + audit + revalidation,
    base-price guard, list status chip; unit + e2e. **Blocker from the session 1 code review:**
    `updateProduct` (`apps/admin/src/lib/products/queries.ts`) only maps 23503 and unique
    violations, so a base price edit that breaks a stored discount would surface as a 500. It must

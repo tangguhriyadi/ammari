@@ -134,6 +134,11 @@ export function OrderItemPicker({ variants, lines, onLineChange }: OrderItemPick
                           = {formatRupiah(line.qty * (Number.parseInt(line.unitPrice.replace(/\D/g, ""), 10) || 0))}
                         </p>
                       )}
+                      {variant.discounted && (
+                        <p className="col-span-3 text-sm text-neutral-600" data-testid={`discount-note-${variant.sku}`}>
+                          Harga diskon. Harga normal {formatRupiah(variant.listPrice)}.
+                        </p>
+                      )}
                     </div>
                   );
                 })}

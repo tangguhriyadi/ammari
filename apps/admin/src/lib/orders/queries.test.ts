@@ -1,10 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { withRollback } from "@ammari/db/test-utils";
-import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
-import { orderNotifications, orders, payments, shipments, stockMovements, type OrderAttentionFlag } from "@ammari/db/schema";
+import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant, insertStaffUser, insertVariantForProduct, shippingQuoteValues } from "@ammari/db/test-fixtures";
+import { orderNotifications, orders, payments, products, productVariants, shipments, stockMovements, type OrderAttentionFlag } from "@ammari/db/schema";
 import { createOrder } from "@ammari/commerce/orders";
 import { eq } from "drizzle-orm";
-import { countOrdersNeedingAttention, getOrderDetail, listOrders, stripOrderDetailCost } from "./queries";
+import { countOrdersNeedingAttention, getOrderDetail, listOrderableVariants, listOrders, stripOrderDetailCost } from "./queries";
 
 // The write-path tests (createOrder, updateOrderItems, transitionOrderStatus,
 // generateOrderNumber) moved with that code to packages/commerce/src/orders/lifecycle.test.ts.
@@ -171,3 +171,51 @@ describe("getOrderDetail courier bookings (Phase K2)", () => {
   });
 });
 
+
+describe("listOrderableVariants prefill with a product discount (docs/plans/product-discount.md §5.2)", () => {
+  const NOW = new Date("2026-10-23T05:00:00Z");
+
+  async function discountedProduct(tx: Parameters<Parameters<typeof withRollback>[0]>[0], discount: Partial<typeof products.$inferInsert>) {
+    const { fabric, color } = await insertProductVariant(tx);
+    const { product, variant } = await insertVariantForProduct(tx, fabric.id, color.id, {
+      basePrice: 350_000,
+      discountPriceAmount: 279_000,
+      discountEnabled: true,
+      ...discount,
+    });
+    return { product, variant };
+  }
+
+  async function row(tx: Parameters<Parameters<typeof withRollback>[0]>[0], sku: string) {
+    return (await listOrderableVariants(tx, NOW)).find((candidate) => candidate.sku === sku);
+  }
+
+  test("an active discount prefills the sale price and keeps the list price for the note", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await discountedProduct(tx, {});
+      expect(await row(tx, variant.sku)).toMatchObject({ effectivePrice: 279_000, listPrice: 350_000, discounted: true });
+    });
+  });
+
+  test("a scheduled, ended or switched-off discount prefills the normal price", async () => {
+    await withRollback(async (tx) => {
+      const scheduled = await discountedProduct(tx, { discountStartsAt: new Date("2026-11-01T00:00:00Z") });
+      const ended = await discountedProduct(tx, { discountEndsAt: new Date("2026-10-23T05:00:00Z") });
+      const off = await discountedProduct(tx, { discountEnabled: false });
+      for (const { variant } of [scheduled, ended, off]) {
+        expect(await row(tx, variant.sku)).toMatchObject({ effectivePrice: 350_000, listPrice: 350_000, discounted: false });
+      }
+    });
+  });
+
+  test("a variant override above the sale price gets the sale price; one at or below it keeps its override", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await discountedProduct(tx, {});
+      await tx.update(productVariants).set({ priceOverrideAmount: 375_000 }).where(eq(productVariants.sku, variant.sku));
+      expect(await row(tx, variant.sku)).toMatchObject({ effectivePrice: 279_000, listPrice: 375_000, discounted: true });
+
+      await tx.update(productVariants).set({ priceOverrideAmount: 260_000 }).where(eq(productVariants.sku, variant.sku));
+      expect(await row(tx, variant.sku)).toMatchObject({ effectivePrice: 260_000, listPrice: 260_000, discounted: false });
+    });
+  });
+});

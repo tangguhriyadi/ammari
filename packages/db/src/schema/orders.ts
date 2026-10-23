@@ -283,8 +283,9 @@ export const orderItems = pgTable(
     unitCost: bigint("unit_cost", { mode: "number" }).notNull(),
     // The undiscounted unit price at order time (docs/plans/product-discount.md §4, migration
     // 0036); `unit_price` stays what was actually charged. Written by placeOrder for every
-    // checkout line (equal to unit_price when no discount was active). NULL on rows from before
-    // 0036, marketplace imports and manual orders.
+    // checkout line (equal to unit_price when no discount was active). Manual orders write it only
+    // when the line was charged below the SKU's normal price, else NULL. NULL on rows from before
+    // 0036 and marketplace orders.
     listUnitPrice: bigint("list_unit_price", { mode: "number" }),
     ...createdAtOnly(),
   },

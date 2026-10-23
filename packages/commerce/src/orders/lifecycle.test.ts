@@ -751,3 +751,108 @@ describe("updateShipmentDetails (\"Tambah resi\" / \"Ubah resi\")", () => {
     });
   });
 });
+
+describe("manual orders snapshot list_unit_price (docs/plans/product-discount.md §4)", () => {
+  const NOW = new Date("2026-10-23T05:00:00Z");
+
+  async function linePrices(tx: TestDatabase, orderId: string) {
+    return tx.select({ sku: orderItems.sku, unitPrice: orderItems.unitPrice, listUnitPrice: orderItems.listUnitPrice }).from(orderItems).where(eq(orderItems.orderId, orderId));
+  }
+
+  async function discountedVariant(tx: TestDatabase) {
+    const { product, variant } = await insertProductVariant(tx);
+    await tx.update(products).set({ basePrice: 350_000, discountPriceAmount: 279_000, discountEnabled: true }).where(eq(products.id, product.id));
+    return { product, variant };
+  }
+
+  function manualOrder(items: { sku: string; qty: number; unitPrice: number }[], channelId: "whatsapp" | "shopee" = "whatsapp") {
+    return {
+      channelId,
+      channelOrderNo: channelId === "shopee" ? `SHP-${crypto.randomUUID()}` : null,
+      orderDate: "2026-10-23",
+      items,
+      discountAmount: 0,
+      shippingAmount: 0,
+      status: "awaiting_payment" as const,
+    };
+  }
+
+  test("a line charged at the active discount price keeps the normal price", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await discountedVariant(tx);
+      const staff = await insertStaffUser(tx);
+      const order = await createOrder(manualOrder([{ sku: variant.sku, qty: 1, unitPrice: 279_000 }]), staff.id, tx, NOW);
+      expect(await linePrices(tx, order.id)).toEqual([{ sku: variant.sku, unitPrice: 279_000, listUnitPrice: 350_000 }]);
+    });
+  });
+
+  test("the normal price follows a variant override", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await discountedVariant(tx);
+      await tx.update(productVariants).set({ priceOverrideAmount: 375_000 }).where(eq(productVariants.sku, variant.sku));
+      const staff = await insertStaffUser(tx);
+      const order = await createOrder(manualOrder([{ sku: variant.sku, qty: 1, unitPrice: 279_000 }]), staff.id, tx, NOW);
+      expect((await linePrices(tx, order.id))[0]?.listUnitPrice).toBe(375_000);
+    });
+  });
+
+  test("NULL when nothing was taken off: no discount, or charged at or above the normal price", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx); // 259.000, no discount
+      const discounted = await discountedVariant(tx);
+      const staff = await insertStaffUser(tx);
+      const order = await createOrder(
+        manualOrder([
+          { sku: variant.sku, qty: 1, unitPrice: 259_000 },
+          { sku: discounted.variant.sku, qty: 1, unitPrice: 360_000 },
+        ]),
+        staff.id,
+        tx,
+        NOW,
+      );
+      const lines = await linePrices(tx, order.id);
+      expect(lines.every((line) => line.listUnitPrice === null)).toBe(true);
+    });
+  });
+
+  test("a discount that has ended no longer counts, but a price typed below normal still records it", async () => {
+    await withRollback(async (tx) => {
+      const { product, variant } = await discountedVariant(tx);
+      await tx.update(products).set({ discountEndsAt: new Date("2026-10-01T00:00:00Z") }).where(eq(products.id, product.id));
+      const staff = await insertStaffUser(tx);
+      const order = await createOrder(manualOrder([{ sku: variant.sku, qty: 1, unitPrice: 300_000 }]), staff.id, tx, NOW);
+      expect((await linePrices(tx, order.id))[0]?.listUnitPrice).toBe(350_000);
+    });
+  });
+
+  test("marketplace channels keep NULL (their prices are the marketplace's own)", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await discountedVariant(tx);
+      const staff = await insertStaffUser(tx);
+      const order = await createOrder(manualOrder([{ sku: variant.sku, qty: 1, unitPrice: 279_000 }], "shopee"), staff.id, tx, NOW);
+      expect((await linePrices(tx, order.id))[0]?.listUnitPrice).toBeNull();
+    });
+  });
+
+  test("updateOrderItems keeps the original snapshot for a line whose price did not change", async () => {
+    await withRollback(async (tx) => {
+      const { product, variant } = await insertProductVariant(tx); // 259.000, no discount
+      const staff = await insertStaffUser(tx);
+      const order = await createOrder(manualOrder([{ sku: variant.sku, qty: 1, unitPrice: 259_000 }]), staff.id, tx, NOW);
+      await tx.update(products).set({ basePrice: 300_000 }).where(eq(products.id, product.id));
+      await updateOrderItems(order.id, [{ sku: variant.sku, qty: 3, unitPrice: 259_000 }], staff.id, tx, NOW);
+      expect((await linePrices(tx, order.id))[0]?.listUnitPrice).toBeNull();
+    });
+  });
+
+  test("updateOrderItems snapshots the same way", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await discountedVariant(tx);
+      const staff = await insertStaffUser(tx);
+      const order = await createOrder(manualOrder([{ sku: variant.sku, qty: 1, unitPrice: 350_000 }]), staff.id, tx, NOW);
+      expect((await linePrices(tx, order.id))[0]?.listUnitPrice).toBeNull();
+      await updateOrderItems(order.id, [{ sku: variant.sku, qty: 2, unitPrice: 279_000 }], staff.id, tx, NOW);
+      expect(await linePrices(tx, order.id)).toEqual([{ sku: variant.sku, unitPrice: 279_000, listUnitPrice: 350_000 }]);
+    });
+  });
+});

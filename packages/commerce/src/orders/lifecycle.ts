@@ -1,6 +1,8 @@
 import "server-only";
-import { and, desc, eq, notInArray, sql, type SQL } from "drizzle-orm";
-import { orderItems, orderNotifications, orders, shipments, stockMovements, vouchers, MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
+import { and, desc, eq, inArray, notInArray, sql, type SQL } from "drizzle-orm";
+import { orderItems, orderNotifications, orders, products, productVariants, shipments, stockMovements, vouchers, MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
+import { resolveUnitPrice } from "@ammari/db/pricing";
+import { productPricingColumns } from "@ammari/db/pricing-columns";
 import type { ChannelId, OrderStatus } from "@ammari/db/schema";
 import { valueDeltaForConsumption } from "../inventory/moving-average";
 import { lockVariantForUpdate } from "../stock/lock";
@@ -126,6 +128,35 @@ async function restoreStockForOrderItems(tx: Tx, orderId: string, actorStaffUser
   }
 }
 
+/** `order_items.list_unit_price` for manually entered lines (docs/plans/product-discount.md §4):
+ * the SKU's normal price at this moment (variant override, else the product's base price, the
+ * `listPrice` of resolveUnitPrice) when the charged price is below it, e.g. an active discount the
+ * order form prefilled; NULL when nothing was taken off. The normal price is always read here,
+ * never taken from the browser. Marketplace channels keep NULL: their prices are the
+ * marketplace's own, not a reduction from ours (plan §5.2). */
+async function manualListUnitPrices(
+  tx: Tx,
+  channelId: ChannelId,
+  items: readonly { sku: string; unitPrice: number }[],
+  now: Date,
+): Promise<Map<string, number | null>> {
+  const result = new Map<string, number | null>(items.map((item) => [item.sku, null]));
+  if (MARKETPLACE_CHANNEL_IDS.includes(channelId) || items.length === 0) return result;
+  const rows = await tx
+    .select({ sku: productVariants.sku, priceOverrideAmount: productVariants.priceOverrideAmount, ...productPricingColumns })
+    .from(productVariants)
+    .innerJoin(products, eq(products.id, productVariants.productId))
+    .where(inArray(productVariants.sku, items.map((item) => item.sku)));
+  const listPriceBySku = new Map(
+    rows.map(({ sku, priceOverrideAmount, ...pricing }) => [sku, resolveUnitPrice(pricing, now, { variantPriceOverride: priceOverrideAmount }).listPrice]),
+  );
+  for (const item of items) {
+    const listPrice = listPriceBySku.get(item.sku);
+    result.set(item.sku, listPrice !== undefined && listPrice > item.unitPrice ? listPrice : null);
+  }
+  return result;
+}
+
 function validateOrderItemsInput(items: readonly CreateOrderItemInput[]): void {
   if (items.length === 0) throw new ActionError("Pesanan harus punya minimal 1 item.");
   const seen = new Set<string>();
@@ -137,7 +168,7 @@ function validateOrderItemsInput(items: readonly CreateOrderItemInput[]): void {
   }
 }
 
-export async function createOrder(input: CreateOrderInput, actorStaffUserId: string, db: Database = defaultDb) {
+export async function createOrder(input: CreateOrderInput, actorStaffUserId: string, db: Database = defaultDb, now: Date = new Date()) {
   validateOrderItemsInput(input.items);
   if (MARKETPLACE_CHANNEL_IDS.includes(input.channelId) && !input.channelOrderNo?.trim()) {
     throw new FieldError("channelOrderNo", "Nomor pesanan marketplace wajib diisi untuk kanal ini.");
@@ -173,6 +204,7 @@ export async function createOrder(input: CreateOrderInput, actorStaffUserId: str
         .returning();
       if (!order) throw new Error("failed to insert order");
 
+      const listUnitPrices = await manualListUnitPrices(tx, input.channelId, input.items, now);
       const insertedItems = await tx
         .insert(orderItems)
         .values(
@@ -181,6 +213,7 @@ export async function createOrder(input: CreateOrderInput, actorStaffUserId: str
             sku: item.sku,
             qty: item.qty,
             unitPrice: item.unitPrice,
+            listUnitPrice: listUnitPrices.get(item.sku) ?? null,
             // Placeholder — overwritten by decrementStockForOrderItems below whenever this
             // order's starting status already requires stock to leave. Stays 0 for an
             // awaiting_payment order, where stock hasn't left yet (set for real on its later
@@ -235,6 +268,7 @@ export async function updateOrderItems(
   items: readonly UpdateOrderItemInput[],
   actorStaffUserId: string,
   db: Database = defaultDb,
+  now: Date = new Date(),
 ) {
   validateOrderItemsInput(items);
   return db.transaction(async (tx) => {
@@ -253,10 +287,32 @@ export async function updateOrderItems(
       throw new ActionError(CHECKOUT_ORDER_LOCKED_MESSAGE);
     }
 
+    // A line kept at the same price keeps its original list_unit_price snapshot; only new or
+    // repriced lines are resolved against today's catalog. Otherwise a qty-only edit after a base
+    // price change would record a reduction the buyer never got.
+    const previousLines = await tx
+      .select({ sku: orderItems.sku, unitPrice: orderItems.unitPrice, listUnitPrice: orderItems.listUnitPrice })
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId));
+    const previousBySku = new Map(previousLines.map((line) => [line.sku, line]));
+    const keptPrice = (item: UpdateOrderItemInput) => previousBySku.get(item.sku)?.unitPrice === item.unitPrice;
     await tx.delete(orderItems).where(eq(orderItems.orderId, orderId));
+    const freshListUnitPrices = await manualListUnitPrices(tx, order.channelId, items.filter((item) => !keptPrice(item)), now);
+    const listUnitPrices = new Map(
+      items.map((item) => [item.sku, keptPrice(item) ? (previousBySku.get(item.sku)?.listUnitPrice ?? null) : (freshListUnitPrices.get(item.sku) ?? null)]),
+    );
     const insertedItems = await tx
       .insert(orderItems)
-      .values(items.map((item) => ({ orderId, sku: item.sku, qty: item.qty, unitPrice: item.unitPrice, unitCost: 0 })))
+      .values(
+        items.map((item) => ({
+          orderId,
+          sku: item.sku,
+          qty: item.qty,
+          unitPrice: item.unitPrice,
+          listUnitPrice: listUnitPrices.get(item.sku) ?? null,
+          unitCost: 0,
+        })),
+      )
       .returning();
 
     const subtotalAmount = items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);

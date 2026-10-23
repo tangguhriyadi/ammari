@@ -19,6 +19,8 @@ import {
 } from "@ammari/db/schema";
 import type { ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus, ShipmentEventSource, ShipmentStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
+import { resolveUnitPrice } from "@ammari/db/pricing";
+import { productPricingColumns } from "@ammari/db/pricing-columns";
 import { defaultDb, type Database } from "@/lib/db";
 import { orderBuyerNameSql } from "./buyer-name";
 
@@ -49,17 +51,21 @@ export interface OrderableVariantRow {
   colorId: string;
   colorName: string;
   colorHex: string | null;
-  /** priceOverrideAmount ?? the product's basePrice — the same "effective price" every other
-   * price-reading call site in this codebase computes inline (there is no shared helper to
-   * reuse; see products/queries.ts's own variant rows). Prefilled into the order form, editable
-   * per line before submit. */
+  /** The price prefilled into the order form, editable per line before submit:
+   * `resolveUnitPrice(product, now, { variantPriceOverride })` (docs/plans/product-discount.md
+   * §5.2, owner answer 2). Without an active discount that is priceOverrideAmount ?? basePrice;
+   * with one it is the product's sale price, but only when that is below the variant's own list
+   * price (a discount never raises a price). */
   effectivePrice: number;
+  /** The undiscounted price (override ?? base); equal to effectivePrice when not discounted. */
+  listPrice: number;
+  discounted: boolean;
 }
 
 /** Active variants across every product — the /orders/new SKU picker's source list. Flat rows,
  * grouped product -> color -> size client-side, same division of labor as production's
  * listEligibleSkusForFabric/BatchLinePicker. */
-export async function listOrderableVariants(db: Database = defaultDb): Promise<OrderableVariantRow[]> {
+export async function listOrderableVariants(db: Database = defaultDb, now: Date = new Date()): Promise<OrderableVariantRow[]> {
   const rows = await db
     .select({
       sku: productVariants.sku,
@@ -70,7 +76,7 @@ export async function listOrderableVariants(db: Database = defaultDb): Promise<O
       colorName: fabricColors.name,
       colorHex: fabricColors.hex,
       priceOverrideAmount: productVariants.priceOverrideAmount,
-      basePrice: products.basePrice,
+      ...productPricingColumns,
     })
     .from(productVariants)
     .innerJoin(products, eq(products.id, productVariants.productId))
@@ -78,10 +84,14 @@ export async function listOrderableVariants(db: Database = defaultDb): Promise<O
     .where(eq(productVariants.isActive, true))
     .orderBy(products.name, fabricColors.name, productVariants.size);
 
-  return rows.map(({ priceOverrideAmount, basePrice, ...row }) => ({
-    ...row,
-    effectivePrice: priceOverrideAmount ?? basePrice,
-  }));
+  return rows.map(({ priceOverrideAmount, basePrice, discountPriceAmount, discountEnabled, discountStartsAt, discountEndsAt, ...row }) => {
+    const price = resolveUnitPrice(
+      { basePrice, discountPriceAmount, discountEnabled, discountStartsAt, discountEndsAt },
+      now,
+      { variantPriceOverride: priceOverrideAmount },
+    );
+    return { ...row, effectivePrice: price.unitPrice, listPrice: price.listPrice, discounted: price.discounted };
+  });
 }
 
 // ---------- Read ----------

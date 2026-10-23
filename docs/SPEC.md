@@ -535,8 +535,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   several rows for the same SKU in one order, the importer **merges them into one line** before
   inserting: `qty` summed, `unit_price` the weighted average rounded to the nearest whole
   rupiah. `unit_price` is always what was charged; `list_unit_price` (migration 0036, nullable)
-  is the undiscounted price, snapshotted for checkout lines (NULL on older rows, imports and
-  manual orders; never below `unit_price`).
+  is the undiscounted price, snapshotted for checkout lines, and for manual-order lines charged
+  below the SKU's normal price (NULL on older rows, marketplace orders and undiscounted manual
+  lines; never below `unit_price`).
 - `order_settlements` — actual payout data from the marketplace, arrives after `orders`.
 - `import_batches` — tracks each Shopee/TikTok export upload.
 - `payments` — one row per payment attempt (Midtrans); unique on `provider_order_id`
