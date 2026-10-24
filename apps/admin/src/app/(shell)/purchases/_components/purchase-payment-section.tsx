@@ -1,37 +1,19 @@
-import type { ReactNode } from "react";
-import { Badge, Card, CardList, TableContainer, TableHead, Td, Th, Tr } from "@ammari/ui";
-import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
-import {
-  PAYMENT_METHOD_LABELS,
-  type PurchaseAttachmentRow,
-  type PurchasePaymentRow,
-} from "@/lib/supplier-payments/purchase-payments";
+import { Badge, Card } from "@ammari/ui";
+import { formatDateTime, formatRupiah } from "@ammari/ui/lib";
+import { PaymentHistory, Struck, SummaryItem, voidedLine } from "@/components/supplier-payments/payment-history";
+import { PaymentStatusBadge } from "@/components/supplier-payments/payment-status-badge";
+import { PrivateFileLink } from "@/components/supplier-payments/private-file-link";
+import { RecordPaymentButton } from "@/components/supplier-payments/record-payment-button";
+import { VoidRecordButton } from "@/components/supplier-payments/void-record-button";
+import type { SupplierPaymentRow } from "@/lib/supplier-payments/payment-records";
+import type { PurchaseAttachmentRow } from "@/lib/supplier-payments/purchase-payments";
 import type { PaymentSummary } from "@/lib/supplier-payments/status";
+import { recordPurchasePaymentAction, voidPurchaseAttachmentAction } from "../payment-actions";
 import { AttachInvoiceButton } from "./attach-invoice-button";
-import { PaymentStatusBadge } from "./payment-status-badge";
-import { PrivateFileLink } from "./private-file-link";
-import { RecordPaymentButton } from "./record-payment-button";
-import { VoidRecordButton } from "./void-record-button";
 
 // The purchase detail's "Pembayaran" and "Nota pemasok" sections (docs/plans/purchase-payments.md
 // §9). Rendered only for finance.view_profit (the page decides; §7): every figure here is cost
 // data. Recording, voiding and opening a proof additionally need supplier_payments.manage.
-
-function voidedLine(row: { voidedAt: Date | null; voidedByName: string | null; voidReason: string | null }): string | null {
-  if (!row.voidedAt) return null;
-  return `Dibatalkan ${formatDateTime(row.voidedAt)}${row.voidedByName ? ` oleh ${row.voidedByName}` : ""}: ${row.voidReason ?? ""}`;
-}
-
-function SummaryItem({ label, value, testId }: { label: string; value: string; testId: string }) {
-  return (
-    <div>
-      <dt className="text-sm text-neutral-600">{label}</dt>
-      <dd className="text-base font-semibold tabular-nums text-neutral-900" data-testid={testId}>
-        {value}
-      </dd>
-    </div>
-  );
-}
 
 export function PurchasePaymentSection({
   purchaseId,
@@ -45,7 +27,7 @@ export function PurchasePaymentSection({
   purchaseNo: string;
   isCancelled: boolean;
   summary: PaymentSummary;
-  payments: PurchasePaymentRow[];
+  payments: SupplierPaymentRow[];
   /** supplier_payments.manage (+ finance.view_profit, implied by this section rendering at all):
    * record, void, open proofs. */
   canRecord: boolean;
@@ -57,7 +39,14 @@ export function PurchasePaymentSection({
         <h2 id="payments-heading" className="text-lg font-semibold text-neutral-900">
           Pembayaran
         </h2>
-        {canPay && <RecordPaymentButton purchaseId={purchaseId} purchaseNo={purchaseNo} remaining={summary.remaining} />}
+        {canPay && (
+          <RecordPaymentButton
+            recordAction={recordPurchasePaymentAction}
+            targetFields={{ purchaseId }}
+            documentNo={purchaseNo}
+            remaining={summary.remaining}
+          />
+        )}
       </div>
 
       <Card className="flex flex-col gap-3" data-testid="payment-summary">
@@ -83,109 +72,8 @@ export function PurchasePaymentSection({
       </Card>
 
       <h3 className="mt-4 mb-2 text-base font-semibold text-neutral-900">Riwayat pembayaran</h3>
-      {payments.length === 0 ? (
-        <p className="text-base text-neutral-600">Belum ada pembayaran.</p>
-      ) : (
-        <PaymentHistory payments={payments} canRecord={canRecord} />
-      )}
+      <PaymentHistory payments={payments} canRecord={canRecord} />
     </section>
-  );
-}
-
-function Struck({ voided, children }: { voided: boolean; children: ReactNode }) {
-  return voided ? <span className="text-neutral-500 line-through">{children}</span> : <>{children}</>;
-}
-
-function PaymentHistory({ payments, canRecord }: { payments: PurchasePaymentRow[]; canRecord: boolean }) {
-  const proofCell = (payment: PurchasePaymentRow) =>
-    canRecord ? <PrivateFileLink file={payment.proof} label="Lihat bukti" title={`Bukti ${payment.paymentNo}`} /> : <span className="text-neutral-600">-</span>;
-  const voidButton = (payment: PurchasePaymentRow) =>
-    canRecord && payment.voidedAt === null ? <VoidRecordButton kind="payment" id={payment.id} label={payment.paymentNo} /> : null;
-
-  return (
-    <>
-      <CardList>
-        {payments.map((payment) => {
-          const voided = payment.voidedAt !== null;
-          return (
-            <li key={payment.id} data-testid="payment-card">
-              <Card className="flex flex-col gap-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-base font-medium text-neutral-900">
-                      <Struck voided={voided}>{payment.paymentNo}</Struck>
-                    </p>
-                    <p className="text-sm text-neutral-600">
-                      {formatDate(new Date(payment.paidAt))} · {PAYMENT_METHOD_LABELS[payment.method]}
-                    </p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <span className="text-base font-semibold tabular-nums text-neutral-900">
-                      <Struck voided={voided}>{formatRupiah(payment.amount)}</Struck>
-                    </span>
-                    {voided && <Badge variant="neutral">Dibatalkan</Badge>}
-                  </div>
-                </div>
-                <p className="text-sm text-neutral-600">
-                  Kepada {payment.supplierName ?? "-"} · dicatat {formatDateTime(payment.createdAt)}
-                  {payment.recordedByName ? ` oleh ${payment.recordedByName}` : ""}
-                </p>
-                {payment.note && <p className="text-sm text-neutral-800">{payment.note}</p>}
-                {voided && <p className="text-sm text-neutral-700">{voidedLine(payment)}</p>}
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  {proofCell(payment)}
-                  {voidButton(payment)}
-                </div>
-              </Card>
-            </li>
-          );
-        })}
-      </CardList>
-      <TableContainer>
-        <TableHead>
-          <Th>No. bayar</Th>
-          <Th>Tanggal</Th>
-          <Th>Metode</Th>
-          <Th>Jumlah</Th>
-          <Th>Dibayar kepada</Th>
-          <Th>Dicatat oleh</Th>
-          <Th>Bukti</Th>
-          <Th>Catatan</Th>
-          {canRecord && <Th>Aksi</Th>}
-        </TableHead>
-        <tbody>
-          {payments.map((payment) => {
-            const voided = payment.voidedAt !== null;
-            return (
-              <Tr key={payment.id} data-testid="payment-row">
-                <Td className="font-medium text-neutral-900">
-                  <div className="flex flex-col items-start gap-1">
-                    <Struck voided={voided}>{payment.paymentNo}</Struck>
-                    {voided && <Badge variant="neutral">Dibatalkan</Badge>}
-                  </div>
-                </Td>
-                <Td className="text-neutral-700">{formatDate(new Date(payment.paidAt))}</Td>
-                <Td className="text-neutral-700">{PAYMENT_METHOD_LABELS[payment.method]}</Td>
-                <Td className="tabular-nums text-neutral-900">
-                  <Struck voided={voided}>{formatRupiah(payment.amount)}</Struck>
-                </Td>
-                <Td className="text-neutral-700">{payment.supplierName ?? "-"}</Td>
-                <Td className="text-neutral-700">
-                  {payment.recordedByName ?? "-"}
-                  <span className="block text-sm text-neutral-600">{formatDateTime(payment.createdAt)}</span>
-                </Td>
-                <Td>{proofCell(payment)}</Td>
-                <Td className="max-w-64 text-neutral-700">
-                  {payment.note ?? (voided ? null : "-")}
-                  {voided && <span className="block text-sm text-neutral-700">{voidedLine(payment)}</span>}
-                </Td>
-                {canRecord && <Td>{voidButton(payment)}</Td>}
-              </Tr>
-            );
-          })}
-        </tbody>
-      </TableContainer>
-    </>
   );
 }
 
@@ -232,7 +120,7 @@ export function PurchaseInvoiceSection({
                   {voided && <p className="text-sm text-neutral-700">{voidedLine(attachment)}</p>}
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <PrivateFileLink file={attachment.file} label="Lihat nota" title={label} />
-                    {canManage && !voided && <VoidRecordButton kind="attachment" id={attachment.id} label={label} />}
+                    {canManage && !voided && <VoidRecordButton kind="attachment" id={attachment.id} label={label} voidAction={voidPurchaseAttachmentAction} />}
                   </div>
                 </Card>
               </li>

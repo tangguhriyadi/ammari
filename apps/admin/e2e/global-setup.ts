@@ -79,6 +79,14 @@ const E2E_SUPPLIERS_ROLE_KEY = "e2e_suppliers";
 // never an amount, a proof, or "Catat pembayaran" (A8).
 export const E2E_SUPPLIER_PAYMENTS_EMAIL = "supplier-payments@e2e.ammari.test";
 export const E2E_PAYMENTS_NO_FINANCE_EMAIL = "payments-no-finance@e2e.ammari.test";
+// Dedicated emails for production-payments.spec.ts (session S4), same "fresh email, clean OTP
+// throttle" reasoning. The owner role builds its own fabric, product, suppliers and batch and
+// holds supplier_payments.manage. The second email sits on a role with EXACTLY production.manage
+// (no finance.view_profit): it must see the batch's payment badge but never an amount, a proof,
+// or "Catat pembayaran" (A8).
+export const E2E_PRODUCTION_PAYMENTS_EMAIL = "production-payments@e2e.ammari.test";
+export const E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL = "production-payments-no-finance@e2e.ammari.test";
+const E2E_PRODUCTION_NO_FINANCE_ROLE_KEY = "e2e_production_no_finance";
 // A dedicated email/role for purchases-receipt.spec.ts (docs/plans/suppliers-goods-receipt.md
 // session S3) — same "fresh email, clean OTP throttle" reasoning as every fixture above. Needs
 // products.manage only to create its own fabric fixture; finance.view_profit so the line totals
@@ -365,6 +373,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_SUPPLIERS_EMAIL, "E2E Suppliers", E2E_SUPPLIERS_ROLE_KEY);
   await ensureStaffFixture(E2E_PAYMENTS_NO_FINANCE_EMAIL, "E2E Payments (no finance)", E2E_SUPPLIERS_ROLE_KEY);
   await ensureStaffFixture(E2E_SUPPLIER_PAYMENTS_EMAIL, "E2E Supplier Payments", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_PRODUCTION_PAYMENTS_EMAIL, "E2E Production Payments", OWNER_ROLE_KEY);
+  await ensureLimitedRole(E2E_PRODUCTION_NO_FINANCE_ROLE_KEY, ["production.manage"]);
+  await ensureStaffFixture(E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL, "E2E Production Payments (no finance)", E2E_PRODUCTION_NO_FINANCE_ROLE_KEY);
 
   await ensureLimitedRole(E2E_PURCHASES_ROLE_KEY, [
     "products.manage",

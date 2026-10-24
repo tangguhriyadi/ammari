@@ -3,8 +3,8 @@ import { describe, expect, test, vi } from "vitest";
 const { getStaffSessionMock } = vi.hoisted(() => ({ getStaffSessionMock: vi.fn() }));
 vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMock }));
 
-const { attachPurchaseInvoiceAction, findDuplicateProofAction, recordPurchasePaymentAction, voidPurchaseAttachmentAction, voidPurchasePaymentAction } =
-  await import("./payment-actions");
+const { attachPurchaseInvoiceAction, recordPurchasePaymentAction, voidPurchaseAttachmentAction } = await import("./payment-actions");
+const { findDuplicateProofAction, voidSupplierPaymentAction } = await import("@/components/supplier-payments/actions");
 
 // docs/plans/purchase-payments.md §7: every payment action re-checks its permissions on the
 // server, and refuses bad input before touching the database or storage. (The write paths
@@ -46,7 +46,7 @@ describe("permissions", () => {
 
   test("voiding a payment and the duplicate-proof lookup need the same two keys", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["finance.view_profit"]));
-    await expect(voidPurchasePaymentAction({ id: NIL_ID, reason: "Salah" })).rejects.toThrow();
+    await expect(voidSupplierPaymentAction({ id: NIL_ID, reason: "Salah" })).rejects.toThrow();
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.view", "inventory.manage"]));
     await expect(findDuplicateProofAction({ sha256: "a".repeat(64) })).rejects.toThrow();
   });
@@ -95,7 +95,7 @@ describe("input validation, before any database or storage call", () => {
 
   test("voiding needs a reason", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(PAYMENT_KEYS));
-    expect(await voidPurchasePaymentAction({ id: NIL_ID, reason: "   " })).toEqual({ ok: false, error: "Alasan pembatalan wajib diisi." });
+    expect(await voidSupplierPaymentAction({ id: NIL_ID, reason: "   " })).toEqual({ ok: false, error: "Alasan pembatalan wajib diisi." });
   });
 
   test("a nota file is required", async () => {

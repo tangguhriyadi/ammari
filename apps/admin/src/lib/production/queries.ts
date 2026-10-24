@@ -1,5 +1,5 @@
 import "server-only";
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import {
   accessories,
   accessoryMovements,
@@ -14,6 +14,7 @@ import {
   products,
   productVariants,
   staffUsers,
+  supplierPayments,
   suppliers,
 } from "@ammari/db/schema";
 import type { CostComponentType, CostComponentUnit, ProductionBatchStatus, ProductionReceiptStatus } from "@ammari/db/schema";
@@ -30,6 +31,7 @@ import { calculateUnitCost } from "./unit-cost";
 import { resolveAccessoryNeeds } from "./accessory-needs";
 import { lockSelectableSuppliers } from "@/lib/suppliers/queries";
 import { effectiveReceiptStatuses } from "@/lib/receipts/production";
+import { summarizePayment, type PaymentSummary } from "@/lib/supplier-payments/status";
 
 // ---------- Eligible SKUs for a fabric ----------
 
@@ -84,6 +86,11 @@ export async function listProductsUsingFabric(fabricId: string, db: Database = d
 
 // ---------- List ----------
 
+/** The /production "Pembayaran" filter (docs/plans/purchase-payments.md §9), same tabs as
+ * /purchases: "Tanpa tagihan" is listed under "Semua" only. */
+export const BATCH_PAYMENT_FILTERS = ["unpaid", "partial", "paid"] as const;
+export type BatchPaymentFilter = (typeof BATCH_PAYMENT_FILTERS)[number];
+
 export interface ListBatchesRow {
   id: string;
   batchNo: string;
@@ -96,17 +103,62 @@ export interface ListBatchesRow {
   receiptStatus: ProductionReceiptStatus;
   fabricName: string;
   totalPcs: number;
+  /** Derived payment state over every payee (§3.2), null for a draft (no tagihan yet). The status
+   * is visible to every viewer of the page (A8); the amounts are cost data, stripped by the
+   * caller (stripBatchListPaymentAmounts). */
+  payment: PaymentSummary | { status: PaymentSummary["status"] } | null;
 }
 
 export async function listBatches(
-  status: ProductionBatchStatus | undefined,
+  filters: { status?: ProductionBatchStatus; payment?: BatchPaymentFilter },
   rawPage: string | undefined,
   rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: ListBatchesRow[]; pagination: Pagination }> {
-  const where = status ? eq(productionBatches.status, status) : undefined;
+  // §3.2 in SQL: Σ of the batch's service lines (never fabric/accessories, A2) and Σ of its
+  // non-voided payments. Mirrors computeBatchPaymentSummary's overall figure; queries.test.ts
+  // asserts the two agree.
+  const serviceTotals = db
+    .select({
+      productionBatchId: productionBatchCosts.productionBatchId,
+      tagihan: sql<string>`sum(${productionBatchCosts.total})::bigint`.as("tagihan"),
+    })
+    .from(productionBatchCosts)
+    .groupBy(productionBatchCosts.productionBatchId)
+    .as("service_totals");
+  const paidTotals = db
+    .select({
+      productionBatchId: supplierPayments.productionBatchId,
+      paid: sql<string>`sum(${supplierPayments.amount})::bigint`.as("paid"),
+    })
+    .from(supplierPayments)
+    .where(and(isNull(supplierPayments.voidedAt), isNotNull(supplierPayments.productionBatchId)))
+    .groupBy(supplierPayments.productionBatchId)
+    .as("batch_paid_totals");
 
-  const [totalCountRow] = await db.select({ totalCount: count() }).from(productionBatches).where(where);
+  const tagihan = sql`coalesce(${serviceTotals.tagihan}, 0)`;
+  const paid = sql`coalesce(${paidTotals.paid}, 0)`;
+  const isPosted = eq(productionBatches.status, "posted");
+  const paymentCondition = {
+    unpaid: and(isPosted, sql`${paid} = 0 and ${tagihan} > 0`),
+    partial: and(isPosted, sql`${paid} > 0 and ${paid} < ${tagihan}`),
+    paid: and(isPosted, sql`${paid} > 0 and ${paid} >= ${tagihan}`),
+  } satisfies Record<BatchPaymentFilter, SQL | undefined>;
+
+  const conditions = [
+    filters.status ? eq(productionBatches.status, filters.status) : undefined,
+    filters.payment ? paymentCondition[filters.payment] : undefined,
+  ].filter((c) => c !== undefined);
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  // The count needs the two aggregates only when it filters on them.
+  const countQuery = db.select({ totalCount: count() }).from(productionBatches).$dynamic();
+  const [totalCountRow] = await (filters.payment
+    ? countQuery
+        .leftJoin(serviceTotals, eq(serviceTotals.productionBatchId, productionBatches.id))
+        .leftJoin(paidTotals, eq(paidTotals.productionBatchId, productionBatches.id))
+    : countQuery
+  ).where(where);
   const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const rows = await db
@@ -119,12 +171,16 @@ export async function listBatches(
       receiptStatus: productionBatches.receiptStatus,
       fabricName: fabrics.name,
       totalPcs: sql<number>`coalesce(sum(${productionBatchItems.qty})::int, 0)`,
+      tagihan: sql<string>`${tagihan}`,
+      paid: sql<string>`${paid}`,
     })
     .from(productionBatches)
     .innerJoin(fabrics, eq(fabrics.id, productionBatches.fabricId))
     .leftJoin(productionBatchItems, eq(productionBatchItems.productionBatchId, productionBatches.id))
+    .leftJoin(serviceTotals, eq(serviceTotals.productionBatchId, productionBatches.id))
+    .leftJoin(paidTotals, eq(paidTotals.productionBatchId, productionBatches.id))
     .where(where)
-    .groupBy(productionBatches.id, fabrics.name)
+    .groupBy(productionBatches.id, fabrics.name, serviceTotals.tagihan, paidTotals.paid)
     .orderBy(desc(productionBatches.producedAt), desc(productionBatches.batchNo))
     .limit(pagination.limit)
     .offset(pagination.offset);
@@ -133,7 +189,21 @@ export async function listBatches(
   // BatchReceiptSummary.receiptStatus): a batch the previous release posted after migration 0025
   // is stored 'pending' though its at-posting stock already counts as received.
   const effective = await effectiveReceiptStatuses(rows, db);
-  return { rows: rows.map((row) => ({ ...row, receiptStatus: effective.get(row.id) ?? row.receiptStatus })), pagination };
+  return {
+    rows: rows.map(({ tagihan: rowTagihan, paid: rowPaid, ...row }) => ({
+      ...row,
+      receiptStatus: effective.get(row.id) ?? row.receiptStatus,
+      payment: row.status === "posted" ? summarizePayment(Number(rowTagihan), Number(rowPaid)) : null,
+    })),
+    pagination,
+  };
+}
+
+/** The list's payment amounts stripped for a viewer without finance.view_profit: the badge
+ * stays (A8), every amount goes. */
+export function stripBatchListPaymentAmounts(rows: ListBatchesRow[], canViewProfit: boolean): ListBatchesRow[] {
+  if (canViewProfit) return rows;
+  return rows.map((row) => ({ ...row, payment: row.payment ? { status: row.payment.status } : null }));
 }
 
 // ---------- Detail ----------

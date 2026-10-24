@@ -1,25 +1,24 @@
 import "server-only";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import {
-  privateFiles,
-  purchaseAttachments,
-  purchaseItems,
-  purchases,
-  staffUsers,
-  supplierPayments,
-  suppliers,
-  type PrivateFileContentType,
-  type PurchaseStatus,
-  type SupplierPaymentMethod,
-} from "@ammari/db/schema";
-import { ActionError, FieldError } from "@/lib/errors";
+import { privateFiles, purchaseAttachments, purchaseItems, purchases, staffUsers, supplierPayments, suppliers, type PurchaseStatus, type SupplierPaymentMethod } from "@ammari/db/schema";
+import { ActionError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
-import { nextDocumentNumber } from "@/lib/documents/document-number";
-import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { getLineQuantities, lockPurchaseForUpdate } from "@/lib/purchases/queries";
+import {
+  assertAmountAllowed,
+  assertPaidAt,
+  insertSupplierPayment,
+  listSupplierPayments,
+  normalizeNote,
+  normalizeReason,
+  PAYMENT_MESSAGES,
+  privateFileValues,
+  type PrivateFileRef,
+  type SupplierPaymentRow,
+} from "./payment-records";
 import { getPurchasePaymentAmounts } from "./purchase-paid";
-import { paymentAmountError, purchasePaymentSummary, summarizePayment, type PaymentSummary } from "./status";
+import { purchasePaymentSummary, summarizePayment, type PaymentSummary } from "./status";
 import type { StoredPrivateFile } from "./store-upload";
 
 // Supplier payments against a purchase document, and the supplier's nota attached to it
@@ -31,28 +30,6 @@ import type { StoredPrivateFile } from "./store-upload";
 // nextDocumentNumber's advisory lock, then the inserts. The private_files row is inserted only
 // here, after the cap check, never in a separate transaction: rows are undeletable, so an orphan
 // row could never be cleaned up.
-
-export const MAX_NOTE_LENGTH = 500;
-export const MAX_REASON_LENGTH = 500;
-
-export const PAYMENT_METHOD_LABELS: Record<SupplierPaymentMethod, string> = {
-  cash: "Tunai",
-  transfer: "Transfer",
-};
-
-export const PAYMENT_MESSAGES = {
-  purchaseNotFound: "Pesanan pembelian tidak ditemukan.",
-  cancelled: "Pesanan yang dibatalkan tidak bisa dibayar.",
-  futureDate: "Tanggal bayar tidak boleh di masa depan.",
-  invalidDate: "Tanggal bayar tidak valid.",
-  noteTooLong: `Catatan maksimal ${MAX_NOTE_LENGTH} karakter.`,
-  reasonRequired: "Alasan pembatalan wajib diisi.",
-  reasonTooLong: `Alasan maksimal ${MAX_REASON_LENGTH} karakter.`,
-  paymentNotFound: "Pembayaran tidak ditemukan.",
-  alreadyVoided: "Pembayaran ini sudah dibatalkan.",
-  attachmentNotFound: "Nota tidak ditemukan.",
-  attachmentAlreadyVoided: "Nota ini sudah dibatalkan.",
-} as const;
 
 // ---------- Summary ----------
 
@@ -100,32 +77,6 @@ export async function purchaseExists(purchaseId: string, db: Database = defaultD
 
 // ---------- Validation ----------
 
-function assertPaidAt(paidAt: string): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(paidAt) || Number.isNaN(Date.parse(`${paidAt}T00:00:00Z`))) {
-    throw new FieldError("paidAt", PAYMENT_MESSAGES.invalidDate);
-  }
-  // A9: only "not in the future" (Asia/Jakarta), no lower bound.
-  if (paidAt > todayInJakarta()) throw new FieldError("paidAt", PAYMENT_MESSAGES.futureDate);
-}
-
-function normalizeNote(note: string | null | undefined): string | null {
-  const trimmed = note?.trim() ?? "";
-  if (trimmed.length > MAX_NOTE_LENGTH) throw new FieldError("note", PAYMENT_MESSAGES.noteTooLong);
-  return trimmed === "" ? null : trimmed;
-}
-
-function normalizeReason(reason: string): string {
-  const trimmed = reason.trim();
-  if (trimmed === "") throw new FieldError("reason", PAYMENT_MESSAGES.reasonRequired);
-  if (trimmed.length > MAX_REASON_LENGTH) throw new FieldError("reason", PAYMENT_MESSAGES.reasonTooLong);
-  return trimmed;
-}
-
-function assertAmountAllowed(amount: number, summary: PaymentSummary): void {
-  const error = paymentAmountError(amount, summary);
-  if (error) throw new FieldError("amount", error);
-}
-
 export interface RecordPurchasePaymentInput {
   purchaseId: string;
   /** Asia/Jakarta calendar date, YYYY-MM-DD. */
@@ -149,22 +100,6 @@ export async function precheckPurchasePayment(input: RecordPurchasePaymentInput,
 
 // ---------- Writes ----------
 
-function privateFileValues(file: StoredPrivateFile, actorStaffUserId: string) {
-  return {
-    id: file.id,
-    purpose: file.purpose,
-    storageKey: file.storageKey,
-    contentType: file.processed.contentType,
-    byteSize: file.processed.byteSize,
-    sha256: file.processed.sha256,
-    originalFilename: file.processed.originalFilename,
-    originalContentType: file.processed.originalContentType,
-    originalByteSize: file.processed.originalByteSize,
-    originalSha256: file.processed.originalSha256,
-    uploadedByStaffUserId: actorStaffUserId,
-  };
-}
-
 /** §8 recordSupplierPayment for a purchase. `file` was already processed and stored (§5.7); its
  * row is inserted here, in the same transaction as the payment. */
 export async function recordPurchasePayment(
@@ -175,7 +110,6 @@ export async function recordPurchasePayment(
 ) {
   assertPaidAt(input.paidAt);
   const note = normalizeNote(input.note);
-  if (file.purpose !== "payment_proof") throw new Error(`expected a payment_proof file, got ${file.purpose}`);
 
   return db.transaction(async (tx) => {
     const purchase = await lockPurchaseForUpdate(tx, input.purchaseId);
@@ -184,62 +118,23 @@ export async function recordPurchasePayment(
     const before = await computePurchasePaymentSummary(purchase, tx);
     assertAmountAllowed(input.amount, before);
 
-    const paymentNo = await nextDocumentNumber(tx, "BYR", supplierPayments.paymentNo);
     const [supplier] = await tx.select({ name: suppliers.name }).from(suppliers).where(eq(suppliers.id, purchase.supplierId));
     if (!supplier) throw new Error(`supplier ${purchase.supplierId} of purchase ${purchase.id} not found`);
-
-    const [fileRow] = await tx.insert(privateFiles).values(privateFileValues(file, actorStaffUserId)).returning();
-    if (!fileRow) throw new Error("failed to insert private file");
-    const [payment] = await tx
-      .insert(supplierPayments)
-      .values({
-        paymentNo,
-        targetType: "purchase",
-        purchaseId: purchase.id,
+    const payment = await insertSupplierPayment(
+      tx,
+      {
+        target: { type: "purchase", purchaseId: purchase.id },
         supplierId: purchase.supplierId,
         supplierName: supplier.name,
         paidAt: input.paidAt,
         amount: input.amount,
         method: input.method,
         note,
-        proofFileId: fileRow.id,
-        recordedByStaffUserId: actorStaffUserId,
-      })
-      .returning();
-    if (!payment) throw new Error("failed to insert supplier payment");
-
-    // Viewing a proof is never audited (A10); recording and voiding are.
-    await writeAuditLog(tx, {
+      },
+      file,
       actorStaffUserId,
-      action: "record",
-      entityType: "supplier_payment",
-      entityId: payment.id,
-      after: { payment, file: fileRow },
-    });
+    );
     return { payment, summary: summarizePayment(before.tagihan, before.paid + input.amount) };
-  });
-}
-
-/** §8 voidSupplierPayment: void-once by a conditional UPDATE under the purchase row lock. Zero
- * rows back means someone else voided it first. */
-export async function voidPurchasePayment(paymentId: string, reason: string, actorStaffUserId: string, db: Database = defaultDb) {
-  const trimmed = normalizeReason(reason);
-
-  return db.transaction(async (tx) => {
-    const [target] = await tx.select().from(supplierPayments).where(eq(supplierPayments.id, paymentId));
-    if (!target || target.purchaseId === null) throw new ActionError(PAYMENT_MESSAGES.paymentNotFound);
-    // The FK guarantees the purchase exists; the lock only orders this write (plan §4.6).
-    if (!(await lockPurchaseForUpdate(tx, target.purchaseId))) throw new Error(`purchase ${target.purchaseId} not found`);
-
-    const [payment] = await tx
-      .update(supplierPayments)
-      .set({ voidedAt: new Date(), voidedByStaffUserId: actorStaffUserId, voidReason: trimmed })
-      .where(and(eq(supplierPayments.id, paymentId), isNull(supplierPayments.voidedAt)))
-      .returning();
-    if (!payment) throw new ActionError(PAYMENT_MESSAGES.alreadyVoided);
-
-    await writeAuditLog(tx, { actorStaffUserId, action: "void", entityType: "supplier_payment", entityId: paymentId, before: target, after: payment });
-    return payment;
   });
 }
 
@@ -303,28 +198,6 @@ export async function voidPurchaseAttachment(attachmentId: string, reason: strin
 
 // ---------- Reads for the detail page ----------
 
-export interface PrivateFileRef {
-  id: string;
-  contentType: PrivateFileContentType;
-  originalFilename: string;
-}
-
-export interface PurchasePaymentRow {
-  id: string;
-  paymentNo: string;
-  paidAt: string;
-  method: SupplierPaymentMethod;
-  amount: number;
-  supplierName: string | null;
-  note: string | null;
-  recordedByName: string | null;
-  createdAt: Date;
-  proof: PrivateFileRef;
-  voidedAt: Date | null;
-  voidedByName: string | null;
-  voidReason: string | null;
-}
-
 export interface PurchaseAttachmentRow {
   id: string;
   note: string | null;
@@ -336,39 +209,9 @@ export interface PurchaseAttachmentRow {
   voidReason: string | null;
 }
 
-/** Payment history in the order the money moved (paid date, then recording time). Voided rows
- * stay in it (P6). Amount data: the caller renders it only for finance.view_profit (§7). */
-export async function listPurchasePayments(purchaseId: string, db: Database = defaultDb): Promise<PurchasePaymentRow[]> {
-  const recordedBy = alias(staffUsers, "recorded_by");
-  const voidedBy = alias(staffUsers, "voided_by");
-  const rows = await db
-    .select({
-      id: supplierPayments.id,
-      paymentNo: supplierPayments.paymentNo,
-      paidAt: supplierPayments.paidAt,
-      method: supplierPayments.method,
-      amount: supplierPayments.amount,
-      supplierName: supplierPayments.supplierName,
-      note: supplierPayments.note,
-      recordedByName: recordedBy.name,
-      createdAt: supplierPayments.createdAt,
-      fileId: privateFiles.id,
-      fileContentType: privateFiles.contentType,
-      fileName: privateFiles.originalFilename,
-      voidedAt: supplierPayments.voidedAt,
-      voidedByName: voidedBy.name,
-      voidReason: supplierPayments.voidReason,
-    })
-    .from(supplierPayments)
-    .innerJoin(privateFiles, eq(privateFiles.id, supplierPayments.proofFileId))
-    .leftJoin(recordedBy, eq(recordedBy.id, supplierPayments.recordedByStaffUserId))
-    .leftJoin(voidedBy, eq(voidedBy.id, supplierPayments.voidedByStaffUserId))
-    .where(eq(supplierPayments.purchaseId, purchaseId))
-    .orderBy(asc(supplierPayments.paidAt), asc(supplierPayments.createdAt), asc(supplierPayments.paymentNo));
-  return rows.map(({ fileId, fileContentType, fileName, ...row }) => ({
-    ...row,
-    proof: { id: fileId, contentType: fileContentType, originalFilename: fileName },
-  }));
+/** The purchase's payment history (listSupplierPayments: paid date order, voided rows kept). */
+export async function listPurchasePayments(purchaseId: string, db: Database = defaultDb): Promise<SupplierPaymentRow[]> {
+  return listSupplierPayments(eq(supplierPayments.purchaseId, purchaseId), db);
 }
 
 export async function listPurchaseAttachments(purchaseId: string, db: Database = defaultDb): Promise<PurchaseAttachmentRow[]> {
@@ -397,18 +240,4 @@ export async function listPurchaseAttachments(purchaseId: string, db: Database =
     ...row,
     file: { id: fileId, contentType: fileContentType, originalFilename: fileName },
   }));
-}
-
-/** §8 step 4, the soft duplicate-proof warning: the payment numbers whose (non-voided) proof was
- * uploaded with exactly these bytes. Read-only and advisory; never blocks a payment. */
-export async function findPaymentsWithProofHash(originalSha256: string, db: Database = defaultDb): Promise<string[]> {
-  if (!/^[0-9a-f]{64}$/.test(originalSha256)) return [];
-  const rows = await db
-    .select({ paymentNo: supplierPayments.paymentNo })
-    .from(supplierPayments)
-    .innerJoin(privateFiles, eq(privateFiles.id, supplierPayments.proofFileId))
-    .where(and(eq(privateFiles.originalSha256, originalSha256), isNull(supplierPayments.voidedAt)))
-    .orderBy(asc(supplierPayments.paymentNo))
-    .limit(5);
-  return rows.map((row) => row.paymentNo);
 }

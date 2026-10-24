@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Dialog, Label, Textarea, useToast } from "@ammari/ui";
 import { attachPurchaseInvoiceAction } from "../payment-actions";
-import { PrivateFileField, type PreparedUpload } from "./private-file-field";
+import { PrivateFileField, type PreparedUpload } from "@/components/supplier-payments/private-file-field";
 
 // "Lampirkan nota" (docs/plans/purchase-payments.md P13): the supplier's invoice, optional, many
 // per purchase, never blocking anything. Same private storage and void rule as payment proofs.

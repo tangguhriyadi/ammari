@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Badge, Card, EmptyState, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
-import { formatDate, formatNumber } from "@ammari/ui/lib";
+import { formatDate, formatNumber, formatRupiah } from "@ammari/ui/lib";
+import { PaymentStatusBadge } from "@/components/supplier-payments/payment-status-badge";
 import type { ListBatchesRow } from "@/lib/production/queries";
 import type { ProductionBatchStatus } from "@ammari/db/schema";
 import { ReceiptStatusBadge } from "./receipt-status-badge";
@@ -11,7 +12,13 @@ export function BatchStatusBadge({ status }: { status: ProductionBatchStatus }) 
   return <Badge variant={status === "posted" ? "success" : "neutral"}>{STATUS_LABELS[status]}</Badge>;
 }
 
-export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
+/** "Sisa" for a finance viewer; null when the amounts were stripped (A8) or nothing is left. */
+function remainingText(payment: ListBatchesRow["payment"]): string | null {
+  if (!payment || !("tagihan" in payment) || payment.remaining === 0) return null;
+  return formatRupiah(payment.remaining);
+}
+
+export function ProductionBatchList({ rows, showBalance }: { rows: ListBatchesRow[]; showBalance: boolean }) {
   if (rows.length === 0) {
     return <EmptyState title="Belum ada batch produksi" description="Buat batch baru untuk mulai mencatat produksi." />;
   }
@@ -38,6 +45,14 @@ export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
                     Hasil: <ReceiptStatusBadge status={row.receiptStatus} />
                   </span>
                 )}
+                {row.payment && (
+                  <span className="flex flex-wrap items-center justify-between gap-2 text-sm text-neutral-600">
+                    <span className="flex items-center gap-2">
+                      Pembayaran <PaymentStatusBadge status={row.payment.status} />
+                    </span>
+                    {remainingText(row.payment) && <span className="tabular-nums">Sisa {remainingText(row.payment)}</span>}
+                  </span>
+                )}
               </Card>
             </Link>
           </li>
@@ -53,6 +68,8 @@ export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
           <Th>Pcs</Th>
           <Th>Status</Th>
           <Th>Penerimaan hasil</Th>
+          <Th>Pembayaran</Th>
+          {showBalance && <Th>Sisa</Th>}
         </TableHead>
         <tbody>
           {rows.map((row) => (
@@ -70,6 +87,8 @@ export function ProductionBatchList({ rows }: { rows: ListBatchesRow[] }) {
                 <BatchStatusBadge status={row.status} />
               </Td>
               <Td>{row.status === "posted" ? <ReceiptStatusBadge status={row.receiptStatus} /> : <span className="text-neutral-600">-</span>}</Td>
+              <Td>{row.payment ? <PaymentStatusBadge status={row.payment.status} /> : <span className="text-neutral-600">-</span>}</Td>
+              {showBalance && <Td className="text-neutral-700 tabular-nums">{remainingText(row.payment) ?? "-"}</Td>}
             </Tr>
           ))}
         </tbody>

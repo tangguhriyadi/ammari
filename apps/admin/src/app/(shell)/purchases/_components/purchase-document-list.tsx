@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Card, EmptyState, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
 import { formatDate, formatRupiah } from "@ammari/ui/lib";
 import type { PurchaseDocumentListRow } from "@/lib/purchases/queries";
-import { PaymentStatusBadge } from "./payment-status-badge";
+import { PaymentStatusBadge } from "@/components/supplier-payments/payment-status-badge";
 import { PurchaseStatusBadge } from "./purchase-status-badge";
 
 /** "Sisa" (or "Lebih bayar") for a finance viewer; null when the amounts were stripped (A8). */

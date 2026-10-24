@@ -12,7 +12,6 @@ import type { PrivateFilePurpose } from "@ammari/db/schema";
 import type { StoredPrivateFile } from "./store-upload";
 import {
   attachPurchaseInvoice,
-  findPaymentsWithProofHash,
   getPurchasePaymentSummary,
   listPurchaseAttachments,
   listPurchasePayments,
@@ -20,9 +19,9 @@ import {
   precheckPurchasePayment,
   recordPurchasePayment,
   voidPurchaseAttachment,
-  voidPurchasePayment,
   type RecordPurchasePaymentInput,
 } from "./purchase-payments";
+import { findPaymentsWithProofHash, voidSupplierPayment } from "./payment-records";
 import { purchaseTagihan } from "./status";
 
 // docs/plans/purchase-payments.md §10, session S3: purchase payment write paths, the
@@ -187,14 +186,14 @@ describe("recordPurchasePayment", () => {
   });
 });
 
-describe("voidPurchasePayment", () => {
+describe("voidSupplierPayment (purchase)", () => {
   test("a voided payment stays in history but stops counting; audit 'void' with before/after", async () => {
     await withRollback(async (tx) => {
       const { staff, purchase } = await purchaseFixture(tx);
       await recordPurchasePayment(pay(purchase.id, 300_000), storedFile(), staff.id, tx);
       const { payment } = await recordPurchasePayment(pay(purchase.id, 700_000), storedFile(), staff.id, tx);
 
-      const voided = await voidPurchasePayment(payment.id, "  Salah nominal  ", staff.id, tx);
+      const voided = await voidSupplierPayment(payment.id, "  Salah nominal  ", staff.id, tx);
       expect(voided.voidReason).toBe("Salah nominal");
       expect(voided.voidedByStaffUserId).toBe(staff.id);
       expect(await getPurchasePaymentSummary(purchase.id, tx)).toMatchObject({ status: "partial", paid: 300_000, remaining: 700_000 });
@@ -213,14 +212,14 @@ describe("voidPurchasePayment", () => {
     await withRollback(async (tx) => {
       const { staff, purchase } = await purchaseFixture(tx);
       const { payment } = await recordPurchasePayment(pay(purchase.id, 100), storedFile(), staff.id, tx);
-      const blank = await rejection(voidPurchasePayment(payment.id, "   ", staff.id, tx));
+      const blank = await rejection(voidSupplierPayment(payment.id, "   ", staff.id, tx));
       expect(blank).toBeInstanceOf(FieldError);
       expect(blank.message).toBe("Alasan pembatalan wajib diisi.");
-      await voidPurchasePayment(payment.id, "Dobel", staff.id, tx);
-      const twice = await rejection(voidPurchasePayment(payment.id, "Lagi", staff.id, tx));
+      await voidSupplierPayment(payment.id, "Dobel", staff.id, tx);
+      const twice = await rejection(voidSupplierPayment(payment.id, "Lagi", staff.id, tx));
       expect(twice).toBeInstanceOf(ActionError);
       expect(twice.message).toBe("Pembayaran ini sudah dibatalkan.");
-      await expect(voidPurchasePayment(randomUUID(), "x", staff.id, tx)).rejects.toThrow("Pembayaran tidak ditemukan.");
+      await expect(voidSupplierPayment(randomUUID(), "x", staff.id, tx)).rejects.toThrow("Pembayaran tidak ditemukan.");
     });
   });
 });
@@ -237,7 +236,7 @@ describe("updatePurchase and closePurchase with payments (§3.1)", () => {
       const error = await rejection(edit(other.id));
       expect(error).toBeInstanceOf(FieldError);
       expect(error.message).toBe("Pemasok tidak bisa diganti karena sudah ada pembayaran.");
-      await voidPurchasePayment(payment.id, "Salah", staff.id, tx);
+      await voidSupplierPayment(payment.id, "Salah", staff.id, tx);
       await expect(edit(other.id)).rejects.toThrow("Pemasok tidak bisa diganti");
       // Keeping the supplier is still fine.
       await expect(edit(purchase.supplierId)).resolves.toBeTruthy();
@@ -398,7 +397,7 @@ describe("findPaymentsWithProofHash (duplicate-proof warning)", () => {
       const hash = sha(`same-photo-${randomUUID()}`);
       const { payment } = await recordPurchasePayment(pay(purchase.id, 100), storedFile("payment_proof", hash), staff.id, tx);
       expect(await findPaymentsWithProofHash(hash, tx)).toEqual([payment.paymentNo]);
-      await voidPurchasePayment(payment.id, "Dobel", staff.id, tx);
+      await voidSupplierPayment(payment.id, "Dobel", staff.id, tx);
       expect(await findPaymentsWithProofHash(hash, tx)).toEqual([]);
       expect(await findPaymentsWithProofHash("not-a-hash", tx)).toEqual([]);
     });
@@ -453,8 +452,8 @@ describe("concurrency (real commits)", () => {
     try {
       const { payment } = await recordPurchasePayment(pay(purchase.id, 100), storedFile(), staff.id, testDb);
       const outcomes = await Promise.allSettled([
-        voidPurchasePayment(payment.id, "A", staff.id, testDb),
-        voidPurchasePayment(payment.id, "B", staff.id, testDb),
+        voidSupplierPayment(payment.id, "A", staff.id, testDb),
+        voidSupplierPayment(payment.id, "B", staff.id, testDb),
       ]);
       expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
       const failed = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");

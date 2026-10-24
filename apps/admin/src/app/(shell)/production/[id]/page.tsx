@@ -17,6 +17,9 @@ import { BatchOutputSection } from "../_components/batch-output-section";
 import { BatchCostsSection } from "../_components/batch-costs-section";
 import { AccessoryNeedsSection } from "../_components/accessory-needs-section";
 import { DraftControls } from "../_components/draft-controls";
+import { BatchPaymentSection, DraftPaymentNotice } from "../_components/batch-payment-section";
+import { PaymentStatusBadge } from "@/components/supplier-payments/payment-status-badge";
+import { getBatchPaymentSummary, listBatchPayments } from "@/lib/supplier-payments/batch-payments";
 
 export default async function ProductionBatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission("production.manage");
@@ -54,12 +57,17 @@ async function PostedView({
   canViewProfit: boolean;
   permissionKeys: readonly string[];
 }) {
-  const [summary, receipts, defectRowsRaw] = await Promise.all([
+  // Supplier payments (docs/plans/purchase-payments.md §7, S4): the status badge for every viewer
+  // (A8); amounts and history only for finance.view_profit, queried only then.
+  const canRecordPayments = canViewProfit && permissionKeys.includes("supplier_payments.manage");
+  const [summary, receipts, defectRowsRaw, paymentSummary, payments] = await Promise.all([
     getBatchReceiptSummary(batch.id),
     listReceiptsForBatch(batch.id),
     listDefectMovementsForBatch(batch.id),
+    getBatchPaymentSummary(batch.id),
+    canViewProfit ? listBatchPayments(batch.id) : Promise.resolve([]),
   ]);
-  if (!summary) notFound();
+  if (!summary || !paymentSummary) notFound();
   const defectRows = stripDefectMovementAmounts(defectRowsRaw, canViewProfit);
   const canManage = permissionKeys.includes("inventory.manage");
   // Cost data (the disposal dialog's live value preview): only for finance.view_profit.
@@ -70,6 +78,9 @@ async function PostedView({
 
   return (
     <>
+      <p className="mb-4 flex items-center gap-2 text-sm text-neutral-600">
+        Pembayaran <PaymentStatusBadge status={paymentSummary.overall.status} />
+      </p>
       <ProductionBatchReadOnly batch={batch} />
       <div className="mt-6">
         <BatchOutputSection
@@ -89,6 +100,9 @@ async function PostedView({
         <div className="mt-6">
           <BatchCostsSection batchId={batch.id} fabricYards={batch.fabricYards} lines={batch.lines} receiptSummary={summary} defectRows={defectRowsRaw} />
         </div>
+      )}
+      {canViewProfit && (
+        <BatchPaymentSection batchId={batch.id} batchNo={batch.batchNo} summary={paymentSummary} payments={payments} canRecord={canRecordPayments} />
       )}
     </>
   );
@@ -153,6 +167,7 @@ async function DraftView({
       <div className="mt-6">
         <DraftControls batchId={batch.id} canPost={canViewProfit} />
       </div>
+      {canViewProfit && <DraftPaymentNotice />}
     </>
   );
 }

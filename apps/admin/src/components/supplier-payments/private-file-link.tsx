@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Dialog } from "@ammari/ui";
-import type { PrivateFileRef } from "@/lib/supplier-payments/purchase-payments";
+import type { PrivateFileRef } from "@/lib/supplier-payments/payment-records";
 
 // Opens a payment proof or nota (docs/plans/purchase-payments.md §9 "Proof viewer"). Both go
 // through /api/private-files/[id], which re-checks the session and permissions on every request

@@ -28,7 +28,7 @@ import { ClosePurchaseButton } from "../_components/close-purchase-button";
 import { DefectHistory } from "../_components/defect-history";
 import { DisposeDefectsButton, ReturnDefectsButton } from "../_components/defect-actions";
 import { PurchaseVariancePanel } from "../_components/defect-variance";
-import { PaymentStatusBadge } from "../_components/payment-status-badge";
+import { PaymentStatusBadge } from "@/components/supplier-payments/payment-status-badge";
 import { PurchaseInvoiceSection, PurchasePaymentSection } from "../_components/purchase-payment-section";
 import { PurchaseStatusBadge } from "../_components/purchase-status-badge";
 import { ReverseReceiptButton } from "../_components/reverse-receipt-button";

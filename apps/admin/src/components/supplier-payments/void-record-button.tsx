@@ -3,7 +3,7 @@
 import { useId, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Dialog, Label, Textarea, useToast } from "@ammari/ui";
-import { voidPurchaseAttachmentAction, voidPurchasePaymentAction } from "../payment-actions";
+import type { ActionResult } from "@/lib/action-result";
 
 // "Batalkan" for a payment or a nota (docs/plans/purchase-payments.md P6): a required reason,
 // confirmed in the admin dialog. Nothing is deleted: the row stays in the history as
@@ -26,7 +26,18 @@ const COPY = {
   },
 } as const;
 
-export function VoidRecordButton({ kind, id, label }: { kind: "payment" | "attachment"; id: string; label: string }) {
+export function VoidRecordButton({
+  kind,
+  id,
+  label,
+  voidAction,
+}: {
+  kind: "payment" | "attachment";
+  id: string;
+  label: string;
+  /** voidSupplierPaymentAction for a payment, the purchase's voidPurchaseAttachmentAction for a nota. */
+  voidAction: (input: { id: string; reason: string }) => Promise<ActionResult>;
+}) {
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -45,8 +56,7 @@ export function VoidRecordButton({ kind, id, label }: { kind: "payment" | "attac
       return;
     }
     startTransition(async () => {
-      const action = kind === "payment" ? voidPurchasePaymentAction : voidPurchaseAttachmentAction;
-      const result = await action({ id, reason });
+      const result = await voidAction({ id, reason });
       if (!result.ok) {
         setError(result.error);
         return;

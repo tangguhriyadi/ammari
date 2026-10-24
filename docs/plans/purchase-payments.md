@@ -1,8 +1,13 @@
 # Plan: Supplier payments with mandatory proof (Pembelian + Produksi)
 
 Status (2026-10-24): **Approved.** Owner answers recorded in §12 (A1 to A10); nothing open.
-S1 (database + status logic) committed (`ee30ed7`). S2 (private storage, file processing, viewing
-route) implemented, awaiting review and commit.
+S1 (database + status logic) committed (`ee30ed7`). S2 (`29bb88f`) and S3 (`6e676f2`) committed.
+S4 (production payments) implemented, awaiting review and commit. S4 notes: the target-independent
+parts moved to `lib/supplier-payments/payment-records.ts` (inputs, insert, void for any target,
+history, duplicate lookup) and `form-input.ts`; the shared UI to `src/components/supplier-payments/`
+(record/void buttons take their server action as a prop). Payees are listed by name, "Tanpa
+pemasok" last. A batch's overall status is `summarizePayment(Σ tagihan, Σ paid)`; since the cap is
+per payee it reads "Lunas" only once every payee is.
 
 Record every rupiah paid to a supplier or tailor against the document it settles, with a proof
 file that can never be quietly changed or removed, so the books can be audited later. Scope is

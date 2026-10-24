@@ -2,6 +2,13 @@
 // dependency so the file picker can show exactly the text the server would. The server
 // (proof-processing.ts) remains the real guard: it decides from the bytes, never the file name.
 
+import type { SupplierPaymentMethod } from "@ammari/db/schema";
+
+export const PAYMENT_METHOD_LABELS: Record<SupplierPaymentMethod, string> = {
+  cash: "Tunai",
+  transfer: "Transfer",
+};
+
 export const PROOF_MESSAGES = {
   missing: "Bukti bayar wajib diunggah.",
   unsupported: "Format file tidak didukung. Gunakan foto JPG, PNG, WebP, atau PDF.",
