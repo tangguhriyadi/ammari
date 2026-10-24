@@ -18,6 +18,7 @@ import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { buildImageSizeUrl } from "@/lib/products/image-queries";
 import { ActionError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
+import { channelDisplayNameSql } from "@/lib/orders/channel-label";
 import { generateClaimToken, hashClaimToken } from "./token";
 import { resolveCardBuyerName } from "./card-copy";
 import { assignStickerCodes, type StickerCodeFixed, type StickerCodeOrderInput } from "./sticker-code";
@@ -153,7 +154,7 @@ export async function listPackingQueue(
       id: orders.id,
       orderNo: orders.orderNo,
       channelId: orders.channelId,
-      channelName: channels.name,
+      channelName: channelDisplayNameSql(channels.id, channels.name),
       customerName: orderBuyerNameSql(),
       buyerUsername: orders.buyerUsername,
       orderDate: orders.orderDate,

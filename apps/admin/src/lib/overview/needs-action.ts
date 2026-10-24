@@ -15,6 +15,7 @@ import {
 import { addCalendarDays, jakartaDate, jakartaMidnight } from "@ammari/commerce/jakarta-day";
 import { defaultDb, type Database } from "@/lib/db";
 import { aliasedOrderBuyerNameSql } from "@/lib/orders/buyer-name";
+import { channelDisplayNameSql } from "@/lib/orders/channel-label";
 
 // Ringkasan "Perlu tindakan" (docs/plans/dashboard-overview.md §5, D8, D10): what needs doing now,
 // not tied to the selected period. Each block is a count plus its first few rows. The page checks
@@ -42,7 +43,7 @@ export interface ActionOrderRow {
   orderDate: Date;
 }
 
-const orderRowColumns = sql`o.id, o.order_no, ch.name as channel_name, ${aliasedOrderBuyerNameSql()} as buyer_name, o.order_date`;
+const orderRowColumns = sql`o.id, o.order_no, ${channelDisplayNameSql(sql`ch.id`, sql`ch.name`)} as channel_name, ${aliasedOrderBuyerNameSql()} as buyer_name, o.order_date`;
 const orderJoins = sql`join ${channels} ch on ch.id = o.channel_id
   left join ${customers} cu on cu.id = o.customer_id`;
 const orderRowFrom = sql`from ${orders} o

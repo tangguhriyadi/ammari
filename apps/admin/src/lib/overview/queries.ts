@@ -3,6 +3,7 @@ import { eq, sql, type SQL } from "drizzle-orm";
 import { channels, fabricColors, orderItems, orders, products, productTypes, productVariants, salesGoal } from "@ammari/db/schema";
 import { addCalendarDays, jakartaDate, jakartaMidnight } from "@ammari/commerce/jakarta-day";
 import { defaultDb, type Database } from "@/lib/db";
+import { channelDisplayNameSql } from "@/lib/orders/channel-label";
 import { goalCumulativeSeries, type CumulativePoint, type SeriesGranularity, type SeriesPoint } from "./charts";
 import { computeGoalProgress, goalWindow, type GoalProgress, type SalesGoal } from "./goal";
 import type { TimeRange } from "./period";
@@ -180,7 +181,7 @@ export async function getChannelBreakdown(range: TimeRange, { canViewProfit }: P
       join counted c on c.id = oi.order_id
       group by oi.order_id
     )
-    select c.channel_id, ch.name as channel_name, count(*)::int as orders, coalesce(sum(order_pcs.pcs), 0)::text as pcs
+    select c.channel_id, ${channelDisplayNameSql(sql`c.channel_id`, sql`ch.name`)} as channel_name, count(*)::int as orders, coalesce(sum(order_pcs.pcs), 0)::text as pcs
            ${canViewProfit ? sql`, sum(c.omzet)::text as omzet` : sql``}
     from counted c
     join ${channels} ch on ch.id = c.channel_id

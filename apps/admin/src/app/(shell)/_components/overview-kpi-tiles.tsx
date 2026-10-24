@@ -6,7 +6,9 @@ import { comparisonLabel, computeDelta, formatCompactRupiah, formatDeltaPercent,
 import type { ResolvedPeriod } from "@/lib/overview/period";
 import { getPeriodTotals } from "@/lib/overview/queries";
 
-const GRID = "grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4";
+// One row of 4 when the sales column has room for it (a container query: the "Perlu tindakan"
+// aside takes part of a wide screen), 2x2 otherwise. The parent section is the @container.
+const GRID = "grid grid-cols-2 gap-3 @2xl:grid-cols-4 @2xl:gap-4";
 
 /** Compact on the tile, the full amount for screen readers and on hover (§8). */
 function Money({ amount }: { amount: number }) {

@@ -55,13 +55,13 @@ export async function OverviewChannelBreakdown({ resolved, canViewProfit, classN
       id="overview-channels"
       testId="overview-channels"
       className={className}
-      title="Per channel"
+      title="Per kanal"
       summary={leaderSummary(
         data.map((datum) => ({ label: datum.label, value: datum.value })),
         canViewProfit ? "omzet" : "pesanan",
       )}
       data={data}
-      headers={["Channel", canViewProfit ? "Omzet" : "Pesanan", "Keterangan"]}
+      headers={["Kanal", canViewProfit ? "Omzet" : "Pesanan", "Keterangan"]}
       emptyText={EMPTY}
     />
   );

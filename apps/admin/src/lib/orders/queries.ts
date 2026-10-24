@@ -22,6 +22,7 @@ import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { resolveUnitPrice } from "@ammari/db/pricing";
 import { productPricingColumns } from "@ammari/db/pricing-columns";
 import { defaultDb, type Database } from "@/lib/db";
+import { channelDisplayNameSql } from "./channel-label";
 import { orderBuyerNameSql } from "./buyer-name";
 
 // Read-only, admin-screen queries (channel list, SKU picker, order list/detail). The order WRITE
@@ -37,7 +38,10 @@ export interface ChannelOption {
 }
 
 export async function listChannels(db: Database = defaultDb): Promise<ChannelOption[]> {
-  const rows = await db.select({ id: channels.id, name: channels.name }).from(channels).orderBy(channels.name);
+  const rows = await db
+    .select({ id: channels.id, name: channelDisplayNameSql(channels.id, channels.name) })
+    .from(channels)
+    .orderBy(channelDisplayNameSql(channels.id, channels.name));
   return rows;
 }
 
@@ -158,7 +162,7 @@ export async function listOrders(
       id: orders.id,
       orderNo: orders.orderNo,
       channelId: orders.channelId,
-      channelName: channels.name,
+      channelName: channelDisplayNameSql(channels.id, channels.name),
       channelOrderNo: orders.channelOrderNo,
       status: orders.status,
       customerName: orderBuyerNameSql(),
@@ -510,7 +514,7 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
       id: orders.id,
       orderNo: orders.orderNo,
       channelId: orders.channelId,
-      channelName: channels.name,
+      channelName: channelDisplayNameSql(channels.id, channels.name),
       channelOrderNo: orders.channelOrderNo,
       status: orders.status,
       customerId: orders.customerId,
