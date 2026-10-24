@@ -19,6 +19,12 @@
 # A brand-new install that has never run pg-backup.sh even once has NEITHER a status file NOR any
 # bucket object — that alerts immediately too (not a "staleness" check that could never trigger
 # with nothing to compare against yet).
+#   3. PROOF FILES: /opt/ammari-prod/backup/last-proof-backup-status.json, written by
+#      deploy-prod/backup/proof-backup.sh (docs/plans/purchase-payments.md A7) only after every
+#      private proof object was verified copied into the backups bucket. Missing or older than
+#      STALE_HOURS is a problem, but only once the proof backup is configured
+#      (PROOF_BACKUP_SOURCE_BUCKET set in env/backup.env): before that release there is nothing to
+#      back up, and this check stays silent rather than alerting every morning.
 #
 # Usage: backup-check.sh   (no arguments; always targets this directory's own
 #                           ../env/backup.env and ../backup/last-backup-status.json)
@@ -145,6 +151,29 @@ if [ -n "$LOCAL_TS" ] && [ -n "$BUCKET_TS" ] && [ "$LOCAL_TS" != "$BUCKET_TS" ];
   ISSUES+=("local status file ($LOCAL_TS) disagrees with the newest bucket object (${BUCKET_TS:-none}) — the status file may not reflect what's actually live in the bucket")
 fi
 
+echo "==> Checking the proof-file backup"
+PROOF_STATUS_FILE="$ROOT_DIR/backup/last-proof-backup-status.json"
+PROOF_TS=""
+if [ -z "${PROOF_BACKUP_SOURCE_BUCKET:-}" ]; then
+  # Not configured yet is fine; configured BEFORE and now missing (a status file exists, or the
+  # timer is enabled) means the setting was lost and the backup silently stopped.
+  if [ -f "$PROOF_STATUS_FILE" ] || [ "$(systemctl is-enabled proof-backup.timer 2>/dev/null || true)" = "enabled" ]; then
+    ISSUES+=("PROOF_BACKUP_SOURCE_BUCKET is missing from env/backup.env although the proof-file backup was set up (status file or enabled proof-backup.timer): the nightly proof copy is not running")
+  else
+    echo "==> Proof-file backup not configured (no PROOF_BACKUP_SOURCE_BUCKET in env/backup.env), skipped"
+  fi
+elif [ ! -f "$ROOT_DIR/backup/proof-backup-lib.sh" ]; then
+  ISSUES+=("the proof-file backup is configured but $ROOT_DIR/backup/proof-backup-lib.sh is missing (copy deploy-prod/backup over, docs/deploy-prod.md §8.1)")
+else
+  # shellcheck source=../backup/proof-backup-lib.sh
+  . "$ROOT_DIR/backup/proof-backup-lib.sh"
+  PROOF_ISSUE="$(proof_status_issue "$PROOF_STATUS_FILE" "$NOW_EPOCH" "$STALE_HOURS")"
+  if [ -n "$PROOF_ISSUE" ]; then
+    ISSUES+=("$PROOF_ISSUE")
+  fi
+  PROOF_TS="$(proof_status_timestamp "$PROOF_STATUS_FILE")"
+fi
+
 OK=1
 SUMMARY="(no issues)"
 if [ "${#ISSUES[@]}" -gt 0 ]; then
@@ -159,9 +188,11 @@ ${SUMMARY}
 
 Local status file: ${STATUS_FILE} (last timestamp: ${LOCAL_TS:-none})
 Newest backups/daily/ object in the bucket: ${BUCKET_TS:-none}
+Proof-file backup status: ${PROOF_STATUS_FILE} (last timestamp: ${PROOF_TS:-none})
 
 Check: SSH onto the VPS, run \`journalctl -u pg-backup.service -n 100\` to see the last backup
 attempt's own output, and \`docker compose exec db pg_isready\` to confirm the database itself is
-up. See docs/runbooks/restore-drill.md for how a backup gets restored once one exists."
+up. For the proof files: \`journalctl -u proof-backup.service -n 100\`, then
+\`cd /opt/ammari-prod/backup && ./proof-backup.sh --dry-run\` to see what is not copied yet. See docs/runbooks/restore-drill.md for how a backup gets restored once one exists."
 
 monitoring_alert_check "backup" "$OK" "[Ammari] Nightly backup check FAILED" "$BODY"

@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Badge, Card, EmptyState, Switch, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
+import { formatRupiah } from "@ammari/ui/lib";
 import { supplierKindLabels } from "@/lib/suppliers/kinds";
+import type { SupplierBalance } from "@/lib/supplier-payments/supplier-balance";
 import { setSupplierActiveAction } from "../actions";
 
 export interface SupplierListRowData {
@@ -13,9 +15,29 @@ export interface SupplierListRowData {
   kinds: string[];
   phone: string | null;
   isActive: boolean;
+  /** "Total utang" (docs/plans/purchase-payments.md §9); null for a viewer without
+   * finance.view_profit, who sees no column at all. */
+  balance: SupplierBalance | null;
+}
+
+/** "Rp X", plus "Lebih bayar Rp Y" when a document was paid above its bill (A4). */
+function SupplierBalanceText({ balance }: { balance: SupplierBalance }) {
+  return (
+    <span data-testid="supplier-balance" className="flex flex-col">
+      <span data-testid="supplier-outstanding" className={balance.outstanding > 0 ? "text-neutral-900" : "text-neutral-600"}>
+        {formatRupiah(balance.outstanding)}
+      </span>
+      {balance.overpaid > 0 && (
+        <span data-testid="supplier-overpaid" className="text-sm text-warning-700">
+          Lebih bayar {formatRupiah(balance.overpaid)}
+        </span>
+      )}
+    </span>
+  );
 }
 
 export function SupplierList({ rows, canManage }: { rows: SupplierListRowData[]; canManage: boolean }) {
+  const showBalance = rows.some((row) => row.balance !== null);
   const router = useRouter();
   const [, startTransition] = useTransition();
   // The toggle's own failure surface. Without it a refused setSupplierActiveAction (e.g. the
@@ -80,6 +102,11 @@ export function SupplierList({ rows, canManage }: { rows: SupplierListRowData[];
                     {kinds ?? "Jenis belum diisi"}
                     {row.phone && <> · {row.phone}</>}
                   </p>
+                  {row.balance && (
+                    <div className="mt-1 flex items-baseline gap-1 text-sm text-neutral-600">
+                      Utang <SupplierBalanceText balance={row.balance} />
+                    </div>
+                  )}
                 </Link>
                 {!row.isActive && <Badge variant="neutral">Nonaktif</Badge>}
                 {canManage ? (
@@ -102,6 +129,7 @@ export function SupplierList({ rows, canManage }: { rows: SupplierListRowData[];
           <Th>Nama</Th>
           <Th>Jenis</Th>
           <Th>Telepon/WhatsApp</Th>
+          {showBalance && <Th>Total utang</Th>}
           <Th>Status</Th>
         </TableHead>
         <tbody>
@@ -114,6 +142,7 @@ export function SupplierList({ rows, canManage }: { rows: SupplierListRowData[];
               </Td>
               <Td className="text-neutral-700">{kindsText(row.kinds) ?? "-"}</Td>
               <Td className="text-neutral-700">{row.phone ?? "-"}</Td>
+              {showBalance && <Td>{row.balance && <SupplierBalanceText balance={row.balance} />}</Td>}
               <Td>
                 <div className="flex items-center gap-2">
                   {!row.isActive && <Badge variant="neutral">Nonaktif</Badge>}

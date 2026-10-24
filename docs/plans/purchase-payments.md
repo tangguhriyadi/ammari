@@ -2,7 +2,15 @@
 
 Status (2026-10-24): **Approved.** Owner answers recorded in §12 (A1 to A10); nothing open.
 S1 (database + status logic) committed (`ee30ed7`). S2 (`29bb88f`) and S3 (`6e676f2`) committed.
-S4 (production payments) implemented, awaiting review and commit. S4 notes: the target-independent
+S4 committed (`acfdcc2`). S5 implemented, awaiting review and commit. S5 notes: "Total utang" is
+`lib/supplier-payments/supplier-balance.ts` (one SQL union of purchases and per-payee posted batch
+lines; the purchase tagihan SQL moved to `purchase-tagihan-sql.ts` so both share it); an overpaid
+document is shown apart ("Lebih bayar"), never netted against another. `/suppliers` gains an "Ada
+utang" tab (finance only). Proof backup: `deploy-prod/backup/proof-backup.sh` + timer, read-only
+source token in `env/backup.env` (`PROOF_BACKUP_SOURCE_*`), copies to `private-files/` in the
+backups bucket; backup-check and go-live-check check it. Owner runbook: `docs/deploy-prod.md` §14,
+`docs/deploy.md` "Private proof storage". Not done: `storage:check --private` (a put+get would
+leave an undeletable test object in the private bucket; §14.6 checks the same thing by hand). S4 notes: the target-independent
 parts moved to `lib/supplier-payments/payment-records.ts` (inputs, insert, void for any target,
 history, duplicate lookup) and `form-input.ts`; the shared UI to `src/components/supplier-payments/`
 (record/void buttons take their server action as a prop). Payees are listed by name, "Tanpa

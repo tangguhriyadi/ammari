@@ -492,6 +492,56 @@ check_checkout_config() {
   fi
 }
 
+# --- Private proof storage and its nightly backup (docs/plans/purchase-payments.md §5, A7). Only
+#     set/empty/missing states and derived booleans arrive from the VPS, never a value. Required
+#     from the supplier-payments release on: without PRIVATE_S3_* the admin's "Catat pembayaran"
+#     dialog refuses every payment ("Penyimpanan bukti belum dikonfigurasi."). Whether the bucket
+#     really has no public domain cannot be checked from here: docs/deploy-prod.md §14.6. ---
+check_private_storage_config() {
+  local output="$1" item line state
+  for item in admin.env:PRIVATE_S3_BUCKET admin.env:PRIVATE_S3_ACCESS_KEY_ID admin.env:PRIVATE_S3_SECRET_ACCESS_KEY \
+    backup.env:PROOF_BACKUP_SOURCE_BUCKET backup.env:PROOF_BACKUP_SOURCE_ACCESS_KEY_ID backup.env:PROOF_BACKUP_SOURCE_SECRET_ACCESS_KEY; do
+    line="$(grep "^CFG:${item}:" <<<"$output" | head -n 1)"
+    state="${line##*:}"
+    if [ "$state" = "set" ]; then
+      pass "private storage: ${item%%:*} ${item#*:} is set"
+    else
+      fail "private storage: ${item%%:*} ${item#*:} is ${state:-unknown} (docs/deploy-prod.md §14)"
+    fi
+  done
+  state="$(grep '^PRIVBUCKET:' <<<"$output" | cut -d: -f2)"
+  if [ "$state" = "private-name" ]; then
+    pass "private storage: admin.env PRIVATE_S3_BUCKET names a -private bucket"
+  else
+    fail "private storage: admin.env PRIVATE_S3_BUCKET is ${state:-unknown} (must be the ammari-prod-private bucket)"
+  fi
+  state="$(grep '^SAME:private-media:' <<<"$output" | cut -d: -f3)"
+  if [ "$state" = "differ" ]; then
+    pass "private storage: the private token is not the media token"
+  else
+    fail "private storage: PRIVATE_S3_ACCESS_KEY_ID vs S3_ACCESS_KEY_ID: ${state:-unknown} (must be two different tokens)"
+  fi
+  state="$(grep '^SAME:private-readonly:' <<<"$output" | cut -d: -f3)"
+  if [ "$state" = "differ" ]; then
+    pass "private storage: the backup host's token is not the admin's read & write token"
+  else
+    fail "private storage: PROOF_BACKUP_SOURCE_ACCESS_KEY_ID vs admin PRIVATE_S3_ACCESS_KEY_ID: ${state:-unknown} (the backup host needs its own read-only token)"
+  fi
+  line="$(grep '^PROOFBACKUPAGE:' <<<"$output")"
+  state="$(cut -d: -f2 <<<"$line")"
+  case "$state" in
+    missing) fail "no backup/last-proof-backup-status.json on the VPS: the nightly proof-file backup has never succeeded (docs/deploy-prod.md §14.5)" ;;
+    no-timestamp | unparseable | '') fail "could not read the proof-file backup age from the VPS (${line:-no data})" ;;
+    *)
+      if [ "$state" -lt 26 ] 2>/dev/null; then
+        pass "last proof-file backup is ${state}h old (< 26h)"
+      else
+        fail "last proof-file backup is ${state}h old (>= 26h stale threshold)"
+      fi
+      ;;
+  esac
+}
+
 run_ssh_checks() {
   if [ "$SKIP_SSH" = "1" ]; then
     skip "all SSH checks — --skip-ssh was passed"
@@ -627,10 +677,11 @@ run_ssh_checks() {
   done
 
   check_checkout_config "$output"
+  check_private_storage_config "$output"
 
   # --- monitoring timers ---
   local t state
-  for t in pg-backup.timer disk-alert.timer backup-check.timer health-check.timer; do
+  for t in pg-backup.timer proof-backup.timer disk-alert.timer backup-check.timer health-check.timer; do
     line="$(grep "^TIMER:$t:" <<<"$output")"
     state="$(cut -d: -f3 <<<"$line")"
     local next_run

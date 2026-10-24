@@ -100,15 +100,15 @@ async function runSupplierFlow(page: Page, layout: Layout): Promise<void> {
   // each tab click is load-bearing, not decoration — `searchSuppliers` submits a plain GET form
   // whose hidden `status` field comes from the CURRENT render, so firing it before the tab's
   // client-side navigation has landed would re-submit the previous tab's filter and the next
-  // assertion would pass or fail for the wrong reason.
+  // assertion would pass or fail for the wrong reason. The tabs keep the current search (q).
   await page.getByRole("link", { name: "Nonaktif", exact: true }).click();
-  await page.waitForURL(/\/suppliers\?status=inactive$/);
+  await page.waitForURL(/\/suppliers\?status=inactive(&q=[^&]*)?$/);
   await searchSuppliers(page, marker);
   await expect(page).toHaveURL(/status=inactive/);
   await expect(rowFor(page, layout, name)).toBeVisible();
 
   await page.getByRole("link", { name: "Aktif", exact: true }).click();
-  await page.waitForURL(/\/suppliers\?status=active$/);
+  await page.waitForURL(/\/suppliers\?status=active(&q=[^&]*)?$/);
   await searchSuppliers(page, marker);
   await expect(page).toHaveURL(/status=active/);
   await expect(rowFor(page, layout, name)).toHaveCount(0);

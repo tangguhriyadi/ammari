@@ -12,9 +12,9 @@
 #                   (auth secrets, OAuth, Resend, storage — everything), but backs each one up
 #                   first as prod-<name>.env.bak.<UTC timestamp> in the same directory.
 #   --storage-only Edits the EXISTING prod-admin.env/prod-web.env/prod-backup.env IN PLACE and
-#                   changes ONLY the storage-related variables (S3_*/STORAGE_PUBLIC_BASE_URL in
-#                   prod-admin.env, STORAGE_PUBLIC_BASE_URL only in prod-web.env, BACKUP_S3_* in
-#                   prod-backup.env) — every other line, including every auth/session/encryption
+#                   changes ONLY the storage-related variables (S3_*/PRIVATE_S3_*/
+#                   STORAGE_PUBLIC_BASE_URL in prod-admin.env, STORAGE_PUBLIC_BASE_URL only in
+#                   prod-web.env, BACKUP_S3_*/PROOF_BACKUP_SOURCE_* in prod-backup.env) — every other line, including every auth/session/encryption
 #                   secret and PG_BACKUP_ENCRYPTION_KEY, is left byte-for-byte untouched. A
 #                   required storage variable is ADDED (appended) if the file doesn't already
 #                   have that line, or REPLACED in place if it does. Use this for a
@@ -57,6 +57,22 @@
 #                                                bucket's — docs/plans/storage-r2.md). Read
 #                                                directly — NEVER prompted, NEVER taken as an
 #                                                argument.
+#   ~/ammari-secrets/r2-prod-private-access-key Required in every mode that touches storage.
+#   ~/ammari-secrets/r2-prod-private-secret-key  The `ammari-prod-private`-scoped R2 API token
+#                                                (Object Read & Write, the private proof bucket
+#                                                only — docs/plans/purchase-payments.md §5) ->
+#                                                prod-admin.env's PRIVATE_S3_ACCESS_KEY_ID /
+#                                                PRIVATE_S3_SECRET_ACCESS_KEY. Must not be the
+#                                                media token (refused).
+#   ~/ammari-secrets/r2-prod-private-readonly-access-key
+#   ~/ammari-secrets/r2-prod-private-readonly-secret-key
+#                                                Required in every mode that touches storage. A
+#                                                SECOND token on `ammari-prod-private`, Object
+#                                                Read only -> prod-backup.env's
+#                                                PROOF_BACKUP_SOURCE_* (the nightly proof-file copy,
+#                                                A7: the backup host can read proofs, never write
+#                                                or delete one). Must not be the read & write
+#                                                token above (refused).
 #
 # R2 endpoint/region/bucket names are account-wide, non-secret constants (same values already
 # committed in deploy-prod/env/backup.env.example's BACKUP_S3_ENDPOINT/BACKUP_S3_REGION) — see
@@ -105,6 +121,8 @@ R2_ENDPOINT="https://d99c5045ed359887e8fdd591cc492ee9.r2.cloudflarestorage.com"
 R2_REGION="auto"
 R2_PROD_MEDIA_BUCKET="ammari-prod"
 R2_PROD_BACKUPS_BUCKET="ammari-prod-backups"
+# The private proof bucket (docs/plans/purchase-payments.md §5): no custom domain, never public.
+R2_PROD_PRIVATE_BUCKET="ammari-prod-private"
 # The prod media bucket's public CDN domain — read directly at runtime by both apps
 # (apps/admin/src/lib/storage.ts, apps/web/src/lib/storage/public-url.ts) as
 # STORAGE_PUBLIC_BASE_URL. Same value belongs in BOTH prod-admin.env and prod-web.env (same
@@ -239,6 +257,36 @@ read_key_file() {
   printf '%s' "$value"
 }
 
+# Reads the four private-bucket key files into PRIVATE_RW_ACCESS_KEY_ID/PRIVATE_RW_SECRET_ACCESS_KEY
+# (admin, read & write) and PRIVATE_RO_ACCESS_KEY_ID/PRIVATE_RO_SECRET_ACCESS_KEY (backup host,
+# read only), then refuses a mix-up: the private token must not be the media token (the media
+# bucket is public), and the backup host's token must not be the admin's read & write one.
+# Compares values in variables only; prints file NAMES, never a value.
+read_private_bucket_keys() {
+  local media_access_key_id="$1"
+  PRIVATE_RW_ACCESS_KEY_ID="$(read_key_file "$SECRETS_DIR/r2-prod-private-access-key")"
+  PRIVATE_RW_SECRET_ACCESS_KEY="$(read_key_file "$SECRETS_DIR/r2-prod-private-secret-key")"
+  PRIVATE_RO_ACCESS_KEY_ID="$(read_key_file "$SECRETS_DIR/r2-prod-private-readonly-access-key")"
+  PRIVATE_RO_SECRET_ACCESS_KEY="$(read_key_file "$SECRETS_DIR/r2-prod-private-readonly-secret-key")"
+  local name value
+  for name in PRIVATE_RW_ACCESS_KEY_ID PRIVATE_RW_SECRET_ACCESS_KEY PRIVATE_RO_ACCESS_KEY_ID PRIVATE_RO_SECRET_ACCESS_KEY; do
+    value="${!name}"
+    # An R2 key never contains whitespace; a newline here would inject an extra line into the env file.
+    if [[ "$value" =~ [[:space:]] ]]; then
+      echo "A private-bucket key file holds whitespace or more than one line ($name): re-save it from the dashboard (docs/deploy-prod.md §14.3)." >&2
+      exit 1
+    fi
+  done
+  if [[ "$PRIVATE_RW_ACCESS_KEY_ID" == "$media_access_key_id" ]]; then
+    echo "r2-prod-private-access-key holds the MEDIA token (same as r2-prod-access-key): create a separate token scoped to $R2_PROD_PRIVATE_BUCKET only." >&2
+    exit 1
+  fi
+  if [[ "$PRIVATE_RO_ACCESS_KEY_ID" == "$PRIVATE_RW_ACCESS_KEY_ID" ]]; then
+    echo "r2-prod-private-readonly-access-key holds the same token as r2-prod-private-access-key: the backup host needs its own Object Read only token." >&2
+    exit 1
+  fi
+}
+
 # Timestamped mode-600 backup copy, same naming in every mode that makes one.
 make_backup_copy() {
   local dest="$1" ts backup_path
@@ -268,6 +316,7 @@ run_storage_only() {
   r2_prod_secret_access_key="$(read_key_file "$SECRETS_DIR/r2-prod-secret-key")"
   r2_backups_access_key_id="$(read_key_file "$SECRETS_DIR/r2-backups-access-key")"
   r2_backups_secret_access_key="$(read_key_file "$SECRETS_DIR/r2-backups-secret-key")"
+  read_private_bucket_keys "$r2_prod_access_key_id"
 
   echo "=== --storage-only: editing existing prod env files in place ==="
   echo "(every other line, including all non-storage secrets, is left untouched)"
@@ -323,6 +372,9 @@ run_storage_only() {
   update_storage_var "$ADMIN_DEST" "S3_ACCESS_KEY_ID" "$r2_prod_access_key_id"
   update_storage_var "$ADMIN_DEST" "S3_SECRET_ACCESS_KEY" "$r2_prod_secret_access_key"
   update_storage_var "$ADMIN_DEST" "STORAGE_PUBLIC_BASE_URL" "$R2_PROD_PUBLIC_BASE_URL"
+  update_storage_var "$ADMIN_DEST" "PRIVATE_S3_BUCKET" "$R2_PROD_PRIVATE_BUCKET"
+  update_storage_var "$ADMIN_DEST" "PRIVATE_S3_ACCESS_KEY_ID" "$PRIVATE_RW_ACCESS_KEY_ID"
+  update_storage_var "$ADMIN_DEST" "PRIVATE_S3_SECRET_ACCESS_KEY" "$PRIVATE_RW_SECRET_ACCESS_KEY"
   print_storage_only_changes "$ADMIN_DEST"
 
   # apps/web never uploads/deletes/holds an S3 credential (no S3_* vars there at all, by design
@@ -342,9 +394,13 @@ run_storage_only() {
   update_storage_var "$BACKUP_DEST" "BACKUP_S3_BUCKET" "$R2_PROD_BACKUPS_BUCKET"
   update_storage_var "$BACKUP_DEST" "BACKUP_S3_ACCESS_KEY_ID" "$r2_backups_access_key_id"
   update_storage_var "$BACKUP_DEST" "BACKUP_S3_SECRET_ACCESS_KEY" "$r2_backups_secret_access_key"
+  update_storage_var "$BACKUP_DEST" "PROOF_BACKUP_SOURCE_BUCKET" "$R2_PROD_PRIVATE_BUCKET"
+  update_storage_var "$BACKUP_DEST" "PROOF_BACKUP_SOURCE_ACCESS_KEY_ID" "$PRIVATE_RO_ACCESS_KEY_ID"
+  update_storage_var "$BACKUP_DEST" "PROOF_BACKUP_SOURCE_SECRET_ACCESS_KEY" "$PRIVATE_RO_SECRET_ACCESS_KEY"
   print_storage_only_changes "$BACKUP_DEST"
 
-  unset r2_prod_access_key_id r2_prod_secret_access_key r2_backups_access_key_id r2_backups_secret_access_key
+  unset r2_prod_access_key_id r2_prod_secret_access_key r2_backups_access_key_id r2_backups_secret_access_key \
+    PRIVATE_RW_ACCESS_KEY_ID PRIVATE_RW_SECRET_ACCESS_KEY PRIVATE_RO_ACCESS_KEY_ID PRIVATE_RO_SECRET_ACCESS_KEY
 
   # --- Verification: every required storage var present with a non-empty value -------------
   # Prints a per-file checklist of key NAMES only (never values) and fails loudly (non-zero
@@ -369,10 +425,12 @@ run_storage_only() {
     done
   }
   check_required_vars "$ADMIN_DEST" S3_ENDPOINT S3_REGION S3_BUCKET S3_ACCESS_KEY_ID \
-    S3_SECRET_ACCESS_KEY STORAGE_PUBLIC_BASE_URL
+    S3_SECRET_ACCESS_KEY STORAGE_PUBLIC_BASE_URL PRIVATE_S3_BUCKET PRIVATE_S3_ACCESS_KEY_ID \
+    PRIVATE_S3_SECRET_ACCESS_KEY
   check_required_vars "$WEB_DEST" STORAGE_PUBLIC_BASE_URL
   check_required_vars "$BACKUP_DEST" BACKUP_S3_ENDPOINT BACKUP_S3_REGION BACKUP_S3_BUCKET \
-    BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY
+    BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY PROOF_BACKUP_SOURCE_BUCKET \
+    PROOF_BACKUP_SOURCE_ACCESS_KEY_ID PROOF_BACKUP_SOURCE_SECRET_ACCESS_KEY
 
   if [[ "$overall_ok" -ne 0 ]]; then
     echo >&2
@@ -436,6 +494,7 @@ s3_access_key_id="$(read_key_file "$SECRETS_DIR/r2-prod-access-key")"
 s3_secret_access_key="$(read_key_file "$SECRETS_DIR/r2-prod-secret-key")"
 r2_backups_access_key_id="$(read_key_file "$SECRETS_DIR/r2-backups-access-key")"
 r2_backups_secret_access_key="$(read_key_file "$SECRETS_DIR/r2-backups-secret-key")"
+read_private_bucket_keys "$s3_access_key_id"
 
 # --- Fresh secrets (openssl rand, generated ONCE where shared across files) ----------------
 staff_better_auth_secret="$(openssl rand -base64 32)"
@@ -469,6 +528,9 @@ set_env_var "$ADMIN_DEST" "S3_BUCKET" "$R2_PROD_MEDIA_BUCKET"
 set_env_var "$ADMIN_DEST" "S3_ACCESS_KEY_ID" "$s3_access_key_id"
 set_env_var "$ADMIN_DEST" "S3_SECRET_ACCESS_KEY" "$s3_secret_access_key"
 set_env_var "$ADMIN_DEST" "S3_KEY_PREFIX" ""
+set_env_var "$ADMIN_DEST" "PRIVATE_S3_BUCKET" "$R2_PROD_PRIVATE_BUCKET"
+set_env_var "$ADMIN_DEST" "PRIVATE_S3_ACCESS_KEY_ID" "$PRIVATE_RW_ACCESS_KEY_ID"
+set_env_var "$ADMIN_DEST" "PRIVATE_S3_SECRET_ACCESS_KEY" "$PRIVATE_RW_SECRET_ACCESS_KEY"
 
 echo "Writing $WEB_DEST"
 cp "$ENV_EXAMPLE_DIR/web.env.example" "$WEB_DEST"
@@ -501,10 +563,14 @@ set_env_var "$BACKUP_DEST" "BACKUP_S3_REGION" "$R2_REGION"
 set_env_var "$BACKUP_DEST" "BACKUP_S3_BUCKET" "$R2_PROD_BACKUPS_BUCKET"
 set_env_var "$BACKUP_DEST" "BACKUP_S3_ACCESS_KEY_ID" "$r2_backups_access_key_id"
 set_env_var "$BACKUP_DEST" "BACKUP_S3_SECRET_ACCESS_KEY" "$r2_backups_secret_access_key"
+set_env_var "$BACKUP_DEST" "PROOF_BACKUP_SOURCE_BUCKET" "$R2_PROD_PRIVATE_BUCKET"
+set_env_var "$BACKUP_DEST" "PROOF_BACKUP_SOURCE_ACCESS_KEY_ID" "$PRIVATE_RO_ACCESS_KEY_ID"
+set_env_var "$BACKUP_DEST" "PROOF_BACKUP_SOURCE_SECRET_ACCESS_KEY" "$PRIVATE_RO_SECRET_ACCESS_KEY"
 
 unset staff_better_auth_secret customer_better_auth_secret revalidate_secret preview_secret \
   postgres_password backup_encryption_key resend_key google_client_id google_client_secret \
   s3_access_key_id s3_secret_access_key r2_backups_access_key_id r2_backups_secret_access_key \
+  PRIVATE_RW_ACCESS_KEY_ID PRIVATE_RW_SECRET_ACCESS_KEY PRIVATE_RO_ACCESS_KEY_ID PRIVATE_RO_SECRET_ACCESS_KEY \
   database_url
 
 # --- Validation (key names and status ONLY — never a value) --------------------------------

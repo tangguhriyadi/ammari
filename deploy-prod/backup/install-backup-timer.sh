@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run ON THE PROD VPS, once, with sudo — NOT on the owner's Mac (unlike
 # make-prod-env.sh/upload-prod-env.sh, which run locally). Installs/refreshes the systemd units
-# that run pg-backup.sh nightly (docs/plans/prod-deploy.md §3 Session 5).
+# that run pg-backup.sh nightly (docs/plans/prod-deploy.md §3 Session 5) and proof-backup.sh
+# nightly (docs/plans/purchase-payments.md A7, session S5). Idempotent: re-running it refreshes
+# both and is how a unit-file change is applied.
 #
 # Prerequisite (one-time, and again any time pg-backup.sh/the unit files change — this directory
 # is deliberately excluded from deploy-prod.yml's own rsync, so it is never auto-updated):
@@ -21,26 +23,29 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_DEST="/etc/systemd/system"
 
-for unit in pg-backup.service pg-backup.timer pg-backup.sh; do
+for unit in pg-backup.service pg-backup.timer pg-backup.sh \
+  proof-backup.service proof-backup.timer proof-backup.sh proof-backup-ops.sh proof-backup-lib.sh; do
   if [ ! -f "$SCRIPT_DIR/$unit" ]; then
     echo "Missing $SCRIPT_DIR/$unit — copy the whole deploy-prod/backup/ directory here first (see this script's header comment)." >&2
     exit 1
   fi
 done
 
-echo "==> Making pg-backup.sh executable"
-chmod +x "$SCRIPT_DIR/pg-backup.sh"
+echo "==> Making pg-backup.sh and proof-backup.sh executable"
+chmod +x "$SCRIPT_DIR/pg-backup.sh" "$SCRIPT_DIR/proof-backup.sh"
 
 echo "==> Installing systemd units"
-cp "$SCRIPT_DIR/pg-backup.service" "$UNIT_DEST/pg-backup.service"
-cp "$SCRIPT_DIR/pg-backup.timer" "$UNIT_DEST/pg-backup.timer"
+for name in pg-backup proof-backup; do
+  cp "$SCRIPT_DIR/$name.service" "$UNIT_DEST/$name.service"
+  cp "$SCRIPT_DIR/$name.timer" "$UNIT_DEST/$name.timer"
+done
 
 echo "==> Reloading systemd"
 systemctl daemon-reload
 
-echo "==> Enabling + starting the timer"
-systemctl enable --now pg-backup.timer
+echo "==> Enabling + starting the timers"
+systemctl enable --now pg-backup.timer proof-backup.timer
 
 echo
-echo "==> Next scheduled run:"
-systemctl list-timers pg-backup.timer --no-pager
+echo "==> Next scheduled runs:"
+systemctl list-timers pg-backup.timer proof-backup.timer --no-pager

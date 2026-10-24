@@ -417,6 +417,8 @@ Prompts for the same passphrase, extracts `ammari-secrets/` into the current dir
   token, never the media bucket's credentials.
 - Daily backups go to `backups/daily/<timestamp>.dump.enc`. On Sundays, the same dump is **also**
   uploaded to `backups/weekly/<timestamp>.dump.enc`.
+- **Proof files** (payment proofs, notas) are copied by a second job, `proof-backup.sh`, at
+  02:45 into the same bucket's `private-files/` prefix, incrementally and never pruned (§14.5).
 - **Retention:** last 14 daily + last 8 weekly; older objects under those two prefixes are
   pruned on every run. The backups bucket holds nothing but these two prefixes, so there's no
   `products/*`/`content/*` to worry about pruning around, unlike the old shared-bucket layout.
@@ -1039,6 +1041,199 @@ atau memposting batch belum menambah stok.
   dikoreksi lewat hitung stok.
 - Salah catat? Jangan dihapus. Pakai **Batalkan penerimaan** atau **Batalkan** di baris yang
   salah, lalu catat ulang.
+
+---
+
+## 14. Release: supplier payments with proof (private bucket, nightly proof backup)
+
+The first prod deploy of `docs/plans/purchase-payments.md` (S1 to S5). Prod is on `d5c654b`, so
+this deploy applies `0037_product_types` and `0038_supplier_payments` together. 0038 is additive
+only (three new tables, triggers on those new tables, the `supplier_payments.manage` permission
+and its grants to `super_admin` and `owner`); the live release never reads them, so rollback
+stays safe (§14.7).
+
+Proof files (payment proofs, supplier notas) never go into the media bucket, which is public as a
+whole. They live in a **separate private bucket** and are only ever served through the admin's
+`/api/private-files/<id>`, which checks the permission on every request. Without the bucket env
+the app still boots and everything else works; only "Catat pembayaran" and "Lampirkan nota"
+refuse with **"Penyimpanan bukti belum dikonfigurasi."**
+
+Do §14.1 to §14.4 **before** the release reaches prod (dev first, docs/deploy.md "Private proof
+storage"), then §14.5 and §14.6 after it. The secret rules are the ones in
+`docs/launch/checkout-dev.md`: a secret goes from the dashboard into a file under
+`~/ammari-secrets/` with `pbpaste` or a hidden prompt, and is never typed on a command line,
+`echo`ed or `cat`ed.
+
+### 14.1 Cloudflare: buckets (R2 dashboard → R2 Object Storage → Create bucket)
+
+1. Create **`ammari-dev-private`** and **`ammari-prod-private`**. Location: automatic, Standard
+   storage class.
+2. On each, open **Settings → Public access** and leave it closed: **no Custom Domain**, and
+   **R2.dev subdomain: Disabled** (never "Allow Access"). These buckets must never be public.
+3. Optional hardening, prod only: **Settings → Bucket lock rules → Add rule**, whole bucket,
+   retention **indefinite**. Then nobody, not even someone holding the token, can delete or
+   overwrite a proof. It works with this design (keys are never reused); it also means a test
+   object can never be removed, so add it after §14.6.
+
+### 14.2 Cloudflare: tokens (R2 → Manage API tokens → Create Account API token)
+
+Create three tokens. For each: **Specify bucket(s)** with exactly the one bucket named, TTL
+forever. The dashboard shows the Access Key ID and Secret Access Key **once**.
+
+| Token name | Permission | Bucket | Save as (`~/ammari-secrets/…`) |
+|---|---|---|---|
+| `ammari-dev-private` | Object Read & Write | `ammari-dev-private` | `r2-dev-private-access-key`, `r2-dev-private-secret-key` |
+| `ammari-prod-private` | Object Read & Write | `ammari-prod-private` | `r2-prod-private-access-key`, `r2-prod-private-secret-key` |
+| `ammari-prod-private-readonly` | **Object Read only** | `ammari-prod-private` | `r2-prod-private-readonly-access-key`, `r2-prod-private-readonly-secret-key` |
+
+The read-only one is for the nightly proof backup on the VPS (A7): the backup host can read
+proofs, never write or delete one. Never reuse the media tokens (`r2-prod-access-key`) or the
+backups token here: the media token must never see proofs, and `make-prod-env.sh` refuses a
+mix-up.
+
+### 14.3 Save the six values (Mac)
+
+For each value: press the dashboard's **Copy** button, then run the matching line (one at a
+time, the clipboard holds one value):
+
+```bash
+(umask 077 && pbpaste > ~/ammari-secrets/r2-prod-private-access-key) && pbcopy < /dev/null
+wc -c < ~/ammari-secrets/r2-prod-private-access-key     # prints only a length, never the value
+```
+
+Same for `r2-prod-private-secret-key`, `r2-prod-private-readonly-access-key`,
+`r2-prod-private-readonly-secret-key`, `r2-dev-private-access-key`, `r2-dev-private-secret-key`.
+Or with a hidden prompt instead of the clipboard:
+
+```bash
+printf 'Paste, then Enter: '; IFS= read -rs v; printf '\n'; (umask 077 && printf '%s' "$v" > ~/ammari-secrets/r2-prod-private-secret-key); unset v
+```
+
+Then regenerate the encrypted secrets archive (§4.1).
+
+### 14.4 Prod env: admin and backup
+
+```bash
+# On your Mac, in the repo. Edits prod-admin.env and prod-backup.env IN PLACE (backups first),
+# changes only storage variables, prints key NAMES only:
+deploy-prod/make-prod-env.sh --storage-only
+#   prod-admin.env:  PRIVATE_S3_BUCKET / PRIVATE_S3_ACCESS_KEY_ID / PRIVATE_S3_SECRET_ACCESS_KEY: changed
+#   prod-backup.env: PROOF_BACKUP_SOURCE_BUCKET / _ACCESS_KEY_ID / _SECRET_ACCESS_KEY: changed
+#   ...then a checklist that must end with every line OK.
+deploy/set-env-var.sh --check ~/ammari-secrets/prod-admin.env PRIVATE_S3_BUCKET PRIVATE_S3_ACCESS_KEY_ID PRIVATE_S3_SECRET_ACCESS_KEY
+
+deploy-prod/upload-prod-env.sh
+ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 \
+  'cd /opt/ammari-prod && ./recreate-active-slot.sh admin'
+```
+
+The admin reads these only when a proof is stored or viewed, so the recreate is enough (no
+deploy needed), and it is harmless before the release: the old image ignores them.
+`S3_ENDPOINT`, `S3_REGION` and the empty `S3_KEY_PREFIX` are shared with the media bucket. A
+running admin with the vars missing or wrong does not crash; it refuses the upload with
+"Penyimpanan bukti belum dikonfigurasi." and logs the env var NAMES only.
+
+### 14.5 Install the nightly proof backup (VPS)
+
+`deploy-prod/backup/proof-backup.sh` copies, every night at 02:45 Asia/Jakarta, each object of
+`ammari-prod-private` that is not backed up yet into `ammari-prod-backups` under
+`private-files/<same key>`, using the read-only token for the source and the backups token for
+the destination. It never deletes or overwrites anything, re-checks that every proof has a copy
+of the same size, and only then writes `backup/last-proof-backup-status.json`.
+`backup-check.sh` (09:00) alerts when that file is missing or older than 26 h, once
+`PROOF_BACKUP_SOURCE_BUCKET` is set.
+
+```bash
+# On your Mac: copy both script directories (§8.1; both changed in this release)
+scp -i ~/ammari-secrets/ammari_prod_deploy_key -r deploy-prod/backup deploy@43.173.52.121:/opt/ammari-prod/
+scp -i ~/ammari-secrets/ammari_prod_deploy_key -r deploy-prod/monitoring deploy@43.173.52.121:/opt/ammari-prod/
+
+# On the VPS as ubuntu (sudo): installs/refreshes pg-backup.timer AND proof-backup.timer
+ssh ubuntu@43.173.52.121
+cd /opt/ammari-prod/backup && sudo ./install-backup-timer.sh
+exit
+
+# On the VPS as deploy: a dry run, a real run, then the morning check by hand
+ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121
+cd /opt/ammari-prod/backup
+./proof-backup.sh --dry-run      # "N object(s) in the private bucket, N not backed up yet", copies nothing
+./proof-backup.sh                # "Proof backup complete: ..."
+cat last-proof-backup-status.json
+./proof-backup.sh                # again: "0 new this run" (idempotent)
+cd ../monitoring && ./backup-check.sh   # "(no issues)"
+```
+
+`AccessDenied` on the listing means a token is wrong or scoped to the wrong bucket (§14.2).
+Three failures are deliberate and repeat every night until someone looks (the status file goes
+stale and `backup-check.sh` emails):
+
+- **"fewer than the N of the last successful run"**: the private bucket shrank. Proofs are never
+  deleted, so check `PROOF_BACKUP_SOURCE_BUCKET`/the token first, then whether objects were
+  removed (restore them from `private-files/`). Only if the drop is understood and accepted, move
+  `last-proof-backup-status.json` aside so the next run starts a new baseline.
+- **"size differs: <key>"**: a copy in `private-files/` does not match its source. The job never
+  overwrites a copy, so compare the two objects by hand and, once you know the source is right,
+  delete that one backup object in the R2 dashboard; the next run copies it again.
+- **"unexpected key"**: an object the admin would never write (odd characters). It is skipped;
+  find out where it came from, then remove or rename it in the private bucket.
+Before the first proof exists the private bucket is empty and the run reports 0 objects, which
+is a success. Logs: `journalctl -u proof-backup.service -n 100`. To restore one proof, copy it
+back from `s3://ammari-prod-backups/private-files/<key>` to the same `<key>` in
+`ammari-prod-private` (the `private_files.storage_key` column holds it).
+
+### 14.6 Manual verification checklist (on dev first, then prod after the deploy)
+
+1. As the owner, open a purchase, **Catat pembayaran** with a photo as Bukti bayar: the toast
+   says it was recorded and the status badge changes (DP or Lunas).
+2. Click the proof in "Riwayat pembayaran": it opens inside the admin, and the browser's address
+   (or the image's "open in new tab") is `https://admin…/api/private-files/<id>`, never an R2 or
+   `img.` URL.
+3. In a private window (logged out), open that same `/api/private-files/<id>` address: it must
+   land on the admin login page (the proxy redirects; the route itself answers 401), never show
+   the image.
+4. R2 dashboard → the private bucket → **Objects**: the file is there under
+   `payment_proof/<yyyy>/<mm>/`. **Settings → Public access**: Custom Domains empty, R2.dev
+   subdomain **Disabled**. This is the one property no script can check.
+5. Prod only: the next morning, `cat /opt/ammari-prod/backup/last-proof-backup-status.json`
+   shows today's date and `source_objects` ≥ 1; `deploy-prod/go-live-check.sh` reports every
+   "private storage" line and `proof-backup.timer` as PASS.
+6. `/suppliers` shows the **Total utang** column and the **Ada utang** tab for the owner; a staff
+   account whose role lacks `finance.view_profit` sees neither.
+
+### 14.7 Rollback
+
+Same rule as §2: roll back with `skip_migrate` ticked. 0038 is additive, so the previous release
+(`d5c654b`) runs unchanged against it; payments recorded meanwhile stay in the database and
+reappear on roll-forward. During the rollback window: the old code does not refuse editing a
+purchase below what was already paid (it shows "Lebih bayar" after roll-forward, nothing breaks),
+and changing the supplier of a purchase that has a payment fails with an error page (the
+database refuses it). The env vars and the proof-backup timer can stay: the old image ignores
+the vars, and the backup keeps copying whatever is in the bucket. Never delete the private bucket
+or its objects as part of a rollback.
+
+### 14.8 Catatan untuk Ibu: mencatat pembayaran dengan bukti
+
+- **Kapan:** setiap kali uang keluar ke supplier atau penjahit (DP, cicilan, pelunasan), tunai
+  maupun transfer.
+- **Pembelian:** buka pesanan di **Pembelian**, tekan **Catat pembayaran**. Isi **Tanggal
+  bayar** (otomatis hari ini, boleh tanggal sebelumnya, tidak boleh besok), **Jumlah** (otomatis
+  terisi sisa tagihan, ubah kalau baru DP), **Metode** (Tunai / Transfer), lalu **Bukti bayar**:
+  foto struk/bukti transfer atau PDF. Bukti **wajib**. **Catatan** boleh dikosongkan. Tekan
+  **Simpan pembayaran**.
+- **Produksi:** buka batch yang sudah diposting, tekan **Catat pembayaran**, pilih **Dibayar
+  kepada** (penjahit atau penyedia jasa), sisanya sama.
+- Foto dari iPhone otomatis jadi JPG saat dipilih. Kalau muncul "Foto HEIC belum didukung", buka
+  fotonya, simpan ulang sebagai JPG, lalu unggah lagi. Ukuran maksimal 10 MB.
+- Jumlah tidak bisa melebihi sisa tagihan. Status berubah sendiri: **Belum bayar → DP → Lunas**.
+- **Salah catat?** Pembayaran tidak bisa diubah atau dihapus. Tekan **Batalkan** di baris itu,
+  tulis **Alasan pembatalan**, lalu catat ulang yang benar. Baris lama tetap terlihat dicoret
+  dengan tanda "Dibatalkan".
+- **Nota dari supplier** (kalau ada): di pesanan pembelian, **Lampirkan nota**. Tidak wajib.
+- **Utang ke supplier:** menu **Supplier** menampilkan **Total utang** tiap supplier (pembelian
+  dan ongkos jahit/jasa produksi), tab **Ada utang** untuk melihat yang belum lunas saja. Buka
+  suppliernya untuk melihat dokumen mana saja yang belum lunas. "Lebih bayar" artinya kita sudah
+  membayar lebih dari tagihan (misalnya pesanan dibatalkan setelah DP); uang kembaliannya belum
+  dicatat di sistem.
 
 ---
 

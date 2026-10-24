@@ -195,6 +195,27 @@ b="$(env_value env/cron.env INTERNAL_CRON_SECRET || true)"
 if [ -z "$a" ] || [ -z "$b" ]; then echo "SAME:cron:missing"; elif [ "$a" != "$b" ]; then echo "SAME:cron:mismatch"; elif [ "${#a}" -lt 32 ]; then echo "SAME:cron:short"; else echo "SAME:cron:match"; fi
 unset v a b
 
+# --- Private proof storage (docs/plans/purchase-payments.md §5, A7). Presence only (set/empty/
+# missing via cfg_state), plus two derived booleans; no value is ever printed.
+for key in PRIVATE_S3_BUCKET PRIVATE_S3_ACCESS_KEY_ID PRIVATE_S3_SECRET_ACCESS_KEY; do
+  cfg_state admin.env "$key"
+done
+for key in PROOF_BACKUP_SOURCE_BUCKET PROOF_BACKUP_SOURCE_ACCESS_KEY_ID PROOF_BACKUP_SOURCE_SECRET_ACCESS_KEY; do
+  cfg_state backup.env "$key"
+done
+v="$(env_value env/admin.env PRIVATE_S3_BUCKET || true)"
+case "$v" in
+  "") echo "PRIVBUCKET:missing" ;;
+  *-private) echo "PRIVBUCKET:private-name" ;;
+  *) echo "PRIVBUCKET:not-private-name" ;;
+esac
+a="$(env_value env/admin.env PRIVATE_S3_ACCESS_KEY_ID || true)"
+b="$(env_value env/admin.env S3_ACCESS_KEY_ID || true)"
+if [ -z "$a" ] || [ -z "$b" ]; then echo "SAME:private-media:missing"; elif [ "$a" = "$b" ]; then echo "SAME:private-media:match"; else echo "SAME:private-media:differ"; fi
+b="$(env_value env/backup.env PROOF_BACKUP_SOURCE_ACCESS_KEY_ID || true)"
+if [ -z "$a" ] || [ -z "$b" ]; then echo "SAME:private-readonly:missing"; elif [ "$a" = "$b" ]; then echo "SAME:private-readonly:match"; else echo "SAME:private-readonly:differ"; fi
+unset v a b
+
 # The floating `web` alias (cron and admin revalidation): a bare recreate of the web slot drops it
 # (deploy-prod/recreate-active-slot.sh).
 if docker compose exec -T caddy curl -sf "http://web:3000/api/health" >/dev/null 2>&1 </dev/null; then
@@ -208,7 +229,7 @@ cron_log="$(docker compose logs --no-log-prefix --since 15m cron 2>/dev/null </d
 echo "CRONLOG:sweep200=$(grep -c '/api/internal/payments/sweep -> 200' <<<"$cron_log"):email200=$(grep -c '/api/internal/emails/dispatch -> 200' <<<"$cron_log"):errors=$(grep -c 'ERROR\|ALERT' <<<"$cron_log"):idle=$(grep -c 'idle (no sweep' <<<"$cron_log")"
 unset cron_log
 
-for t in pg-backup.timer disk-alert.timer backup-check.timer health-check.timer; do
+for t in pg-backup.timer proof-backup.timer disk-alert.timer backup-check.timer health-check.timer; do
   # No `|| echo unknown` fallback here: `systemctl is-active` always prints the unit's state word
   # (active/inactive/failed/unknown/...) to stdout regardless of its exit code (the exit code is
   # just a boolean signal, not a marker of missing output) — appending `|| echo unknown` after a
@@ -239,6 +260,21 @@ if [ -f backup/last-backup-status.json ]; then
   fi
 else
   echo "BACKUPAGE:missing"
+fi
+
+if [ -f backup/last-proof-backup-status.json ] && [ -f backup/proof-backup-lib.sh ]; then
+  # shellcheck source=./backup/proof-backup-lib.sh
+  . backup/proof-backup-lib.sh
+  ts="$(proof_status_timestamp backup/last-proof-backup-status.json)"
+  if [ -z "$ts" ]; then
+    echo "PROOFBACKUPAGE:no-timestamp"
+  elif epoch="$(proof_ts_to_epoch "$ts")"; then
+    echo "PROOFBACKUPAGE:$((($(date +%s) - epoch) / 3600)):$ts"
+  else
+    echo "PROOFBACKUPAGE:unparseable:$ts"
+  fi
+else
+  echo "PROOFBACKUPAGE:missing"
 fi
 
 echo "DISK:$(df -h / | awk 'NR==2{print $5" used, "$4" free of "$2}')"

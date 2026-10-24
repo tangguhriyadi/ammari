@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { PageHeader, Badge, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getSupplierById } from "@/lib/suppliers/queries";
+import { getSupplierPayables } from "@/lib/supplier-payments/supplier-balance";
 import { supplierKindLabels, type SupplierKind } from "@/lib/suppliers/kinds";
 // Reused, not re-implemented: the one existing Indonesian-phone normalizer in this app (added
 // for the storefront's WhatsApp button). It returns null for anything that isn't a plausible
@@ -10,6 +11,7 @@ import { supplierKindLabels, type SupplierKind } from "@/lib/suppliers/kinds";
 import { normalizeWhatsappNumber } from "@/lib/content/store-settings-schema";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { SupplierForm } from "../_components/supplier-form";
+import { SupplierPayables } from "../_components/supplier-payables";
 
 function DetailRow({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
@@ -29,6 +31,9 @@ export default async function SupplierDetailPage({ params }: { params: Promise<{
   if (!supplier) notFound();
 
   const canManage = session.permissionKeys.includes("inventory.manage");
+  // "Utang" (docs/plans/purchase-payments.md §9) is cost data: without finance.view_profit the
+  // query never runs and the card is not rendered at all.
+  const payables = session.permissionKeys.includes("finance.view_profit") ? await getSupplierPayables(supplier.id) : null;
   const kindLabels = supplierKindLabels(supplier.kinds);
   const whatsappNumber = supplier.phone ? normalizeWhatsappNumber(supplier.phone) : null;
 
@@ -55,6 +60,8 @@ export default async function SupplierDetailPage({ params }: { params: Promise<{
           )}
         </div>
       )}
+
+      {payables && <SupplierPayables documents={payables.documents} balance={payables.balance} />}
 
       {canManage ? (
         <SupplierForm

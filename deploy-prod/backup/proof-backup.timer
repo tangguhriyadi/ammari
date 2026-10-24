@@ -1,0 +1,13 @@
+[Unit]
+Description=Run proof-backup.service daily at 02:45 Asia/Jakarta
+
+[Timer]
+# 30 minutes after pg-backup.timer (02:15), so the two never compete for the same bucket token at
+# the same moment; backup-check.timer (09:00) checks both.
+OnCalendar=*-*-* 02:45:00 Asia/Jakarta
+# Catches up on a missed run (VPS reboot/maintenance window spanning 02:45).
+Persistent=true
+Unit=proof-backup.service
+
+[Install]
+WantedBy=timers.target

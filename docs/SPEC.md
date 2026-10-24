@@ -22,6 +22,9 @@ As of 2026-10-21 (cart plan session 17).
 - Stock, production and raw-material stock on append-only, moving-average ledgers (§5.1);
   suppliers, purchase documents with goods receipts, production output receipts, defect stock and
   dispositions (§5.1a; docs/plans/suppliers-goods-receipt.md).
+- Supplier payments with mandatory proof on purchases and posted production batches, voids with
+  reason, supplier notas, "Total utang" per supplier, proofs in a private bucket with a nightly
+  backup (§5.1a; docs/plans/purchase-payments.md, migration 0038).
 - Orders (`/orders`), packing with printable QR thank-you cards (`/packing`), the shared order,
   stock and card write paths in `packages/commerce` (`@ammari/commerce`).
 - Main site (`apps/web`): catalog, product pages, customer login and account (§10.3), voucher
@@ -109,7 +112,11 @@ pnpm workspaces + Turborepo:
   automated tests only. A laptop never connects to the Sumopod dev database directly — local
   work always talks to the local container.
 - **Object storage:** Cloudflare R2 (S3-compatible), with separate dev and prod media buckets
-  plus a dedicated, private prod backups bucket (see `docs/plans/storage-r2.md`).
+  plus a dedicated, private prod backups bucket (see `docs/plans/storage-r2.md`). Payment proofs
+  and supplier notas live in separate **private** buckets (`ammari-dev-private`,
+  `ammari-prod-private`: no custom domain, never public, own tokens), served only through the
+  admin's permission-checked `/api/private-files/<id>`; prod's are copied nightly, read-only,
+  into the backups bucket's `private-files/` (docs/plans/purchase-payments.md §5, A7).
 - **DNS:** Cloudflare.
 - Dev domains (`ammari.my.id`, `admin.ammari.my.id`) sit behind a login and are marked `noindex`.
 
@@ -525,6 +532,17 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   and the count page shows "Dipesan: N pcs (tetap dihitung)" per SKU plus a note that held
   pieces are still on the shelf and are counted. Every physical figure (count, "Sistem", low-stock
   status) stays physical stock; holds never change it.
+
+- **Supplier payments** (docs/plans/purchase-payments.md, migration 0038). `supplier_payments`
+  (`BYR-YYYYMM-NNN`, against one purchase or one posted batch and payee, amount, date, Tunai /
+  Transfer, a required proof in `private_files`) and `purchase_attachments` (notas) are
+  append-only: no edit, no delete, a mistake is voided with a reason and stops counting. Payment
+  status is derived, never stored: Belum bayar / DP / Lunas / Tanpa tagihan / Lebih bayar.
+  Tagihan: a purchase's order total (a short-closed one only what was settled, a cancelled one 0);
+  a posted batch's service lines per payee, never fabric or accessories. A payment above the
+  remaining balance is refused. "Total utang" per supplier = remaining over their purchases plus
+  their share of posted batches; overpaid documents show "Lebih bayar" separately. Amounts need
+  `finance.view_profit`; recording, voiding and viewing proofs also `supplier_payments.manage`.
 
 ### 5.2 Orders & finance
 

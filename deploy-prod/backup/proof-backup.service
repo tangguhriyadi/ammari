@@ -1,0 +1,18 @@
+[Unit]
+Description=Ammari prod: nightly copy of private proof files into the backups bucket
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/opt/ammari-prod/backup
+ExecStart=/opt/ammari-prod/backup/proof-backup.sh
+# A hung S3 call must not hold the lock forever: systemd kills the run after 2 hours (the status
+# file then goes stale and backup-check.sh alerts). A normal night takes seconds; the first full
+# copy of every proof takes minutes.
+TimeoutStartSec=2h
+# proof-backup.sh never prints a secret (only counts, bucket names and storage keys, which are
+# uuids), so its output is safe in the journal: `journalctl -u proof-backup.service -n 100`.
+StandardOutput=journal
+StandardError=journal

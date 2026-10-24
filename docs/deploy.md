@@ -246,6 +246,44 @@ Point `STORAGE_PUBLIC_BASE_URL` at that URL in `admin.env`/`web.env` and verify 
 `pnpm --filter @ammari/storage storage:check` (prints "Public read works." against a real
 healthcheck object).
 
+## Private proof storage (supplier payments)
+
+Payment proofs and supplier notas (`docs/plans/purchase-payments.md` §5) never go into the media
+bucket: `ammari-dev` is public as a whole through `img.ammari.my.id`. They go into the private
+bucket **`ammari-dev-private`** (no custom domain, R2.dev subdomain disabled, never public) with
+its own token, and the admin serves them only through `/api/private-files/<id>`, permission-
+checked per request. Until the three vars below are set, dev's admin boots and works as before;
+only "Catat pembayaran" / "Lampirkan nota" refuse with "Penyimpanan bukti belum dikonfigurasi."
+Local development needs none of this: `PRIVATE_STORAGE_DRIVER=fs` in `apps/admin/.env` keeps
+files in the git-ignored `apps/admin/.private-storage/`.
+
+1. **Cloudflare:** create the bucket and an **Object Read & Write** token scoped to
+   `ammari-dev-private` only, as in `docs/deploy-prod.md` §14.1 and §14.2.
+2. **[Mac]** save the token with the dashboard's Copy button, never typing or echoing it:
+   ```bash
+   (umask 077 && pbpaste > ~/ammari-secrets/r2-dev-private-access-key) && pbcopy < /dev/null
+   (umask 077 && pbpaste > ~/ammari-secrets/r2-dev-private-secret-key) && pbcopy < /dev/null
+   wc -c < ~/ammari-secrets/r2-dev-private-access-key   # a length only
+   ```
+3. **[Mac → dev VPS]** set the env through `set-env-var.sh` on ssh's stdin (it prints the key
+   name and a length, never the value; `devssh` as in `docs/launch/checkout-dev.md`):
+   ```bash
+   devssh() { ssh -i ~/ammari-secrets/ammari_deploy_key deploy@43.129.55.61 "$@"; }
+   printf 'ammari-dev-private\n' | devssh 'cd /opt/ammari && ./set-env-var.sh env/admin.env PRIVATE_S3_BUCKET'
+   devssh 'cd /opt/ammari && ./set-env-var.sh env/admin.env PRIVATE_S3_ACCESS_KEY_ID' < ~/ammari-secrets/r2-dev-private-access-key
+   devssh 'cd /opt/ammari && ./set-env-var.sh env/admin.env PRIVATE_S3_SECRET_ACCESS_KEY' < ~/ammari-secrets/r2-dev-private-secret-key
+   devssh 'cd /opt/ammari && ./set-env-var.sh --check env/admin.env PRIVATE_S3_BUCKET PRIVATE_S3_ACCESS_KEY_ID PRIVATE_S3_SECRET_ACCESS_KEY'
+   devssh 'cd /opt/ammari && docker compose up -d --force-recreate admin'   # admin reads env only at start
+   ```
+   `S3_ENDPOINT`, `S3_REGION` and `S3_KEY_PREFIX=dev/` are shared with the media bucket, so dev
+   proofs land under `dev/payment_proof/...`. The admin refuses a bucket name not ending in
+   `-private`, the media bucket, or the media token.
+4. **Verify:** the checklist in `docs/deploy-prod.md` §14.6, steps 1 to 4 and 6, on
+   `admin.ammari.my.id`.
+
+Dev has no backup job (`deploy/` ships none, unlike `deploy-prod/backup/`), so dev proofs are not backed up.
+Rollback: nothing to undo; an older image ignores these vars.
+
 ## Image tagging scheme
 
 Every commit SHA that `deploy-dev.yml` deploys must have all three images

@@ -1,9 +1,11 @@
 import "server-only";
 import { and, asc, count, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { suppliers } from "@ammari/db/schema";
+import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError, mapUniqueViolation } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
+import { owedSupplierIdsSql } from "@/lib/supplier-payments/supplier-balance";
 import type { SupplierKind } from "./kinds";
 
 // `suppliers.name` is citext UNIQUE (migration 0022), so "Laksmi" and "laksmi" collide — the
@@ -42,7 +44,9 @@ export type SupplierRow = typeof suppliers.$inferSelect;
  * caller to strip before rendering for a session without `finance.view_profit` — bank details
  * are payment reference text the whole `inventory.view` audience needs. */
 export async function listSuppliers(
-  filters: { q?: string; activeFilter?: SupplierActiveFilter },
+  // owedOnly: the "Ada utang" tab (docs/plans/purchase-payments.md §9). Who is owed money is cost
+  // data, so the caller passes it only for a viewer with finance.view_profit.
+  filters: { q?: string; activeFilter?: SupplierActiveFilter; owedOnly?: boolean },
   rawPage: string | undefined,
   rawPerPage: string | undefined,
   db: Database = defaultDb,
@@ -51,6 +55,7 @@ export async function listSuppliers(
     filters.q ? ilike(suppliers.name, `%${filters.q}%`) : undefined,
     filters.activeFilter === "active" ? eq(suppliers.isActive, true) : undefined,
     filters.activeFilter === "inactive" ? eq(suppliers.isActive, false) : undefined,
+    filters.owedOnly ? sql`${qualifiedColumn(suppliers, suppliers.id)} in (${owedSupplierIdsSql()})` : undefined,
   ].filter((condition) => condition !== undefined);
   const where = conditions.length > 0 ? and(...conditions) : undefined;
 

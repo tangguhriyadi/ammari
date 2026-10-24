@@ -3,7 +3,6 @@ import { and, asc, count, desc, eq, ilike, inArray, isNotNull, isNull, or, sql, 
 import { alias } from "drizzle-orm/pg-core";
 import {
   accessories,
-  defectMovements,
   fabrics,
   goodsReceiptItems,
   goodsReceipts,
@@ -16,7 +15,6 @@ import {
   type PurchaseStatus,
 } from "@ammari/db/schema";
 import { formatRupiah, resolvePagination, type Pagination } from "@ammari/ui/lib";
-import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { nextDocumentNumber } from "@/lib/documents/document-number";
@@ -25,6 +23,7 @@ import { getDefectDispositionsByPurchaseLine, getDefectSettledByPurchaseLine } f
 import { toCentiQty } from "@/lib/receipts/valuation";
 import { lockSelectableSuppliers } from "@/lib/suppliers/queries";
 import { getPurchasePaidState } from "@/lib/supplier-payments/purchase-paid";
+import { purchaseLineTagihanSql } from "@/lib/supplier-payments/purchase-tagihan-sql";
 import { summarizePayment, type PaymentSummary } from "@/lib/supplier-payments/status";
 import { closedStatus, isOpenPurchaseStatus, type LineProgress } from "./status";
 
@@ -315,30 +314,6 @@ export interface PurchaseDocumentListRow {
   payment: PaymentSummary | { status: PaymentSummary["status"] };
 }
 
-/** One line's share of §3.1's tagihan, in SQL, for the list's filter and badge. It mirrors
- * purchaseTagihan (lib/supplier-payments/status.ts): the order total, except a closed document
- * (A1) is due cumulativeValue(total, ordered, settled) per line (round half up, integer
- * hundredths), and a cancelled one nothing. settled = net accepted + the defect ledger's
- * disposal-less rows (getLineQuantities). queries.test.ts asserts it equals purchaseTagihan. */
-function lineTagihanSql() {
-  const lineId = qualifiedColumn(purchaseItems, purchaseItems.id);
-  const settled = sql`(
-    coalesce((select sum(${qualifiedColumn(goodsReceiptItems, goodsReceiptItems.qtyAccepted)}) from ${goodsReceiptItems}
-      where ${qualifiedColumn(goodsReceiptItems, goodsReceiptItems.purchaseItemId)} = ${lineId}), 0)
-    + coalesce((select sum(${qualifiedColumn(defectMovements, defectMovements.qty)}) from ${defectMovements}
-      where ${qualifiedColumn(defectMovements, defectMovements.purchaseItemId)} = ${lineId}
-        and ${qualifiedColumn(defectMovements, defectMovements.disposalType)} is null), 0)
-  )`;
-  const total = qualifiedColumn(purchaseItems, purchaseItems.totalAmount);
-  const orderedCenti = sql`round(${qualifiedColumn(purchaseItems, purchaseItems.qtyOrdered)} * 100)`;
-  const status = qualifiedColumn(purchases, purchases.status);
-  return sql`case
-    when ${status} = 'cancelled' then 0
-    when ${status} = 'closed' then floor((2 * ${total}::numeric * round(${settled} * 100) + ${orderedCenti}) / (2 * ${orderedCenti}))
-    else ${total}
-  end`;
-}
-
 export async function listPurchaseDocuments(
   filters: { status?: PurchaseStatusFilter; payment?: PurchasePaymentFilter; q?: string },
   rawPage: string | undefined,
@@ -350,7 +325,7 @@ export async function listPurchaseDocuments(
       purchaseId: purchaseItems.purchaseId,
       itemCount: sql<number>`count(*)::int`.as("item_count"),
       totalAmount: sql<string>`sum(${purchaseItems.totalAmount})::bigint`.as("total_amount"),
-      tagihan: sql<string>`sum(${lineTagihanSql()})::bigint`.as("tagihan"),
+      tagihan: sql<string>`sum(${purchaseLineTagihanSql()})::bigint`.as("tagihan"),
     })
     .from(purchaseItems)
     .innerJoin(purchases, eq(purchases.id, purchaseItems.purchaseId))
