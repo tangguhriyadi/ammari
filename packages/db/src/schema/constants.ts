@@ -270,6 +270,10 @@ export const ORDER_ATTENTION_FLAGS = [
   // (decision 47), and a resi typed by staff differs from the booked waybill (owner 2026-10-22).
   "shipping_cost_over_quote",
   "tracking_number_mismatch",
+  // Migration 0040 (docs/plans/marketplace-import.md §3, owner decision 3): the marketplace says the
+  // buyer is returning the parcel ("Dalam Pengembalian"). No stock effect until the return is final;
+  // cleared when the order becomes cancelled/returned.
+  "marketplace_return_pending",
 ] as const;
 export type OrderAttentionFlag = (typeof ORDER_ATTENTION_FLAGS)[number];
 
@@ -323,6 +327,25 @@ export type ImportBatchKind = (typeof IMPORT_BATCH_KINDS)[number];
 
 export const IMPORT_BATCH_STATUSES = ["pending", "previewed", "committed", "failed"] as const;
 export type ImportBatchStatus = (typeof IMPORT_BATCH_STATUSES)[number];
+
+/** What one marketplace import did to one order (import_batch_orders.action, migration 0040). An
+ * unchanged order gets no row (docs/plans/marketplace-import.md §6). */
+export const IMPORT_BATCH_ORDER_ACTIONS = ["created", "updated"] as const;
+export type ImportBatchOrderAction = (typeof IMPORT_BATCH_ORDER_ACTIONS)[number];
+
+/** What a platform charges the seller on one order (order_channel_fees.component, migration 0040,
+ * docs/plans/marketplace-import.md §5). A closed list behind a CHECK: a new platform's component
+ * ships as a CHECK widen (owner decision 7). `seller_shipping_subsidy` is ongkir the seller pays on
+ * the marketplace; it counts as a platform cost in "Laba setelah biaya platform" (plan §9). */
+export const CHANNEL_FEE_COMPONENTS = [
+  "admin_fee",
+  "service_fee",
+  "platform_commission",
+  "affiliate_commission",
+  "seller_shipping_subsidy",
+  "other",
+] as const;
+export type ChannelFeeComponent = (typeof CHANNEL_FEE_COMPONENTS)[number];
 
 export const EXPENSE_CATEGORIES = [
   "packaging",

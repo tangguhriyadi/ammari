@@ -8,6 +8,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -16,15 +17,19 @@ import {
 } from "drizzle-orm/pg-core";
 import { checkArraySubset, checkIn, citext, timestamps, createdAtOnly } from "./columns";
 import {
+  CHANNEL_FEE_COMPONENTS,
   CHANNEL_IDS,
   EXPENSE_CATEGORIES,
+  IMPORT_BATCH_ORDER_ACTIONS,
   IMPORT_BATCH_KINDS,
   IMPORT_BATCH_STATUSES,
   ORDER_ATTENTION_FLAGS,
   ORDER_CANCEL_REASONS,
   ORDER_PAYMENT_STATUSES,
   ORDER_STATUSES,
+  type ChannelFeeComponent,
   type ChannelId,
+  type ImportBatchOrderAction,
   type OrderAttentionFlag,
   type OrderCancelReason,
   type OrderPaymentStatus,
@@ -63,6 +68,15 @@ export const importBatches = pgTable(
       .references(() => staffUsers.id, { onDelete: "restrict" }),
     rowCount: integer("row_count"),
     errorMessage: text("error_message"),
+    // ---- Marketplace order import (docs/plans/marketplace-import.md §5, migration 0040) ----
+    // The importer inserts its batch only at Simpan, directly as `committed` (nothing is written
+    // before Simpan); `pending`/`previewed` stay unused. sha256 of the uploaded bytes (hex), so a
+    // file uploaded again shows "File ini sudah pernah disimpan"; the file itself is never stored.
+    fileSha256: text("file_sha256"),
+    // Counts and totals shown in the import history, plus the manual SKU matches used. Never buyer
+    // data.
+    summary: jsonb("summary"),
+    committedAt: timestamp("committed_at", { withTimezone: true, mode: "date" }),
     ...timestamps(),
   },
   (table) => [
@@ -71,6 +85,10 @@ export const importBatches = pgTable(
     index("import_batches_status_idx").on(table.status),
     check("import_batches_kind_check", checkIn(table.kind, IMPORT_BATCH_KINDS)),
     check("import_batches_status_check", checkIn(table.status, IMPORT_BATCH_STATUSES)),
+    check("import_batches_file_sha256_check", sql`${table.fileSha256} is null or ${table.fileSha256} ~ '^[0-9a-f]{64}$'`),
+    // One direction only: a commit time means committed. (Not the reverse, so a `committed` row
+    // written before 0040, if any, stays valid.)
+    check("import_batches_committed_at_check", sql`${table.committedAt} is null or ${table.status} = 'committed'`),
   ],
 );
 
@@ -185,6 +203,14 @@ export const orders = pgTable(
     // The provider area id (Biteship), snapshotted (a shipping_areas row can be re-synced).
     shippingDestinationId: text("shipping_destination_id"),
     shippingQuotedAt: timestamp("shipping_quoted_at", { withTimezone: true, mode: "date" }),
+
+    // ---- Marketplace order import (docs/plans/marketplace-import.md §3, §5, migration 0040) ----
+    // The latest raw status text from the marketplace export (display and debugging), updated by
+    // every import that changes it, even when no transition happens. NULL on every order no import
+    // has touched.
+    channelStatus: text("channel_status"),
+    // When an import last wrote this order.
+    channelSyncedAt: timestamp("channel_synced_at", { withTimezone: true, mode: "date" }),
     ...timestamps(),
   },
   (table) => [
@@ -268,6 +294,10 @@ export const orders = pgTable(
       "orders_checkout_shipping_quote_check",
       sql`${table.paymentStatus} is null or ${table.shippingCostAmount} is not null`,
     ),
+
+    // ---- Marketplace order import (migration 0040) ----
+    // Only a status the adapter's map knows is ever stored (plan §2.2), so 64 is generous.
+    check("orders_channel_status_check", sql`${table.channelStatus} is null or char_length(${table.channelStatus}) between 1 and 64`),
   ],
 );
 
@@ -307,6 +337,57 @@ export const orderItems = pgTable(
     check("order_items_unit_price_check", sql`${table.unitPrice} >= 0`),
     check("order_items_unit_cost_check", sql`${table.unitCost} >= 0`),
     check("order_items_list_unit_price_check", sql`${table.listUnitPrice} is null or ${table.listUnitPrice} >= ${table.unitPrice}`),
+  ],
+);
+
+/** Platform fees per marketplace order (docs/plans/marketplace-import.md §5, migration 0040), for
+ * "Laba setelah biaya platform" (plan §9). One row per (order, component): a re-import upserts
+ * (`ON CONFLICT (order_id, component) DO UPDATE`), never duplicates. A component missing from a
+ * later file is left as is (a missing column must not zero a real fee). A table rather than columns
+ * on `orders`: TikTok has other components and per-product commissions (owner decision 7). */
+export const orderChannelFees = pgTable(
+  "order_channel_fees",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "restrict" }),
+    component: text("component").$type<ChannelFeeComponent>().notNull(),
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    // The import that last wrote this amount.
+    importBatchId: uuid("import_batch_id").references(() => importBatches.id, { onDelete: "restrict" }),
+    ...timestamps(),
+  },
+  (table) => [
+    // Also serves every lookup by order_id (leading column).
+    unique("order_channel_fees_order_id_component_key").on(table.orderId, table.component),
+    index("order_channel_fees_import_batch_id_idx").on(table.importBatchId),
+    check("order_channel_fees_component_check", checkIn(table.component, CHANNEL_FEE_COMPONENTS)),
+    check("order_channel_fees_amount_check", sql`${table.amount} >= 0`),
+  ],
+);
+
+/** What one marketplace import created or updated (docs/plans/marketplace-import.md §5, migration
+ * 0040): the import history's batch detail, readable without `audit_log.view`. `changes` names the
+ * fields and statuses that moved (before/after), never buyer data. Unchanged orders get no row.
+ * `orders.import_batch_id` keeps meaning "the batch that created this order". */
+export const importBatchOrders = pgTable(
+  "import_batch_orders",
+  {
+    importBatchId: uuid("import_batch_id")
+      .notNull()
+      .references(() => importBatches.id, { onDelete: "restrict" }),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "restrict" }),
+    action: text("action").$type<ImportBatchOrderAction>().notNull(),
+    changes: jsonb("changes").notNull().default(sql`'{}'::jsonb`),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    primaryKey({ name: "import_batch_orders_pkey", columns: [table.importBatchId, table.orderId] }),
+    index("import_batch_orders_order_id_idx").on(table.orderId),
+    check("import_batch_orders_action_check", checkIn(table.action, IMPORT_BATCH_ORDER_ACTIONS)),
   ],
 );
 

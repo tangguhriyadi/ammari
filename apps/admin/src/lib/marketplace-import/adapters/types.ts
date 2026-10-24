@@ -1,20 +1,12 @@
-import type { OrderStatus } from "@ammari/db/schema";
+import type { ChannelFeeComponent, OrderStatus } from "@ammari/db/schema";
 
 // One adapter per marketplace (docs/plans/marketplace-import.md §2). An adapter is data only: which
 // header names mean what, the scope of each value, the status vocabulary. Adding TikTok later is a
 // mapping plus tests, no new parsing code.
 
-/** What a platform charges the seller, per order (plan §5). Backs order_channel_fees.component;
- * moves into @ammari/db's constants.ts with its CHECK in session 2 (migration 0040). */
-export const CHANNEL_FEE_COMPONENTS = [
-  "admin_fee",
-  "service_fee",
-  "platform_commission",
-  "affiliate_commission",
-  "seller_shipping_subsidy",
-  "other",
-] as const;
-export type ChannelFeeComponent = (typeof CHANNEL_FEE_COMPONENTS)[number];
+// What a platform charges the seller, per order (plan §5): the closed list behind
+// order_channel_fees_component_check lives with the schema (migration 0040).
+export { CHANNEL_FEE_COMPONENTS, type ChannelFeeComponent } from "@ammari/db/schema";
 export type FeeAmounts = Partial<Record<ChannelFeeComponent, number>>;
 
 /** `order`: the same value repeated on each row of an order, taken once (blanks ignored, two

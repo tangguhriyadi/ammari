@@ -102,6 +102,12 @@ export const ATTENTION_FLAG_COPY: Record<OrderAttentionFlag, AttentionFlagCopy> 
     label: "Resi beda dengan pesanan kurir",
     meaning: "Nomor resi yang diisi berbeda dengan resi dari pemesanan kurir. Cek mana yang benar, perbaiki lewat Ubah resi, lalu tandai beres.",
   },
+  // Migration 0040 (docs/plans/marketplace-import.md §3, owner decision 3).
+  marketplace_return_pending: {
+    label: "Retur di marketplace",
+    meaning:
+      "Menurut file impor marketplace, pembeli sedang mengembalikan paket. Stok belum dikembalikan. Kalau paket sudah diterima, ubah status ke Retur. Kalau retur ditolak, tandai beres.",
+  },
 };
 
 export function isKnownAttentionFlag(flag: string): flag is OrderAttentionFlag {
