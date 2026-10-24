@@ -10,3 +10,4 @@ export * from "./customer-auth";
 export * from "./auth-throttle";
 export * from "./claim-throttle";
 export * from "./shipments";
+export * from "./supplier-payments";

@@ -361,3 +361,25 @@ export const CUTTING_RATIO: Record<CuttingSize, number> = {
   L: 3,
   XL: 2,
 };
+
+/** What a private (never public) stored file is for (docs/plans/purchase-payments.md §4.1). Each
+ * table that points at private_files pins its own purpose through a composite FK, so a nota can
+ * never be filed as a payment proof or the other way round. */
+export const PRIVATE_FILE_PURPOSES = ["payment_proof", "purchase_invoice"] as const;
+export type PrivateFilePurpose = (typeof PRIVATE_FILE_PURPOSES)[number];
+
+/** The only stored formats (§6): photos are re-encoded to JPEG, PDFs stored as-is. */
+export const PRIVATE_FILE_CONTENT_TYPES = ["image/jpeg", "application/pdf"] as const;
+export type PrivateFileContentType = (typeof PRIVATE_FILE_CONTENT_TYPES)[number];
+
+/** What a supplier payment settles (§4.2): a purchase document or a posted production batch. */
+export const SUPPLIER_PAYMENT_TARGET_TYPES = ["purchase", "production_batch"] as const;
+export type SupplierPaymentTargetType = (typeof SUPPLIER_PAYMENT_TARGET_TYPES)[number];
+
+/** Tunai / Transfer. Indonesian labels live in apps/admin, never in the DB. */
+export const SUPPLIER_PAYMENT_METHODS = ["cash", "transfer"] as const;
+export type SupplierPaymentMethod = (typeof SUPPLIER_PAYMENT_METHODS)[number];
+
+/** Kinds of file attached to a purchase document (§4.3). Only the supplier's invoice/nota today. */
+export const PURCHASE_ATTACHMENT_KINDS = ["invoice"] as const;
+export type PurchaseAttachmentKind = (typeof PURCHASE_ATTACHMENT_KINDS)[number];

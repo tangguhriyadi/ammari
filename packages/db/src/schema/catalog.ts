@@ -1200,6 +1200,10 @@ export const purchases = pgTable(
       sql`num_nonnulls(${table.reopenedAt}, ${table.reopenedByStaffUserId}, ${table.reopenReason}) in (0, 3) and (${table.reopenReason} is null or btrim(${table.reopenReason}) <> '')`,
     ),
     index("purchases_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
+    // Composite-FK target for supplier_payments (migration 0038, docs/plans/purchase-payments.md
+    // §4.2): a purchase payment's payee is always the purchase's own supplier, and the supplier
+    // can no longer be changed once a payment references the pair (ON UPDATE RESTRICT).
+    unique("purchases_id_supplier_id_key").on(table.id, table.supplierId),
     check("purchases_status_check", checkIn(table.status, PURCHASE_STATUSES)),
     // One-directional on purpose (§3.2): a terminal status always carries its close stamp, but a
     // document re-opened later (D18, S6) keeps the record of its last close.

@@ -50,6 +50,15 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
     description: "Record ad spend and expenses",
   },
   { key: "finance.view_profit", group: "finance", description: "View cost, profit, and payout figures" },
+  // docs/plans/purchase-payments.md P10 — writing money records (and opening their proofs) is a
+  // stronger act than the read-only finance.view_profit, and the person receiving goods should not
+  // by default be able to mark a supplier paid. Every use also requires finance.view_profit (§7).
+  // Shipped to existing databases by migration 0038.
+  {
+    key: "supplier_payments.manage",
+    group: "finance",
+    description: "Record and void supplier payments, and view payment proofs",
+  },
   { key: "settings.manage", group: "settings", description: "Manage targets, cost assumptions, and settings" },
   { key: "customers.view", group: "customers", description: "View customers" },
   { key: "vouchers.void", group: "vouchers", description: "Void a voucher" },

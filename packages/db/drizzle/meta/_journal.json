@@ -267,6 +267,13 @@
       "when": 1792795515256,
       "tag": "0037_product_types",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1792804701599,
+      "tag": "0038_supplier_payments",
+      "breakpoints": true
     }
   ]
 }
