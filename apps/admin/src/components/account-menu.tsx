@@ -11,7 +11,46 @@ import { logoutAction } from "@/app/actions";
 // same-browser memory of a send attempt for this email).
 const OTP_LAST_SEND_STORAGE_KEY_PREFIX = "ammari-admin-otp-last-send";
 
-export function AccountMenu({ session }: { session: StaffSessionData }) {
+function initialsOf(name: string): string {
+  const letters = name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((word) => word.charAt(0).toUpperCase())
+    .join("");
+  return letters || "?";
+}
+
+export function AccountMenu({ session, compact = false }: { session: StaffSessionData; compact?: boolean }) {
+  if (compact) {
+    return (
+      <div className="flex flex-col items-center gap-3">
+        <span
+          title={`${session.staffUser.name} (${session.role.name})`}
+          className="flex size-10 items-center justify-center rounded-full bg-neutral-100 text-sm font-semibold text-brand"
+        >
+          <span aria-hidden="true">{initialsOf(session.staffUser.name)}</span>
+          <span className="sr-only">{`${session.staffUser.name}, ${session.role.name}`}</span>
+        </span>
+        <form
+          action={logoutAction}
+          onSubmit={() => {
+            void clearRememberedOtpSendAttempt(OTP_LAST_SEND_STORAGE_KEY_PREFIX, session.staffUser.email);
+          }}
+        >
+          <button
+            type="submit"
+            aria-label="Keluar"
+            title="Keluar"
+            className="flex size-11 items-center justify-center rounded-md border border-neutral-500 text-neutral-700 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+          >
+            <LogOut aria-hidden="true" className="size-4" />
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col">
