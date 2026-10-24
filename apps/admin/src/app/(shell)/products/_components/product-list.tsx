@@ -113,8 +113,8 @@ export function ProductList({ products }: { products: Product[] }) {
         <tbody>
           {products.map((product) => (
             <Tr key={product.id}>
-              <Td>
-                <ProductThumbnail url={product.thumbnailUrl} className="size-10" />
+              <Td className="w-[72px] min-w-[72px]">
+                <ProductThumbnail url={product.thumbnailUrl} className="block h-[60px] w-10 shrink-0" />
               </Td>
               <Td>
                 <div className="flex flex-wrap items-center gap-2">
