@@ -32,7 +32,7 @@ export async function AdminShell({ session, children }: { session: StaffSessionD
       <Sidebar items={navItems} session={session} />
       <Topbar accountMenu={<AccountMenu session={session} />} />
       <main className="pt-[calc(3.5rem+env(safe-area-inset-top))] pb-[calc(3.5rem+env(safe-area-inset-bottom))] lg:pt-0 lg:pb-0 lg:pl-[272px] lg:transition-[padding-left] lg:duration-200 motion-reduce:transition-none lg:group-data-[collapsed=true]/shell:pl-[72px]">
-        <div className="w-full max-w-7xl px-4 py-6 lg:px-8">{children}</div>
+        <div className="w-full px-4 py-6 lg:px-8">{children}</div>
       </main>
       <BottomNav
         primaryItems={mobilePrimaryItems.map(toNavLinkItem)}

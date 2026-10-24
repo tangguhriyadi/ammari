@@ -66,7 +66,7 @@ export function AccessoryForm(props: AccessoryFormProps) {
 
   return (
     <form
-      className="flex flex-col gap-4"
+      className="flex max-w-xl flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
         handleSubmit();

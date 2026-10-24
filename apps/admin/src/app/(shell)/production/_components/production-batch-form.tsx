@@ -178,7 +178,7 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
 
   return (
     <form
-      className="flex flex-col gap-6"
+      className="flex max-w-3xl flex-col gap-6"
       onSubmit={(event) => {
         event.preventDefault();
         handleSubmit();
