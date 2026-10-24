@@ -216,11 +216,11 @@ export function PurchaseForm(props: PurchaseFormProps) {
                 </div>
                 <div>
                   <Label htmlFor={`line-${line.key}-amount`} required>
-                    Total dibayar
+                    Total harga
                   </Label>
                   <Input
                     id={`line-${line.key}-amount`}
-                    aria-label={`Total dibayar barang ${number}`}
+                    aria-label={`Total harga barang ${number}`}
                     inputMode="numeric"
                     value={line.totalAmount}
                     onChange={(event) => updateLine(line.key, { totalAmount: event.target.value })}

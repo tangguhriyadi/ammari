@@ -65,13 +65,13 @@ async function runPurchaseFlow(page: Page, layout: Layout): Promise<void> {
   await page.getByLabel("Jenis barang 1").selectOption({ label: "Kain" });
   await page.getByLabel("Barang 1", { exact: true }).selectOption({ label: fabricName });
   await page.getByLabel("Jumlah barang 1").fill("10");
-  await page.getByLabel("Total dibayar barang 1").fill("1.000.000");
+  await page.getByLabel("Total harga barang 1").fill("1.000.000");
   await expect(page.getByText("≈ Rp 100.000/yard (otomatis)")).toBeVisible();
   await page.getByRole("button", { name: "+ Tambah barang" }).click();
   await page.getByLabel("Jenis barang 2").selectOption({ label: "Aksesoris" });
   await page.getByLabel("Barang 2", { exact: true }).selectOption({ label: accessoryName });
   await page.getByLabel("Jumlah barang 2").fill("3");
-  await page.getByLabel("Total dibayar barang 2").fill("30.000");
+  await page.getByLabel("Total harga barang 2").fill("30.000");
   await page.getByRole("button", { name: "Simpan", exact: true }).click();
   // Create redirects to the LIST with a toast, and the new document shows there as "Dipesan".
   await expect(page).toHaveURL(/\/purchases$/);

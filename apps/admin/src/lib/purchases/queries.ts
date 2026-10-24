@@ -1,19 +1,22 @@
 import "server-only";
-import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import {
   accessories,
+  defectMovements,
   fabrics,
   goodsReceiptItems,
   goodsReceipts,
   purchaseItems,
   purchases,
   staffUsers,
+  supplierPayments,
   suppliers,
   type PurchaseItemType,
   type PurchaseStatus,
 } from "@ammari/db/schema";
-import { resolvePagination, type Pagination } from "@ammari/ui/lib";
+import { formatRupiah, resolvePagination, type Pagination } from "@ammari/ui/lib";
+import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { nextDocumentNumber } from "@/lib/documents/document-number";
@@ -21,6 +24,8 @@ import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { getDefectDispositionsByPurchaseLine, getDefectSettledByPurchaseLine } from "@/lib/defects/queries";
 import { toCentiQty } from "@/lib/receipts/valuation";
 import { lockSelectableSuppliers } from "@/lib/suppliers/queries";
+import { getPurchasePaidState } from "@/lib/supplier-payments/purchase-paid";
+import { summarizePayment, type PaymentSummary } from "@/lib/supplier-payments/status";
 import { closedStatus, isOpenPurchaseStatus, type LineProgress } from "./status";
 
 // Purchase documents (docs/plans/suppliers-goods-receipt.md D1/§3.2, session S3). Creating or
@@ -171,7 +176,20 @@ export async function updatePurchase(id: string, input: PurchaseInput, actorStaf
     if (before.status !== "ordered" || (await hasAnyReceipt(tx, id))) {
       throw new ActionError("Pesanan yang sudah ada penerimaan barangnya, atau sudah ditutup, tidak bisa diubah.");
     }
-    if (input.supplierId !== before.supplierId) await lockSelectableSuppliers(tx, [input.supplierId], "supplierId");
+    // Supplier payments (docs/plans/purchase-payments.md §3.1), decided under the row lock above,
+    // which every payment write takes first too. While a document is editable (ordered, nothing
+    // received) its tagihan is the order total.
+    const { paid, hasAnyPayment } = await getPurchasePaidState(id, tx);
+    if (input.supplierId !== before.supplierId) {
+      // The payee of a payment is history, voided ones included; the composite FK
+      // supplier_payments_purchase_supplier_fk is the backstop for this friendly refusal.
+      if (hasAnyPayment) throw new FieldError("supplierId", "Pemasok tidak bisa diganti karena sudah ada pembayaran.");
+      await lockSelectableSuppliers(tx, [input.supplierId], "supplierId");
+    }
+    const newTotal = input.lines.reduce((sum, line) => sum + line.totalAmount, 0);
+    if (newTotal < paid) {
+      throw new FieldError("lines", `Total pembelian tidak boleh lebih kecil dari yang sudah dibayar (${formatRupiah(paid)}).`);
+    }
     const beforeLines = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, id));
     const currentAccessoryIds = new Set(beforeLines.flatMap((line) => (line.accessoryId ? [line.accessoryId] : [])));
     await assertItemsOrderable(tx, input.lines, currentAccessoryIds);
@@ -277,6 +295,11 @@ export async function closePurchase(id: string, reason: string, actorStaffUserId
 
 export type PurchaseStatusFilter = PurchaseStatus | undefined;
 
+/** The /purchases "Pembayaran" filter (docs/plans/purchase-payments.md §9). "Tanpa tagihan" is
+ * listed under "Semua" only; "Lunas" includes "Lebih bayar" (§3.3). */
+export const PURCHASE_PAYMENT_FILTERS = ["unpaid", "partial", "paid"] as const;
+export type PurchasePaymentFilter = (typeof PURCHASE_PAYMENT_FILTERS)[number];
+
 export interface PurchaseDocumentListRow {
   id: string;
   purchaseNo: string;
@@ -287,36 +310,84 @@ export interface PurchaseDocumentListRow {
   /** Sum of the lines' total_amount; cost data, stripped (null) for a viewer without
    * finance.view_profit by the caller via stripPurchaseAmounts (lib/inventory/purchases.ts). */
   totalAmountPaid: number | null;
+  /** Derived payment state. The status is visible to every viewer of the page (A8); the amounts
+   * are cost data, stripped by the caller (stripPurchaseListPaymentAmounts). */
+  payment: PaymentSummary | { status: PaymentSummary["status"] };
+}
+
+/** One line's share of §3.1's tagihan, in SQL, for the list's filter and badge. It mirrors
+ * purchaseTagihan (lib/supplier-payments/status.ts): the order total, except a closed document
+ * (A1) is due cumulativeValue(total, ordered, settled) per line (round half up, integer
+ * hundredths), and a cancelled one nothing. settled = net accepted + the defect ledger's
+ * disposal-less rows (getLineQuantities). queries.test.ts asserts it equals purchaseTagihan. */
+function lineTagihanSql() {
+  const lineId = qualifiedColumn(purchaseItems, purchaseItems.id);
+  const settled = sql`(
+    coalesce((select sum(${qualifiedColumn(goodsReceiptItems, goodsReceiptItems.qtyAccepted)}) from ${goodsReceiptItems}
+      where ${qualifiedColumn(goodsReceiptItems, goodsReceiptItems.purchaseItemId)} = ${lineId}), 0)
+    + coalesce((select sum(${qualifiedColumn(defectMovements, defectMovements.qty)}) from ${defectMovements}
+      where ${qualifiedColumn(defectMovements, defectMovements.purchaseItemId)} = ${lineId}
+        and ${qualifiedColumn(defectMovements, defectMovements.disposalType)} is null), 0)
+  )`;
+  const total = qualifiedColumn(purchaseItems, purchaseItems.totalAmount);
+  const orderedCenti = sql`round(${qualifiedColumn(purchaseItems, purchaseItems.qtyOrdered)} * 100)`;
+  const status = qualifiedColumn(purchases, purchases.status);
+  return sql`case
+    when ${status} = 'cancelled' then 0
+    when ${status} = 'closed' then floor((2 * ${total}::numeric * round(${settled} * 100) + ${orderedCenti}) / (2 * ${orderedCenti}))
+    else ${total}
+  end`;
 }
 
 export async function listPurchaseDocuments(
-  filters: { status?: PurchaseStatusFilter; q?: string },
+  filters: { status?: PurchaseStatusFilter; payment?: PurchasePaymentFilter; q?: string },
   rawPage: string | undefined,
   rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: PurchaseDocumentListRow[]; pagination: Pagination }> {
-  const conditions = [
-    filters.status ? eq(purchases.status, filters.status) : undefined,
-    filters.q ? or(ilike(purchases.purchaseNo, `%${filters.q}%`), ilike(suppliers.name, `%${filters.q}%`)) : undefined,
-  ].filter((c) => c !== undefined);
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-
-  const [totalCountRow] = await db
-    .select({ totalCount: count() })
-    .from(purchases)
-    .innerJoin(suppliers, eq(suppliers.id, purchases.supplierId))
-    .where(where);
-  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
-
   const totals = db
     .select({
       purchaseId: purchaseItems.purchaseId,
       itemCount: sql<number>`count(*)::int`.as("item_count"),
       totalAmount: sql<string>`sum(${purchaseItems.totalAmount})::bigint`.as("total_amount"),
+      tagihan: sql<string>`sum(${lineTagihanSql()})::bigint`.as("tagihan"),
     })
     .from(purchaseItems)
+    .innerJoin(purchases, eq(purchases.id, purchaseItems.purchaseId))
     .groupBy(purchaseItems.purchaseId)
     .as("totals");
+  const paidTotals = db
+    .select({
+      purchaseId: supplierPayments.purchaseId,
+      paid: sql<string>`sum(${supplierPayments.amount})::bigint`.as("paid"),
+    })
+    .from(supplierPayments)
+    .where(and(isNull(supplierPayments.voidedAt), isNotNull(supplierPayments.purchaseId)))
+    .groupBy(supplierPayments.purchaseId)
+    .as("paid_totals");
+
+  const tagihan = sql`coalesce(${totals.tagihan}, 0)`;
+  const paid = sql`coalesce(${paidTotals.paid}, 0)`;
+  const paymentCondition = {
+    unpaid: sql`${paid} = 0 and ${tagihan} > 0`,
+    partial: sql`${paid} > 0 and ${paid} < ${tagihan}`,
+    paid: sql`${paid} > 0 and ${paid} >= ${tagihan}`,
+  } satisfies Record<PurchasePaymentFilter, SQL>;
+
+  const conditions = [
+    filters.status ? eq(purchases.status, filters.status) : undefined,
+    filters.payment ? paymentCondition[filters.payment] : undefined,
+    filters.q ? or(ilike(purchases.purchaseNo, `%${filters.q}%`), ilike(suppliers.name, `%${filters.q}%`)) : undefined,
+  ].filter((c) => c !== undefined);
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  // The count needs the two aggregates only when it filters on them.
+  const countQuery = db.select({ totalCount: count() }).from(purchases).innerJoin(suppliers, eq(suppliers.id, purchases.supplierId)).$dynamic();
+  const [totalCountRow] = await (filters.payment
+    ? countQuery.leftJoin(totals, eq(totals.purchaseId, purchases.id)).leftJoin(paidTotals, eq(paidTotals.purchaseId, purchases.id))
+    : countQuery
+  ).where(where);
+  const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const rows = await db
     .select({
@@ -327,10 +398,13 @@ export async function listPurchaseDocuments(
       status: purchases.status,
       itemCount: sql<number>`coalesce(${totals.itemCount}, 0)`,
       totalAmount: sql<string>`coalesce(${totals.totalAmount}, 0)`,
+      tagihan: sql<string>`${tagihan}`,
+      paid: sql<string>`${paid}`,
     })
     .from(purchases)
     .innerJoin(suppliers, eq(suppliers.id, purchases.supplierId))
     .leftJoin(totals, eq(totals.purchaseId, purchases.id))
+    .leftJoin(paidTotals, eq(paidTotals.purchaseId, purchases.id))
     .where(where)
     // Newest order date first (backed by purchases_ordered_at_idx), newest record within a day.
     .orderBy(desc(purchases.orderedAt), desc(purchases.createdAt), desc(purchases.id))
@@ -338,9 +412,21 @@ export async function listPurchaseDocuments(
     .offset(pagination.offset);
 
   return {
-    rows: rows.map(({ totalAmount, ...row }) => ({ ...row, itemCount: Number(row.itemCount), totalAmountPaid: Number(totalAmount) })),
+    rows: rows.map(({ totalAmount, tagihan: rowTagihan, paid: rowPaid, ...row }) => ({
+      ...row,
+      itemCount: Number(row.itemCount),
+      totalAmountPaid: Number(totalAmount),
+      payment: summarizePayment(Number(rowTagihan), Number(rowPaid)),
+    })),
     pagination,
   };
+}
+
+/** The list's payment amounts stripped for a viewer without finance.view_profit: the badge
+ * stays (A8), every amount goes. */
+export function stripPurchaseListPaymentAmounts(rows: PurchaseDocumentListRow[], canViewProfit: boolean): PurchaseDocumentListRow[] {
+  if (canViewProfit) return rows;
+  return rows.map((row) => ({ ...row, payment: { status: row.payment.status } }));
 }
 
 export interface PurchaseDocumentLine {

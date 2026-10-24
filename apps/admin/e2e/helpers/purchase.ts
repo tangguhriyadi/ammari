@@ -41,7 +41,7 @@ export async function createPurchase(page: Page, supplierName: string, lines: Pu
     await page.getByLabel(`Jenis barang ${number}`).selectOption({ label: line.type });
     await page.getByLabel(`Barang ${number}`, { exact: true }).selectOption({ label: line.itemName });
     await page.getByLabel(`Jumlah barang ${number}`).fill(line.qty);
-    await page.getByLabel(`Total dibayar barang ${number}`).fill(line.amount);
+    await page.getByLabel(`Total harga barang ${number}`).fill(line.amount);
   }
   await saveAndLand(page, page.getByRole("button", { name: "Simpan", exact: true }), /\/purchases$/, "/purchases");
   await openCreated(page, "/purchases", supplierName);

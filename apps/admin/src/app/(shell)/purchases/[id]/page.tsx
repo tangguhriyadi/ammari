@@ -18,10 +18,18 @@ import { getLineDefectTotals, listDefectMovementsForPurchase, stripDefectMovemen
 import type { LineDefectTotals } from "@/lib/defects/valuation";
 import { purchaseVariance, summarizeDefectValues, type PurchaseVariance } from "@/lib/defects/variance";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import {
+  getPurchasePaymentSummary,
+  listPurchaseAttachments,
+  listPurchasePayments,
+  overpaidIfClosed,
+} from "@/lib/supplier-payments/purchase-payments";
 import { ClosePurchaseButton } from "../_components/close-purchase-button";
 import { DefectHistory } from "../_components/defect-history";
 import { DisposeDefectsButton, ReturnDefectsButton } from "../_components/defect-actions";
 import { PurchaseVariancePanel } from "../_components/defect-variance";
+import { PaymentStatusBadge } from "../_components/payment-status-badge";
+import { PurchaseInvoiceSection, PurchasePaymentSection } from "../_components/purchase-payment-section";
 import { PurchaseStatusBadge } from "../_components/purchase-status-badge";
 import { ReverseReceiptButton } from "../_components/reverse-receipt-button";
 import { VoidPurchaseButton } from "../_components/void-purchase-button";
@@ -51,7 +59,17 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
   const canManage = session.permissionKeys.includes("inventory.manage");
   const canReceive = session.permissionKeys.includes("inventory.receive");
   const document = stripPurchaseDocumentAmounts(documentRaw, canViewProfit);
-  const [receipts, defectRowsRaw] = await Promise.all([listReceiptsForPurchase(document.id), listDefectMovementsForPurchase(document.id)]);
+  // Supplier payments (docs/plans/purchase-payments.md §7): the status badge for every viewer
+  // (A8); amounts, history and notas only for finance.view_profit, queried only then.
+  const canRecordPayments = canViewProfit && session.permissionKeys.includes("supplier_payments.manage");
+  const [receipts, defectRowsRaw, paymentSummary, payments, attachments] = await Promise.all([
+    listReceiptsForPurchase(document.id),
+    listDefectMovementsForPurchase(document.id),
+    getPurchasePaymentSummary(document.id),
+    canViewProfit ? listPurchasePayments(document.id) : Promise.resolve([]),
+    canViewProfit ? listPurchaseAttachments(document.id) : Promise.resolve([]),
+  ]);
+  if (!paymentSummary) notFound();
   const defectRows = stripDefectMovementAmounts(defectRowsRaw, canViewProfit);
 
   const isOpen = isOpenPurchaseStatus(document.status);
@@ -60,6 +78,8 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
   const canEdit = canManage && canViewProfit && document.status === "ordered" && !document.hasReceipts;
   const nothingArrived = document.lines.every((line) => line.accepted === 0 && line.rejected === 0);
   const isTerminal = TERMINAL_PURCHASE_STATUSES.includes(document.status);
+  // §3.1: closing below what was paid is allowed (it is about goods), the dialog warns first.
+  const overpaidOnClose = isOpen && canManage && canViewProfit ? await overpaidIfClosed(document.id, nothingArrived ? "cancelled" : "closed") : null;
   // Defect actions (inventory.manage, D10) on every line still holding defect stock.
   const actionableLines = canManage ? document.lines.filter((line) => line.defectHeld > 0) : [];
   // Cost data: queried only for finance.view_profit (the disposal preview and the §4.3 panel).
@@ -102,6 +122,7 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
             </Link>
           }
         />
+        <Row label="Pembayaran" value={<PaymentStatusBadge status={paymentSummary.status} />} />
         {document.notes && <Row label="Catatan" value={document.notes} />}
         <Row label="Dibuat" value={`${formatDateTime(document.createdAt)}${document.createdByName ? ` · ${document.createdByName}` : ""}`} />
         {document.closedAt && (
@@ -142,7 +163,7 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
               <Button variant="secondary">Ubah pesanan</Button>
             </Link>
           )}
-          {isOpen && canManage && <ClosePurchaseButton purchaseId={document.id} nothingArrived={nothingArrived} />}
+          {isOpen && canManage && <ClosePurchaseButton purchaseId={document.id} nothingArrived={nothingArrived} overpaidAmount={overpaidOnClose} />}
         </div>
       ) : null}
 
@@ -182,6 +203,20 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
         }
       />
 
+      {canViewProfit && (
+        <>
+          <PurchasePaymentSection
+            purchaseId={document.id}
+            purchaseNo={document.purchaseNo}
+            isCancelled={document.status === "cancelled"}
+            summary={paymentSummary}
+            payments={payments}
+            canRecord={canRecordPayments}
+          />
+          <PurchaseInvoiceSection purchaseId={document.id} attachments={attachments} canManage={canManage} />
+        </>
+      )}
+
       <h2 className="mt-6 mb-3 text-lg font-semibold text-neutral-900">Riwayat penerimaan</h2>
       <ReceiptHistory receipts={receipts} canReverse={canManage} />
 
@@ -215,7 +250,7 @@ function PurchaseLines({ document, actions }: { document: PurchaseDocument; acti
                 <QtyCell label="Dilepas" value={formatPurchaseQty(line.itemType, line.released)} />
                 <QtyCell label="Sisa" value={formatPurchaseQty(line.itemType, line.outstanding)} />
               </dl>
-              {line.totalAmountPaid !== null && <p className="text-sm text-neutral-600">Total dibayar {formatRupiah(line.totalAmountPaid)}</p>}
+              {line.totalAmountPaid !== null && <p className="text-sm text-neutral-600">Total harga {formatRupiah(line.totalAmountPaid)}</p>}
               {actions?.(line)}
             </Card>
           </li>
@@ -230,7 +265,7 @@ function PurchaseLines({ document, actions }: { document: PurchaseDocument; acti
           <Th>Ditukar</Th>
           <Th>Dilepas</Th>
           <Th>Sisa</Th>
-          {showTotals && <Th>Total dibayar</Th>}
+          {showTotals && <Th>Total harga</Th>}
           {showActions && <Th>Barang cacat</Th>}
         </TableHead>
         <tbody>
@@ -336,7 +371,7 @@ function LegacyPurchaseView({ purchaseRaw, session }: { purchaseRaw: PurchaseDet
       </div>
       <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
         <Row label="Jumlah" value={`${qtyLabel} ${unitLabel}`} />
-        {purchase.totalAmountPaid !== null && <Row label="Total dibayar" value={formatRupiah(purchase.totalAmountPaid)} />}
+        {purchase.totalAmountPaid !== null && <Row label="Total harga" value={formatRupiah(purchase.totalAmountPaid)} />}
         {unitPrice !== null && <Row label="Harga satuan" value={`≈ ${formatRupiah(unitPrice)}/${unitLabel} (otomatis)`} />}
         <Row label="Supplier" value={purchase.supplier ?? "-"} />
         {purchase.note && <Row label="Catatan" value={purchase.note} />}

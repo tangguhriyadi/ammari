@@ -3,11 +3,22 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Dialog, Label, Textarea, useToast } from "@ammari/ui";
+import { formatRupiah } from "@ammari/ui/lib";
 import { closePurchaseAction } from "../actions";
 
 /** D19: one close action with a required reason. The server decides between "Dibatalkan"
- * (nothing arrived) and "Ditutup" (something arrived); the description tells her which. */
-export function ClosePurchaseButton({ purchaseId, nothingArrived }: { purchaseId: string; nothingArrived: boolean }) {
+ * (nothing arrived) and "Ditutup" (something arrived); the description tells her which.
+ * `overpaidAmount` (finance viewers only): what was already paid above the bill closing would
+ * leave (docs/plans/purchase-payments.md §3.1). Closing is still allowed; this only warns. */
+export function ClosePurchaseButton({
+  purchaseId,
+  nothingArrived,
+  overpaidAmount = null,
+}: {
+  purchaseId: string;
+  nothingArrived: boolean;
+  overpaidAmount?: number | null;
+}) {
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -59,6 +70,11 @@ export function ClosePurchaseButton({ purchaseId, nothingArrived }: { purchaseId
         onConfirm={handleConfirm}
         loading={pending}
       >
+        {overpaidAmount !== null && (
+          <p className="mb-3 rounded-md bg-warning-50 p-2 text-sm text-warning-700" data-testid="close-overpaid-warning">
+            Pembayaran yang sudah dicatat melebihi tagihan setelah ditutup. Pesanan akan tercatat Lebih bayar {formatRupiah(overpaidAmount)}.
+          </p>
+        )}
         <Label htmlFor="close-reason" required>
           Alasan
         </Label>

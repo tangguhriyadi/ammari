@@ -6,13 +6,15 @@ import type { PrivateFileContentType } from "@ammari/db/schema";
 import { ActionError } from "@/lib/errors";
 // Also applies that module's process-wide sharp.concurrency(1) (2 GB VPS).
 import { sniffImageContentType } from "@/lib/products/image-processing";
+import { PRIVATE_UPLOAD_MAX_INPUT_BYTES, PROOF_MESSAGES } from "./messages";
+
+export { PRIVATE_UPLOAD_MAX_INPUT_BYTES, PROOF_MESSAGES };
 
 // File processing for private uploads: payment proofs now, supplier notas later
 // (docs/plans/purchase-payments.md §6). Photos are re-encoded to a small, metadata-free JPEG;
 // PDFs are stored byte-for-byte. Everything is decided from the bytes, never from the file name
 // or the browser-supplied MIME type.
 
-export const PRIVATE_UPLOAD_MAX_INPUT_BYTES = 10 * 1024 * 1024;
 export const PROOF_IMAGE_MAX_EDGE_PX = 2000;
 export const PROOF_IMAGE_TARGET_BYTES = 600 * 1024;
 /** Tried in order; the first encode at or under the target wins. If even the last one is over
@@ -22,16 +24,6 @@ export const PROOF_JPEG_QUALITY_LADDER = [82, 76, 70] as const;
 // Same RAM guard as the product pipeline (lib/products/image-processing.ts).
 const MAX_INPUT_PIXELS = 40_000_000;
 const MAX_FILENAME_LENGTH = 255;
-
-export const PROOF_MESSAGES = {
-  missing: "Bukti bayar wajib diunggah.",
-  unsupported: "Format file tidak didukung. Gunakan foto JPG, PNG, WebP, atau PDF.",
-  tooLarge: "Ukuran file maksimal 10 MB.",
-  heic: "Foto HEIC belum didukung. Ubah ke JPG lalu unggah ulang.",
-  unreadable: "Foto tidak bisa dibaca: rusak atau dimensinya terlalu besar.",
-  pdfUnreadable: "PDF tidak bisa dibaca atau rusak. Unggah ulang, atau kirim foto/screenshot buktinya.",
-  pdfActive: "PDF ini berisi skrip atau lampiran tersembunyi. Unggah foto/screenshot buktinya saja.",
-} as const;
 
 /** A refusal tied to the uploaded file itself. Extends ActionError so runAction turns it into a
  * friendly ActionResult (same as ImageValidationError). */

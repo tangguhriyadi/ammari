@@ -2,9 +2,23 @@ import Link from "next/link";
 import { Card, EmptyState, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
 import { formatDate, formatRupiah } from "@ammari/ui/lib";
 import type { PurchaseDocumentListRow } from "@/lib/purchases/queries";
+import { PaymentStatusBadge } from "./payment-status-badge";
 import { PurchaseStatusBadge } from "./purchase-status-badge";
 
+/** "Sisa" (or "Lebih bayar") for a finance viewer; null when the amounts were stripped (A8). */
+function balanceText(payment: PurchaseDocumentListRow["payment"], remainingPrefix: string): string | null {
+  if (!("tagihan" in payment)) return null;
+  if (payment.overpaid > 0) return `Lebih bayar ${formatRupiah(payment.overpaid)}`;
+  return payment.remaining > 0 ? `${remainingPrefix}${formatRupiah(payment.remaining)}` : null;
+}
+
+function CardBalance({ payment }: { payment: PurchaseDocumentListRow["payment"] }) {
+  const text = balanceText(payment, "Sisa ");
+  return text ? <span className="tabular-nums">{text}</span> : null;
+}
+
 export function PurchaseDocumentList({ rows }: { rows: PurchaseDocumentListRow[] }) {
+  const showBalance = rows.some((row) => "tagihan" in row.payment);
   if (rows.length === 0) {
     return <EmptyState title="Belum ada pesanan pembelian" description="Buat pesanan pembelian bahan atau aksesoris pertama." />;
   }
@@ -31,6 +45,12 @@ export function PurchaseDocumentList({ rows }: { rows: PurchaseDocumentListRow[]
                     <span className="text-base font-semibold tabular-nums text-neutral-900">{formatRupiah(row.totalAmountPaid)}</span>
                   )}
                 </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-neutral-600">
+                  <span className="flex items-center gap-2">
+                    Pembayaran <PaymentStatusBadge status={row.payment.status} />
+                  </span>
+                  <CardBalance payment={row.payment} />
+                </div>
               </Card>
             </Link>
           </li>
@@ -45,6 +65,8 @@ export function PurchaseDocumentList({ rows }: { rows: PurchaseDocumentListRow[]
           <Th>Barang</Th>
           <Th>Total</Th>
           <Th>Status</Th>
+          <Th>Pembayaran</Th>
+          {showBalance && <Th>Sisa</Th>}
         </TableHead>
         <tbody>
           {rows.map((row) => (
@@ -61,6 +83,10 @@ export function PurchaseDocumentList({ rows }: { rows: PurchaseDocumentListRow[]
               <Td>
                 <PurchaseStatusBadge status={row.status} />
               </Td>
+              <Td>
+                <PaymentStatusBadge status={row.payment.status} />
+              </Td>
+              {showBalance && <Td className="text-neutral-700 tabular-nums">{balanceText(row.payment, "") ?? "-"}</Td>}
             </Tr>
           ))}
         </tbody>

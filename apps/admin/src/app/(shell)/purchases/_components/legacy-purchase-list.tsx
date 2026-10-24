@@ -53,7 +53,7 @@ export function LegacyPurchaseList({ rows }: { rows: PurchaseListRow[] }) {
           <Th>Tanggal</Th>
           <Th>Supplier</Th>
           <Th>Jumlah</Th>
-          <Th>Total dibayar</Th>
+          <Th>Total harga</Th>
           <Th>Status</Th>
         </TableHead>
         <tbody>

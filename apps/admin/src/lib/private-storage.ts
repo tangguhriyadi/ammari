@@ -2,7 +2,13 @@ import "server-only";
 import path from "node:path";
 import { createPrivateStorageClientFromEnv, type PrivateStorageClient } from "@ammari/storage";
 
-let cached: PrivateStorageClient | undefined;
+// Process-wide, not module-scoped: `next dev` bundles server actions and route handlers into
+// separate module graphs, so a module-level `let` gives each its own client. For the memory driver
+// (e2e) that means a proof stored by the "Catat pembayaran" action would be invisible to
+// /api/private-files. One client per process is right for every driver.
+const GLOBAL_KEY = Symbol.for("ammari.admin.privateStorageClient");
+type GlobalWithClient = typeof globalThis & { [GLOBAL_KEY]?: PrivateStorageClient };
+const store = globalThis as GlobalWithClient;
 
 /** Lazy singleton for the PRIVATE file storage (payment proofs, supplier notas;
  * docs/plans/purchase-payments.md §5). Constructed on first use, so pages that never touch a
@@ -12,15 +18,17 @@ let cached: PrivateStorageClient | undefined;
  * and docker-ignored apps/admin/.private-storage/), unset = the private S3 bucket. memory and fs
  * are refused when NODE_ENV=production. */
 export function getPrivateStorageClient(): PrivateStorageClient {
-  if (cached) return cached;
-  cached = createPrivateStorageClientFromEnv(process.env, {
+  const existing = store[GLOBAL_KEY];
+  if (existing) return existing;
+  const client = createPrivateStorageClientFromEnv(process.env, {
     fsRootDir: path.join(process.cwd(), ".private-storage"),
   });
-  return cached;
+  store[GLOBAL_KEY] = client;
+  return client;
 }
 
 /** Test-only: inject a client (e.g. an InMemoryPrivateStorageClient to assert on `.objects`).
  * Never imported from application code. */
 export function __setPrivateStorageClientForTests(client: PrivateStorageClient | undefined): void {
-  cached = client;
+  store[GLOBAL_KEY] = client;
 }
