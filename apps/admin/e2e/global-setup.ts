@@ -201,6 +201,19 @@ const E2E_SETTINGS_NO_FINANCE_ROLE_KEY = "e2e_settings_no_finance";
 // order; the day before 1 order, omzet Rp 250.000, HPP Rp 100.000. Plus one Siap Kirim order 5 days
 // ago (Rp 300.000), the oldest to_ship order in the database, so "Perlu tindakan" lists it first as
 // late (D10).
+// Marketplace import (docs/plans/marketplace-import.md, session 5): an owner-role email for the
+// save path (its own OTP throttle: 2 layouts), and a role with exactly orders.import + orders.view
+// (no finance.view_profit) for the lock, refusal and no-money checks. One product with two SKUs and
+// 20 pcs each; the spec's uploads only ever use these SKUs and order dates in January 2026, as
+// Selesai, so no other spec's figures (Ringkasan periods, the oldest Siap Kirim order, Packing)
+// move.
+export const E2E_IMPORT_EMAIL = "import@e2e.ammari.test";
+export const E2E_IMPORT_NO_FINANCE_EMAIL = "import-no-finance@e2e.ammari.test";
+const E2E_IMPORT_NO_FINANCE_ROLE_KEY = "e2e_import_no_finance";
+export const E2E_IMPORT_PRODUCT_NAME = "E2E Gamis Impor";
+export const E2E_IMPORT_SKU_M = "E2E-IMPOR-M";
+export const E2E_IMPORT_SKU_L = "E2E-IMPOR-L";
+
 export const E2E_OVERVIEW_SKU = "E2E-RINGKASAN-M";
 export const E2E_OVERVIEW_LATE_ORDER_NO = "ORD-E2E-RINGKASAN-LATE";
 
@@ -432,6 +445,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_LOGIN_OTP_RESEND_EMAIL, "E2E Login OTP Resend", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_LOGIN_OTP_EXPIRY_EMAIL, "E2E Login OTP Expiry", OWNER_ROLE_KEY);
 
+  await ensureStaffFixture(E2E_IMPORT_EMAIL, "E2E Import", OWNER_ROLE_KEY);
+  await ensureLimitedRole(E2E_IMPORT_NO_FINANCE_ROLE_KEY, ["orders.import", "orders.view"]);
+  await ensureStaffFixture(E2E_IMPORT_NO_FINANCE_EMAIL, "E2E Import (no finance)", E2E_IMPORT_NO_FINANCE_ROLE_KEY);
+
   await ensureStaffFixture(E2E_OVERVIEW_EMAIL, "E2E Overview", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_OVERVIEW_SETTINGS_EMAIL, "E2E Overview Settings", OWNER_ROLE_KEY);
   await ensureLimitedRole(E2E_OVERVIEW_NO_FINANCE_ROLE_KEY, ["overview.view", "orders.view", "stock.view", "inventory.view", "production.manage"]);
@@ -592,6 +609,28 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       if (!order) throw new Error(`failed to seed ${seed.orderNo}`);
       await tx.insert(orderItems).values({ orderId: order.id, sku: E2E_OVERVIEW_SKU, qty: 1, unitPrice: seed.unitPrice, unitCost: seed.unitCost });
     }
+  });
+
+  // The marketplace import product (see E2E_IMPORT_EMAIL above).
+  await db.transaction(async (tx) => {
+    const [fabric] = await tx.insert(fabrics).values({ name: "E2E Impor Fabric" }).returning({ id: fabrics.id });
+    if (!fabric) throw new Error("failed to seed the e2e import fabric");
+    const [color] = await tx.insert(fabricColors).values({ fabricId: fabric.id, name: "Sage" }).returning({ id: fabricColors.id });
+    if (!color) throw new Error("failed to seed the e2e import colour");
+    const [product] = await tx
+      .insert(products)
+      .values({ name: E2E_IMPORT_PRODUCT_NAME, code: "E2EIMPOR", slug: "e2e-gamis-impor", fabricId: fabric.id, closure: "front_zip", sizeMode: "sized", basePrice: 249_000 })
+      .returning({ id: products.id, closure: products.closure });
+    if (!product) throw new Error("failed to seed the e2e import product");
+    const variantBase = { productId: product.id, fabricId: fabric.id, fabricColorId: color.id, closure: product.closure };
+    await tx.insert(productVariants).values([
+      { ...variantBase, sku: E2E_IMPORT_SKU_M, size: "M" },
+      { ...variantBase, sku: E2E_IMPORT_SKU_L, size: "L" },
+    ]);
+    await tx.insert(stockMovements).values([
+      { sku: E2E_IMPORT_SKU_M, qty: 20, valueAmount: 2_000_000, type: "production", refType: "manual" },
+      { sku: E2E_IMPORT_SKU_L, qty: 20, valueAmount: 2_000_000, type: "production", refType: "manual" },
+    ]);
   });
 
   // The discount product for product-discount.spec.ts (see E2E_PRODUCT_DISCOUNT_EMAIL above).
@@ -811,6 +850,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_FRESH_AFTER_SAVE_EMAIL,
         E2E_PRODUCT_DISCOUNT_EMAIL,
         E2E_PRODUCT_TYPES_EMAIL,
+        E2E_IMPORT_EMAIL,
+        E2E_IMPORT_NO_FINANCE_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);

@@ -1,10 +1,12 @@
 import "server-only";
 import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
+  CHANNEL_FEE_COMPONENTS,
   channels,
   customers,
   fabricColors,
   orderItems,
+  orderChannelFees,
   orderNotifications,
   orders,
   payments,
@@ -17,7 +19,7 @@ import {
   thankYouCards,
   vouchers,
 } from "@ammari/db/schema";
-import type { ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus, ShipmentEventSource, ShipmentStatus } from "@ammari/db/schema";
+import type { ChannelFeeComponent, ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus, ShipmentEventSource, ShipmentStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { resolveUnitPrice } from "@ammari/db/pricing";
 import { productPricingColumns } from "@ammari/db/pricing-columns";
@@ -234,6 +236,20 @@ export interface OrderDetail {
   cardClaimedAt: Date | null;
   /** Web checkout data (plan §7); null for manual and marketplace orders. */
   checkout: CheckoutOrderDetail | null;
+  /** Every needs_attention flag (any channel): the Perlu dicek panel. */
+  needsAttention: OrderAttentionFlag[];
+  /** Marketplace import data (docs/plans/marketplace-import.md §11); null when no import has ever
+   * created or confirmed this order. */
+  marketplace: MarketplaceOrderDetail | null;
+}
+
+export interface MarketplaceOrderDetail {
+  channelStatus: string | null;
+  syncedAt: Date | null;
+  /** The batch that created the order; null for a manual order an import matched. */
+  importBatchId: string | null;
+  /** Platform fees per component. `null` when stripped for a viewer without finance.view_profit. */
+  fees: { component: ChannelFeeComponent; amount: number }[] | null;
 }
 
 export interface CheckoutPaymentAttempt {
@@ -578,7 +594,20 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
   const checkout =
     full && full.paymentStatus !== null ? await getCheckoutOrderDetail({ ...full, paymentStatus: full.paymentStatus }, db) : null;
 
-  return { ...order, items: itemRows, cardClaimedAt: claimedCard?.claimedAt ?? null, checkout };
+  const imported = full !== undefined && (full.importBatchId !== null || full.channelSyncedAt !== null);
+  const feeRows = imported
+    ? await db.select({ component: orderChannelFees.component, amount: orderChannelFees.amount }).from(orderChannelFees).where(eq(orderChannelFees.orderId, id))
+    : [];
+  const marketplace: MarketplaceOrderDetail | null = imported
+    ? {
+        channelStatus: full.channelStatus,
+        syncedAt: full.channelSyncedAt,
+        importBatchId: full.importBatchId,
+        fees: [...feeRows].sort((a, b) => CHANNEL_FEE_COMPONENTS.indexOf(a.component) - CHANNEL_FEE_COMPONENTS.indexOf(b.component)),
+      }
+    : null;
+
+  return { ...order, items: itemRows, cardClaimedAt: claimedCard?.claimedAt ?? null, checkout, needsAttention: full?.needsAttention ?? [], marketplace };
 }
 
 /** Cost data (unit_cost) is gated by finance.view_profit, same discipline every other cost field
@@ -593,5 +622,6 @@ export function stripOrderDetailCost(detail: OrderDetail, canViewProfit: boolean
         shipments: detail.checkout.shipments.map((shipment) => ({ ...shipment, costAmount: null })),
       }
     : detail.checkout;
-  return { ...detail, items: detail.items.map((item) => ({ ...item, unitCost: null })), checkout };
+  const marketplace = detail.marketplace ? { ...detail.marketplace, fees: null } : null;
+  return { ...detail, items: detail.items.map((item) => ({ ...item, unitCost: null })), checkout, marketplace };
 }

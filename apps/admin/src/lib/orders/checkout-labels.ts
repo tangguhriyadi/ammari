@@ -106,7 +106,7 @@ export const ATTENTION_FLAG_COPY: Record<OrderAttentionFlag, AttentionFlagCopy> 
   marketplace_return_pending: {
     label: "Retur di marketplace",
     meaning:
-      "Menurut file impor marketplace, pembeli sedang mengembalikan paket. Stok belum dikembalikan. Kalau paket sudah diterima, ubah status ke Retur. Kalau retur ditolak, tandai beres.",
+      "Menurut file impor marketplace, pembeli sedang mengembalikan paket. Stok belum dikembalikan. Kalau paket sudah diterima, ubah status ke Retur. Kalau retur ditolak, tekan Hapus tanda retur.",
   },
 };
 

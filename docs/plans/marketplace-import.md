@@ -1,6 +1,7 @@
 # Marketplace import: Shopee (now) and TikTok Shop (framework)
 
-Status: **owner decisions recorded 2026-10-24** (section 13). Session 1 implemented 2026-10-24.
+Status: **owner decisions recorded 2026-10-24** (section 13). Sessions 1 to 3 implemented
+2026-10-24/25, sessions 4 and 5 implemented 2026-10-25 (section 17).
 Shopee "Simpan" stays locked (`SHOPEE_MAPPING_VERIFIED = false`) until a real Seller Center header
 is checked (section 2.1). Written 2026-10-24.
 
@@ -218,7 +219,7 @@ Shopee (seen = the owner has seen it in a real file; others are from Seller Cent
 | Dikirim / Sedang Dikirim | no | `shipped` | Create at `to_ship` then `-> shipped` | `to_ship -> shipped`; later states unchanged. |
 | Selesai | **yes** | `completed` | Create, `-> shipped -> completed` | Walk forward to `completed`; `cancelled`/`returned` unchanged + warning. |
 | Batal | **yes** | `cancelled` | **Skip** (never existed for us; decision 5) | `to_ship -> cancelled` (stock restored); from `shipped`/`completed` -> **`returned`** (the lifecycle forbids `shipped -> cancelled`; the parcel comes back; decision 4). |
-| Dalam Pengembalian | **yes** | hold | Create at `to_ship -> shipped` (the sale happened, stock left) and set the flag | **No transition**; set flag `marketplace_return_pending` (decision 3). |
+| Dalam Pengembalian | **yes** | hold | Create at `to_ship -> shipped` (the sale happened, stock left) and set the flag | Set flag `marketplace_return_pending` (decision 3); no return, no stock movement. An admin order still `to_ship` also moves `-> shipped` (the parcel left: it is coming back), owner 2026-10-25; `shipped`/`completed` stay as they are. |
 | Pengembalian Selesai / Pengembalian Dana Disetujui (names unknown) | no | `returned` | Skip (sale undone before we saw it) | `-> returned` (stock restored), clears `marketplace_return_pending`. Added to the map only once seen in a real file. |
 
 Rules that hold for every adapter:
@@ -744,3 +745,45 @@ map, tests 11/12 flipped to "accepts", one e2e run).
 - Negative stock (decision 2).
 - Remembering manual SKU matches across imports (decision A: this import only).
 - Any marketplace API (Open Platform) integration; this is file upload only.
+
+## 17. Session notes (4 and 5)
+
+- **Owner, 2026-10-25**: "Dalam Pengembalian" on an admin order still `to_ship` moves it to
+  `shipped` AND sets `marketplace_return_pending` (section 3 table updated; the session 1 status
+  rules already did this).
+- **Where the commit lives.** The planner needs the parser, so it stays in apps/admin; the write
+  path is `@ammari/commerce/marketplace-import` (`commitMarketplaceImport`). It opens the
+  transaction, takes the channel advisory lock and calls back into the admin (`replan(tx)`), which
+  plans again with the transaction's reads and decides: save blockers (enforced on their own, the
+  digest does not cover them), digest equal to the preview's, something to write. Only then does
+  the commerce module write. `lib/marketplace-import/commit.ts` is the admin side.
+- **Re-check under the row lock.** Each update carries `expected` (status, voucher, total,
+  `channel_status`, return flag, lines as the planner read them); the locked row must match it, and
+  every money write is conditional (`discount_amount`/`total_amount`, each fee row `amount = before`
+  or insert-if-absent). Any mismatch, an `INSERT ... ON CONFLICT DO NOTHING` that returns nothing, a
+  stock sale refused, or a transition refused is drift: the whole transaction rolls back and the
+  owner gets the fresh preview with "Data berubah sejak pemeriksaan".
+- `decrementStockForOrderItems` is exported from `lifecycle.ts`; `transitionOrderStatus` to
+  `cancelled`/`returned` now clears `marketplace_return_pending` (rule 3a).
+- **History rows** (`import_batch_orders.changes`) and the batch `summary` carry money; the history
+  queries (`history.ts`) null it for staff without `finance.view_profit`. The preview payload is an
+  allowlist (`preview-view.ts`), money filled only for finance staff.
+- **E2E unlock.** `SHOPEE_MAPPING_VERIFIED` stays `false`. The import actions honour the cookie
+  `e2e_marketplace_mapping_verified=<channel>` only when `NODE_ENV !== "production"` and
+  `E2E_TEST_LOGIN=true` (`e2e-unlock.ts`, same gate as the e2e sign-in backdoor); the save-path e2e
+  sets it on its own browser context. The fixture goes to the file input as an in-memory buffer
+  (no temp file).
+- "Hapus tanda retur" reuses the audited `clearAttentionFlag`; the Perlu dicek panel on the order
+  page now shows for any order with a flag (it was checkout-only), and the order list's "Perlu
+  dicek" badge too.
+- **Locks (review).** Before any write the commit locks every touched order (`ORDER BY id FOR
+  UPDATE`) and then every touched SKU (sorted), the same order the other stock paths use, under a
+  10 s `lock_timeout`; a lock timeout or deadlock rolls back and shows "Sebagian data sedang dipakai
+  proses lain ... Coba simpan lagi". Measured locally: 300 Selesai orders (600 lines) commit in
+  about 4,5 s; the per-month `ORD-` number lock is held for that long, so a manual order or web
+  checkout placed during a Simpan waits for it.
+- Known gap, not fixed: a manual Shopee order typed in lowercase between the in-transaction plan and
+  the insert would not hit the exact unique key (the planner's match is case-insensitive). The
+  window is the length of one transaction; uppercasing marketplace numbers in `createOrder` would
+  close it.
+

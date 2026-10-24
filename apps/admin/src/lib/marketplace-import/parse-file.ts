@@ -50,6 +50,10 @@ export interface ParseFileInput {
   channelId: string;
   fileName: string;
   bytes: Uint8Array;
+  /** E2E ONLY: treat the channel's mapping as verified for this one request, so the save path can be
+   * exercised end to end while the adapter constant stays false. Set solely from
+   * `e2eMappingUnlocked` (e2e-unlock.ts), which refuses outside a local e2e run. */
+  assumeMappingVerified?: boolean;
 }
 
 /** The first sheet whose header matches; otherwise the most useful refusal (a sheet that is
@@ -108,7 +112,8 @@ export function parseMarketplaceFile(input: ParseFileInput): FileResult<ParsedIm
     }
   }
 
-  const lockedMessage = adapter.mappingVerified ? null : (adapter.lockedMessage ?? "Kanal ini belum bisa disimpan.");
+  const mappingVerified = adapter.mappingVerified || input.assumeMappingVerified === true;
+  const lockedMessage = mappingVerified ? null : (adapter.lockedMessage ?? "Kanal ini belum bisa disimpan.");
   const saveBlockers = lockedMessage ? [lockedMessage] : [];
   if (unattributedRowCount > 0) {
     saveBlockers.push(
@@ -121,7 +126,7 @@ export function parseMarketplaceFile(input: ParseFileInput): FileResult<ParsedIm
     value: {
       channelId: adapter.channelId,
       channelLabel: adapter.label,
-      mappingVerified: adapter.mappingVerified,
+      mappingVerified,
       lockedMessage,
       saveBlockers,
       fileSha256: createHash("sha256").update(input.bytes).digest("hex"),

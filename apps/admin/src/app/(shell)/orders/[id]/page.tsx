@@ -12,6 +12,7 @@ import { refundsOwed } from "@ammari/commerce/payments";
 import { AttentionPanel, CheckoutStatusActions, type RefundableAttempt } from "./_components/checkout-actions";
 import { ContactSection, PaymentSection, ShippingSection, VoucherAndEmailSection } from "./_components/checkout-sections";
 import { ShipmentDetailsSection } from "./_components/shipment-details-section";
+import { MarketplaceSection } from "./_components/marketplace-section";
 import { productDiscountSummary } from "@/lib/orders/product-discount-summary";
 import { isOpenShipmentStatus } from "@/lib/orders/shipment-labels";
 
@@ -47,10 +48,15 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   return (
     <>
       <Breadcrumb items={[...rootCrumbs("/orders"), { label: detail.orderNo }]} />
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <PageHeader title={detail.orderNo} description={`${detail.channelName} · ${formatDate(new Date(detail.orderDate))}`} />
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant={ORDER_STATUS_BADGE_VARIANT[detail.status]}>{ORDER_STATUS_LABELS[detail.status]}</Badge>
+          {detail.needsAttention.includes("marketplace_return_pending") && (
+            <Badge variant="warning" className="whitespace-nowrap" data-testid="marketplace-return-badge">
+              Retur di marketplace
+            </Badge>
+          )}
           {detail.cardClaimedAt && (
             <Badge variant="success" className="whitespace-nowrap">
               Diklaim · {formatShortDate(detail.cardClaimedAt)}
@@ -59,11 +65,11 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
         </div>
       </div>
 
-      {checkout && (
+      {(checkout || detail.needsAttention.length > 0) && (
         <AttentionPanel
           orderId={detail.id}
           status={detail.status}
-          flags={checkout.needsAttention}
+          flags={detail.needsAttention}
           refundableAttempts={refundableAttempts}
           refundOwed={refundsOwed(detail.status, refundableAttempts.length) > 0}
           canManage={canManage}
@@ -98,6 +104,8 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
         {detail.notes && <Row label="Catatan" value={detail.notes} />}
         <Row label="Dicatat" value={`${formatDateTime(detail.createdAt)}${detail.createdByName ? ` · ${detail.createdByName}` : ""}`} />
       </div>
+
+      {detail.marketplace && <MarketplaceSection marketplace={detail.marketplace} canViewProfit={canViewProfit} canViewImports={session.permissionKeys.includes("orders.import")} />}
 
       {(detail.status === "shipped" || detail.status === "completed") && (
         <ShipmentDetailsSection

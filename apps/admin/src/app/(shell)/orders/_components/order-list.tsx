@@ -9,14 +9,16 @@ function buyerLabel(row: OrderListRow): string {
   return row.customerName ?? row.buyerUsername ?? "-";
 }
 
-/** Web checkout orders only: the payment state and a "Perlu dicek" marker when a flag is set. */
+/** The payment state (web checkout orders only) and a "Perlu dicek" marker when any flag is set
+ * (any channel: an imported order can carry `marketplace_return_pending`). */
 function CheckoutBadges({ row }: { row: OrderListRow }) {
-  if (row.paymentStatus === null) return null;
   return (
     <>
-      <Badge variant={ORDER_PAYMENT_STATUS_BADGE_VARIANT[row.paymentStatus]} className="whitespace-nowrap">
-        {ORDER_PAYMENT_STATUS_LABELS[row.paymentStatus]}
-      </Badge>
+      {row.paymentStatus !== null && (
+        <Badge variant={ORDER_PAYMENT_STATUS_BADGE_VARIANT[row.paymentStatus]} className="whitespace-nowrap">
+          {ORDER_PAYMENT_STATUS_LABELS[row.paymentStatus]}
+        </Badge>
+      )}
       {row.needsAttention.length > 0 && (
         <Badge variant="danger" className="whitespace-nowrap">
           Perlu dicek
@@ -28,7 +30,7 @@ function CheckoutBadges({ row }: { row: OrderListRow }) {
 
 export function OrderList({ rows, filtered = false }: { rows: OrderListRow[]; filtered?: boolean }) {
   if (rows.length === 0) {
-    if (filtered) return <EmptyState title="Tidak ada pesanan yang perlu dicek" description="Pesanan website yang butuh tindakan staf muncul di sini." />;
+    if (filtered) return <EmptyState title="Tidak ada pesanan yang perlu dicek" description="Pesanan yang butuh tindakan staf muncul di sini." />;
     return <EmptyState title="Belum ada pesanan" description="Catat pesanan manual pertama, atau tunggu pesanan masuk dari impor." />;
   }
 

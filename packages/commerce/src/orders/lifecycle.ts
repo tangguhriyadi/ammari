@@ -67,9 +67,10 @@ const ORDER_CONSTRAINT_FIELDS = {
  * deadlock-avoidance idiom as stock/ledger.ts's saveStockCount) and snapshots the resulting
  * per-pcs cost onto that order_item's `unit_cost` — called both from createOrder (when the
  * order starts already past awaiting_payment) and from transitionOrderStatus's
- * awaiting_payment -> to_ship path. Throws a FieldError named after the specific SKU that would
+ * awaiting_payment -> to_ship path, and by the marketplace import's commit for the orders it creates
+ * (docs/plans/marketplace-import.md §6). Throws a FieldError named after the specific SKU that would
  * go negative, never a generic "stock tidak cukup". */
-async function decrementStockForOrderItems(
+export async function decrementStockForOrderItems(
   tx: Tx,
   items: readonly { id: string; sku: string; qty: number }[],
   actorStaffUserId: string | null,
@@ -495,6 +496,7 @@ export async function transitionOrderStatus(
     // written the flag is resolved, so it ends in the same update (every other flag stays).
     const resolvesStockShort = fromStatus === "awaiting_payment" && toStatus === "to_ship" && order.needsAttention.includes("stock_short_at_payment");
     const mismatch = shipment ? await trackingMismatchUpdate(tx, order, shipment.trackingNumber) : null;
+    const endsOrder = toStatus === "cancelled" || toStatus === "returned";
 
     if (fromStatus === "awaiting_payment" && toStatus === "to_ship") {
       const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
@@ -503,7 +505,7 @@ export async function transitionOrderStatus(
       // above (docs/plans/cart-checkout.md D3). No-op for staff-entered orders, which never hold.
       // The sale checks physical stock only, so the order's own hold never blocks it (D4).
       await consumeReservationsForOrder(tx, orderId);
-    } else if (toStatus === "cancelled" || toStatus === "returned") {
+    } else if (endsOrder) {
       if (!STOCK_NOT_YET_DECREMENTED_STATUSES.includes(fromStatus)) {
         await restoreStockForOrderItems(tx, orderId, actorStaffUserId);
       } else {
@@ -533,6 +535,10 @@ export async function transitionOrderStatus(
         ...shippingFields,
         ...(resolvesStockShort ? { needsAttention: sql`array_remove(${orders.needsAttention}, 'stock_short_at_payment')` } : {}),
         ...(mismatch ? { needsAttention: mismatch } : {}),
+        // A marketplace return waiting (docs/plans/marketplace-import.md §3 rule 3a) ends with the
+        // order: a manual Retur or Batal never leaves the flag behind. Only these two targets, so it
+        // never meets the two needs_attention expressions above (to_ship and shipped only).
+        ...(endsOrder && order.needsAttention.includes("marketplace_return_pending") ? { needsAttention: withoutAttentionFlag("marketplace_return_pending") } : {}),
       })
       .where(and(eq(orders.id, orderId), eq(orders.status, fromStatus)))
       .returning();

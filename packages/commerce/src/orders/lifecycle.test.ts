@@ -492,6 +492,41 @@ describe("transitionOrderStatus", () => {
     }
   });
 
+  test("cancelled/returned clears a pending marketplace return and keeps every other flag (marketplace-import §3 rule 3a)", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      await seedStock(tx, variant.sku, 5, 50_000);
+      for (const [from, to] of [["to_ship", "cancelled"], ["shipped", "returned"]] as const) {
+        const order = await createOrder(
+          { channelId: "shopee", channelOrderNo: `RET${from}${Date.now()}`, orderDate: "2026-10-09", items: [{ sku: variant.sku, qty: 1, unitPrice: 259_000 }], discountAmount: 0, shippingAmount: 0, status: "to_ship" },
+          staff.id,
+          tx,
+        );
+        if (from === "shipped") await transitionOrderStatus(order.id, "shipped", staff.id, tx);
+        await tx.update(orders).set({ needsAttention: ["marketplace_return_pending", "delivery_problem"] }).where(eq(orders.id, order.id));
+        const updated = await transitionOrderStatus(order.id, to, staff.id, tx);
+        expect(updated.needsAttention).toEqual(["delivery_problem"]);
+      }
+    });
+  });
+
+  test("shipping keeps a pending marketplace return flag", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      await seedStock(tx, variant.sku, 5, 50_000);
+      const order = await createOrder(
+        { channelId: "shopee", channelOrderNo: `RETKEEP${Date.now()}`, orderDate: "2026-10-09", items: [{ sku: variant.sku, qty: 1, unitPrice: 259_000 }], discountAmount: 0, shippingAmount: 0, status: "to_ship" },
+        staff.id,
+        tx,
+      );
+      await tx.update(orders).set({ needsAttention: ["marketplace_return_pending"] }).where(eq(orders.id, order.id));
+      const updated = await transitionOrderStatus(order.id, "shipped", staff.id, tx);
+      expect(updated.needsAttention).toEqual(["marketplace_return_pending"]);
+    });
+  });
+
   test("cancelling an order with an active thank-you card voids it in the same transaction", async () => {
     await withRollback(async (tx) => {
       const { variant } = await insertProductVariant(tx);

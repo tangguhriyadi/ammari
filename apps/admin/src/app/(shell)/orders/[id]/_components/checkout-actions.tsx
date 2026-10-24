@@ -223,6 +223,12 @@ export interface AttentionPanelProps {
 /** Flags whose facts are in the Pengiriman section (K4). */
 const SHIPPING_FLAGS: ReadonlySet<string> = new Set(["tracking_stale", "delivery_problem", "tracking_number_mismatch", "shipping_cost_over_quote"]);
 
+/** A rejected marketplace return is settled by removing its flag (docs/plans/marketplace-import.md
+ * §3 rule 3a); every other flag is "Tandai beres". Audit logged on the server either way. */
+function clearLabel(flag: OrderAttentionFlag): string {
+  return flag === "marketplace_return_pending" ? "Hapus tanda retur" : "Tandai beres";
+}
+
 function sameResi(a: string, b: string): boolean {
   return a.replace(/\s+/g, "").toUpperCase() === b.replace(/\s+/g, "").toUpperCase();
 }
@@ -235,6 +241,8 @@ export function AttentionPanel({ orderId, status, flags, refundableAttempts, ref
   const [clearing, setClearing] = useState<OrderAttentionFlag | null>(null);
   // The label the clear dialog shows, kept while it closes (clearing is reset first).
   const [clearingLabel, setClearingLabel] = useState("");
+  // Same for the action's name ("Hapus tanda retur" / "Tandai beres").
+  const [clearingAction, setClearingAction] = useState("Tandai beres");
   /** Which button the running action belongs to (its spinner); every other button is disabled. */
   const [busy, setBusy] = useState<string | null>(null);
   const [refunding, setRefunding] = useState<RefundableAttempt | null>(null);
@@ -353,10 +361,11 @@ export function AttentionPanel({ orderId, status, flags, refundableAttempts, ref
                       disabled={pending}
                       onClick={() => {
                         setClearingLabel(copy.label);
+                        setClearingAction(clearLabel(flag));
                         setClearing(flag);
                       }}
                     >
-                      Tandai beres
+                      {clearLabel(flag)}
                     </Button>
                   )}
                 </div>
@@ -370,11 +379,11 @@ export function AttentionPanel({ orderId, status, flags, refundableAttempts, ref
       <Dialog
         open={clearing !== null}
         onOpenChange={(open) => !open && setClearing(null)}
-        title="Tandai beres?"
+        title={`${clearingAction}?`}
         description={
           `Tanda "${clearingLabel}" dihapus dari pesanan ini. Tanda lain tetap ada.`
         }
-        confirmLabel="Tandai beres"
+        confirmLabel={clearingAction}
         cancelLabel="Kembali"
         onConfirm={() => clearing && clear(clearing)}
         loading={pending}

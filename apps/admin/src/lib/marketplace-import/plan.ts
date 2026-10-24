@@ -107,9 +107,21 @@ export interface FeeChange {
   after: number;
 }
 
+/** The admin order as the planner read it; the commit re-checks it under the row lock (any change
+ * is drift: roll back, fresh preview). Money: never sent to the browser (preview-view.ts). */
+export interface ExpectedOrderState {
+  status: OrderStatus;
+  discountAmount: number;
+  totalAmount: number;
+  channelStatus: string | null;
+  returnPending: boolean;
+  lines: { sku: string; qty: number; unitPrice: number }[];
+}
+
 export interface UpdateEntry extends EntryBase {
   action: "update";
   existing: ExistingOrderRef;
+  expected: ExpectedOrderState;
   rawStatus: string;
   transitions: OrderStatus[];
   setReturnPending: boolean;
@@ -529,6 +541,14 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
       ...base,
       action: "update",
       existing: existingRef(existing),
+      expected: {
+        status: existing.status,
+        discountAmount: existing.discountAmount,
+        totalAmount: existing.totalAmount,
+        channelStatus: existing.channelStatus,
+        returnPending: existing.returnPending,
+        lines: (storedItems.get(existing.id) ?? []).map((item) => ({ sku: item.sku, qty: item.qty, unitPrice: item.unitPrice })).sort((a, b) => compareText(a.sku, b.sku)),
+      },
       rawStatus: order.rawStatus,
       transitions: statusChange?.transitions ?? [],
       setReturnPending: statusChange?.setReturnPending ?? false,
