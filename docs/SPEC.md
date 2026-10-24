@@ -46,9 +46,10 @@ As of 2026-10-21 (cart plan session 17).
 - The 90-day anonymization of unpaid checkout orders (plan §11; the privacy policy promises it,
   first due 1 Mar 2027) and saved addresses at checkout (deferred, plan session 10 notes).
 - Orders import (`/import`, Shopee/TikTok Shop exports): placeholder today.
-- Overview dashboard (§6; docs/plans/dashboard-overview.md): session 1 done (omzet / laba kotor
-  definitions and queries, `sales_goal`, migration 0039); the page itself is still a placeholder
-  (sessions 2 to 5).
+- Overview dashboard (§6; docs/plans/dashboard-overview.md): sessions 1 to 3 done (omzet / laba
+  kotor definitions and queries, `sales_goal`, migration 0039; "Target penjualan" on `/settings`;
+  Ringkasan with the target card, period tabs and KPI tiles). Charts (session 4) and "Perlu
+  tindakan" (session 5) still open.
 
 ## 1. Goals
 

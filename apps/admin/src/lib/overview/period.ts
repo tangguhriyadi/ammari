@@ -38,6 +38,15 @@ export interface PeriodParams {
   to?: string;
 }
 
+/** A page's `searchParams` value: Next gives an array when a key repeats (`?period=a&period=b`). */
+type SearchParamValue = string | string[] | undefined;
+
+/** The first value of each period param, so a repeated key never reaches resolvePeriod as an array. */
+export function periodParamsFromSearch(searchParams: Record<string, SearchParamValue>): PeriodParams {
+  const first = (value: SearchParamValue) => (Array.isArray(value) ? value[0] : value);
+  return { period: first(searchParams.period), from: first(searchParams.from), to: first(searchParams.to) };
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function withPreviousDates(resolved: Omit<ResolvedPeriod, "previousFromDate" | "previousToDate">): ResolvedPeriod {

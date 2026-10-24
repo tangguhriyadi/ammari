@@ -1,7 +1,13 @@
 # Ringkasan: the owner's daily overview
 
-Status: **owner decisions recorded 2026-10-24** (section 12, all recommendations accepted). Session 1
-implemented; sessions 2 to 5 open. Written 2026-10-24.
+Status: **owner decisions recorded 2026-10-24** (section 12, all recommendations accepted). Sessions
+1 to 3 implemented; sessions 4 and 5 open. Written 2026-10-24.
+
+Session 2/3 notes: the target card's progress bar is a plain div (`overview-target-card.tsx`);
+session 4 may move it to `components/charts/` with the SVG charts. The period tabs sit above the
+tiles (not in the page header), since the target card does not follow the period. "Pcs terjual" is
+its own tile only without `finance.view_profit`; with it, pcs is a line under "Pesanan" so the four
+money tiles stay one row on desktop.
 
 The admin `/` page ("Ringkasan", `overview.view`) is a `ComingSoonPage` placeholder today. It
 becomes the page the owner opens every morning on the phone: progress toward the first-year goal

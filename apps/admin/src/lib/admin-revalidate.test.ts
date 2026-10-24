@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { revalidatePath } from "next/cache";
-import { revalidateAdmin } from "./admin-revalidate";
+import { revalidateAdmin, revalidateOverview } from "./admin-revalidate";
 
 // next/cache is mocked for every test file in test/setup.ts.
 describe("revalidateAdmin", () => {
@@ -13,5 +13,13 @@ describe("revalidateAdmin", () => {
       ["/(shell)/products", "layout"],
       ["/(shell)/stock", "layout"],
     ]);
+  });
+});
+
+describe("revalidateOverview", () => {
+  test("revalidates only the shell's own page (Ringkasan), not every page under the shell", () => {
+    vi.mocked(revalidatePath).mockClear();
+    revalidateOverview();
+    expect(vi.mocked(revalidatePath).mock.calls).toEqual([["/(shell)", "page"]]);
   });
 });

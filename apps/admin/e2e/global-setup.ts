@@ -178,6 +178,22 @@ export const E2E_DISCOUNT_ORDER_NO = "ORD-E2E-WEB-DISKON";
 // in the admin UI can create this state any more, so it is seeded here.
 export const E2E_UNWEIGHED_PUBLISHED_PRODUCT_NAME = "E2E Gamis Tanpa Berat";
 
+// overview.spec.ts (docs/plans/dashboard-overview.md sessions 2 and 3): Ringkasan and the "Target
+// penjualan" settings. Three dedicated emails, same "fresh email, clean OTP throttle" reasoning as
+// every fixture above: an owner for the page, an owner for the settings form (it changes the one
+// sales_goal row, so it runs last in that spec), and a role holding EXACTLY overview.view (no
+// finance.view_profit, no settings.manage): it must see counts but never a rupiah or the target.
+export const E2E_OVERVIEW_EMAIL = "overview@e2e.ammari.test";
+export const E2E_OVERVIEW_SETTINGS_EMAIL = "overview-settings@e2e.ammari.test";
+export const E2E_OVERVIEW_NO_FINANCE_EMAIL = "overview-no-finance@e2e.ammari.test";
+const E2E_OVERVIEW_NO_FINANCE_ROLE_KEY = "e2e_overview_no_finance";
+// Manual WhatsApp orders dated yesterday and the day before (Jakarta), so "Kemarin" (the default
+// period) has fixed numbers no other spec touches (every other spec's orders are dated today):
+// yesterday 2 counted orders, omzet Rp 500.000 (300.000 + 250.000 - 50.000 voucher, ongkir out),
+// HPP Rp 120.000 (one line has unit_cost 0: "HPP belum lengkap untuk 1 item"), one cancelled
+// order; the day before 1 order, omzet Rp 250.000, HPP Rp 100.000.
+export const E2E_OVERVIEW_SKU = "E2E-RINGKASAN-M";
+
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
 // lib/products/queries.ts. A distinct name prefix keeps this from colliding with anything a
 // test itself creates.
@@ -405,6 +421,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_LOGIN_OTP_RESEND_EMAIL, "E2E Login OTP Resend", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_LOGIN_OTP_EXPIRY_EMAIL, "E2E Login OTP Expiry", OWNER_ROLE_KEY);
 
+  await ensureStaffFixture(E2E_OVERVIEW_EMAIL, "E2E Overview", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_OVERVIEW_SETTINGS_EMAIL, "E2E Overview Settings", OWNER_ROLE_KEY);
+  await ensureLimitedRole(E2E_OVERVIEW_NO_FINANCE_ROLE_KEY, ["overview.view"]);
+  await ensureStaffFixture(E2E_OVERVIEW_NO_FINANCE_EMAIL, "E2E Overview (no finance)", E2E_OVERVIEW_NO_FINANCE_ROLE_KEY);
+
   const [paginationFabric] = await db
     .insert(fabrics)
     .values({ name: "E2E Pagination Fabric" })
@@ -515,6 +536,47 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       await tx
         .insert(stockReservations)
         .values({ orderId: order.id, orderItemId: item.id, sku: E2E_RESERVATION_HELD_SKU, qty: 2, expiresAt: hold.expiresAt });
+    }
+  });
+
+  // Ringkasan's backdated orders (see E2E_OVERVIEW_SKU above). 10:00 WIB is 03:00 UTC.
+  await db.transaction(async (tx) => {
+    const [fabric] = await tx.insert(fabrics).values({ name: "E2E Ringkasan Fabric" }).returning({ id: fabrics.id });
+    if (!fabric) throw new Error("failed to seed the e2e overview fabric");
+    const [color] = await tx.insert(fabricColors).values({ fabricId: fabric.id, name: "Navy" }).returning({ id: fabricColors.id });
+    if (!color) throw new Error("failed to seed the e2e overview colour");
+    const [product] = await tx
+      .insert(products)
+      .values({ name: "E2E Gamis Ringkasan", code: "E2ERINGKASAN", slug: "e2e-gamis-ringkasan", fabricId: fabric.id, closure: "front_zip", sizeMode: "sized", basePrice: 300_000 })
+      .returning({ id: products.id, closure: products.closure });
+    if (!product) throw new Error("failed to seed the e2e overview product");
+    await tx.insert(productVariants).values({ productId: product.id, fabricId: fabric.id, fabricColorId: color.id, closure: product.closure, sku: E2E_OVERVIEW_SKU, size: "M" });
+
+    const jakartaToday = new Date(Date.now() + 7 * 60 * 60_000);
+    const daysAgoAt10Wib = (days: number) =>
+      new Date(Date.UTC(jakartaToday.getUTCFullYear(), jakartaToday.getUTCMonth(), jakartaToday.getUTCDate() - days, 3, 0));
+    const seeds = [
+      { orderNo: "ORD-E2E-RINGKASAN-1", daysAgo: 1, status: "completed" as const, unitPrice: 300_000, unitCost: 120_000, shipping: 15_000, discount: 0 },
+      { orderNo: "ORD-E2E-RINGKASAN-2", daysAgo: 1, status: "shipped" as const, unitPrice: 250_000, unitCost: 0, shipping: 0, discount: 50_000 },
+      { orderNo: "ORD-E2E-RINGKASAN-3", daysAgo: 1, status: "cancelled" as const, unitPrice: 259_000, unitCost: 0, shipping: 0, discount: 0 },
+      { orderNo: "ORD-E2E-RINGKASAN-4", daysAgo: 2, status: "completed" as const, unitPrice: 250_000, unitCost: 100_000, shipping: 10_000, discount: 0 },
+    ];
+    for (const seed of seeds) {
+      const [order] = await tx
+        .insert(orders)
+        .values({
+          channelId: "whatsapp",
+          orderNo: seed.orderNo,
+          status: seed.status,
+          orderDate: daysAgoAt10Wib(seed.daysAgo),
+          subtotalAmount: seed.unitPrice,
+          shippingAmount: seed.shipping,
+          discountAmount: seed.discount,
+          totalAmount: seed.unitPrice + seed.shipping - seed.discount,
+        })
+        .returning({ id: orders.id });
+      if (!order) throw new Error(`failed to seed ${seed.orderNo}`);
+      await tx.insert(orderItems).values({ orderId: order.id, sku: E2E_OVERVIEW_SKU, qty: 1, unitPrice: seed.unitPrice, unitCost: seed.unitCost });
     }
   });
 

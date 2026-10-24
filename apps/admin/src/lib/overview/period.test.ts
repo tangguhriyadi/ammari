@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { DEFAULT_OVERVIEW_PERIOD, resolvePeriod } from "./period";
+import { DEFAULT_OVERVIEW_PERIOD, periodParamsFromSearch, resolvePeriod } from "./period";
 
 // docs/plans/dashboard-overview.md §3.1 (D5: default Kemarin). Jakarta is UTC+7, so 08:00 WIB on
 // 24 Oct 2026 is 01:00Z, and 06:59 WIB on 1 Nov is still 31 Oct 23:59Z.
@@ -91,5 +91,25 @@ describe("resolvePeriod", () => {
     // 367 days is one too many; exactly 366 days is allowed.
     expect(resolvePeriod({ period: "custom", from: "2025-10-23", to: "2026-10-24" }, morning).period).toBe("yesterday");
     expect(resolvePeriod({ period: "custom", from: "2025-10-24", to: "2026-10-24" }, morning).period).toBe("custom");
+  });
+});
+
+describe("periodParamsFromSearch", () => {
+  test("takes the first value when Next passes a repeated key as an array", () => {
+    expect(periodParamsFromSearch({ period: ["7d", "today"], from: ["2026-10-01", "x"], to: "2026-10-05" })).toEqual({
+      period: "7d",
+      from: "2026-10-01",
+      to: "2026-10-05",
+    });
+  });
+
+  test("missing keys stay undefined, unrelated keys are ignored", () => {
+    expect(periodParamsFromSearch({ metric: "orders" })).toEqual({ period: undefined, from: undefined, to: undefined });
+    expect(periodParamsFromSearch({ period: [] })).toEqual({ period: undefined, from: undefined, to: undefined });
+  });
+
+  test("an array period resolves like its first value", () => {
+    const now = new Date("2026-10-24T01:00:00Z");
+    expect(resolvePeriod(periodParamsFromSearch({ period: ["today", "month"] }), now).period).toBe("today");
   });
 });

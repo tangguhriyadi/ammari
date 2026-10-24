@@ -27,6 +27,7 @@ export type AdminSection =
   | "/products"
   | "/purchases"
   | "/receipts"
+  | "/settings"
   | "/stock"
   | "/suppliers";
 
@@ -34,4 +35,11 @@ export type AdminSection =
  * naming every section whose pages render the changed data, not just the one the form returns to. */
 export function revalidateAdmin(...sections: AdminSection[]): void {
   for (const section of sections) revalidatePath(`/(shell)${section}`, "layout");
+}
+
+/** The Ringkasan page (`/`, the shell's own page.tsx). Not an `AdminSection`: as a layout path it
+ * would be the whole shell. A route group plus "page" is the documented form for one page file
+ * (revalidatePath.md, "Revalidating a Page path": `revalidatePath('/(main)/blog/[slug]', 'page')`). */
+export function revalidateOverview(): void {
+  revalidatePath("/(shell)", "page");
 }
