@@ -12,6 +12,7 @@
     "./db": "./src/db.ts",
     "./emails": "./src/emails/index.ts",
     "./errors": "./src/errors.ts",
+    "./jakarta-day": "./src/jakarta-day.ts",
     "./jakarta-month": "./src/jakarta-month.ts",
     "./maintenance": "./src/maintenance/index.ts",
     "./moving-average": "./src/inventory/moving-average.ts",

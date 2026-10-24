@@ -274,6 +274,13 @@
       "when": 1792804701599,
       "tag": "0038_supplier_payments",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1792837267166,
+      "tag": "0039_sales_goal_and_order_date_index",
+      "breakpoints": true
     }
   ]
 }

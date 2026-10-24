@@ -45,8 +45,10 @@ As of 2026-10-21 (cart plan session 17).
 - Phase K: Biteship courier booking and tracking (plan §15; target the first weeks of December).
 - The 90-day anonymization of unpaid checkout orders (plan §11; the privacy policy promises it,
   first due 1 Mar 2027) and saved addresses at checkout (deferred, plan session 10 notes).
-- Orders import (`/import`, Shopee/TikTok Shop exports) and the Overview dashboard (§6 metrics):
-  placeholders today.
+- Orders import (`/import`, Shopee/TikTok Shop exports): placeholder today.
+- Overview dashboard (§6; docs/plans/dashboard-overview.md): session 1 done (omzet / laba kotor
+  definitions and queries, `sales_goal`, migration 0039); the page itself is still a placeholder
+  (sessions 2 to 5).
 
 ## 1. Goals
 
@@ -610,7 +612,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   not sales revenue; the subsidy is a shipping expense.
 - `ad_spend_daily` — unique on `(date, channel)`.
 - `expenses`
-- `targets` — one row per month.
+- `targets` — one row per month (not used yet; seasonal weights for the target curve later).
+- `sales_goal` — one row (`id = 1`, migration 0039): the first-year revenue target and its start
+  date (Asia/Jakarta). The row ships in the migration.
 - `cost_assumptions` — dated by `effective_from`; see §7 for the initial row.
 - Defect disposal proceeds (`defect_movements.proceeds_amount`, Lelang) are **not** finance data
   yet: stored, visible on the source document and audit-logged, but booked nowhere (no journal,
@@ -640,8 +644,20 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 
 ## 6. Overview dashboard metrics
 
-- Net revenue from completed orders vs. the target curve, shown year-to-date and for the current
-  month.
+- **Omzet** (canonical revenue, owner decision 2026-10-24,
+  [docs/plans/dashboard-overview.md](plans/dashboard-overview.md) §1): `subtotal_amount -
+  discount_amount` of orders in `to_ship`, `shipped` or `completed` (Siap Kirim, Dikirim,
+  Selesai), dated by `order_date` in Asia/Jakarta. Excluded: `awaiting_payment`, `cancelled`,
+  `returned`, and web orders whose payment is `refunded` or `chargeback`; a later return removes
+  the order from its original date. A `partially_refunded` web order counts minus its refunded
+  amount (capped at the goods amount). Ongkir is out (pass-through); the voucher is a reduction;
+  product discounts are already in `unit_price`. Platform fees are not subtracted (later, net
+  profit). Per-line breakdowns spread each order's omzet over its lines so they add up to omzet.
+- **Laba kotor** = omzet − Σ `qty × unit_cost` (HPP locked when stock left). Lines with
+  `unit_cost = 0` are flagged as incomplete HPP. The shipping subsidy is not in laba kotor.
+- Omzet vs. the first-year target (`sales_goal`, one row: Rp 1.000.000.000 from 1 November 2026,
+  editable on `/settings`), straight-line pace for now, shown year-to-date and for the current
+  month. Amounts, profit and target progress only with `finance.view_profit`.
 - 7-day average revenue — chart only, no status color.
 - Units sold per SKU.
 - Size mix vs. the cutting ratio per fabric roll: **XS2-S4-M4-L3-XL2**. A gap of more than 10

@@ -193,6 +193,9 @@ export const orders = pgTable(
     index("orders_import_batch_id_idx").on(table.importBatchId),
     index("orders_status_idx").on(table.status),
     index("orders_completed_at_idx").on(table.completedAt),
+    // Every Ringkasan aggregation is an order_date range scan (docs/plans/dashboard-overview.md
+    // §7, migration 0039). Plain, not partial on the counted statuses: statuses change.
+    index("orders_order_date_idx").on(table.orderDate),
     index("orders_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
     check("orders_status_check", checkIn(table.status, ORDER_STATUSES)),
     check("orders_subtotal_amount_check", sql`${table.subtotalAmount} >= 0`),
@@ -397,6 +400,26 @@ export const targets = pgTable(
     ),
     check("targets_revenue_target_amount_check", sql`${table.revenueTargetAmount} >= 0`),
     check("targets_units_target_check", sql`${table.unitsTarget} >= 0`),
+  ],
+);
+
+/** The first-year revenue goal for the Ringkasan target tracker (docs/plans/dashboard-overview.md
+ * §2, migration 0039). One row only (`id = 1`, same shape as store_settings), inserted by the
+ * migration itself because the page depends on it; edited on /settings (`settings.manage`).
+ * Deliberately not in store_settings: apps/web reads that row, and this is private. The goal year
+ * runs `start_date` to `start_date + 1 year - 1 day`, as Asia/Jakarta calendar dates; NULL means
+ * not configured yet. Unrelated to the per-month `targets` table above (seasonal weights, later). */
+export const salesGoal = pgTable(
+  "sales_goal",
+  {
+    id: integer("id").primaryKey().default(1),
+    revenueTargetAmount: bigint("revenue_target_amount", { mode: "number" }).notNull().default(1_000_000_000),
+    startDate: date("start_date", { mode: "string" }),
+    ...timestamps(),
+  },
+  (table) => [
+    check("sales_goal_id_check", sql`${table.id} = 1`),
+    check("sales_goal_revenue_target_amount_check", sql`${table.revenueTargetAmount} > 0`),
   ],
 );
 

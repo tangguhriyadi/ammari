@@ -11,6 +11,7 @@ import {
   productTypes,
   rolePermissions,
   roles,
+  salesGoal,
   staffUsers,
   storefrontHomepageSections,
   storeSettings,
@@ -211,6 +212,14 @@ async function seedDefaultProductType(db: Database) {
   await db.insert(productTypes).values({ code: DEFAULT_PRODUCT_TYPE_CODE, name: "Gamis", sortOrder: 0 }).onConflictDoNothing();
 }
 
+// Same dual mechanism again: migration 0039 inserts the one sales_goal row for dev/prod (the
+// Ringkasan target tracker reads it), and this restores it after e2e-db.ts's TRUNCATE. Values match
+// migration 0039 exactly (keep the two in sync by hand). Insert-only: an existing row may hold the
+// owner's own target or start date.
+async function seedSalesGoal(db: Database) {
+  await db.insert(salesGoal).values({ id: 1, revenueTargetAmount: 1_000_000_000, startDate: "2026-11-01" }).onConflictDoNothing({ target: salesGoal.id });
+}
+
 async function seedStaffUserFromEnv(db: Database, emailVar: string, nameVar: string, roleKey: string) {
   const email = process.env[emailVar];
   const name = process.env[nameVar];
@@ -245,6 +254,7 @@ export async function seed(db: Database = defaultDb) {
   await seedInitialCostAssumptions(db);
   await seedCostComponentDefaults(db);
   await seedDefaultProductType(db);
+  await seedSalesGoal(db);
   await seedStaffUsers(db);
 }
 
