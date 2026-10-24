@@ -21,6 +21,9 @@ node_modules
 
 .git
 
+# local private file storage (payment proofs): must never reach an image
+**/.private-storage
+
 playwright-report
 test-results
 blob-report

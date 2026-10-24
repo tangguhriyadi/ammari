@@ -36,6 +36,45 @@ export interface S3StorageClientConfig {
   publicBaseUrl: string;
 }
 
+export interface S3ConnectionConfig {
+  endpoint: string;
+  region: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+}
+
+/** The one S3Client setup (checksums, retries, timeouts above) shared by the media client and
+ * the private client (private-s3-client.ts), so both get the same stall protection. */
+export function createS3Client(config: S3ConnectionConfig): S3Client {
+  return new S3Client({
+    endpoint: config.endpoint,
+    region: config.region,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
+    maxAttempts: MAX_ATTEMPTS,
+    requestHandler: new NodeHttpHandler({
+      connectionTimeout: CONNECTION_TIMEOUT_MS,
+      requestTimeout: REQUEST_TIMEOUT_MS,
+    }),
+  });
+}
+
+/** True for a missing-object error: the typed NoSuchKey, or the bare 404 some S3-compatible
+ * providers surface instead. */
+export function isS3NotFound(error: unknown): boolean {
+  return error instanceof NoSuchKey || s3HttpStatus(error) === 404;
+}
+
+export function s3HttpStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  return (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+}
+
 /** `forcePathStyle: true` unconditionally — this client is only ever constructed for a custom
  * (non-AWS) endpoint, and self-hosted/S3-compatible providers (Cloudeka, Sumopod, MinIO, …)
  * aren't guaranteed to have the wildcard DNS virtual-hosted-style addressing needs. Revisit if a
@@ -46,22 +85,7 @@ export class S3StorageClient implements StorageClient {
   private readonly publicBaseUrl: string;
 
   constructor(config: S3StorageClientConfig) {
-    this.client = new S3Client({
-      endpoint: config.endpoint,
-      region: config.region,
-      forcePathStyle: true,
-      credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey,
-      },
-      requestChecksumCalculation: "WHEN_REQUIRED",
-      responseChecksumValidation: "WHEN_REQUIRED",
-      maxAttempts: MAX_ATTEMPTS,
-      requestHandler: new NodeHttpHandler({
-        connectionTimeout: CONNECTION_TIMEOUT_MS,
-        requestTimeout: REQUEST_TIMEOUT_MS,
-      }),
-    });
+    this.client = createS3Client(config);
     this.bucket = config.bucket;
     this.publicBaseUrl = config.publicBaseUrl.replace(/\/+$/, "");
   }
@@ -84,11 +108,7 @@ export class S3StorageClient implements StorageClient {
       if (!response.Body) return null;
       return Buffer.from(await response.Body.transformToByteArray());
     } catch (error) {
-      // NoSuchKey is the typed AWS error; some S3-compatible providers only surface a bare 404.
-      if (error instanceof NoSuchKey) return null;
-      if (typeof error === "object" && error !== null && (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) {
-        return null;
-      }
+      if (isS3NotFound(error)) return null;
       throw error;
     }
   }

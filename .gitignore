@@ -24,6 +24,9 @@ blob-report/
 deploy/env/*.env
 deploy-prod/env/*.env
 
+# local private file storage (payment proofs, PRIVATE_STORAGE_DRIVER=fs): never committed
+.private-storage/
+
 # misc
 .DS_Store
 *.log

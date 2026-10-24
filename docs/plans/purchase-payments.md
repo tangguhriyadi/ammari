@@ -1,7 +1,8 @@
 # Plan: Supplier payments with mandatory proof (Pembelian + Produksi)
 
 Status (2026-10-24): **Approved.** Owner answers recorded in §12 (A1 to A10); nothing open.
-S1 (database + status logic) implemented, awaiting review and commit.
+S1 (database + status logic) committed (`ee30ed7`). S2 (private storage, file processing, viewing
+route) implemented, awaiting review and commit.
 
 Record every rupiah paid to a supplier or tailor against the document it settles, with a proof
 file that can never be quietly changed or removed, so the books can be audited later. Scope is
@@ -309,7 +310,8 @@ API, so it becomes a manual checklist item in `docs/deploy-prod.md`.
 
 ## 6. File processing
 
-New `lib/payments/proof-processing.ts`, reusing the product pipeline's sniff/limits:
+New `lib/supplier-payments/proof-processing.ts` (S2; not `lib/payments/`, which is the Midtrans
+checkout code), reusing the product pipeline's sniff/limits:
 
 - **Sniff by magic bytes**, never trust the client type: JPEG, PNG, WebP, PDF (`%PDF-`). HEIC
   (`ftypheic`/`ftypmif1`) is recognized only to give a clear Indonesian error; no HEIC decoder
