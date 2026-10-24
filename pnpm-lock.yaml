@@ -259,6 +259,9 @@ importers:
       sharp:
         specifier: 0.35.5
         version: 0.35.5(@types/node@26.6.3)
+      xlsx:
+        specifier: file:vendor/xlsx-0.20.3.tgz
+        version: file:apps/admin/vendor/xlsx-0.20.3.tgz
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -4318,6 +4321,12 @@ packages:
     resolution: {integrity: sha512-r6lPcBGxZXlIcymEu7InxDMhdW0KDxpLgoFLcguasxCaJ/SOIZwINatK9KY/tf+ZrlywOKU0UDj3ATXUBfxJXA==}
     engines: {node: '>=8'}
 
+  xlsx@file:apps/admin/vendor/xlsx-0.20.3.tgz:
+    resolution: {integrity: sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA==, tarball: file:apps/admin/vendor/xlsx-0.20.3.tgz}
+    version: 0.20.3
+    engines: {node: '>=0.8'}
+    hasBin: true
+
   xml-name-validator@5.0.0:
     resolution: {integrity: sha512-EvGK8EJ3DhaHfbRlETOWAS5pO9MZITeauHKJyb8wyajUfQUenkIg2MvLDTZ4T/TgIcm3HU0TFBgWWboAZ30UHg==}
     engines: {node: '>=18'}
@@ -8004,6 +8013,8 @@ snapshots:
       ansi-styles: 4.3.0
       string-width: 4.2.3
       strip-ansi: 6.0.1
+
+  xlsx@file:apps/admin/vendor/xlsx-0.20.3.tgz: {}
 
   xml-name-validator@5.0.0: {}
 

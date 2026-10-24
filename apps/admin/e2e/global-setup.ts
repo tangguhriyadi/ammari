@@ -133,6 +133,9 @@ export const E2E_RESERVATION_PRODUCT_NAME = "E2E Gamis Dipesan";
 export const E2E_RESERVATION_HELD_SKU = "E2E-DIPESAN-M";
 export const E2E_RESERVATION_FREE_SKU = "E2E-DIPESAN-L";
 export const E2E_RESERVATION_ORDER_NO = "ORD-E2E-DIPESAN-0001";
+// sku-list.spec.ts (docs/plans/marketplace-import.md §11.1, Daftar SKU): reads the reservation
+// product above, on the existing `e2e_orders` role (stock.view). Its own OTP throttle.
+export const E2E_SKU_LIST_EMAIL = "sku-list@e2e.ammari.test";
 
 // checkout-orders.spec.ts (docs/plans/cart-checkout.md session 16): web checkout orders in every
 // state staff act on, one set per viewport (each test changes its own orders). Only web checkout
@@ -363,6 +366,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   ]);
   await ensureStaffFixture(E2E_ORDERS_EMAIL, "E2E Orders", E2E_ORDERS_ROLE_KEY);
   await ensureStaffFixture(E2E_STOCK_RESERVATIONS_EMAIL, "E2E Stock Reservations", E2E_ORDERS_ROLE_KEY);
+  await ensureStaffFixture(E2E_SKU_LIST_EMAIL, "E2E SKU List", E2E_ORDERS_ROLE_KEY);
 
   await ensureLimitedRole(E2E_PACKING_ROLE_KEY, [
     "products.manage",

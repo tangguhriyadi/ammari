@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { PageHeader, FilterTabs, Input, Checkbox, Button, Pagination, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getReservedQtyBySku, listStockOverview, type ActiveFilter } from "@/lib/stock/queries";
@@ -31,7 +32,15 @@ export default async function StockPage({
   return (
     <>
       <Breadcrumb items={[...rootCrumbs("/stock"), { label: "Barang jadi" }]} />
-      <PageHeader title="Stok" description="Stok per SKU dan riwayat pergerakannya." />
+      <PageHeader
+        title="Stok"
+        description="Stok per SKU dan riwayat pergerakannya."
+        actions={
+          <Link href="/stock/sku-list">
+            <Button variant="secondary">Daftar SKU</Button>
+          </Link>
+        }
+      />
       <div className="flex flex-col gap-3">
         <StockTypeTabs
           active="Barang jadi"
