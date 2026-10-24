@@ -3,9 +3,9 @@ import { eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertOrder, insertProductVariant, insertVariantForProduct, shippingQuoteValues } from "@ammari/db/test-fixtures";
-import { orderItems, orders, payments, productTypes, salesGoal, type OrderPaymentStatus, type OrderStatus } from "@ammari/db/schema";
+import { orderItems, orders, payments, productTypes, productVariants, salesGoal, type OrderPaymentStatus, type OrderStatus } from "@ammari/db/schema";
 import { jakartaMidnight } from "@ammari/commerce/jakarta-day";
-import { getChannelBreakdown, getGoalProgress, getPeriodTotals, getProductTypeBreakdown, getSalesGoal } from "./queries";
+import { getChannelBreakdown, getGoalCumulative, getGoalProgress, getPeriodTotals, getProductTypeBreakdown, getSalesGoal, getSalesSeries, getTopProducts } from "./queries";
 
 // docs/plans/dashboard-overview.md §1 (D1: omzet = Siap Kirim / Dikirim / Selesai, after voucher,
 // without ongkir, partial refunds subtracted; D6: voucher prorated across lines). Every order here
@@ -236,6 +236,124 @@ describe("sales goal", () => {
         status: "behind",
         neededPcsPerDay: null, // 3 pcs in the last 30 days: no average price yet
       });
+    });
+  });
+});
+
+describe("getSalesSeries", () => {
+  const MONTH = { start: jakartaMidnight("2031-03-01"), end: jakartaMidnight("2031-05-01") };
+
+  test("buckets by Jakarta day: 23:30 WIB stays on its day, 00:30 WIB is the next", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const line = { sku: variant.sku, qty: 2, unitPrice: 100_000, unitCost: 40_000 };
+      await recordOrder(tx, [line], { status: "to_ship", orderDate: new Date("2031-03-10T16:30:00Z") }); // 23:30 WIB 10 Mar
+      await recordOrder(tx, [line], { status: "completed", orderDate: new Date("2031-03-10T17:30:00Z") }); // 00:30 WIB 11 Mar
+      await recordOrder(tx, [line], { status: "shipped", orderDate: new Date("2031-03-11T05:00:00Z"), discountAmount: 20_000, shippingAmount: 15_000 });
+      await recordOrder(tx, [line], { status: "cancelled", orderDate: new Date("2031-03-11T05:00:00Z") });
+
+      expect(await getSalesSeries(MONTH, { canViewProfit: true, granularity: "day" }, tx)).toEqual([
+        { key: "2031-03-10", orders: 1, pcs: 2, omzet: 200_000 },
+        { key: "2031-03-11", orders: 2, pcs: 4, omzet: 380_000 },
+      ]);
+      // Without finance.view_profit: counts only, no amount selected.
+      expect(await getSalesSeries(MONTH, { canViewProfit: false, granularity: "day" }, tx)).toEqual([
+        { key: "2031-03-10", orders: 1, pcs: 2, omzet: null },
+        { key: "2031-03-11", orders: 2, pcs: 4, omzet: null },
+      ]);
+    });
+  });
+
+  test("monthly buckets are Jakarta months and sum to the period omzet", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const line = { sku: variant.sku, qty: 1, unitPrice: 100_000, unitCost: 40_000 };
+      await recordOrder(tx, [line], { status: "to_ship", orderDate: new Date("2031-03-31T17:30:00Z") }); // 1 Apr 00:30 WIB
+      await recordOrder(tx, [line], { status: "to_ship", orderDate: new Date("2031-03-31T16:00:00Z") }); // 31 Mar 23:00 WIB
+      await recordOrder(tx, [line], { status: "to_ship", orderDate: new Date("2031-03-05T05:00:00Z") });
+
+      const months = await getSalesSeries(MONTH, { canViewProfit: true, granularity: "month" }, tx);
+      expect(months).toEqual([
+        { key: "2031-03-01", orders: 2, pcs: 2, omzet: 200_000 },
+        { key: "2031-04-01", orders: 1, pcs: 1, omzet: 100_000 },
+      ]);
+      const totals = await getPeriodTotals(MONTH, { canViewProfit: true }, tx);
+      expect(months.reduce((sum, point) => sum + point.omzet!, 0)).toBe(totals.money!.omzet);
+    });
+  });
+});
+
+describe("getTopProducts", () => {
+  test("by pcs with each product's variants; omzet is allocated (D6) and adds up to the tile", async () => {
+    await withRollback(async (tx) => {
+      const { fabric, color, product: gamis, variant: gamisM } = await insertProductVariant(tx);
+      const [gamisL] = await tx
+        .insert(productVariants)
+        .values({ sku: `SKU-${randomUUID()}`, productId: gamis.id, fabricId: fabric.id, fabricColorId: color.id, closure: gamis.closure, size: "L" })
+        .returning();
+      const { product: khimar, variant: khimarM } = await insertVariantForProduct(tx, fabric.id, color.id, { name: "Khimar Test" });
+
+      // Gamis: 3 pcs (2 M, 1 L); Khimar: 2 pcs but more omzet. Rp 10.000 voucher spread over the first order.
+      await recordOrder(
+        tx,
+        [
+          { sku: gamisM.sku, qty: 2, unitPrice: 100_000, unitCost: 40_000 },
+          { sku: khimarM.sku, qty: 1, unitPrice: 300_000, unitCost: 100_000 },
+        ],
+        { status: "to_ship", discountAmount: 10_000 },
+      );
+      await recordOrder(tx, [{ sku: gamisL!.sku, qty: 1, unitPrice: 100_000, unitCost: 40_000 }], { status: "completed" });
+      await recordOrder(tx, [{ sku: khimarM.sku, qty: 1, unitPrice: 300_000, unitCost: 100_000 }], { status: "shipped" });
+      await recordOrder(tx, [{ sku: gamisM.sku, qty: 5, unitPrice: 100_000, unitCost: 40_000 }], { status: "cancelled" });
+
+      const byPcs = await getTopProducts(DAY, { canViewProfit: true }, tx);
+      expect(byPcs.map((row) => [row.productId, row.pcs])).toEqual([
+        [gamis.id, 3],
+        [khimar.id, 2],
+      ]);
+      expect(byPcs[0]!.variants.map((variant) => [variant.sku, variant.size, variant.pcs])).toEqual([
+        [gamisM.sku, "M", 2],
+        [gamisL!.sku, "L", 1],
+      ]);
+      expect(byPcs[0]!.moreVariants).toBe(0);
+      for (const row of byPcs) expect(row.variants.reduce((sum, variant) => sum + variant.omzet!, 0)).toBe(row.omzet);
+      const omzet = (await getPeriodTotals(DAY, { canViewProfit: true }, tx)).money!.omzet;
+      expect(byPcs.reduce((sum, row) => sum + row.omzet!, 0)).toBe(omzet);
+
+      const byOmzet = await getTopProducts(DAY, { canViewProfit: true, rank: "omzet" }, tx);
+      expect(byOmzet.map((row) => row.productId)).toEqual([khimar.id, gamis.id]);
+
+      // Without finance.view_profit: pcs only, and a rank by omzet is ignored.
+      const withoutFinance = await getTopProducts(DAY, { canViewProfit: false, rank: "omzet" }, tx);
+      expect(withoutFinance.map((row) => [row.productId, row.pcs, row.omzet])).toEqual([
+        [gamis.id, 3, null],
+        [khimar.id, 2, null],
+      ]);
+      expect(withoutFinance.flatMap((row) => row.variants).every((variant) => variant.omzet === null)).toBe(true);
+    });
+  });
+});
+
+describe("getGoalCumulative", () => {
+  test("cumulative monthly omzet from the start, null without finance or before the start", async () => {
+    await withRollback(async (tx) => {
+      await tx.update(salesGoal).set({ revenueTargetAmount: 365_000_000, startDate: "2031-02-15" });
+      const { variant } = await insertProductVariant(tx);
+      const line = { sku: variant.sku, qty: 1, unitPrice: 300_000, unitCost: 100_000 };
+      await recordOrder(tx, [line], { status: "completed", orderDate: new Date("2031-02-14T05:00:00Z") }); // before the start
+      await recordOrder(tx, [line], { status: "completed", orderDate: new Date("2031-02-20T05:00:00Z") });
+      await recordOrder(tx, [line], { status: "to_ship", orderDate: IN_DAY });
+
+      const now = new Date("2031-03-10T06:00:00Z");
+      expect(await getGoalCumulative({ canViewProfit: false, now }, tx)).toBeNull();
+      expect(await getGoalCumulative({ canViewProfit: true, now: new Date("2031-02-14T05:00:00Z") }, tx)).toBeNull();
+      const series = (await getGoalCumulative({ canViewProfit: true, now }, tx))!;
+      expect(series).toHaveLength(13);
+      expect(series.slice(0, 3)).toEqual([
+        { month: "2031-02-01", expected: 14_000_000, actual: 300_000 },
+        { month: "2031-03-01", expected: 45_000_000, actual: 600_000 },
+        { month: "2031-04-01", expected: 75_000_000, actual: null },
+      ]);
     });
   });
 });

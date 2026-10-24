@@ -10,3 +10,8 @@ import { customers, orders } from "@ammari/db/schema";
 export function orderBuyerNameSql() {
   return sql<string | null>`case when ${orders.paymentStatus} is not null then coalesce(nullif(btrim(${orders.recipientName}), ''), ${customers.name}) else ${customers.name} end`;
 }
+
+/** The same rule for a hand-written query that aliases orders as `o` and customers as `cu`. */
+export function aliasedOrderBuyerNameSql() {
+  return sql<string | null>`case when o.payment_status is not null then coalesce(nullif(btrim(o.recipient_name), ''), cu.name) else cu.name end`;
+}

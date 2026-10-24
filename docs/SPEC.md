@@ -46,10 +46,12 @@ As of 2026-10-21 (cart plan session 17).
 - The 90-day anonymization of unpaid checkout orders (plan §11; the privacy policy promises it,
   first due 1 Mar 2027) and saved addresses at checkout (deferred, plan session 10 notes).
 - Orders import (`/import`, Shopee/TikTok Shop exports): placeholder today.
-- Overview dashboard (§6; docs/plans/dashboard-overview.md): sessions 1 to 3 done (omzet / laba
+- Overview dashboard (§6; docs/plans/dashboard-overview.md): sessions 1 to 5 done (omzet / laba
   kotor definitions and queries, `sales_goal`, migration 0039; "Target penjualan" on `/settings`;
-  Ringkasan with the target card, period tabs and KPI tiles). Charts (session 4) and "Perlu
-  tindakan" (session 5) still open.
+  Ringkasan with the target card and its cumulative chart, period tabs, KPI tiles, server-rendered
+  SVG charts (omzet or orders over time, per channel, per product type, top products) and
+  "Perlu tindakan" (Perlu dicek, Siap Kirim with late orders, Menunggu Bayar, Stok menipis,
+  Utang pemasok, Produksi belum lunas)). The later items of §6 are listed in the plan's §11.
 
 ## 1. Goals
 
@@ -657,8 +659,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - **Laba kotor** = omzet − Σ `qty × unit_cost` (HPP locked when stock left). Lines with
   `unit_cost = 0` are flagged as incomplete HPP. The shipping subsidy is not in laba kotor.
 - Omzet vs. the first-year target (`sales_goal`, one row: Rp 1.000.000.000 from 1 November 2026,
-  editable on `/settings`), straight-line pace for now, shown year-to-date and for the current
-  month. Amounts, profit and target progress only with `finance.view_profit`.
+  editable on `/settings` by staff holding both `settings.manage` and `finance.view_profit`),
+  straight-line pace for now, shown year-to-date and as a cumulative monthly chart. Amounts,
+  profit and target progress only with `finance.view_profit`.
 - 7-day average revenue — chart only, no status color.
 - Units sold per SKU.
 - Size mix vs. the cutting ratio per fabric roll: **XS2-S4-M4-L3-XL2**. A gap of more than 10

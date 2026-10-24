@@ -1,7 +1,15 @@
 # Ringkasan: the owner's daily overview
 
 Status: **owner decisions recorded 2026-10-24** (section 12, all recommendations accepted). Sessions
-1 to 3 implemented; sessions 4 and 5 open. Written 2026-10-24.
+1 to 5 implemented. Written 2026-10-24.
+
+Session 4/5 notes: the "Target penjualan" section, its server action and the card's "Atur target"
+link need `settings.manage` AND `finance.view_profit` (owner decision 2026-10-24, after D9); with
+only `settings.manage`, `/settings` shows no section and never reads the goal. Charts live in
+`components/charts/` (BarChart, RankBars, ProgressBar, CumulativeLine); labels are HTML next to a
+stretched SVG so they stay readable at 390px, and each chart has a visually hidden data table.
+Chart switches are URL params: `?metric=orders` (chart 1) and `?top=omzet` (Produk terlaris rank,
+finance only). "Perlu tindakan" lists 3 rows per block (5 for Stok menipis).
 
 Session 2/3 notes: the target card's progress bar is a plain div (`overview-target-card.tsx`);
 session 4 may move it to `components/charts/` with the SVG charts. The period tabs sit above the

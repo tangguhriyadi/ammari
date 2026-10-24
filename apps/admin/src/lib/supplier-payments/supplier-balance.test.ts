@@ -13,7 +13,7 @@ import type { StoredPrivateFile } from "./store-upload";
 import { recordBatchPayment } from "./batch-payments";
 import { voidSupplierPayment } from "./payment-records";
 import { recordPurchasePayment } from "./purchase-payments";
-import { EMPTY_SUPPLIER_BALANCE, getSupplierBalances, getSupplierPayables, supplierBalance } from "./supplier-balance";
+import { EMPTY_SUPPLIER_BALANCE, getSupplierBalances, getSupplierDebtSummary, getSupplierPayables, supplierBalance } from "./supplier-balance";
 
 // docs/plans/purchase-payments.md P9 / A3 / §9, session S5: "Total utang" per supplier over their
 // purchases and their share of posted production batches.
@@ -152,6 +152,29 @@ async function fixture(tx: TestDatabase) {
 
   return { staff, supplier, other, p1, p2, p3, p4, batch, draft };
 }
+
+describe("getSupplierDebtSummary (Ringkasan, docs/plans/dashboard-overview.md §5)", () => {
+  test("the total equals the sum of every supplier's getSupplierBalances; top suppliers biggest first", async () => {
+    await withRollback(async (tx) => {
+      const { supplier, other } = await fixture(tx);
+      const allIds = (await tx.select({ id: suppliers.id }).from(suppliers)).map((row) => row.id);
+      const balances = await getSupplierBalances(allIds, tx);
+      const owed = [...balances.entries()].filter(([, balance]) => balance.outstanding > 0);
+
+      const summary = await getSupplierDebtSummary(3, tx);
+      expect(summary.totalOutstanding).toBe(owed.reduce((sum, [, balance]) => sum + balance.outstanding, 0));
+      expect(summary.suppliersOwed).toBe(owed.length);
+      expect(summary.top.length).toBe(Math.min(3, owed.length));
+      const outstandings = summary.top.map((row) => row.outstanding);
+      expect(outstandings).toEqual([...outstandings].sort((a, b) => b - a));
+      // The fixture's two suppliers are the biggest unless ammari_test already holds larger debts.
+      const ours = summary.top.filter((row) => row.supplierId === supplier.id || row.supplierId === other.id);
+      for (const row of ours) expect(row.outstanding).toBe(balances.get(row.supplierId)!.outstanding);
+      // An overpaid document (P4's Lebih bayar 100.000) never reduces the total.
+      expect(balances.get(supplier.id)!.outstanding).toBe(1_350_000);
+    });
+  });
+});
 
 describe("getSupplierBalances / getSupplierPayables", () => {
   test("purchases plus the supplier's share of posted batches; voided payments, drafts, other payees excluded; overpaid apart", async () => {

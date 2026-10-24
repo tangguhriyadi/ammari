@@ -22,9 +22,9 @@ beforeEach(() => {
   vi.useRealTimers();
 });
 
-describe("saveSalesGoalAction requires settings.manage", () => {
-  test("refuses finance.view_profit or content.manage without settings.manage", async () => {
-    for (const keys of [["finance.view_profit", "overview.view"], ["content.manage"]]) {
+describe("saveSalesGoalAction requires settings.manage AND finance.view_profit", () => {
+  test("refuses either permission alone, or content.manage", async () => {
+    for (const keys of [["finance.view_profit", "overview.view"], ["settings.manage"], ["settings.manage", "overview.view"], ["content.manage"]]) {
       getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(keys));
       // It reached next/navigation's forbidden(), not some other error. Outside a Next build that
       // call throws its own "experimental" error (authInterrupts is set in next.config.ts only).
@@ -43,7 +43,7 @@ describe("saveSalesGoalAction requires settings.manage", () => {
 describe("saveSalesGoalAction", () => {
   test("saves the parsed amount and date as the signed-in staff member", async () => {
     vi.useFakeTimers({ now: new Date("2026-10-24T01:00:00Z"), toFake: ["Date"] });
-    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage"]));
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage", "finance.view_profit"]));
     const result = await saveSalesGoalAction({ revenueTarget: "Rp 1.250.000.000", startDate: "2026-11-01" });
     expect(result).toEqual({ ok: true, data: undefined });
     expect(saveSalesGoalMock).toHaveBeenCalledWith({ revenueTargetAmount: 1_250_000_000, startDate: "2026-11-01" }, "staff-1");
@@ -51,7 +51,7 @@ describe("saveSalesGoalAction", () => {
 
   test("returns Indonesian field errors and never writes", async () => {
     vi.useFakeTimers({ now: new Date("2026-10-24T01:00:00Z"), toFake: ["Date"] });
-    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage"]));
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage", "finance.view_profit"]));
     const result = await saveSalesGoalAction({ revenueTarget: "0", startDate: "2028-01-01" });
     expect(result).toEqual({
       ok: false,
@@ -66,7 +66,7 @@ describe("saveSalesGoalAction", () => {
 
   test("today is the Jakarta date: at 00:30 WIB on 25 Oct (still 24 Oct in UTC), 25 Oct next year is allowed", async () => {
     vi.useFakeTimers({ now: new Date("2026-10-24T17:30:00Z"), toFake: ["Date"] });
-    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage"]));
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage", "finance.view_profit"]));
     const result = await saveSalesGoalAction({ revenueTarget: "1000", startDate: "2027-10-25" });
     expect(result.ok).toBe(true);
   });

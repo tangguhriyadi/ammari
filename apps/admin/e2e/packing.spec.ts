@@ -178,10 +178,13 @@ test("the packing queue renders correctly on a desktop-width browser: rows visib
   await assertNoWrap(page.locator("th", { hasText: "Tanggal" }));
   await assertNoWrap(rowA.getByText(orderANo, { exact: true }));
 
-  // Select-all picks up every visible row, and the bulk-action buttons reflect the count.
+  // Select-all picks up every visible row, and the bulk-action buttons reflect the count. Not
+  // fixed at 2: the queue holds every to_ship order, including global-setup.ts's backdated one for
+  // overview.spec.ts (E2E_OVERVIEW_LATE_ORDER_NO) and whatever other specs left in Siap Kirim, and
+  // "Cetak kartu" counts only rows that get a card (not web checkout orders).
   const selectAll = page.getByRole("checkbox", { name: "Pilih semua" });
   await selectAll.check();
-  await expect(page.getByRole("button", { name: "Cetak kartu (2)" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Cetak kartu \(\d+\)$/ })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: `Pilih ${orderANo}` })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: `Pilih ${orderBNo}` })).toBeChecked();
   await selectAll.uncheck();

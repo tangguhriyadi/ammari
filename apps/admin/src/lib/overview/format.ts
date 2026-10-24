@@ -25,6 +25,12 @@ export function formatCompactRupiah(amount: number): string {
   return `${sign}Rp ${decimalFormatter.format(scaled)} ${unit.suffix}`;
 }
 
+/** formatCompactRupiah without "Rp " ("3,2 jt"), for a chart axis whose title already says
+ * Omzet: it keeps the tick labels short enough for a phone. */
+export function formatCompactAmount(amount: number): string {
+  return formatCompactRupiah(amount).replace("Rp ", "");
+}
+
 /** 2345 -> "23,4%", 10000 -> "100%". Rounded toward zero: 99,99% is not "100%", and a -0,05%
  * margin is not "-0,1%". */
 export function formatPercentBps(bps: number): string {
@@ -53,6 +59,19 @@ export function formatDeltaPercent(changeBps: number): string {
   if (changeBps >= 1_000) return `${formatNumber(Math.round(changeBps / 100))}%`;
   if (changeBps > 0 && changeBps < 10) return "<0,1%";
   return `${decimalFormatter.format(Math.round(changeBps / 10) / 10)}%`;
+}
+
+const monthFormatter = new Intl.DateTimeFormat("id-ID", { month: "short", timeZone: "UTC" });
+const monthYearFormatter = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "UTC" });
+
+/** "Nov" for "2026-11-01" (a chart's month bucket). */
+export function formatMonthShort(month: string): string {
+  return monthFormatter.format(new Date(`${month.slice(0, 7)}-01T00:00:00Z`));
+}
+
+/** "November 2026" for "2026-11-01". */
+export function formatMonthYear(month: string): string {
+  return monthYearFormatter.format(new Date(`${month.slice(0, 7)}-01T00:00:00Z`));
 }
 
 /** "1 Nov 2026" for a Jakarta calendar date. */

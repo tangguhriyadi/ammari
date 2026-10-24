@@ -1,16 +1,18 @@
 "use server";
 
 import { jakartaDate } from "@ammari/commerce/jakarta-day";
-import { requirePermission } from "@/lib/auth/require-permission";
+import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin, revalidateOverview } from "@/lib/admin-revalidate";
 import { saveSalesGoal } from "@/lib/settings/sales-goal";
+import { SALES_GOAL_PERMISSIONS } from "@/lib/settings/sales-goal-permissions";
 import { salesGoalSchema, type SalesGoalFormInput } from "@/lib/settings/sales-goal-schema";
 
-/** "Target penjualan" (docs/plans/dashboard-overview.md §2.2, D2). settings.manage on the server,
- * whatever the page showed. Validated against today's Jakarta date. */
+/** "Target penjualan" (docs/plans/dashboard-overview.md §2.2, D2). settings.manage AND
+ * finance.view_profit on the server, whatever the page showed: the target is a revenue figure
+ * (D9). Validated against today's Jakarta date. */
 export async function saveSalesGoalAction(input: SalesGoalFormInput): Promise<ActionResult> {
-  const session = await requirePermission("settings.manage");
+  const session = await requireAllPermissions(SALES_GOAL_PERMISSIONS);
   const parsed = salesGoalSchema(jakartaDate()).safeParse(input);
   if (!parsed.success) {
     const fieldErrors: Record<string, string> = {};

@@ -1,6 +1,6 @@
 import "server-only";
 import { sql, type SQL } from "drizzle-orm";
-import { productionBatchCosts, productionBatches, purchaseItems, purchases, supplierPayments, type PurchaseStatus } from "@ammari/db/schema";
+import { productionBatchCosts, productionBatches, purchaseItems, purchases, supplierPayments, suppliers, type PurchaseStatus } from "@ammari/db/schema";
 import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { defaultDb, type Database } from "@/lib/db";
 import { purchaseLineTagihanSql } from "./purchase-tagihan-sql";
@@ -133,6 +133,59 @@ export async function getSupplierBalances(supplierIds: readonly string[], db: Da
     balances.set(row.supplier_id, balance);
   }
   return balances;
+}
+
+export interface SupplierDebtSummary {
+  /** Σ outstanding over every supplier ("Total utang" summed, overpaid documents never net it). */
+  totalOutstanding: number;
+  /** Suppliers with something left to pay. */
+  suppliersOwed: number;
+  /** The largest balances, biggest first. */
+  top: { supplierId: string; supplierName: string; outstanding: number }[];
+}
+
+// supplier_* and outstanding are null on the one row a debt-free database returns (left join lateral).
+type DebtRow = { supplier_id: string | null; supplier_name: string | null; outstanding: string | null; total_outstanding: string; suppliers_owed: number };
+
+/** Ringkasan's "Utang pemasok" (docs/plans/dashboard-overview.md §5): the same per-document
+ * arithmetic as getSupplierBalances, over all suppliers. Cost data: finance.view_profit only. */
+export async function getSupplierDebtSummary(limit: number, db: Database = defaultDb): Promise<SupplierDebtSummary> {
+  const rows = await db.execute<DebtRow>(sql`
+    with balances as (
+      select docs.supplier_id, sum(greatest(docs.tagihan - docs.paid, 0))::bigint as outstanding
+      from (${supplierDocumentsSql()}) docs
+      group by docs.supplier_id
+      having sum(greatest(docs.tagihan - docs.paid, 0)) > 0
+    ),
+    totals as (
+      select coalesce(sum(outstanding), 0)::bigint as total_outstanding, count(*)::int as suppliers_owed from balances
+    )
+    select totals.total_outstanding::text, totals.suppliers_owed, top.supplier_id, top.supplier_name, top.outstanding::text
+    from totals
+    left join lateral (
+      select balances.supplier_id, s.name::text as supplier_name, balances.outstanding
+      from balances
+      join ${suppliers} s on s.id = balances.supplier_id
+      order by balances.outstanding desc, s.name
+      limit ${limit}
+    ) top on true
+  `);
+  const [first] = rows;
+  const toMoney = (value: string) => {
+    const amount = Number(value);
+    if (!Number.isSafeInteger(amount)) throw new Error("supplier balance overflow");
+    return amount;
+  };
+  return {
+    totalOutstanding: first ? toMoney(first.total_outstanding) : 0,
+    suppliersOwed: first?.suppliers_owed ?? 0,
+    top: rows
+      .flatMap((row) =>
+        row.supplier_id !== null && row.supplier_name !== null && row.outstanding !== null
+          ? [{ supplierId: row.supplier_id, supplierName: row.supplier_name, outstanding: toMoney(row.outstanding) }]
+          : [],
+      ),
+  };
 }
 
 export interface SupplierPayableDocument {

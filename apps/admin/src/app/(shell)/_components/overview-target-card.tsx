@@ -3,9 +3,12 @@ import Link from "next/link";
 import { Badge, Card, Skeleton, type BadgeVariant } from "@ammari/ui";
 import { formatNumber, formatRupiah } from "@ammari/ui/lib";
 import { calendarDaysBetween } from "@ammari/commerce/jakarta-day";
+import { CumulativeLine } from "@/components/charts/cumulative-line";
+import { ProgressBar } from "@/components/charts/progress-bar";
+import type { CumulativePoint } from "@/lib/overview/charts";
 import type { GoalPace, GoalProgress } from "@/lib/overview/goal";
-import { formatCalendarDate, formatPercentBps } from "@/lib/overview/format";
-import { getGoalProgress } from "@/lib/overview/queries";
+import { formatCalendarDate, formatCompactAmount, formatMonthShort, formatMonthYear, formatPercentBps } from "@/lib/overview/format";
+import { getGoalCumulative, getGoalProgress } from "@/lib/overview/queries";
 
 type StartedGoal = Extract<GoalProgress, { state: "active" | "ended" }>;
 
@@ -35,33 +38,46 @@ function barBps(part: number, whole: number): number {
   return Math.min(Math.max(Math.floor((part * 10_000) / whole), 0), 10_000);
 }
 
-/** Progress with a marker where a straight line to the target stands today (§2.3, D4). Session 4
- * may move it into components/charts with the other SVG pieces. */
-function ProgressBar({ progress }: { progress: StartedGoal }) {
-  const actualBps = barBps(progress.actualAmount, progress.targetAmount);
+/** Progress with a marker where a straight line to the target stands today (§2.3, D4). */
+function GoalProgressBar({ progress }: { progress: StartedGoal }) {
   const expectedBps = barBps(progress.expectedAmount, progress.targetAmount);
   return (
     <div className="flex flex-col gap-1.5">
-      <div
-        role="progressbar"
-        aria-label="Progres target"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.floor(actualBps / 100)}
-        aria-valuetext={`${formatPercentBps(progress.progressBps)} tercapai, seharusnya ${formatPercentBps(expectedBps)} hari ini`}
-        className="relative h-3 rounded-full bg-neutral-200"
-      >
-        <div className="h-full rounded-full bg-brand" style={{ width: `${actualBps / 100}%` }} />
-        {progress.state === "active" && (
-          <div aria-hidden="true" className="absolute -top-1 h-5 w-0.5 -translate-x-1/2 bg-black" style={{ left: `${expectedBps / 100}%` }} />
-        )}
-      </div>
+      <ProgressBar
+        label="Progres target"
+        valueBps={barBps(progress.actualAmount, progress.targetAmount)}
+        markerBps={progress.state === "active" ? expectedBps : undefined}
+        valueText={`${formatPercentBps(progress.progressBps)} tercapai, seharusnya ${formatPercentBps(expectedBps)} hari ini`}
+      />
       {progress.state === "active" && (
         <p className="text-sm text-neutral-600">
           Garis hitam: posisi seharusnya hari ini ({formatPercentBps(expectedBps)}).
         </p>
       )}
     </div>
+  );
+}
+
+function GoalCumulativeChart({ points, today }: { points: readonly CumulativePoint[]; today: string }) {
+  const current = [...points].reverse().find((point) => point.actual !== null);
+  const summary = current
+    ? `Sampai ${formatMonthYear(current.month)}: ${formatRupiah(current.actual ?? 0)}, garis target di akhir bulan itu ${formatRupiah(current.expected)}.`
+    : `Belum ada bulan berjalan per ${formatCalendarDate(today)}.`;
+  return (
+    <CumulativeLine
+      id="overview-target-cumulative"
+      title="Omzet kumulatif per bulan"
+      summary={summary}
+      data={points.map((point) => ({
+        key: point.month,
+        label: formatMonthYear(point.month),
+        axisLabel: formatMonthShort(point.month),
+        expected: point.expected,
+        actual: point.actual,
+      }))}
+      formatValue={formatRupiah}
+      formatTick={formatCompactAmount}
+    />
   );
 }
 
@@ -108,7 +124,17 @@ function PaceDetails({ progress }: { progress: StartedGoal }) {
   );
 }
 
-function TargetBody({ progress, today, canManageSettings }: { progress: GoalProgress; today: string; canManageSettings: boolean }) {
+function TargetBody({
+  progress,
+  cumulative,
+  today,
+  canManageSettings,
+}: {
+  progress: GoalProgress;
+  cumulative: readonly CumulativePoint[] | null;
+  today: string;
+  canManageSettings: boolean;
+}) {
   if (progress.state === "not_configured") {
     return (
       <CardFrame>
@@ -159,8 +185,9 @@ function TargetBody({ progress, today, canManageSettings }: { progress: GoalProg
           {formatRupiah(progress.actualAmount)} dari {formatRupiah(progress.targetAmount)}
         </p>
       </div>
-      <ProgressBar progress={progress} />
+      <GoalProgressBar progress={progress} />
       {progress.state === "active" && <PaceDetails progress={progress} />}
+      {cumulative && <GoalCumulativeChart points={cumulative} today={today} />}
     </CardFrame>
   );
 }
@@ -170,8 +197,9 @@ export function OverviewTargetCardSkeleton() {
 }
 
 /** Only for finance.view_profit (D9). The page does not mount it otherwise, and the session's own
- * permission goes to the query too, which returns null without it: neither the amounts nor the
- * percentage are ever computed for that viewer. */
+ * permission goes to the queries too, which return null without it: neither the amounts nor the
+ * percentage are ever computed for that viewer. The "Atur target" link needs settings.manage AND
+ * finance.view_profit (the settings section's own gate). */
 export async function OverviewTargetCard({
   now,
   today,
@@ -183,7 +211,7 @@ export async function OverviewTargetCard({
   canViewProfit: boolean;
   canManageSettings: boolean;
 }) {
-  const progress = await getGoalProgress({ canViewProfit, now });
+  const [progress, cumulative] = await Promise.all([getGoalProgress({ canViewProfit, now }), getGoalCumulative({ canViewProfit, now })]);
   if (!progress) return null;
-  return <TargetBody progress={progress} today={today} canManageSettings={canManageSettings} />;
+  return <TargetBody progress={progress} cumulative={cumulative} today={today} canManageSettings={canManageSettings} />;
 }
