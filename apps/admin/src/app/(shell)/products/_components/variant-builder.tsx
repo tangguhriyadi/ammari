@@ -11,6 +11,7 @@ import { sizeLabel } from "@ammari/commerce/size-label";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import { addVariantsAction, bulkUpdateVariantsAction, setVariantActiveAction } from "../actions";
 import { buildNewVariantSelections } from "./variant-selection";
+import { useReportVariantsAdded, useStepSection } from "./product-stepper";
 
 export interface VariantRow {
   sku: string;
@@ -252,34 +253,42 @@ function VariantColorGroup({
     setFormError(null);
   }
 
-  function save() {
+  useStepSection(isDirty, persist);
+
+  /** Resolves true once every staged edit is saved (or there was nothing to save). */
+  async function persist(): Promise<boolean> {
     // Filtered against the CURRENT rows, not asserted — a dirty sku can briefly reference a row
     // that just left this group (see the pruning effect above); this guards the same case in
     // case the effect hasn't re-run yet by the time the user clicks Save.
     const dirtySkus = Object.keys(edits).filter((sku) => rows.some((row) => row.sku === sku));
-    if (dirtySkus.length === 0) return;
+    if (dirtySkus.length === 0) return true;
     setFieldErrors({});
     setFormError(null);
-    startTransition(async () => {
-      const updates = dirtySkus.map((sku) => {
-        const row = rows.find((candidate) => candidate.sku === sku)!;
-        return {
-          sku,
-          priceOverrideAmount: edits[sku]?.priceOverride ?? (row.priceOverrideAmount != null ? String(row.priceOverrideAmount) : ""),
-          minStockQty: edits[sku]?.minStock ?? String(row.minStockQty),
-        };
-      });
-      const result = await bulkUpdateVariantsAction({ productId, updates });
-      if (!result.ok) {
-        if (result.fieldErrors) {
-          setFieldErrors(result.fieldErrors);
-        } else {
-          setFormError(result.error);
-        }
-        return;
+    const updates = dirtySkus.map((sku) => {
+      const row = rows.find((candidate) => candidate.sku === sku)!;
+      return {
+        sku,
+        priceOverrideAmount: edits[sku]?.priceOverride ?? (row.priceOverrideAmount != null ? String(row.priceOverrideAmount) : ""),
+        minStockQty: edits[sku]?.minStock ?? String(row.minStockQty),
+      };
+    });
+    const result = await bulkUpdateVariantsAction({ productId, updates });
+    if (!result.ok) {
+      if (result.fieldErrors) {
+        setFieldErrors(result.fieldErrors);
+      } else {
+        setFormError(result.error);
       }
-      setEdits({});
-      router.refresh();
+      return false;
+    }
+    setEdits({});
+    router.refresh();
+    return true;
+  }
+
+  function save() {
+    startTransition(async () => {
+      await persist();
     });
   }
 
@@ -467,6 +476,7 @@ function AddVariantForm({
   const [sizes, setSizes] = useState<Size[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const reportVariantsAdded = useReportVariantsAdded();
 
   // Derived from props on every render (never held in state), so a router.refresh() after a
   // photo upload, an "Aktif" toggle, or a previous submit always reflects the server's current
@@ -484,23 +494,32 @@ function AddVariantForm({
     setSizes((prev) => (prev.includes(size) ? prev.filter((s) => s !== size) : [...prev, size]));
   }
 
-  function submit() {
-    if (!canSubmit) return;
+  // Ticked colours/sizes not added yet count as unsaved: the create stepper's "Lanjut" adds them.
+  useStepSection(canSubmit, persist);
+
+  async function persist(): Promise<boolean> {
+    if (!canSubmit) return true;
     setError(null);
+    // A single atomic call creates every NEW selected color x size in one transaction (all or
+    // nothing) — see productQueries.addVariants' doc comment. Sizes a color already has are
+    // left out (buildNewVariantSelections), so re-ticking an existing size alongside a new
+    // one just adds the new one. On failure nothing was created, so the selection is left
+    // as-is for the user to retry after addressing the error.
+    const result = await addVariantsAction({ productId, selections });
+    if (!result.ok) {
+      setError(result.error);
+      return false;
+    }
+    setSelectedColorIds([]);
+    setSizes([]);
+    reportVariantsAdded();
+    router.refresh();
+    return true;
+  }
+
+  function submit() {
     startTransition(async () => {
-      // A single atomic call creates every NEW selected color x size in one transaction (all or
-      // nothing) — see productQueries.addVariants' doc comment. Sizes a color already has are
-      // left out (buildNewVariantSelections), so re-ticking an existing size alongside a new
-      // one just adds the new one. On failure nothing was created, so the selection is left
-      // as-is for the user to retry after addressing the error.
-      const result = await addVariantsAction({ productId, selections });
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      setSelectedColorIds([]);
-      setSizes([]);
-      router.refresh();
+      await persist();
     });
   }
 

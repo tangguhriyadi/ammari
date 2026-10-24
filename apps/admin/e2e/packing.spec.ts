@@ -5,6 +5,7 @@ import { purchaseAndReceiveAll } from "./helpers/purchase";
 import { postBatchAndReceiveAll } from "./helpers/production";
 import { E2E_PACKING_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
+import { addVariants, createProductDraft } from "./helpers/product";
 
 test("a staffer prints a card and ships one order, then cancelling a second (already-printed) order leaves it out of the packing queue", async ({
   page,
@@ -23,20 +24,8 @@ test("a staffer prints a card and ships one order, then cancelling a second (alr
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   const productName = `Contoh Gamis Packing E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  const code = await page.getByLabel("Kode produk").inputValue();
-  await page.getByRole("switch", { name: "Aktif" }).click();
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
+  const { code } = await createProductDraft(page, { name: productName, fabricName, active: false }); // product left inactive; variants are created active either way
+  await addVariants(page, /Sage/, ["M"]);
   const sku = generateSku({ code, closure: "front_zip", color: "Sage", size: "M" });
   await expect(page.locator(`:text-is("${sku}"):visible`)).toBeVisible();
 
@@ -134,20 +123,8 @@ test("the packing queue renders correctly on a desktop-width browser: rows visib
   // Product with NO photos uploaded — matches the real bug report's product exactly, and rules
   // out a thumbnail-join theory as a confound while this CSS bug is the one under test.
   const productName = `Contoh Gamis Packing Desktop E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  const code = await page.getByLabel("Kode produk").inputValue();
-  await page.getByRole("switch", { name: "Aktif" }).click();
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-
-  await page.getByRole("checkbox", { name: /Dusty/ }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
+  const { code } = await createProductDraft(page, { name: productName, fabricName, active: false }); // product left inactive; variants are created active either way
+  await addVariants(page, /Dusty/, ["M"]);
   const sku = generateSku({ code, closure: "front_zip", color: "Dusty", size: "M" });
   await expect(page.locator(`:text-is("${sku}"):visible`)).toBeVisible();
 

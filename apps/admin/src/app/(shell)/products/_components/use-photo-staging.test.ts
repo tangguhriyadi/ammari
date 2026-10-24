@@ -124,10 +124,13 @@ describe("usePhotoStaging", () => {
       await result.current.addFiles("color-1", makeFileList([makeFile("sage.jpg")]));
     });
 
+    let allSaved: boolean | undefined;
     await act(async () => {
-      await result.current.saveAll();
+      allSaved = await result.current.saveAll();
     });
 
+    // The product stepper's "Lanjut" moves on only on true.
+    expect(allSaved).toBe(true);
     expect(uploadProductImageAction).toHaveBeenCalledTimes(1);
     const sentFormData = uploadProductImageAction.mock.calls[0]![0] as FormData;
     expect(sentFormData.get("productId")).toBe("product-1");
@@ -150,10 +153,12 @@ describe("usePhotoStaging", () => {
       await result.current.addFiles(null, makeFileList([makeFile("front.jpg")]));
     });
 
+    let allSaved: boolean | undefined;
     await act(async () => {
-      await result.current.saveAll();
+      allSaved = await result.current.saveAll();
     });
 
+    expect(allSaved).toBe(false);
     expect(result.current.pending).toHaveLength(1);
     expect(result.current.pending[0]?.state).toBe("error");
     expect(result.current.pending[0]?.error).toBe("Gagal mengunggah foto.");
@@ -203,7 +208,7 @@ describe("usePhotoStaging", () => {
     expect(result.current.pending).toHaveLength(2);
     const secondLocalId = result.current.pending[1]!.localId;
 
-    let saveAllPromise!: Promise<void>;
+    let saveAllPromise!: Promise<boolean>;
     act(() => {
       saveAllPromise = result.current.saveAll();
     });
@@ -213,6 +218,14 @@ describe("usePhotoStaging", () => {
       result.current.removeFile(secondLocalId);
     });
     expect(result.current.pending).toHaveLength(1);
+
+    // A second save while the first is still uploading (the product stepper's "Lanjut" right
+    // after "Simpan foto") must not report "all saved", or the stepper would leave mid-upload.
+    let secondSave: boolean | undefined;
+    await act(async () => {
+      secondSave = await result.current.saveAll();
+    });
+    expect(secondSave).toBe(false);
 
     await act(async () => {
       resolveFirstUpload({ ok: true, data: { id: "img-1" } });

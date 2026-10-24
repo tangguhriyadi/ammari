@@ -28,6 +28,8 @@ function handleClick(event: MouseEvent) {
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   const anchor = (event.target as HTMLElement).closest("a[href]");
   if (!anchor) return;
+  // The product stepper's own links ask through its in-page dialog instead (product-stepper.tsx).
+  if (anchor.hasAttribute("data-skip-unsaved-guard")) return;
   const href = anchor.getAttribute("href");
   if (!href || href.startsWith("#")) return;
   // A new tab or a file download doesn't discard this page's unsaved state — only a same-tab

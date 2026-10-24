@@ -81,12 +81,14 @@ async function runProductTypeFlow(page: Page, layout: Layout): Promise<void> {
   await page.getByLabel("Nama produk").fill(productName);
   await page.locator("#product-fabric").selectOption({ label: fabricName });
   await page.getByLabel("Harga dasar").fill("269.000");
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
+  await page.getByRole("button", { name: "Lanjut", exact: true }).click();
   await expect(page).toHaveURL(/\/products\/new$/);
   await page.locator("#product-type").selectOption({ label: renamedType });
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-  const productUrl = page.url();
+  await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+  // Saved as a draft; the stepper moves on to step 2. The type is on step 1 of the edit page.
+  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+\/setup\?step=varian/);
+  const productUrl = `/products/${new URL(page.url()).pathname.split("/")[2]}`;
+  await page.goto(productUrl);
   await expect(page.locator("#product-type")).toHaveValue(code);
 
   // 4. The product list shows the type, and the type filter finds it (and the Gamis filter doesn't).

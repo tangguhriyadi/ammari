@@ -7,6 +7,7 @@ import {
   E2E_SUPER_ADMIN_EMAIL,
 } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
+import { addVariants, createProductDraft, openProductStep } from "./helpers/product";
 
 // Mobile-first per the product spec — the whole flow below (forms, variant builder, SKU
 // display) runs at 390x844 rather than only checking SKUs at the end.
@@ -36,31 +37,14 @@ test("owner creates a fabric, adds colors, creates a product with variants, and 
   // row's input, so a CSS attribute selector finds it.
   await expect(page.locator('input[value="Sage"]')).toBeVisible();
 
-  // 3. Create a product using that fabric.
+  // 3. Create a product using that fabric (step 1 of the stepper). Created inactive (this test
+  // is about SKU generation and Batas HPP visibility); variants are created active regardless of
+  // the product flag or photos (see variant-photos.spec.ts).
   const productName = `Contoh Gamis E2E ${unique}`; // never a fabric name, per docs/SPEC.md
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  // By id, not getByLabel("Bahan") — the required-field asterisk is appended inside the same
-  // <label>, which also computes an accessible name substring collision risk elsewhere.
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  const code = await page.getByLabel("Kode produk").inputValue();
-  // Created inactive (this test is about SKU generation and Batas HPP visibility); variants are
-  // created active regardless of the product flag or photos (see variant-photos.spec.ts).
-  // Switch, not a checkbox — role="switch" has no check()/uncheck(), click to toggle it off.
-  await page.getByRole("switch", { name: "Aktif" }).click();
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
+  const { productId, code } = await createProductDraft(page, { name: productName, fabricName, active: false });
 
-  // 4. Pick the fabric's color and two sizes.
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
-  // exact: true — "S" and "L" are substrings of "XS" and "XL", so a non-exact match would hit
-  // both checkboxes (same class of bug as "Produk" vs "Produksi" elsewhere in this app's e2e).
-  await page.getByRole("checkbox", { name: "S", exact: true }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
+  // 4. Step 2: pick the fabric's color and two sizes.
+  await addVariants(page, /Sage/, ["S", "M"]);
 
   const expectedSkuS = generateSku({ code, closure: "front_zip", color: "Sage", size: "S" });
   const expectedSkuM = generateSku({ code, closure: "front_zip", color: "Sage", size: "M" });
@@ -70,7 +54,8 @@ test("owner creates a fabric, adds colors, creates a product with variants, and 
   await expect(page.locator(`:text-is("${expectedSkuS}"):visible`)).toBeVisible();
   await expect(page.locator(`:text-is("${expectedSkuM}"):visible`)).toBeVisible();
 
-  // 5. Batas HPP is visible for owner (holds finance.view_profit).
+  // 5. Batas HPP (step 1, beside the product form) is visible for owner (holds finance.view_profit).
+  await openProductStep(page, productId, "info");
   await expect(page.getByText("Batas HPP")).toBeVisible();
 });
 
@@ -150,21 +135,8 @@ test("editing two variant rows saves both in one atomic call; a validation error
 
   // Created inactive; the variants added below are created active regardless.
   const productName = `Contoh Gamis Varian E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  await page.getByRole("switch", { name: "Aktif" }).click();
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
-  await page.getByRole("checkbox", { name: "S", exact: true }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("checkbox", { name: "L", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
+  await createProductDraft(page, { name: productName, fabricName, active: false });
+  await addVariants(page, /Sage/, ["S", "M", "L"]);
   await expect(page.getByRole("heading", { name: productName })).toBeVisible();
 
   // Both the desktop table and mobile card render in the DOM at once (one hidden via CSS per
@@ -189,7 +161,7 @@ test("editing two variant rows saves both in one atomic call; a validation error
   // Scoped to the sheet — the breadcrumb on this page (Data Master / Produk / <name>) now renders its
   // own "Produk" link too, so an unscoped getByRole would match both.
   await page.getByRole("dialog").getByRole("link", { name: "Produk", exact: true }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+\/setup\?step=varian/);
   await expect(page.getByRole("heading", { name: productName })).toBeVisible();
   await page.keyboard.press("Escape");
 
@@ -230,20 +202,8 @@ test("toggling a row's Aktif switch while it has an unsaved price/stock edit doe
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   const productName = `Contoh Gamis Varian Toggle E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  await page.getByRole("switch", { name: "Aktif" }).click(); // product left inactive; variants are created active either way
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
-  await page.getByRole("checkbox", { name: "S", exact: true }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
+  await createProductDraft(page, { name: productName, fabricName, active: false });
+  await addVariants(page, /Sage/, ["S", "M"]);
   await expect(page.getByRole("heading", { name: productName })).toBeVisible();
 
   // Stage edits on BOTH rows.

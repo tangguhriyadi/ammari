@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import sharp from "sharp";
+import { addVariants, createProductDraft, openProductStep } from "./product";
 
 export async function jpegFixture(): Promise<Buffer> {
   return sharp({ create: { width: 40, height: 40, channels: 3, background: { r: 120, g: 90, b: 90 } } }).jpeg().toBuffer();
@@ -26,21 +27,9 @@ export async function createPublishablePhotoReadyProduct(
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   const productName = `Contoh Gamis E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  if (shippingWeightGrams) await page.getByLabel("Berat kirim (gram)").fill(shippingWeightGrams);
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-  const productId = page.url().split("/products/")[1]!;
-
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
-  await expect(page.getByRole("heading", { name: productName })).toBeVisible();
+  const { productId } = await createProductDraft(page, { name: productName, fabricName, shippingWeightGrams });
+  await addVariants(page, /Sage/, ["M"]);
+  await openProductStep(page, productId, "foto");
 
   const sageGroup = page
     .locator('[data-testid^="photo-group-"]')
@@ -100,7 +89,7 @@ export async function createAndPublishProduct(
 
   const chartName = existingSizeChartName ?? `E2E Chart ${label} ${Date.now()}`;
   if (!existingSizeChartName) await createSizeChart(page, chartName);
-  await page.goto(`/products/${productId}`);
+  await openProductStep(page, productId, "toko");
   await page.locator("#size-chart-picker").selectOption({ label: chartName });
 
   const section = page.getByTestId("storefront-section");

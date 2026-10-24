@@ -7,8 +7,10 @@ import { Button, Input, Label, Select, Switch, Textarea, useToast } from "@ammar
 import type { ProductClosure, SizeMode } from "@ammari/db/schema";
 import type { ProductHighlightKey } from "@ammari/db/highlights";
 import { generateProductCode, generateSlug } from "@ammari/db/catalog";
+import { productStepHref } from "@/lib/products/stepper";
 import { createProductAction, revalidateProductAction, updateProductAction } from "../actions";
 import { HighlightsEditor } from "./highlights-editor";
+import { focusStepAfterNavigation, useStepSection } from "./product-stepper";
 
 export interface Fabric {
   id: string;
@@ -64,6 +66,7 @@ export function ProductForm({
   currentProductType = null,
   initialValues,
   hasVariants = false,
+  afterUpdate = "list",
 }: {
   productId?: string;
   fabrics: Fabric[];
@@ -75,11 +78,17 @@ export function ProductForm({
    * product has a variant (the composite FK in migration 0007 enforces this at the DB level;
    * this is just the friendly, don't-let-the-user-try-it-in-the-first-place version). */
   hasVariants?: boolean;
+  /** After a successful update: back to the list (edit mode, as before the stepper), or stay on
+   * this step (create mode's step 1 of a saved draft, where "Lanjut" moves on). */
+  afterUpdate?: "list" | "stay";
 }) {
   const router = useRouter();
   const toast = useToast();
   const isCreate = !productId;
   const [values, setValues] = useState<ProductFormValues>(initialValues ?? EMPTY_VALUES);
+  // What the server holds as of the last load or save, for the stepper's unsaved-changes check
+  // (the refreshed props can differ in format, e.g. "269.000" typed vs "269000" stored).
+  const [savedValues, setSavedValues] = useState<ProductFormValues>(initialValues ?? EMPTY_VALUES);
   const [codeTouched, setCodeTouched] = useState(false);
   const [slugTouched, setSlugTouched] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -108,52 +117,70 @@ export function ProductForm({
     setValues((prev) => ({ ...prev, [key]: value }));
   }
 
-  function handleSubmit() {
+  // Only a saved product takes part in the stepper's checks: on /products/new this form's own
+  // "Lanjut" is the only way forward.
+  useStepSection(productId !== undefined && JSON.stringify(values) !== JSON.stringify(savedValues), () => persist("stay"));
+
+  /** Saves the form; resolves true once the product is saved and nothing needs the owner's
+   * attention on this step any more. */
+  async function persist(after: "list" | "stay"): Promise<boolean> {
     setFormError(null);
     setFieldErrors({});
     setRevalidationWarning(false);
+    const common = {
+      name: values.name,
+      slug: values.slug,
+      fabricId: values.fabricId,
+      closure: values.closure,
+      basePrice: values.basePrice,
+      description: values.description || undefined,
+      isActive: values.isActive,
+      highlights: values.highlights,
+      shippingWeightGrams: values.shippingWeightGrams,
+      productTypeCode: values.productTypeCode,
+    };
+    const result = productId
+      ? await updateProductAction(productId, common)
+      : await createProductAction({ ...common, code: values.code, sizeMode: values.sizeMode });
+    if (!result.ok) {
+      setFormError(result.error);
+      setFieldErrors(result.fieldErrors ?? {});
+      // Nothing was saved (the whole update is one transaction, including on an unrelated
+      // field error like a duplicate slug) — revert to what the server actually still has,
+      // not unconditionally to OFF: an already-active product that fails to save for a
+      // reason unrelated to activation must keep showing as active, never a false "this
+      // product is now inactive" state. On create (no `initialValues`), there's no prior
+      // server truth to revert to, so the user's own attempt is left as they set it.
+      if (productId && initialValues) set("isActive", initialValues.isActive);
+      return false;
+    }
+    setSavedValues(values);
+    // Only updateProductAction's result carries `revalidationOk` — createProductAction has
+    // nothing to revalidate yet (a brand-new product is never published on the storefront).
+    if ("revalidationOk" in result.data && !result.data.revalidationOk) {
+      // Saved, but the storefront is stale: stay on the form so this warning (and its retry
+      // button) stays visible instead of being lost to a redirect.
+      setRevalidationWarning(true);
+      router.refresh();
+      return false;
+    }
+    if (!productId) {
+      // Step 1 of the stepper (docs/plans/product-stepper.md): saved as a draft, which is
+      // never on the storefront until the owner publishes it in step 4. On to Varian.
+      toast.success("Produk tersimpan sebagai draf. Belum tampil di toko online.");
+      focusStepAfterNavigation();
+      router.push(productStepHref(result.data.id, "varian", "create"));
+      return true;
+    }
+    toast.success("Perubahan berhasil disimpan");
+    if (after === "list") router.push("/products");
+    else router.refresh();
+    return true;
+  }
 
+  function handleSubmit() {
     startTransition(async () => {
-      const common = {
-        name: values.name,
-        slug: values.slug,
-        fabricId: values.fabricId,
-        closure: values.closure,
-        basePrice: values.basePrice,
-        description: values.description || undefined,
-        isActive: values.isActive,
-        highlights: values.highlights,
-        shippingWeightGrams: values.shippingWeightGrams,
-        productTypeCode: values.productTypeCode,
-      };
-      const result = productId
-        ? await updateProductAction(productId, common)
-        : await createProductAction({ ...common, code: values.code, sizeMode: values.sizeMode });
-      if (!result.ok) {
-        setFormError(result.error);
-        setFieldErrors(result.fieldErrors ?? {});
-        // Nothing was saved (the whole update is one transaction, including on an unrelated
-        // field error like a duplicate slug) — revert to what the server actually still has,
-        // not unconditionally to OFF: an already-active product that fails to save for a
-        // reason unrelated to activation must keep showing as active, never a false "this
-        // product is now inactive" state. On create (no `initialValues`), there's no prior
-        // server truth to revert to, so the user's own attempt is left as they set it.
-        if (productId && initialValues) set("isActive", initialValues.isActive);
-        return;
-      }
-      // Only updateProductAction's result carries `revalidationOk` — createProductAction has
-      // nothing to revalidate yet (a brand-new product is never published on the storefront).
-      if ("revalidationOk" in result.data && !result.data.revalidationOk) {
-        // Saved, but the storefront is stale: stay on the form so this warning (and its retry
-        // button) stays visible instead of being lost to a redirect.
-        setRevalidationWarning(true);
-        router.refresh();
-        return;
-      }
-      toast.success(productId ? "Perubahan berhasil disimpan" : "Produk berhasil ditambahkan");
-      // Create is the one exception to "redirect to the list": land on the new product's detail
-      // page so variants and photos can be added right away. Edit goes back to the list.
-      router.push(productId ? "/products" : `/products/${result.data.id}`);
+      await persist(afterUpdate);
     });
   }
 
@@ -383,7 +410,7 @@ export function ProductForm({
           </Link>
         )}
         <Button type="submit" loading={pending}>
-          Simpan
+          {isCreate ? "Lanjut" : "Simpan"}
         </Button>
       </div>
     </form>

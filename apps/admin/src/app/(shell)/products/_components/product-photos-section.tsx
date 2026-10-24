@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Image as ImageIcon, Plus } from "lucide-react";
 import { Badge, Button, ColorSwatch, Dialog } from "@ammari/ui";
@@ -10,6 +10,7 @@ import { PendingPhotoTile } from "./pending-photo-tile";
 import { usePhotoStaging } from "./use-photo-staging";
 import type { PendingPhoto, PhotoColorGroup, PhotoImage } from "./photo-types";
 import { PHOTO_SECTION_ID } from "@/lib/products/photo-messages";
+import { useStepSection } from "./product-stepper";
 
 export type { PhotoColorGroup, PhotoImage } from "./photo-types";
 
@@ -207,6 +208,14 @@ export function ProductPhotosSection({
       onSaved: () => {},
     });
   const generalImages = images.filter((image) => image.fabricColorId === null);
+  useStepSection(pending.length > 0 || processing || saving, saveAll);
+
+  // Arriving from the Toko online card's "Buka bagian Foto" (#product-photos): the heading takes
+  // focus so keyboard and screen reader users land on it too.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (window.location.hash === `#${PHOTO_SECTION_ID}`) headingRef.current?.focus();
+  }, []);
 
   function confirmDiscard() {
     discardAll();
@@ -217,7 +226,7 @@ export function ProductPhotosSection({
     <div className="flex flex-col gap-8 pb-36 sm:pb-0">
       {/* Focus target for the Toko online card's "Buka bagian Foto" (tabIndex -1: focusable by
           script only, never an extra tab stop); scroll-mt clears the sticky header. */}
-      <h2 id={PHOTO_SECTION_ID} tabIndex={-1} className="scroll-mt-20 text-lg font-semibold text-neutral-900 focus:outline-none">
+      <h2 ref={headingRef} id={PHOTO_SECTION_ID} tabIndex={-1} className="scroll-mt-20 text-lg font-semibold text-neutral-900 focus:outline-none">
         Foto
       </h2>
       {processing && (

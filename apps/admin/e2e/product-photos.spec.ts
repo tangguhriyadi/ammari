@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import sharp from "sharp";
 import { loginAs } from "./helpers/login";
+import { addVariants, createProductDraft, openProductStep } from "./helpers/product";
 import { E2E_SUPER_ADMIN_EMAIL } from "./global-setup";
 
 test.use({ viewport: { width: 390, height: 844 } });
@@ -30,23 +31,12 @@ test("upload photos, reorder, set thumbnail; a photo-less color only gets a remi
   // 2. Create a product on that fabric, created INACTIVE — so step 7 can check that activating
   // it is allowed even though Mocca never gets a photo.
   const productName = `Contoh Gamis Foto E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  // Switch, not a checkbox — role="switch" has no check()/uncheck(), click to toggle it off.
-  await page.getByRole("switch", { name: "Aktif" }).click();
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
+  const { productId } = await createProductDraft(page, { name: productName, fabricName, active: false });
 
-  // 3. Add a size-M variant for BOTH colors in one batch.
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
+  // 3. Add a size-M variant for BOTH colors in one batch, then open the Foto step.
   await page.getByRole("checkbox", { name: /Mocca/ }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
-  await expect(page.getByRole("heading", { name: productName })).toBeVisible(); // page re-rendered, variants saved
+  await addVariants(page, /Sage/, ["M"]);
+  await openProductStep(page, productId, "foto");
 
   // 4. Upload two photos to the Sage group. Scoped by its heading text, not a fixed testid —
   // product-photos-section.tsx's data-testid for a color group is keyed on the color's (unknown
@@ -113,8 +103,9 @@ test("upload photos, reorder, set thumbnail; a photo-less color only gets a remi
     .filter({ has: page.getByRole("heading", { name: "Mocca", exact: true }) });
   await expect(moccaGroup.getByText("Belum ada foto")).toBeVisible();
   await expect(sageGroup.getByText("Belum ada foto")).toHaveCount(0);
-  // Scoped to <form> — ProductForm's own "Aktif" switch is the only one inside a <form>; each
-  // variant row's own "Aktif" switch (same accessible name) sits outside any <form>.
+  // The product's own "Aktif" switch is on step 1. Scoped to <form>: ProductForm's switch is the
+  // only one inside a <form>.
+  await openProductStep(page, productId, "info");
   const productActiveSwitch = page.locator("form").getByRole("switch", { name: "Aktif" });
   await productActiveSwitch.click();
   const productUrl = page.url();
@@ -142,15 +133,8 @@ test("staged photos can be removed individually, and Batal discards the rest aft
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   const productName = `Contoh Gamis Foto E2E Batal ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  await page.getByRole("switch", { name: "Aktif" }).click();
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
+  const { productId } = await createProductDraft(page, { name: productName, fabricName, active: false });
+  await openProductStep(page, productId, "foto");
 
   const generalGroup = page.getByTestId("photo-group-general");
   const photoA = await jpegFixture({ r: 10, g: 20, b: 30 });

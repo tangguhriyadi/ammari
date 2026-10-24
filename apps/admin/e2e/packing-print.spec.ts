@@ -5,6 +5,7 @@ import { purchaseAndReceiveAll } from "./helpers/purchase";
 import { postBatchAndReceiveAll } from "./helpers/production";
 import { E2E_PACKING_PRINT_EMAIL, E2E_PACKING_PRINT_WEBKIT_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
+import { addVariants, createProductDraft } from "./helpers/product";
 
 /** Chromium's `page.pdf()` output isn't object-stream-compressed for its page tree (unlike some
  * PDF producers), so counting `/Type /Page` dictionary markers in the raw bytes — excluding the
@@ -72,20 +73,8 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
     await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan" }), /\/fabrics\/[0-9a-f-]+$/);
 
     const productName = `Contoh Gamis Print E2E ${unique}`;
-    await page.goto("/products/new");
-    await page.getByLabel("Nama produk").fill(productName);
-    await page.locator("#product-fabric").selectOption({ label: fabricName });
-    // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-    await page.locator("#product-type").selectOption("DRESS");
-    await page.getByLabel("Harga dasar").fill("269.000");
-    const code = await page.getByLabel("Kode produk").inputValue();
-    await page.getByRole("switch", { name: "Aktif" }).click();
-    await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan" }), /\/products\/[0-9a-f-]+$/);
-    await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-
-    await page.getByRole("checkbox", { name: /Print/ }).check();
-    await page.getByRole("checkbox", { name: "M", exact: true }).check();
-    await page.getByRole("button", { name: "Tambah varian" }).click();
+    const { code } = await createProductDraft(page, { name: productName, fabricName, active: false }); // product left inactive; variants are created active either way
+    await addVariants(page, /Print/, ["M"]);
     const sku = generateSku({ code, closure: "front_zip", color: "Print", size: "M" });
     await expect(page.locator(`:text-is("${sku}"):visible`)).toBeVisible();
 

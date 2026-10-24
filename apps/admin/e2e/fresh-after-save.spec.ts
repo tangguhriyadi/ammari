@@ -10,7 +10,8 @@ import { E2E_FRESH_AFTER_SAVE_EMAIL } from "./global-setup";
 // was already rendered once before the save. Nothing below calls page.reload() or page.goto()
 // between a save and its assertions; that is the whole point of this spec.
 //
-// Covers each redirect pattern: create -> new detail page (fabrics, products), edit -> list
+// Covers each redirect pattern: create -> new detail page (fabrics; products land on step 2 of
+// the stepper), edit -> list
 // (products, suppliers), create -> list (suppliers), delete from the record's own page -> list
 // (fabrics). Accessories are left out on purpose: production-and-stock.spec.ts opens "the first
 // accessory row" after creating its own, and a sorts-first name here would take that row. Runs at 390px and 1280px
@@ -50,7 +51,7 @@ async function runFlows(page: Page): Promise<void> {
   await expect(page.getByRole("status")).toContainText("Bahan berhasil ditambahkan");
   await expect(page.getByRole("heading", { level: 1, name: fabricName })).toBeVisible();
 
-  // ---- Product: create -> its new detail page ----
+  // ---- Product: create (step 1 of the stepper) -> step 2 of the new draft ----
   const productName = sortsFirst("Gamis Segar");
   await page.goto("/products");
   await page.getByRole("link", { name: "Tambah produk" }).click();
@@ -60,14 +61,20 @@ async function runFlows(page: Page): Promise<void> {
   // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
   await page.locator("#product-type").selectOption("DRESS");
   await page.getByLabel("Harga dasar").fill("269.000");
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/products/${UUID}$`), NAV);
-  await expect(page.getByRole("status")).toContainText("Produk berhasil ditambahkan");
+  await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/products/${UUID}/setup\\?step=varian&reached=varian$`), NAV);
+  await expect(page.getByRole("status")).toContainText("Produk tersimpan sebagai draf");
   await expect(page.getByRole("heading", { level: 1, name: productName })).toBeVisible();
-  // The detail page is the full editor for the new product, not a stale or empty shell.
-  await expect(page.getByLabel("Nama produk")).toHaveValue(productName);
+  // The new draft's Varian step, not a stale or empty shell.
+  await expect(page.getByTestId("product-step-content")).toHaveAttribute("data-step", "varian");
+  await expect(page.getByRole("button", { name: "Tambah varian" })).toBeVisible();
 
   // ---- Product: edit -> the list, showing the new name ----
+  // Opened from the list, like the owner does: step 1 of the edit page.
+  await page.goto("/products");
+  await visibleLink(page, productName).click();
+  await expect(page).toHaveURL(new RegExp(`/products/${UUID}$`), NAV);
+  await expect(page.getByLabel("Nama produk")).toHaveValue(productName);
   const slug = await page.getByLabel("Slug").inputValue();
   const renamedProduct = sortsFirst("Gamis Segar Diubah");
   const productForm = page.locator("form").filter({ has: page.locator("#product-name") });

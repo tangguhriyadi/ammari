@@ -28,6 +28,8 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
   // is the dev-only size/timing detail for the last file processed in that batch (see
   // client-image-resize.ts's own `[image-resize]` console log, which this mirrors for the UI).
   const [processing, setProcessing] = useState(false);
+  // Read by saveAll, which the product stepper calls from an older render's closure.
+  const processingRef = useRef(false);
   const [devResizeInfo, setDevResizeInfo] = useState<string | null>(null);
   // Set once per `saveAll()` batch (not per file — one revalidation call for the whole batch,
   // not N), null until the first save; docs/plans/storefront-cms.md session 6.
@@ -66,6 +68,7 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
     const files = Array.from(fileList);
     const staged: PendingPhoto[] = [];
     setProcessing(true);
+    processingRef.current = true;
     setDevResizeInfo(null);
 
     for (const file of files) {
@@ -122,6 +125,7 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
 
     setPending((prev) => [...prev, ...staged]);
     setProcessing(false);
+    processingRef.current = false;
   }
 
   function removeFile(localId: string) {
@@ -144,14 +148,19 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
     if (mountedRef.current) setRevalidationOk(result.ok && result.data.revalidationOk);
   }
 
-  async function saveAll() {
+  /** Resolves true when every staged photo was uploaded (nothing left staged with an error).
+   * False while files are still being resized or another save is still uploading: the product
+   * stepper must not leave the Foto step then. */
+  async function saveAll(): Promise<boolean> {
+    if (processingRef.current || pendingRef.current.some((item) => item.state === "uploading")) return false;
     const toSave = pendingRef.current.filter((item) => item.state !== "uploading");
-    if (toSave.length === 0) return;
+    if (toSave.length === 0) return true;
     setSaving(true);
     let anyUploaded = false;
 
+    let allUploaded = true;
     for (const item of toSave) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current) return false;
       // Re-checked against the LIVE list, not the `toSave` snapshot — the remove button is
       // disabled while `saving` is true (see PendingPhotoTile), but this stays correct even if
       // that ever changes: an item removed after this loop started (and so no longer in
@@ -166,8 +175,9 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
 
       try {
         const result = await uploadProductImageAction(formData);
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) return false;
         if (!result.ok) {
+          allUploaded = false;
           setPending((prev) => prev.map((p) => (p.localId === item.localId ? { ...p, state: "error", error: result.error } : p)));
         } else {
           anyUploaded = true;
@@ -175,7 +185,8 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
           setPending((prev) => prev.filter((p) => p.localId !== item.localId));
         }
       } catch {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) return false;
+        allUploaded = false;
         setPending((prev) =>
           prev.map((p) => (p.localId === item.localId ? { ...p, state: "error", error: "Gagal mengunggah. Coba lagi." } : p)),
         );
@@ -194,6 +205,7 @@ export function usePhotoStaging({ productId, onSaved }: { productId: string; onS
       onSaved();
       router.refresh();
     }
+    return allUploaded;
   }
 
   return { pending, saving, processing, devResizeInfo, revalidationOk, addFiles, removeFile, discardAll, saveAll, retryRevalidation };

@@ -5,6 +5,7 @@ import { createSupplier, purchaseAndReceiveAll } from "./helpers/purchase";
 import { postBatch, receiveAllBatchOutput } from "./helpers/production";
 import { E2E_PRODUCTION_STOCK_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
+import { addVariants, createProductDraft, openProductStep } from "./helpers/product";
 
 test("a staffer purchases fabric and an accessory, sets a recipe, creates a draft batch with an extra-cost line, posts it (no stock yet), receives the output in two parts, sees stock and HPP, adjusts it down, then runs a stock count", async ({
   page,
@@ -28,21 +29,8 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   const productName = `Contoh Gamis Produksi E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  const code = await page.getByLabel("Kode produk").inputValue();
-  await page.getByRole("switch", { name: "Aktif" }).click(); // product left inactive; variants are created active either way
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-  const productId = page.url().split("/products/")[1]!;
-
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
+  const { productId, code } = await createProductDraft(page, { name: productName, fabricName, active: false }); // product left inactive; variants are created active either way
+  await addVariants(page, /Sage/, ["M"]);
   const sku = generateSku({ code, closure: "front_zip", color: "Sage", size: "M" });
   await expect(page.locator(`:text-is("${sku}"):visible`)).toBeVisible();
 
@@ -55,7 +43,7 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await openCreated(page, "/accessories");
   const accessoryId = page.url().split("/accessories/")[1]!;
 
-  await page.goto(`/products/${productId}`);
+  await openProductStep(page, productId, "aksesoris");
   await page.getByRole("button", { name: "+ Tambah baris" }).click();
   await page.locator("#recipe-accessory-0").selectOption({ label: accessoryName });
   await page.locator("#recipe-qty-0").fill("1");
@@ -292,20 +280,8 @@ test("a batch whose remaining output will never arrive is short-closed with a re
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   const productName = `Contoh Gamis Tutup E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  const code = await page.getByLabel("Kode produk").inputValue();
-  await page.getByRole("switch", { name: "Aktif" }).click();
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-  const productId = page.url().split("/products/")[1]!;
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
+  const { productId, code } = await createProductDraft(page, { name: productName, fabricName, active: false }); // product left inactive; variants are created active either way
+  await addVariants(page, /Sage/, ["M"]);
   const sku = generateSku({ code, closure: "front_zip", color: "Sage", size: "M" });
   await expect(page.locator(`:text-is("${sku}"):visible`)).toBeVisible();
 

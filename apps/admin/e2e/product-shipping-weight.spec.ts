@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
+import { stepItem } from "./helpers/product";
 import { E2E_STOREFRONT_EMAIL, E2E_UNWEIGHED_PUBLISHED_PRODUCT_NAME } from "./global-setup";
 
 // docs/plans/cart-checkout.md §4.5.3, session 7: a product published before "Berat kirim" became a
@@ -19,6 +20,8 @@ async function expectBadgeAndLiveProduct(page: Page): Promise<void> {
   await visibleRow.getByText(E2E_UNWEIGHED_PUBLISHED_PRODUCT_NAME, { exact: true }).click();
   await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
   await expect(page.getByLabel("Berat kirim (gram)")).toHaveValue("");
+  // The storefront card is on step 4 (docs/plans/product-stepper.md).
+  await stepItem(page, "toko").click();
   const section = page.getByTestId("storefront-section");
   await expect(section.getByRole("switch", { name: "Tayang di toko online" })).toHaveAttribute("aria-checked", "true");
   await expect(section.getByTestId("storefront-needs-shipping-weight")).toContainText(

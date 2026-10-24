@@ -18,6 +18,7 @@ import {
 } from "@/lib/products/discount";
 import { parseRupiah } from "@/lib/products/money";
 import { clearProductDiscountAction, revalidateProductAction, updateProductDiscountAction } from "../actions";
+import { useStepSection } from "./product-stepper";
 
 export interface DiscountSectionValues {
   /** "Harga setelah diskon" as typed, "" when none is stored. */
@@ -112,6 +113,8 @@ function DiscountForm({
   const router = useRouter();
   const toast = useToast();
   const [values, setValues] = useState<DiscountSectionValues>(initialValues);
+  // The stored values until this form remounts with the refreshed ones (see DiscountSection).
+  const [savedValues, setSavedValues] = useState<DiscountSectionValues>(initialValues);
   const [percentText, setPercentText] = useState(() => percentTextForPrice(basePrice, initialValues.priceText));
   const [percentError, setPercentError] = useState<string | null>(null);
   const [serverErrors, setServerErrors] = useState<FieldErrors>({});
@@ -156,26 +159,35 @@ function DiscountForm({
     }
   }
 
-  function handleSave() {
+  useStepSection(JSON.stringify(values) !== JSON.stringify(savedValues), persist);
+
+  /** Resolves true once the discount is saved; false when a rule or the server refused it. */
+  async function persist(): Promise<boolean> {
     setShowErrors(true);
     onRevalidation(true);
-    if (Object.keys(errors).length > 0) return;
+    if (Object.keys(errors).length > 0) return false;
+    const result = await updateProductDiscountAction(productId, {
+      discountPrice: values.priceText,
+      discountEnabled: values.enabled,
+      discountStartsAt: values.startsAt,
+      discountEndsAt: values.endsAt,
+    });
+    if (!result.ok) {
+      setFormError(result.error);
+      setServerErrors((result.fieldErrors ?? {}) as FieldErrors);
+      return false;
+    }
+    setSavedValues(values);
+    setShowErrors(false);
+    onRevalidation(result.data.revalidationOk);
+    toast.success("Diskon berhasil disimpan");
+    router.refresh();
+    return true;
+  }
+
+  function handleSave() {
     startTransition(async () => {
-      const result = await updateProductDiscountAction(productId, {
-        discountPrice: values.priceText,
-        discountEnabled: values.enabled,
-        discountStartsAt: values.startsAt,
-        discountEndsAt: values.endsAt,
-      });
-      if (!result.ok) {
-        setFormError(result.error);
-        setServerErrors((result.fieldErrors ?? {}) as FieldErrors);
-        return;
-      }
-      setShowErrors(false);
-      onRevalidation(result.data.revalidationOk);
-      toast.success("Diskon berhasil disimpan");
-      router.refresh();
+      await persist();
     });
   }
 

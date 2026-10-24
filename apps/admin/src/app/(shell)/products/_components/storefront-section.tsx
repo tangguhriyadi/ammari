@@ -6,27 +6,29 @@ import { useState, useTransition } from "react";
 import { Button, Label, Select, Switch, Textarea } from "@ammari/ui";
 import type { SizeMode } from "@ammari/db/schema";
 import { revalidateProductAction, updateProductStorefrontAction } from "../actions";
-import { PHOTO_SECTION_ID, PHOTO_SECTION_MESSAGES } from "@/lib/products/photo-messages";
+import { PHOTO_SECTION_MESSAGES } from "@/lib/products/photo-messages";
 import { RichTextEditor } from "./rich-text-editor";
+import { SKIP_UNSAVED_GUARD, useStepNavigation, useStepSection } from "./product-stepper";
 
-/** Scrolls to the product page's Foto section and moves focus onto its heading, so keyboard and
- * screen reader users land there too. Replaces "lihat di bawah"-style copy: the section's position
- * relative to this card isn't something the messages should promise. */
-function PhotoSectionLink() {
+/** Opens the Foto step, where the Foto heading takes focus (ProductPhotosSection's `focusHeading`)
+ * so keyboard and screen reader users land there too. Goes through the stepper, so unsaved edits
+ * in this card are not lost silently. Replaces "lihat di bawah"-style copy: the Foto section's
+ * position relative to this card isn't something the messages should promise. */
+function PhotoSectionLink({ href }: { href: string }) {
+  const navigate = useStepNavigation();
   return (
-    <button
-      type="button"
-      onClick={() => {
-        const target = document.getElementById(PHOTO_SECTION_ID);
-        if (!target) return;
-        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
-        target.focus({ preventScroll: true });
+    <Link
+      href={href}
+      {...SKIP_UNSAVED_GUARD}
+      onClick={(event) => {
+        if (!navigate || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        event.preventDefault();
+        navigate(href);
       }}
       className="font-medium text-brand underline hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
     >
       Buka bagian Foto
-    </button>
+    </Link>
   );
 }
 
@@ -47,7 +49,7 @@ export function StorefrontSection({
   sizeMode,
   isActive,
   photoCount,
-  canOpenPhotos,
+  photoStepHref,
   hasShippingWeight,
   initialValues,
   sizeCharts,
@@ -60,9 +62,9 @@ export function StorefrontSection({
   /** The product's CURRENT total photo count, for the same up-front guidance; the server
    * refuses publishing a product with no photo regardless (updateProductStorefront). */
   photoCount: number;
-  /** Whether the Foto section is on this page for this session (it renders only with
-   * products.manage) — the "Buka bagian Foto" jump is hidden when there is nothing to jump to. */
-  canOpenPhotos: boolean;
+  /** The Foto step's URL, or null when this session can't manage photos (it needs
+   * products.manage): the "Buka bagian Foto" jump is hidden when there is nothing to jump to. */
+  photoStepHref: string | null;
   /** Whether the product's saved "Berat kirim" is set, for up-front guidance only; the server
    * refuses going live without one regardless (updateProductStorefront). */
   hasShippingWeight: boolean;
@@ -71,6 +73,7 @@ export function StorefrontSection({
 }) {
   const router = useRouter();
   const [values, setValues] = useState<StorefrontSectionValues>(initialValues);
+  const [savedValues, setSavedValues] = useState<StorefrontSectionValues>(initialValues);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -81,28 +84,38 @@ export function StorefrontSection({
     setValues((prev) => ({ ...prev, [key]: value }));
   }
 
-  function handleSave() {
+  useStepSection(JSON.stringify(values) !== JSON.stringify(savedValues), persist);
+
+  /** Resolves true once saved and the storefront is up to date; false keeps the owner on this
+   * step to read the error or the "belum diperbarui" warning. */
+  async function persist(): Promise<boolean> {
     setFormError(null);
     setFieldErrors({});
     setRevalidationWarning(false);
+    const result = await updateProductStorefrontAction(productId, {
+      isPublishedOnStorefront: values.isPublishedOnStorefront,
+      storefrontDescriptionHtml: values.storefrontDescriptionHtml,
+      allsizeFitNote: values.allsizeFitNote,
+      sizeChartId: sizeMode === "sized" ? values.sizeChartId : null,
+    });
+    if (!result.ok) {
+      setFormError(result.error);
+      setFieldErrors(result.fieldErrors ?? {});
+      // Same "revert to what the server actually still has" reasoning as ProductForm's own
+      // handleSubmit — nothing was saved (one transaction), so a failure unrelated to the
+      // toggle must not leave it visually flipped.
+      set("isPublishedOnStorefront", savedValues.isPublishedOnStorefront);
+      return false;
+    }
+    setSavedValues(values);
+    setRevalidationWarning(!result.data.revalidationOk);
+    router.refresh();
+    return result.data.revalidationOk;
+  }
+
+  function handleSave() {
     startTransition(async () => {
-      const result = await updateProductStorefrontAction(productId, {
-        isPublishedOnStorefront: values.isPublishedOnStorefront,
-        storefrontDescriptionHtml: values.storefrontDescriptionHtml,
-        allsizeFitNote: values.allsizeFitNote,
-        sizeChartId: sizeMode === "sized" ? values.sizeChartId : null,
-      });
-      if (!result.ok) {
-        setFormError(result.error);
-        setFieldErrors(result.fieldErrors ?? {});
-        // Same "revert to what the server actually still has" reasoning as ProductForm's own
-        // handleSubmit — nothing was saved (one transaction), so a failure unrelated to the
-        // toggle must not leave it visually flipped.
-        set("isPublishedOnStorefront", initialValues.isPublishedOnStorefront);
-        return;
-      }
-      setRevalidationWarning(!result.data.revalidationOk);
-      router.refresh();
+      await persist();
     });
   }
 
@@ -129,7 +142,7 @@ export function StorefrontSection({
       {photoCount === 0 && (
         <p className="flex flex-wrap items-center gap-x-2 text-sm text-neutral-600" data-testid="storefront-needs-photo">
           Unggah minimal satu foto di bagian Foto sebelum menayangkan produk ini di toko online.
-          {canOpenPhotos && <PhotoSectionLink />}
+          {photoStepHref && <PhotoSectionLink href={photoStepHref} />}
         </p>
       )}
       {!hasShippingWeight && (
@@ -191,7 +204,7 @@ export function StorefrontSection({
       {formError && (
         <p role="alert" className="flex flex-wrap items-center gap-x-2 text-sm text-danger-700">
           {formError}
-          {canOpenPhotos && PHOTO_SECTION_MESSAGES.includes(formError) && <PhotoSectionLink />}
+          {photoStepHref && PHOTO_SECTION_MESSAGES.includes(formError) && <PhotoSectionLink href={photoStepHref} />}
         </p>
       )}
 

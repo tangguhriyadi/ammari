@@ -30,6 +30,12 @@ async function createProduct(page: Page, label: string): Promise<{ productName: 
   return { productName };
 }
 
+async function saveDraftAndGetEditUrl(page: Page): Promise<string> {
+  await page.locator("form").getByRole("button", { name: "Lanjut", exact: true }).click();
+  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+\/setup\?step=varian/);
+  return `/products/${new URL(page.url()).pathname.split("/")[2]}`;
+}
+
 async function checkedHighlightLabels(page: Page): Promise<string[]> {
   const checked: string[] = [];
   for (const label of [BREATHABLE, FLOWY, FALLS_PERFECTLY, "Bahan sejuk", "Tidak menerawang"]) {
@@ -52,13 +58,9 @@ test.describe("product highlights (Keunggulan)", () => {
     await page.getByRole("checkbox", { name: BREATHABLE, exact: true }).check();
     await expect(page.getByTestId("highlights-counter")).toHaveText("2/5");
 
-    // Scoped to the product form itself — the product EDIT page (reached below via
-    // page.goto(page.url())) also renders the Storefront section's own "Simpan" button
-    // (docs/plans/storefront-cms.md), which would otherwise be a second exact-text match on the
-    // same page for an owner session (owner holds content.manage too).
-    await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
-    await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-    const mobileUrl = page.url();
+    // Step 1's "Lanjut" saves the draft and moves on to step 2; the highlights are re-checked on
+    // the edit page's step 1 (`/products/[id]`).
+    const mobileUrl = await saveDraftAndGetEditUrl(page);
     // Lets the click's OWN client-side router.push/refresh fully settle before the next line's
     // hard navigation — firing `page.goto` immediately after races that in-flight navigation
     // and can intermittently land on a stale pre-save snapshot (docs/plans/product-highlights.md
@@ -74,9 +76,7 @@ test.describe("product highlights (Keunggulan)", () => {
     await page.getByRole("checkbox", { name: BREATHABLE, exact: true }).uncheck();
     await page.getByRole("checkbox", { name: FLOWY, exact: true }).check();
     await expect(page.getByTestId("highlights-counter")).toHaveText("2/5");
-    // Scoped to the form — this click happens on the product EDIT page (reached via
-    // page.goto(page.url()) above), where the Storefront section's own "Simpan" button also
-    // renders for this owner session (see the scoping note earlier in this test).
+    // Scoped to the product form: the discount card on the same step has its own save button.
     await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
     await page.waitForLoadState("networkidle");
     await page.waitForLoadState("networkidle");
@@ -101,9 +101,7 @@ test.describe("product highlights (Keunggulan)", () => {
       await page.getByRole("checkbox", { name: label, exact: true }).check();
     }
     await expect(page.getByTestId("highlights-counter")).toHaveText("5/5");
-    await page.getByRole("button", { name: "Simpan", exact: true }).click();
-    await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-    const desktopUrl = page.url();
+    const desktopUrl = await saveDraftAndGetEditUrl(page);
     await page.waitForLoadState("networkidle");
     await page.goto(desktopUrl);
     expect(await checkedHighlightLabels(page)).toEqual([BREATHABLE, FLOWY, FALLS_PERFECTLY, "Bahan sejuk", "Tidak menerawang"]);

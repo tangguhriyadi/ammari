@@ -5,6 +5,7 @@ import { purchaseAndReceiveAll } from "./helpers/purchase";
 import { postBatchAndReceiveAll } from "./helpers/production";
 import { E2E_ORDERS_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
+import { addVariants, createProductDraft } from "./helpers/product";
 
 test("a staffer creates a manual order, stock decreases, then cancels it and stock is restored", async ({ page }) => {
   // Mobile-first per docs/SPEC.md (Orders is a daily-use, mobile-first admin page).
@@ -22,19 +23,8 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   const productName = `Contoh Gamis Pesanan E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  const code = await page.getByLabel("Kode produk").inputValue();
-  await page.getByRole("switch", { name: "Aktif" }).click(); // product left inactive; variants are created active either way
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-  await page.getByRole("checkbox", { name: /Sage/ }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
+  const { code } = await createProductDraft(page, { name: productName, fabricName, active: false }); // product left inactive; variants are created active either way
+  await addVariants(page, /Sage/, ["M"]);
   const sku = generateSku({ code, closure: "front_zip", color: "Sage", size: "M" });
   await expect(page.locator(`:text-is("${sku}"):visible`)).toBeVisible();
 

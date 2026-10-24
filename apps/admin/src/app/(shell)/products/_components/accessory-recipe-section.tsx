@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Input, Label, Select } from "@ammari/ui";
 import { saveRecipeAction } from "../actions";
+import { useStepSection } from "./product-stepper";
 
 export interface ActiveAccessoryOption {
   id: string;
@@ -38,6 +39,7 @@ export function AccessoryRecipeSection({
 }) {
   const router = useRouter();
   const [rows, setRows] = useState<RecipeRowState[]>(initialRows);
+  const [savedRows, setSavedRows] = useState<RecipeRowState[]>(initialRows);
   const [error, setError] = useState<string | null>(null);
   const [saving, startTransition] = useTransition();
 
@@ -63,22 +65,34 @@ export function AccessoryRecipeSection({
     ]);
   }
 
-  function handleSave() {
+  // Compared on what saveRecipeAction sends (no ids/keys): a row added and removed again leaves
+  // nothing to save.
+  const recipeOf = (list: RecipeRowState[]) =>
+    JSON.stringify(list.map((row) => [row.target, row.accessoryId, row.sizeGroup, row.qtyPerPcs]));
+  useStepSection(recipeOf(rows) !== recipeOf(savedRows), persist);
+
+  async function persist(): Promise<boolean> {
     setError(null);
+    const result = await saveRecipeAction({
+      productId,
+      lines: rows.map((row) => ({
+        accessoryId: row.target === "accessory" ? row.accessoryId : undefined,
+        sizeGroup: row.target === "sizeGroup" ? row.sizeGroup : undefined,
+        qtyPerPcs: Number.parseInt(row.qtyPerPcs, 10) || 0,
+      })),
+    });
+    if (!result.ok) {
+      setError(result.error);
+      return false;
+    }
+    setSavedRows(rows);
+    router.refresh();
+    return true;
+  }
+
+  function handleSave() {
     startTransition(async () => {
-      const result = await saveRecipeAction({
-        productId,
-        lines: rows.map((row) => ({
-          accessoryId: row.target === "accessory" ? row.accessoryId : undefined,
-          sizeGroup: row.target === "sizeGroup" ? row.sizeGroup : undefined,
-          qtyPerPcs: Number.parseInt(row.qtyPerPcs, 10) || 0,
-        })),
-      });
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      router.refresh();
+      await persist();
     });
   }
 

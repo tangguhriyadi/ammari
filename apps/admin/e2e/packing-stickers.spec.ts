@@ -7,6 +7,7 @@ import { purchaseAndReceiveAll } from "./helpers/purchase";
 import { postBatchAndReceiveAll } from "./helpers/production";
 import { E2E_PACKING_STICKERS_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
+import { addVariants, createProductDraft } from "./helpers/product";
 
 /** `packing-print.spec.ts`'s own page-counting trick (a dependency-free regex over Chromium's
  * `page.pdf()` bytes) doesn't work here — `pdf-lib`'s `.save()` compresses the page tree into
@@ -32,20 +33,8 @@ async function createPrintableOrder(page: Page, label: string): Promise<string> 
   await expect(page).toHaveURL(/\/fabrics\/[0-9a-f-]+$/);
 
   const productName = `Contoh Gamis Stiker E2E ${unique}`;
-  await page.goto("/products/new");
-  await page.getByLabel("Nama produk").fill(productName);
-  await page.locator("#product-fabric").selectOption({ label: fabricName });
-  // Required since docs/plans/product-types.md; "Gamis" is the seeded DRESS type.
-  await page.locator("#product-type").selectOption("DRESS");
-  await page.getByLabel("Harga dasar").fill("269.000");
-  const code = await page.getByLabel("Kode produk").inputValue();
-  await page.getByRole("switch", { name: "Aktif" }).click();
-  await page.getByRole("button", { name: "Simpan" }).click();
-  await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
-
-  await page.getByRole("checkbox", { name: /Stiker/ }).check();
-  await page.getByRole("checkbox", { name: "M", exact: true }).check();
-  await page.getByRole("button", { name: "Tambah varian" }).click();
+  const { code } = await createProductDraft(page, { name: productName, fabricName, active: false }); // product left inactive; variants are created active either way
+  await addVariants(page, /Stiker/, ["M"]);
   const sku = generateSku({ code, closure: "front_zip", color: "Stiker", size: "M" });
   await expect(page.locator(`:text-is("${sku}"):visible`)).toBeVisible();
 

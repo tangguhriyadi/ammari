@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import { createPublishablePhotoReadyProduct, createSizeChart } from "./helpers/publishable-product";
+import { openProductStep } from "./helpers/product";
 import { E2E_PAGINATION_PRODUCT_PREFIX, E2E_PRODUCTS_NO_FINANCE_EMAIL, E2E_STOREFRONT_EMAIL } from "./global-setup";
 
 /** Writes "Gamis <b>syar'i</b> dan nyaman." as one paragraph, then a 2-item bullet list, using
@@ -25,11 +26,11 @@ async function writeFormattedDescription(page: Page): Promise<void> {
 async function runStorefrontFlow(page: Page, label: string): Promise<void> {
   // No "Berat kirim" yet: the weight guard is exercised below, before the successful publish.
   const { productId, productName } = await createPublishablePhotoReadyProduct(page, label, { shippingWeightGrams: "" });
+  await openProductStep(page, productId, "toko");
 
-  // Scoped to the Storefront section's own card throughout — the product EDIT page also has
-  // the main ProductForm's own "Simpan" button (plain text, same as this section's), so every
-  // control/button lookup below is scoped to data-testid="storefront-section" rather than the
-  // whole page.
+  // Scoped to the Storefront section's own card throughout — the stepper's footer has its own
+  // buttons too, so every control/button lookup below is scoped to
+  // data-testid="storefront-section" rather than the whole page.
   const section = page.getByTestId("storefront-section");
 
   // --- Write a formatted description, save, and confirm it persists after reload. ---
@@ -58,7 +59,7 @@ async function runStorefrontFlow(page: Page, label: string): Promise<void> {
   // --- Create a size chart and assign it to this product. ---
   const chartName = `E2E Chart ${label} ${Date.now()}`;
   await createSizeChart(page, chartName);
-  await page.goto(`/products/${productId}`);
+  await openProductStep(page, productId, "toko");
   await page.locator("#size-chart-picker").selectOption({ label: chartName });
 
   // --- No shipping weight yet: going live is refused with a pointer to the product data. ---
@@ -70,12 +71,15 @@ async function runStorefrontFlow(page: Page, label: string): Promise<void> {
   await expect(section.getByRole("alert").filter({ hasText: "Isi berat kirim di data produk" }).first()).toBeVisible();
   await expect(section.getByRole("switch", { name: "Tayang di toko online" })).toHaveAttribute("aria-checked", "false");
 
-  // --- Fill in "Berat kirim (gram)" in the product form (saving it goes back to the list). ---
+  // --- Fill in "Berat kirim (gram)" in the product form, step 1 (saving it goes back to the
+  // list). The refused publish left nothing unsaved worth keeping, so leaving the step is fine. ---
+  await openProductStep(page, productId, "info");
   await page.getByLabel("Berat kirim (gram)").fill("1.250");
   await page.locator("form").getByRole("button", { name: "Simpan", exact: true }).click();
   await expect(page).toHaveURL(/\/products$/);
-  await page.goto(`/products/${productId}`);
+  await openProductStep(page, productId, "info");
   await expect(page.getByLabel("Berat kirim (gram)")).toHaveValue("1250");
+  await openProductStep(page, productId, "toko");
   await expect(section.getByTestId("storefront-needs-shipping-weight")).toHaveCount(0);
   // The section's own chart pick was never saved (the refused publish rolled everything back).
   await page.locator("#size-chart-picker").selectOption({ label: chartName });
@@ -115,6 +119,11 @@ test.describe("product storefront section", () => {
     await page.getByRole("link", { name: new RegExp(`${E2E_PAGINATION_PRODUCT_PREFIX} 00`) }).first().click();
     await expect(page).toHaveURL(/\/products\/[0-9a-f-]+$/);
     await expect(page.getByTestId("storefront-section")).toHaveCount(0);
+    // Not even when the Toko online step is opened directly.
+    await page.goto(`${page.url()}?step=toko`);
+    await expect(page.getByTestId("product-step-content")).toHaveAttribute("data-step", "toko");
+    await expect(page.getByTestId("storefront-section")).toHaveCount(0);
+    await expect(page.getByText("Anda tidak punya akses untuk mengubah bagian ini.")).toBeVisible();
 
     await page.goto("/content/size-charts");
     await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();
