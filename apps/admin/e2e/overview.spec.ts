@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import {
   E2E_OVERVIEW_EMAIL,
+  E2E_OVERVIEW_FEE_DATE,
   E2E_OVERVIEW_LATE_ORDER_NO,
   E2E_OVERVIEW_NO_FINANCE_EMAIL,
   E2E_OVERVIEW_SETTINGS_EMAIL,
@@ -116,6 +117,15 @@ for (const layout of LAYOUTS) {
       await expect(profit).toContainText("▲ Naik 153% dibanding");
       await expect(profit.getByRole("link", { name: "HPP belum lengkap untuk 1 item" })).toHaveAttribute("href", "/stock");
 
+      // Laba setelah biaya platform (marketplace-import session 6): only WhatsApp orders, so no
+      // platform fee at all, and nothing "belum lengkap".
+      const net = page.getByTestId("kpi-net-profit");
+      await expect(net.getByTestId("kpi-net-profit-value")).toContainText("Rp 380.000");
+      await expect(net).toContainText("▲ Naik 153% dibanding");
+      await expect(net.getByTestId("kpi-platform-fee")).toHaveText("Tidak ada pesanan Shopee atau TikTok Shop, jadi tidak ada biaya platform.");
+      await expect(net.getByTestId("kpi-platform-fee-incomplete")).toHaveCount(0);
+      await expect(page.getByTestId("kpi-net-profit-help")).toContainText("Hanya dua kanal itu yang punya biaya platform");
+
       await expect(page.getByTestId("kpi-undone")).toHaveText("Batal: 1, Retur: 0");
 
       // Charts (session 4). Omzet per hari: the 14 days ending yesterday, the earlier days muted;
@@ -209,6 +219,20 @@ for (const layout of LAYOUTS) {
       await expect(page.getByRole("heading", { name: "Penjualan kemarin" })).toBeVisible();
       await page.goto("/?period=7d&period=today");
       await expect(page.getByRole("heading", { name: "Penjualan 7 hari terakhir" })).toBeVisible();
+
+      // The platform fee day (global-setup E2E_OVERVIEW_FEE_DATE): one Shopee order with fees, one
+      // without (belum lengkap), one WhatsApp order (never belum lengkap), one cancelled (out).
+      await page.goto(`/?period=custom&from=${E2E_OVERVIEW_FEE_DATE}&to=${E2E_OVERVIEW_FEE_DATE}`);
+      await expect(page.getByTestId("overview-period-range")).toHaveText(dateLabel(E2E_OVERVIEW_FEE_DATE));
+      await expect(page.getByTestId("kpi-orders-value")).toHaveText("3");
+      await expect(page.getByTestId("kpi-omzet-value")).toContainText("Rp 750.000");
+      await expect(page.getByTestId("kpi-gross-profit-value")).toContainText("Rp 450.000");
+      const feeTile = page.getByTestId("kpi-net-profit");
+      await expect(feeTile.getByTestId("kpi-net-profit-value")).toContainText("Rp 442.500");
+      await expect(feeTile.getByTestId("kpi-platform-fee")).toHaveText("Biaya platform Rp 7.500 dari 1 pesanan marketplace");
+      await expect(feeTile.getByRole("link", { name: "Biaya platform belum lengkap untuk 1 pesanan (Shopee 1)" })).toHaveAttribute("href", "/import");
+      await expect(page.getByTestId("kpi-undone")).toHaveText("Batal: 1, Retur: 0");
+      await expectNoHorizontalScroll(page);
     });
 
     test("staff without finance.view_profit: counts only, no rupiah anywhere, no target card", async ({ page }) => {
@@ -221,7 +245,7 @@ for (const layout of LAYOUTS) {
       await expect(page.getByTestId("kpi-undone")).toHaveText("Batal: 1, Retur: 0");
 
       await expect(page.getByTestId("overview-target-card")).toHaveCount(0);
-      for (const testId of ["kpi-omzet", "kpi-average", "kpi-gross-profit"]) {
+      for (const testId of ["kpi-omzet", "kpi-average", "kpi-gross-profit", "kpi-net-profit", "kpi-platform-fee", "kpi-net-profit-help"]) {
         await expect(page.getByTestId(testId)).toHaveCount(0);
       }
 
@@ -253,11 +277,18 @@ for (const layout of LAYOUTS) {
       await expect(page.locator("body")).not.toContainText("Rp");
 
       // Not just hidden: the server response (HTML + RSC payload) carries no amount at all.
-      for (const path of ["/", "/?period=custom&from=" + jakartaDay(-2) + "&to=" + jakartaDay(-1)]) {
+      for (const path of ["/", "/?period=custom&from=" + jakartaDay(-2) + "&to=" + jakartaDay(-1), `/?period=custom&from=${E2E_OVERVIEW_FEE_DATE}&to=${E2E_OVERVIEW_FEE_DATE}`]) {
         const html = await (await page.request.get(path)).text();
+        // The real dashboard, not a login page or a redirect (which would pass the checks below).
+        expect(html).toContain("kpi-orders-value");
         expect(html).not.toMatch(NO_RUPIAH);
         expect(html).not.toMatch(/500\.000|250\.000|380\.000|Margin|HPP|Target penjualan|Total utang|Sisa tagihan/);
+        expect(html).not.toMatch(/[Bb]iaya platform|Laba setelah|7\.500|442\.500|platformFee|ordersWithoutFees/);
       }
+      // The fee day for staff: counts only (3 counted orders, 1 cancelled).
+      await page.goto(`/?period=custom&from=${E2E_OVERVIEW_FEE_DATE}&to=${E2E_OVERVIEW_FEE_DATE}`);
+      await expect(page.getByTestId("kpi-orders-value")).toHaveText("3");
+      await expect(page.getByTestId("kpi-net-profit")).toHaveCount(0);
 
       await page.goto("/settings");
       await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();

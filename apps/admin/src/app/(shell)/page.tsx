@@ -109,7 +109,7 @@ export default async function RingkasanPage({ searchParams }: { searchParams: Pr
             today={today}
           />
           <Suspense key={periodKey} fallback={<OverviewKpiTilesSkeleton canViewProfit={canViewProfit} />}>
-            <OverviewKpiTiles resolved={resolved} canViewProfit={canViewProfit} canViewStock={has("stock.view")} />
+            <OverviewKpiTiles resolved={resolved} canViewProfit={canViewProfit} canViewStock={has("stock.view")} canViewImports={has("orders.import")} />
           </Suspense>
         </section>
 

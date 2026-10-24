@@ -7,7 +7,7 @@ v1. `CLAUDE.md` at the repo root points here for details and should stay in sync
 
 ## Status
 
-As of 2026-10-21 (cart plan session 17).
+As of 2026-10-25 (marketplace import session 6).
 
 **Built:**
 
@@ -45,7 +45,13 @@ As of 2026-10-21 (cart plan session 17).
 - Phase K: Biteship courier booking and tracking (plan §15; target the first weeks of December).
 - The 90-day anonymization of unpaid checkout orders (plan §11; the privacy policy promises it,
   first due 1 Mar 2027) and saved addresses at checkout (deferred, plan session 10 notes).
-- Orders import (`/import`, Shopee/TikTok Shop exports): placeholder today.
+- Orders import (`/import`, docs/plans/marketplace-import.md): sessions 1 to 6 done. Shopee order
+  export upload with preview, manual SKU match, Simpan (one transaction, stock through the ledger,
+  idempotent per marketplace order number), import history, the Marketplace block on the order page,
+  Daftar SKU, and "Laba setelah biaya platform" on Ringkasan. **Shopee Simpan stays locked**
+  (`SHOPEE_MAPPING_VERIFIED = false`) until a real Seller Center header is checked (plan O1, session
+  7); TikTok Shop is refused until its export is mapped (O3). The income (Penghasilan) export is a
+  later plan.
 - Overview dashboard (§6; docs/plans/dashboard-overview.md): sessions 1 to 5 done (omzet / laba
   kotor definitions and queries, `sales_goal`, migration 0039; "Target penjualan" on `/settings`;
   Ringkasan with the target card and its cumulative chart, period tabs, KPI tiles, server-rendered
@@ -138,8 +144,11 @@ pnpm workspaces + Turborepo:
 - Login (email OTP)
 - Overview (see §6 for metrics)
 - Orders
-- Import — upload Shopee/TikTok Shop order and income exports; preview before saving; merges
-  duplicate SKU rows within one order before inserting (see `order_items` in §5.2)
+- Import — upload Shopee/TikTok Shop order exports (income exports later); preview before saving;
+  matches by SKU only (an unknown SKU waits, or is matched by hand for one import); merges
+  duplicate SKU rows within one order before inserting (see `order_items` in §5.2); platform fees
+  from the export go into `order_channel_fees`. No buyer data is stored
+  ([docs/plans/marketplace-import.md](plans/marketplace-import.md))
 - Packing — queue view + print a QR thank-you card per order, or in bulk
 - Products & SKUs
 - Stock
@@ -562,7 +571,16 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   below the SKU's normal price (NULL on older rows, marketplace orders and undiscounted manual
   lines; never below `unit_price`).
 - `order_settlements` — actual payout data from the marketplace, arrives after `orders`.
-- `import_batches` — tracks each Shopee/TikTok export upload.
+- `import_batches` — tracks each Shopee/TikTok export upload (the order import writes it at
+  Simpan, directly as `committed`, with the file's sha256 and a summary; the file itself is never
+  stored).
+- `import_batch_orders` — what one upload created or updated (migration 0040).
+- `order_channel_fees` — platform fees per marketplace order and component (`admin_fee`,
+  `service_fee`, `platform_commission`, `affiliate_commission`, `seller_shipping_subsidy`,
+  `other`), unique `(order_id, component)`, upserted by re-imports (migration 0040). Only Shopee and
+  TikTok Shop orders have them.
+- `orders.channel_status` / `channel_synced_at` — the latest raw marketplace status and when an
+  import last confirmed it; `needs_attention` gains `marketplace_return_pending` (migration 0040).
 - `payments` — one row per payment attempt (Midtrans); unique on `provider_order_id`
   (`<env prefix><order_no>-<attempt>`, prefix `""` in prod and `DEV-` / `LOCAL-` elsewhere because
   dev and local share one gateway Sandbox account), unique `(order_id, attempt)`, unique nullable
@@ -610,9 +628,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   `shipping_amount = shipping_cost_amount - shipping_subsidy_amount`, so `shipping_amount` is
   the buyer's share; every checkout order has them). A checkout order is one with `payment_status` set (staff
   can also enter manual orders on the `web` channel, which leave it NULL). It is
-  `awaiting_payment` until paid, then enters the normal `to_ship` queue; the 18%
-  marketplace-fee assumption does not apply to `web`. Ongkir paid by the buyer is pass-through,
-  not sales revenue; the subsidy is a shipping expense.
+  `awaiting_payment` until paid, then enters the normal `to_ship` queue; `web` has no platform
+  fee. Ongkir paid by the buyer is pass-through, not sales revenue; the subsidy is a shipping
+  expense.
 - `ad_spend_daily` — unique on `(date, channel)`.
 - `expenses`
 - `targets` — one row per month (not used yet; seasonal weights for the target curve later).
@@ -654,8 +672,9 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   `returned`, and web orders whose payment is `refunded` or `chargeback`; a later return removes
   the order from its original date. A `partially_refunded` web order counts minus its refunded
   amount (capped at the goods amount). Ongkir is out (pass-through); the voucher is a reduction;
-  product discounts are already in `unit_price`. Platform fees are not subtracted (later, net
-  profit). Per-line breakdowns spread each order's omzet over its lines so they add up to omzet.
+  product discounts are already in `unit_price`. Platform fees are not subtracted from omzet (see
+  "Laba setelah biaya platform"). Per-line breakdowns spread each order's omzet over its lines so
+  they add up to omzet.
 - **Laba kotor** = omzet − Σ `qty × unit_cost` (HPP locked when stock left). Lines with
   `unit_cost = 0` are flagged as incomplete HPP. The shipping subsidy is not in laba kotor.
 - Omzet vs. the first-year target (`sales_goal`, one row: Rp 1.000.000.000 from 1 November 2026,
@@ -669,8 +688,13 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   all products, `products.size_mode = 'all_size'`) are excluded from this metric entirely — they
   have no place in a cutting ratio.
 - Stock per SKU vs. its minimum threshold.
-- Profit per order, computed from the actual marketplace payout once available; until the payout
-  arrives, use the 18% marketplace-fee assumption from `cost_assumptions`.
+- **Laba setelah biaya platform** = laba kotor − Σ `order_channel_fees.amount` of the counted
+  orders (owner decision 2026-10-24, docs/plans/marketplace-import.md §9; finance only). Fees come
+  from the marketplace order export; **no fee is ever assumed or estimated** (the 18% assumption is
+  not used). A counted Shopee/TikTok Shop order without fee rows adds 0 and is counted in
+  "Biaya platform belum lengkap untuk N pesanan"; other channels have no platform fee and never
+  count as incomplete. `seller_shipping_subsidy` counts as a platform cost; web shipping subsidy and
+  ad spend stay out. Profit from the actual payout (`order_settlements`, the income export) is later.
 - ROAS per channel — break-even ROAS is **8.3**.
 - Cancellations + returns rate vs. the 3% reserve target.
 - Vouchers printed / claimed / redeemed counts.
@@ -679,7 +703,7 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 
 | Assumption | Value |
 |---|---|
-| Marketplace fee | 18% |
+| Marketplace fee | 18% (planning figure only; Ringkasan never applies it, see §6) |
 | Ads | 12% |
 | Returns reserve | 3% |
 | Target net profit | 20% |

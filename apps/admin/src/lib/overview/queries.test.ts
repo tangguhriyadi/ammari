@@ -2,8 +2,24 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
-import { checkoutOrderValues, insertOrder, insertProductVariant, insertVariantForProduct, shippingQuoteValues } from "@ammari/db/test-fixtures";
-import { orderItems, orders, payments, productTypes, productVariants, salesGoal, type OrderPaymentStatus, type OrderStatus } from "@ammari/db/schema";
+import { checkoutOrderValues, insertFabricColor, insertOrder, insertProductVariant, insertStaffUser, insertVariantForProduct, shippingQuoteValues } from "@ammari/db/test-fixtures";
+import { shopeeRows, xlsxBytes, type FixtureOrder } from "../../../test/marketplace-fixtures";
+import { commitImport } from "../marketplace-import/commit";
+import { parseMarketplaceFile } from "../marketplace-import/parse-file";
+import { planImport } from "../marketplace-import/plan";
+import {
+  orderChannelFees,
+  orderItems,
+  orders,
+  payments,
+  productTypes,
+  productVariants,
+  salesGoal,
+  stockMovements,
+  type ChannelFeeComponent,
+  type OrderPaymentStatus,
+  type OrderStatus,
+} from "@ammari/db/schema";
 import { jakartaMidnight } from "@ammari/commerce/jakarta-day";
 import { getChannelBreakdown, getGoalCumulative, getGoalProgress, getPeriodTotals, getProductTypeBreakdown, getSalesGoal, getSalesSeries, getTopProducts } from "./queries";
 
@@ -97,6 +113,17 @@ describe("getPeriodTotals", () => {
           marginBps: 6189, // 747_000 / 1_207_000 = 61.89%
           averageOrderAmount: 301_750,
           linesWithoutCost: 1,
+          // The Shopee (fixture default) and TikTok orders have no fee rows: 0, counted as missing.
+          platformFee: 0,
+          labaSetelahBiayaPlatform: 747_000,
+          platformFees: {
+            marketplaceOrders: 2,
+            ordersWithoutFees: 2,
+            byChannel: [
+              { channelId: "shopee", channelName: "Shopee", orders: 1, ordersWithoutFees: 1, platformFee: 0 },
+              { channelId: "tiktok", channelName: "TikTok Shop", orders: 1, ordersWithoutFees: 1, platformFee: 0 },
+            ],
+          },
         },
       });
 
@@ -113,7 +140,17 @@ describe("getPeriodTotals", () => {
         pcs: 0,
         cancelledOrders: 0,
         returnedOrders: 0,
-        money: { omzet: 0, hpp: 0, labaKotor: 0, marginBps: null, averageOrderAmount: null, linesWithoutCost: 0 },
+        money: {
+          omzet: 0,
+          hpp: 0,
+          labaKotor: 0,
+          marginBps: null,
+          averageOrderAmount: null,
+          linesWithoutCost: 0,
+          platformFee: 0,
+          labaSetelahBiayaPlatform: 0,
+          platformFees: { marketplaceOrders: 0, ordersWithoutFees: 0, byChannel: [] },
+        },
       });
       // A refund that also covered the buyer's Rp 10.000 ongkir share: the goods amount is the floor.
       await recordCheckoutOrder(tx, { sku: variant.sku, qty: 1, unitPrice: 100_000, unitCost: 40_000 }, "partially_refunded", 110_000, shippingQuoteValues(30_000, 20_000));
@@ -147,6 +184,116 @@ describe("getPeriodTotals", () => {
       await tx.update(orders).set({ status: "returned", returnedAt: new Date() }).where(eq(orders.id, orderId));
       const after = await getPeriodTotals(DAY, { canViewProfit: true }, tx);
       expect(after).toMatchObject({ orders: 0, returnedOrders: 1, money: { omzet: 0 } });
+    });
+  });
+});
+
+describe("platform fees (docs/plans/marketplace-import.md §9, tests 45 and 46)", () => {
+  async function fees(tx: TestDatabase, orderId: string, amounts: Partial<Record<ChannelFeeComponent, number>>) {
+    for (const [component, amount] of Object.entries(amounts)) await tx.insert(orderChannelFees).values({ orderId, component: component as ChannelFeeComponent, amount: amount! });
+  }
+
+  test("fees once per order, only counted orders, missing only for marketplace orders without fee rows", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      const other = (await insertProductVariant(tx)).variant.sku;
+      const sku = variant.sku;
+
+      // Shopee, two lines, two fee rows: Rp 7.500 once (a join per line would double it).
+      const twoLines = await recordOrder(
+        tx,
+        [
+          { sku, qty: 1, unitPrice: 250_000, unitCost: 100_000 },
+          { sku: other, qty: 2, unitPrice: 100_000, unitCost: 40_000 },
+        ],
+        { status: "completed", channelId: "shopee" },
+      );
+      await fees(tx, twoLines, { admin_fee: 4_500, service_fee: 3_000 });
+      // TikTok with a known zero fee: not missing.
+      const knownZero = await recordOrder(tx, [{ sku, qty: 1, unitPrice: 200_000, unitCost: 80_000 }], { status: "shipped", channelId: "tiktok" });
+      await fees(tx, knownZero, { platform_commission: 0, seller_shipping_subsidy: 2_000 });
+      // Shopee without fee rows (e.g. typed by hand): adds 0, counted as missing.
+      await recordOrder(tx, [{ sku, qty: 1, unitPrice: 300_000, unitCost: 120_000 }], { status: "to_ship", channelId: "shopee" });
+      // Website and WhatsApp: no platform fee at all, never missing.
+      await recordOrder(tx, [{ sku, qty: 1, unitPrice: 150_000, unitCost: 60_000 }], { status: "completed", channelId: "whatsapp", channelOrderNo: null });
+      await recordOrder(tx, [{ sku, qty: 1, unitPrice: 150_000, unitCost: 60_000 }], { status: "completed", channelId: "web", channelOrderNo: null });
+      // Not counted (omzet definition): their fees and missing state never count either.
+      for (const status of ["cancelled", "returned", "awaiting_payment"] as const) {
+        const undone = await recordOrder(tx, [{ sku, qty: 1, unitPrice: 999_000, unitCost: 1 }], { status, channelId: "shopee" });
+        await fees(tx, undone, { admin_fee: 50_000 });
+        await recordOrder(tx, [{ sku, qty: 1, unitPrice: 999_000, unitCost: 1 }], { status, channelId: "tiktok" });
+      }
+      const refunded = await recordCheckoutOrder(tx, { sku, qty: 1, unitPrice: 999_000, unitCost: 1 }, "refunded", 0);
+      await fees(tx, refunded, { other: 9_000 });
+      // Outside the day.
+      const tomorrow = await recordOrder(tx, [{ sku, qty: 1, unitPrice: 999_000, unitCost: 1 }], { status: "completed", channelId: "shopee", orderDate: DAY.end });
+      await fees(tx, tomorrow, { admin_fee: 70_000 });
+
+      const totals = await getPeriodTotals(DAY, { canViewProfit: true }, tx);
+      const omzet = 450_000 + 200_000 + 300_000 + 150_000 + 150_000;
+      const hpp = 180_000 + 80_000 + 120_000 + 60_000 + 60_000;
+      expect(totals.orders).toBe(5);
+      expect(totals.money).toMatchObject({ omzet, hpp, labaKotor: omzet - hpp, platformFee: 9_500, labaSetelahBiayaPlatform: omzet - hpp - 9_500 });
+      expect(totals.money?.platformFees).toEqual({
+        marketplaceOrders: 3,
+        ordersWithoutFees: 1,
+        byChannel: [
+          { channelId: "shopee", channelName: "Shopee", orders: 2, ordersWithoutFees: 1, platformFee: 7_500 },
+          { channelId: "tiktok", channelName: "TikTok Shop", orders: 1, ordersWithoutFees: 0, platformFee: 2_000 },
+        ],
+      });
+      // Staff never receive any of it.
+      expect((await getPeriodTotals(DAY, { canViewProfit: false }, tx)).money).toBeNull();
+    });
+  });
+
+  test("a period with only non-marketplace orders has no fee channel and nothing missing", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await insertProductVariant(tx);
+      await recordOrder(tx, [{ sku: variant.sku, qty: 1, unitPrice: 100_000, unitCost: 40_000 }], { status: "completed", channelId: "instagram", channelOrderNo: null });
+      expect((await getPeriodTotals(DAY, { canViewProfit: true }, tx)).money).toMatchObject({
+        platformFee: 0,
+        labaSetelahBiayaPlatform: 60_000,
+        platformFees: { marketplaceOrders: 0, ordersWithoutFees: 0, byChannel: [] },
+      });
+    });
+  });
+
+  test("imported orders count on their order date in omzet, laba kotor, Per kanal and the fees; a cancelled one drops out (test 45)", async () => {
+    await withRollback(async (tx) => {
+      const marker = randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase();
+      // An uppercase SKU, as admin generates them (the importer uppercases the file's).
+      const { product, fabric } = await insertProductVariant(tx);
+      const color = await insertFabricColor(tx, fabric.id);
+      const variant = { sku: `OVW${marker}-M` };
+      await tx.insert(productVariants).values({ sku: variant.sku, productId: product.id, fabricId: fabric.id, fabricColorId: color.id, closure: "front_zip", size: "M" });
+      await tx.insert(stockMovements).values({ sku: variant.sku, qty: 10, valueAmount: 1_000_000, type: "production", refType: "manual" });
+      const staff = await insertStaffUser(tx);
+      const commit = async (orders: FixtureOrder[]) => {
+        const parsed = parseMarketplaceFile({ channelId: "shopee", fileName: "uji.xlsx", bytes: xlsxBytes(shopeeRows(orders)), assumeMappingVerified: true });
+        if (!parsed.ok) throw new Error(parsed.error.message);
+        const planned = await planImport(parsed.value, {}, tx);
+        if (!planned.ok) throw new Error(planned.error.message);
+        const outcome = await commitImport({ parsed: parsed.value, fileName: "uji.xlsx", options: {}, expectedDigest: planned.value.digest, actorStaffUserId: staff.id }, tx);
+        if (outcome.kind !== "committed") throw new Error(outcome.kind);
+      };
+      // 2031-03-10 12:00 WIB, as Waktu Pesanan Dibuat.
+      const lines = [{ sku: variant.sku, qty: 1, lineTotal: 249_000 }];
+      await commit([
+        { orderNo: `${marker}A`, status: "Selesai", orderedAt: "2031-03-10 12:00", sellerVoucher: 9_000, adminFee: 4_000, serviceFee: 1_000, lines },
+        { orderNo: `${marker}B`, status: "Perlu Dikirim", orderedAt: "2031-03-10 13:00", adminFee: 4_000, lines },
+      ]);
+      const before = await getPeriodTotals(DAY, { canViewProfit: true }, tx);
+      expect(before.orders).toBe(2);
+      expect(before.money).toMatchObject({ omzet: 240_000 + 249_000, hpp: 200_000, platformFee: 9_000, labaSetelahBiayaPlatform: 489_000 - 200_000 - 9_000 });
+      expect(before.money?.platformFees.ordersWithoutFees).toBe(0);
+      expect(await getChannelBreakdown(DAY, { canViewProfit: true }, tx)).toEqual([{ channelId: "shopee", channelName: "Shopee", orders: 2, pcs: 2, omzet: 489_000 }]);
+
+      // B is cancelled on Shopee: cancelled in admin, out of every figure, its fees with it.
+      await commit([{ orderNo: `${marker}B`, status: "Batal", orderedAt: "2031-03-10 13:00", adminFee: 4_000, lines }]);
+      const after = await getPeriodTotals(DAY, { canViewProfit: true }, tx);
+      expect(after).toMatchObject({ orders: 1, cancelledOrders: 1 });
+      expect(after.money).toMatchObject({ omzet: 240_000, hpp: 100_000, platformFee: 5_000, labaSetelahBiayaPlatform: 135_000 });
     });
   });
 });

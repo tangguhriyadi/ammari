@@ -4,11 +4,16 @@ import { Card, Skeleton } from "@ammari/ui";
 import { formatNumber, formatRupiah } from "@ammari/ui/lib";
 import { comparisonLabel, computeDelta, formatCompactRupiah, formatDeltaPercent, formatPercentBps, type Delta } from "@/lib/overview/format";
 import type { ResolvedPeriod } from "@/lib/overview/period";
-import { getPeriodTotals } from "@/lib/overview/queries";
+import { getPeriodTotals, type PeriodMoney } from "@/lib/overview/queries";
 
 // One row of 4 when the sales column has room for it (a container query: the "Perlu tindakan"
 // aside takes part of a wide screen), 2x2 otherwise. The parent section is the @container.
 const GRID = "grid grid-cols-2 gap-3 @2xl:grid-cols-4 @2xl:gap-4";
+// With finance.view_profit: 5 tiles. Wide: the three sales tiles, then the two profit tiles side by
+// side (a 6-column grid, spans 2 and 3); phone: 2 columns, the last tile across both.
+const FINANCE_GRID = "grid grid-cols-2 gap-3 @2xl:grid-cols-6 @2xl:gap-4";
+const SALES_SPAN = "@2xl:col-span-2";
+const PROFIT_SPAN = "@2xl:col-span-3";
 
 /** Compact on the tile, the full amount for screen readers and on hover (§8). */
 function Money({ amount }: { amount: number }) {
@@ -41,6 +46,7 @@ function KpiTile({
   comparison,
   children,
   testId,
+  className,
 }: {
   label: string;
   value: ReactNode;
@@ -48,9 +54,10 @@ function KpiTile({
   comparison: string;
   children?: ReactNode;
   testId: string;
+  className?: string;
 }) {
   return (
-    <Card className="flex min-w-0 flex-col gap-1" data-testid={testId}>
+    <Card className={`flex min-w-0 flex-col gap-1 ${className ?? ""}`} data-testid={testId}>
       <h3 className="text-sm font-medium text-neutral-600">{label}</h3>
       <p className="truncate text-2xl font-semibold text-neutral-900 tabular-nums" data-testid={`${testId}-value`}>
         {value}
@@ -61,11 +68,44 @@ function KpiTile({
   );
 }
 
-export function OverviewKpiTilesSkeleton({ canViewProfit }: { canViewProfit: boolean }) {
+/** The fee lines of the net profit tile: what was subtracted, and which marketplace orders have no
+ * fee data yet (they add 0; never estimated, owner decision 8). Non-marketplace orders never count
+ * as missing: their channels have no platform fee. */
+function PlatformFeeLines({ money, canViewImports }: { money: PeriodMoney; canViewImports: boolean }) {
+  const fees = money.platformFees;
+  if (fees.marketplaceOrders === 0) {
+    return <p className="text-sm text-neutral-600" data-testid="kpi-platform-fee">Tidak ada pesanan Shopee atau TikTok Shop, jadi tidak ada biaya platform.</p>;
+  }
+  const missing = fees.byChannel.filter((channel) => channel.ordersWithoutFees > 0);
+  const missingText = `Biaya platform belum lengkap untuk ${formatNumber(fees.ordersWithoutFees)} pesanan (${missing.map((channel) => `${channel.channelName} ${formatNumber(channel.ordersWithoutFees)}`).join(", ")})`;
   return (
-    <div className={GRID}>
-      {Array.from({ length: canViewProfit ? 4 : 2 }, (_, index) => (
-        <Skeleton key={index} className="h-28 rounded-lg" />
+    <>
+      <p className="text-sm text-neutral-600 tabular-nums" data-testid="kpi-platform-fee">
+        {/* Only the orders that have fee data paid into this amount; the rest are the note below. */}
+        Biaya platform {formatRupiah(money.platformFee)} dari {formatNumber(fees.marketplaceOrders - fees.ordersWithoutFees)} pesanan marketplace
+        {fees.byChannel.length > 1 ? ` (${fees.byChannel.map((channel) => `${channel.channelName} ${formatRupiah(channel.platformFee)}`).join(", ")})` : ""}
+      </p>
+      {fees.ordersWithoutFees > 0 && (
+        <p className="text-sm text-warning-700" data-testid="kpi-platform-fee-incomplete">
+          {canViewImports ? (
+            <Link href="/import" className="underline">
+              {missingText}
+            </Link>
+          ) : (
+            missingText
+          )}
+        </p>
+      )}
+    </>
+  );
+}
+
+export function OverviewKpiTilesSkeleton({ canViewProfit }: { canViewProfit: boolean }) {
+  const spans = canViewProfit ? [SALES_SPAN, SALES_SPAN, SALES_SPAN, PROFIT_SPAN, `col-span-2 ${PROFIT_SPAN}`] : ["", ""];
+  return (
+    <div className={canViewProfit ? FINANCE_GRID : GRID}>
+      {spans.map((span, index) => (
+        <Skeleton key={index} className={`h-28 rounded-lg ${span}`} />
       ))}
     </div>
   );
@@ -79,10 +119,13 @@ export async function OverviewKpiTiles({
   resolved,
   canViewProfit,
   canViewStock,
+  canViewImports = false,
 }: {
   resolved: ResolvedPeriod;
   canViewProfit: boolean;
   canViewStock: boolean;
+  /** orders.import: the "belum lengkap" note links to /import. */
+  canViewImports?: boolean;
 }) {
   const [current, previous] = await Promise.all([
     getPeriodTotals(resolved.current, { canViewProfit }),
@@ -94,21 +137,22 @@ export async function OverviewKpiTiles({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className={GRID}>
+      <div className={money && previousMoney ? FINANCE_GRID : GRID}>
         {money && previousMoney ? (
           <>
-            <KpiTile label="Omzet" testId="kpi-omzet" value={<Money amount={money.omzet} />} delta={computeDelta(money.omzet, previousMoney.omzet)} comparison={comparison} />
-            <KpiTile label="Pesanan" testId="kpi-orders" value={formatNumber(current.orders)} delta={computeDelta(current.orders, previous.orders)} comparison={comparison}>
+            <KpiTile label="Omzet" testId="kpi-omzet" className={SALES_SPAN} value={<Money amount={money.omzet} />} delta={computeDelta(money.omzet, previousMoney.omzet)} comparison={comparison} />
+            <KpiTile label="Pesanan" testId="kpi-orders" className={SALES_SPAN} value={formatNumber(current.orders)} delta={computeDelta(current.orders, previous.orders)} comparison={comparison}>
               <p className="text-sm text-neutral-600 tabular-nums">{formatNumber(current.pcs)} pcs terjual</p>
             </KpiTile>
             <KpiTile
               label="Rata-rata per pesanan"
               testId="kpi-average"
+              className={SALES_SPAN}
               value={<Money amount={money.averageOrderAmount ?? 0} />}
               delta={computeDelta(money.averageOrderAmount ?? 0, previousMoney.averageOrderAmount ?? 0)}
               comparison={comparison}
             />
-            <KpiTile label="Laba kotor" testId="kpi-gross-profit" value={<Money amount={money.labaKotor} />} delta={computeDelta(money.labaKotor, previousMoney.labaKotor)} comparison={comparison}>
+            <KpiTile label="Laba kotor" testId="kpi-gross-profit" className={PROFIT_SPAN} value={<Money amount={money.labaKotor} />} delta={computeDelta(money.labaKotor, previousMoney.labaKotor)} comparison={comparison}>
               {money.marginBps !== null && <p className="text-sm text-neutral-600 tabular-nums">Margin {formatPercentBps(money.marginBps)}</p>}
               {money.linesWithoutCost > 0 && (
                 <p className="text-sm text-warning-700" data-testid="kpi-hpp-incomplete">
@@ -121,6 +165,16 @@ export async function OverviewKpiTiles({
                   )}
                 </p>
               )}
+            </KpiTile>
+            <KpiTile
+              label="Laba setelah biaya platform"
+              testId="kpi-net-profit"
+              className={`col-span-2 ${PROFIT_SPAN}`}
+              value={<Money amount={money.labaSetelahBiayaPlatform} />}
+              delta={computeDelta(money.labaSetelahBiayaPlatform, previousMoney.labaSetelahBiayaPlatform)}
+              comparison={comparison}
+            >
+              <PlatformFeeLines money={money} canViewImports={canViewImports} />
             </KpiTile>
           </>
         ) : (
@@ -137,6 +191,11 @@ export async function OverviewKpiTiles({
           Batal: {formatNumber(current.cancelledOrders)}, Retur: {formatNumber(current.returnedOrders)}
         </p>
         {money && <p className="text-pretty">Omzet: penjualan barang setelah voucher, tanpa ongkir. Pesanan batal dan retur tidak dihitung.</p>}
+        {money && (
+          <p className="text-pretty" data-testid="kpi-net-profit-help">
+            Laba setelah biaya platform: laba kotor dikurangi biaya Shopee dan TikTok Shop dari file impor. Hanya dua kanal itu yang punya biaya platform; pesanan kanal lain, misalnya Website dan WhatsApp, tidak punya biaya platform dan tidak dihitung belum lengkap. Biaya tidak pernah diperkirakan.
+          </p>
+        )}
       </div>
     </div>
   );

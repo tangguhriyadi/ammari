@@ -1,7 +1,7 @@
 # Marketplace import: Shopee (now) and TikTok Shop (framework)
 
 Status: **owner decisions recorded 2026-10-24** (section 13). Sessions 1 to 3 implemented
-2026-10-24/25, sessions 4 and 5 implemented 2026-10-25 (section 17).
+2026-10-24/25, sessions 4 to 6 implemented 2026-10-25 (section 17).
 Shopee "Simpan" stays locked (`SHOPEE_MAPPING_VERIFIED = false`) until a real Seller Center header
 is checked (section 2.1). Written 2026-10-24.
 
@@ -786,4 +786,30 @@ map, tests 11/12 flipped to "accepts", one e2e run).
   the insert would not hit the exact unique key (the planner's match is case-insensitive). The
   window is the length of one transaction; uppercasing marketplace numbers in `createOrder` would
   close it.
+
+## 18. Session notes (6)
+
+- `revenue-sql.ts`: `PLATFORM_FEE_CHANNEL_IDS` (= `MARKETPLACE_CHANNEL_IDS`), `orderPlatformFeeSql()`
+  (the sum of an order's fee rows as a correlated subquery, so it is taken once per order whatever
+  the number of lines) and `orderPlatformFeeMissingSql()` (a Shopee/TikTok order with no fee row;
+  a row of 0 is a known zero). Both ride on the counted-orders CTE, so cancelled, returned, unpaid
+  and refunded/chargeback orders never add a fee or count as missing.
+- `getPeriodTotals().money` gains `platformFee`, `labaSetelahBiayaPlatform` and `platformFees`
+  (marketplace orders, those without fees, and both per channel). It is inside `money`, so staff
+  without `finance.view_profit` never receive it (not selected).
+- Ringkasan: a fifth tile "Laba setelah biaya platform" next to Laba kotor (same delta against the
+  comparison period), "Biaya platform Rp X dari N pesanan marketplace" (per channel when both have
+  orders), and "Biaya platform belum lengkap untuk N pesanan (Shopee n)" in the same warning style
+  as "HPP belum lengkap", linking to /import with `orders.import`. A help line says only Shopee and
+  TikTok Shop have platform fees. No per-channel fee chart (not assigned by this plan); the per
+  channel numbers are in the tile.
+- Known limit: an order counts as "belum lengkap" only with NO fee rows. A file missing one optional
+  fee column (the parser warns about it) still leaves the other components, so such an order is
+  not flagged; the import does not record which columns were present.
+- Known limit (same as Laba kotor with HPP): the tile's delta compares with the previous period's
+  figure, which may itself miss fees; the "belum lengkap" note describes the current period only.
+- An order whose only fee row is 0 counts as a known zero, not missing (the export said 0).
+- The fee subqueries run only for the tiles (`countedOrdersCte(..., { withFees: true })` in
+  `getPeriodTotals`); the breakdowns and charts do not pay for them (review).
+- SPEC §3.1, §5.2, §6, §7 and Status updated.
 

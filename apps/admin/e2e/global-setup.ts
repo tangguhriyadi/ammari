@@ -215,6 +215,13 @@ export const E2E_IMPORT_SKU_M = "E2E-IMPOR-M";
 export const E2E_IMPORT_SKU_L = "E2E-IMPOR-L";
 
 export const E2E_OVERVIEW_SKU = "E2E-RINGKASAN-M";
+// "Laba setelah biaya platform" (docs/plans/marketplace-import.md §9, session 6): a fixed past day
+// no other spec dates anything on, read as a custom range. Counted: a Shopee order with fee rows
+// (Rp 250.000, HPP Rp 100.000, fees Rp 4.500 + Rp 3.000), a Shopee order without fee rows (Rp 200.000,
+// HPP Rp 80.000: "belum lengkap"), a WhatsApp order (Rp 300.000, HPP Rp 120.000: no platform fee,
+// never "belum lengkap"). Not counted: a cancelled Shopee order with a fee row. So omzet Rp 750.000,
+// laba kotor Rp 450.000, biaya platform Rp 7.500, laba setelah biaya platform Rp 442.500.
+export const E2E_OVERVIEW_FEE_DATE = "2026-03-10";
 export const E2E_OVERVIEW_LATE_ORDER_NO = "ORD-E2E-RINGKASAN-LATE";
 
 // Enough rows to force a second page at the real PAGE_SIZE (20) — see apps/admin's
@@ -296,6 +303,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     stockMovements,
     orders,
     orderItems,
+    orderChannelFees,
     payments,
     stockReservations,
   } = await import("@ammari/db/schema");
@@ -608,6 +616,35 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         .returning({ id: orders.id });
       if (!order) throw new Error(`failed to seed ${seed.orderNo}`);
       await tx.insert(orderItems).values({ orderId: order.id, sku: E2E_OVERVIEW_SKU, qty: 1, unitPrice: seed.unitPrice, unitCost: seed.unitCost });
+    }
+
+    // The platform fee day (see E2E_OVERVIEW_FEE_DATE above), 10:00 WIB.
+    const feeDay = new Date(`${E2E_OVERVIEW_FEE_DATE}T03:00:00Z`);
+    const feeSeeds = [
+      { orderNo: "ORD-E2E-FEE-1", channelId: "shopee" as const, channelOrderNo: "E2EFEE0001", status: "completed" as const, unitPrice: 250_000, unitCost: 100_000, fees: [4_500, 3_000] },
+      { orderNo: "ORD-E2E-FEE-2", channelId: "shopee" as const, channelOrderNo: "E2EFEE0002", status: "completed" as const, unitPrice: 200_000, unitCost: 80_000, fees: [] },
+      { orderNo: "ORD-E2E-FEE-3", channelId: "whatsapp" as const, channelOrderNo: null, status: "completed" as const, unitPrice: 300_000, unitCost: 120_000, fees: [] },
+      { orderNo: "ORD-E2E-FEE-4", channelId: "shopee" as const, channelOrderNo: "E2EFEE0004", status: "cancelled" as const, unitPrice: 999_000, unitCost: 1, fees: [50_000] },
+    ];
+    for (const seed of feeSeeds) {
+      const [order] = await tx
+        .insert(orders)
+        .values({
+          channelId: seed.channelId,
+          orderNo: seed.orderNo,
+          channelOrderNo: seed.channelOrderNo,
+          status: seed.status,
+          orderDate: feeDay,
+          subtotalAmount: seed.unitPrice,
+          shippingAmount: 0,
+          discountAmount: 0,
+          totalAmount: seed.unitPrice,
+        })
+        .returning({ id: orders.id });
+      if (!order) throw new Error(`failed to seed ${seed.orderNo}`);
+      await tx.insert(orderItems).values({ orderId: order.id, sku: E2E_OVERVIEW_SKU, qty: 1, unitPrice: seed.unitPrice, unitCost: seed.unitCost });
+      const components = ["admin_fee", "service_fee"] as const;
+      if (seed.fees.length > 0) await tx.insert(orderChannelFees).values(seed.fees.map((amount, index) => ({ orderId: order.id, component: components[index]!, amount })));
     }
   });
 

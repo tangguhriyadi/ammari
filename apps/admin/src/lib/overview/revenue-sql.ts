@@ -1,5 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
-import { payments, type OrderPaymentStatus, type OrderStatus } from "@ammari/db/schema";
+import { MARKETPLACE_CHANNEL_IDS, orderChannelFees, payments, type ChannelId, type OrderPaymentStatus, type OrderStatus } from "@ammari/db/schema";
 
 // The ONE definition of omzet and laba kotor (docs/plans/dashboard-overview.md §1, owner decisions
 // D1, D6, D11). Every Ringkasan figure (tiles, target tracker, breakdowns) is built from these
@@ -51,4 +51,31 @@ export function orderOmzetSql(): SQL {
 /** One line's HPP; `unit_cost` was locked when the stock left. Alias `oi` for order_items. */
 export function lineHppSql(): SQL {
   return sql`(oi.qty::bigint * oi.unit_cost)`;
+}
+
+// ---------- Platform fees (docs/plans/marketplace-import.md §9, session 6) ----------
+
+/** The channels whose orders carry platform fees at all (order_channel_fees, from the marketplace
+ * import). Every other channel (Website, WhatsApp, Instagram, offline, reseller) has none, so its
+ * orders add 0 and are never "incomplete". */
+export const PLATFORM_FEE_CHANNEL_IDS: readonly ChannelId[] = MARKETPLACE_CHANNEL_IDS;
+
+/** One order's platform fees: the sum of its fee rows, taken once per order (a correlated
+ * subquery, never a join that would repeat per line). 0 when it has none: NO assumption, never an
+ * estimate (owner decision 8); a marketplace order without rows is counted by
+ * orderPlatformFeeMissingSql instead. `order_channel_fees_order_id_component_key` leads with
+ * `order_id`, so it is an index lookup. `seller_shipping_subsidy` counts as a platform cost. */
+export function orderPlatformFeeSql(): SQL {
+  return sql`coalesce((select sum(f.amount) from ${orderChannelFees} f where f.order_id = o.id), 0)`;
+}
+
+/** The order `o` is a marketplace order without a single fee row: its platform fees are not known
+ * ("Biaya platform belum lengkap"). A row with amount 0 is a known zero, not missing. */
+/** `(... )` list of PLATFORM_FEE_CHANNEL_IDS, for an `in` condition on any channel id column. */
+export function platformFeeChannelListSql(): SQL {
+  return textList(PLATFORM_FEE_CHANNEL_IDS);
+}
+
+export function orderPlatformFeeMissingSql(): SQL {
+  return sql`(o.channel_id in (${platformFeeChannelListSql()}) and not exists (select 1 from ${orderChannelFees} f where f.order_id = o.id))`;
 }

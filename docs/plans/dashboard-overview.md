@@ -454,7 +454,8 @@ E2E (Playwright, each test at **390 px and 1280 px**):
 ## 11. Later (SPEC §6 items not in this plan)
 
 Size mix vs cutting ratio, stock per SKU vs minimum (beyond the low-stock list), profit after
-marketplace fees (settlements or the 18% assumption), ROAS per channel (needs `ad_spend_daily`
+marketplace payouts (settlements; "Laba setelah biaya platform" from the exported fees is done,
+docs/plans/marketplace-import.md §9, with no 18% assumption), ROAS per channel (needs `ad_spend_daily`
 input), cancellations + returns rate vs 3%, voucher printed/claimed/redeemed counts, monthly
 target curve (D4), net profit including shipping subsidy and expenses.
 

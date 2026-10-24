@@ -7,7 +7,7 @@ import { channelDisplayNameSql } from "@/lib/orders/channel-label";
 import { goalCumulativeSeries, type CumulativePoint, type SeriesGranularity, type SeriesPoint } from "./charts";
 import { computeGoalProgress, goalWindow, type GoalProgress, type SalesGoal } from "./goal";
 import type { TimeRange } from "./period";
-import { countedOrderSql, lineHppSql, orderOmzetSql } from "./revenue-sql";
+import { countedOrderSql, lineHppSql, orderOmzetSql, orderPlatformFeeMissingSql, orderPlatformFeeSql, platformFeeChannelListSql } from "./revenue-sql";
 
 // Ringkasan aggregations (docs/plans/dashboard-overview.md §1, §3, §4, §7). Every money figure is
 // cost/profit-adjacent data (D9): with `canViewProfit = false` it is not selected at all, so it can
@@ -32,9 +32,13 @@ function orderDateInRangeSql(range: TimeRange): SQL {
   return sql`o.order_date >= ${range.start.toISOString()}::timestamptz and o.order_date < ${range.end.toISOString()}::timestamptz`;
 }
 
-/** The counted orders of a range as a CTE body (`id`, `channel_id`, and `omzet` when allowed). */
-function countedOrdersCte(range: TimeRange, canViewProfit: boolean): SQL {
-  return sql`select o.id, o.channel_id${canViewProfit ? sql`, ${orderOmzetSql()} as omzet` : sql``}
+/** The counted orders of a range as a CTE body (`id`, `channel_id`, and when allowed `omzet`; with
+ * `withFees` also `platform_fee` and `fee_missing`). Only the tiles ask for the fees: a CTE used
+ * twice is materialized with every column, so the breakdowns would pay for lookups they never read. */
+function countedOrdersCte(range: TimeRange, canViewProfit: boolean, { withFees = false }: { withFees?: boolean } = {}): SQL {
+  const fees = withFees ? sql`, ${orderPlatformFeeSql()} as platform_fee, ${orderPlatformFeeMissingSql()} as fee_missing` : sql``;
+  const money = canViewProfit ? sql`, ${orderOmzetSql()} as omzet${fees}` : sql``;
+  return sql`select o.id, o.channel_id${money}
     from ${orders} o
     where ${orderDateInRangeSql(range)} and ${countedOrderSql()}`;
 }
@@ -89,6 +93,21 @@ export interface PeriodMoney {
   averageOrderAmount: number | null;
   /** Counted lines whose locked unit_cost is 0 (their stock had no value): HPP is incomplete. */
   linesWithoutCost: number;
+  /** Sum of the counted orders' order_channel_fees (docs/plans/marketplace-import.md §9). */
+  platformFee: number;
+  /** "Laba setelah biaya platform": laba kotor - platformFee. No fee is ever estimated. */
+  labaSetelahBiayaPlatform: number;
+  platformFees: PlatformFeeSummary;
+}
+
+/** The fee side of the period, per channel that has platform fees at all (Shopee, TikTok Shop). */
+export interface PlatformFeeSummary {
+  /** Counted orders on a platform-fee channel. */
+  marketplaceOrders: number;
+  /** Of those, the ones without a single fee row: they add 0 ("Biaya platform belum lengkap"). */
+  ordersWithoutFees: number;
+  /** Only channels with counted orders, biggest fee first. */
+  byChannel: { channelId: string; channelName: string; orders: number; ordersWithoutFees: number; platformFee: number }[];
 }
 
 export interface PeriodTotals {
@@ -108,11 +127,13 @@ type PeriodTotalsRow = {
   omzet?: string;
   hpp?: string;
   lines_without_cost?: number;
+  platform_fee?: string;
+  fee_channels?: { channel_id: string; channel_name: string; orders: number; orders_without_fees: number; platform_fee: string }[];
 };
 
 export async function getPeriodTotals(range: TimeRange, { canViewProfit }: ProfitOption, db: Database = defaultDb): Promise<PeriodTotals> {
   const [row] = await db.execute<PeriodTotalsRow>(sql`
-    with counted as (${countedOrdersCte(range, canViewProfit)}),
+    with counted as (${countedOrdersCte(range, canViewProfit, { withFees: true })}),
     lines as (
       select sum(oi.qty)::bigint as pcs
         ${canViewProfit ? sql`, sum(${lineHppSql()})::bigint as hpp, count(*) filter (where oi.unit_cost = 0)::int as lines_without_cost` : sql``}
@@ -133,7 +154,19 @@ export async function getPeriodTotals(range: TimeRange, { canViewProfit }: Profi
              canViewProfit
                ? sql`, (select coalesce(sum(counted.omzet), 0) from counted)::text as omzet,
                   coalesce(lines.hpp, 0)::text as hpp,
-                  coalesce(lines.lines_without_cost, 0) as lines_without_cost`
+                  coalesce(lines.lines_without_cost, 0) as lines_without_cost,
+                  (select coalesce(sum(counted.platform_fee), 0) from counted)::text as platform_fee,
+                  (
+                    select coalesce(json_agg(fc order by fc.platform_fee::bigint desc, fc.orders desc, fc.channel_id), '[]'::json)
+                    from (
+                      select c.channel_id, ${channelDisplayNameSql(sql`c.channel_id`, sql`ch.name`)} as channel_name, count(*)::int as orders,
+                             count(*) filter (where c.fee_missing)::int as orders_without_fees, sum(c.platform_fee)::text as platform_fee
+                      from counted c
+                      join ${channels} ch on ch.id = c.channel_id
+                      where c.channel_id in (${platformFeeChannelListSql()})
+                      group by c.channel_id, ch.name
+                    ) fc
+                  ) as fee_channels`
                : sql``
            }
     from lines, undone
@@ -145,6 +178,14 @@ export async function getPeriodTotals(range: TimeRange, { canViewProfit }: Profi
   const omzet = toAmount(row.omzet);
   const hpp = toAmount(row.hpp);
   const labaKotor = omzet - hpp;
+  const platformFee = toAmount(row.platform_fee);
+  const byChannel = (row.fee_channels ?? []).map((channel) => ({
+    channelId: channel.channel_id,
+    channelName: channel.channel_name,
+    orders: channel.orders,
+    ordersWithoutFees: channel.orders_without_fees,
+    platformFee: toAmount(channel.platform_fee),
+  }));
   return {
     ...totals,
     money: {
@@ -154,6 +195,13 @@ export async function getPeriodTotals(range: TimeRange, { canViewProfit }: Profi
       marginBps: omzet > 0 ? Math.round((labaKotor * 10_000) / omzet) : null,
       averageOrderAmount: totals.orders > 0 ? Math.round(omzet / totals.orders) : null,
       linesWithoutCost: row.lines_without_cost ?? 0,
+      platformFee,
+      labaSetelahBiayaPlatform: labaKotor - platformFee,
+      platformFees: {
+        marketplaceOrders: byChannel.reduce((sum, channel) => sum + channel.orders, 0),
+        ordersWithoutFees: byChannel.reduce((sum, channel) => sum + channel.ordersWithoutFees, 0),
+        byChannel,
+      },
     },
   };
 }
