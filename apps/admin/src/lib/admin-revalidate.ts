@@ -18,6 +18,7 @@ import { revalidatePath } from "next/cache";
 // (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/revalidatePath.md).
 export type AdminSection =
   | "/accessories"
+  | "/ads-expenses"
   | "/content"
   | "/fabrics"
   | "/import"
