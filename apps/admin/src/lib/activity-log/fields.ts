@@ -143,6 +143,7 @@ export const FIELD_LABELS: Record<string, string> = {
   attemptedByCustomerId: "Dicoba oleh (ID pembeli)",
   ip: "Alamat IP",
   // Content and settings
+  monthlyBillCategories: "Kategori wajib dicatat tiap bulan",
   content: "Isi",
   rows: "Baris",
   draftBody: "Draf",

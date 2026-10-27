@@ -3,13 +3,17 @@ import {
   BREAK_EVEN_ROAS_TENTHS,
   expenseChannelError,
   expenseChannelRule,
+  formatRoasTenths,
+  buildRoasRows,
   labaBersih,
+  monthlyBillsReminderWindow,
   monthRange,
   monthToDate,
   roasStatus,
   roasTenths,
   summarizeMarketing,
   sumExpensesInRange,
+  shiftMonth,
   type ExpenseFigureRow,
 } from "./figures";
 
@@ -130,11 +134,80 @@ describe("ROAS vs the 8.3 break-even (integer maths, SPEC §6)", () => {
     expect(roasTenths(5_000, 0)).toBeNull();
   });
 
+  test("formatted with one decimal, Indonesian style", () => {
+    expect(formatRoasTenths(83)).toBe("8,3");
+    expect(formatRoasTenths(100)).toBe("10,0");
+    expect(formatRoasTenths(0)).toBe("0,0");
+    expect(formatRoasTenths(12_345)).toBe("1.234,5");
+  });
+
   test("at or above break-even is 'above', under it 'below', no spend is null", () => {
     expect(roasStatus(8_300_000, 1_000_000)).toBe("above");
     expect(roasStatus(8_299_999, 1_000_000)).toBe("below");
     expect(roasStatus(20_000_000, 1_000_000)).toBe("above");
     expect(roasStatus(0, 1_000_000)).toBe("below");
     expect(roasStatus(1_000_000, 0)).toBeNull();
+  });
+});
+
+describe("shiftMonth", () => {
+  test("moves across year ends both ways", () => {
+    expect(shiftMonth("2026-10", -1)).toBe("2026-09");
+    expect(shiftMonth("2026-01", -1)).toBe("2025-12");
+    expect(shiftMonth("2026-12", 1)).toBe("2027-01");
+    expect(shiftMonth("2026-03", -11)).toBe("2025-04");
+    expect(() => shiftMonth("2026-13", 1)).toThrow();
+  });
+});
+
+describe("monthlyBillsReminderWindow (owner answer A6: from the 6th, last month, paid 6th to 5th)", () => {
+  test("null on the 1st to the 5th (Jakarta); from the 6th, last month with the 6th-to-5th window", () => {
+    // 23:30 WIB on the 5th is still the 5th.
+    expect(monthlyBillsReminderWindow(new Date("2026-03-05T16:30:00Z"))).toBeNull();
+    expect(monthlyBillsReminderWindow(new Date("2026-03-01T05:00:00Z"))).toBeNull();
+    // 00:30 WIB on 6 Mar: the plan's example, 6 Feb to 5 Mar.
+    expect(monthlyBillsReminderWindow(new Date("2026-03-05T17:30:00Z"))).toEqual({ month: "2026-02", from: "2026-02-06", to: "2026-03-05" });
+    expect(monthlyBillsReminderWindow(new Date("2026-03-31T05:00:00Z"))).toEqual({ month: "2026-02", from: "2026-02-06", to: "2026-03-05" });
+    // Across a year end.
+    expect(monthlyBillsReminderWindow(new Date("2027-01-06T05:00:00Z"))).toEqual({ month: "2026-12", from: "2026-12-06", to: "2027-01-05" });
+  });
+});
+
+describe("buildRoasRows (plan §4.1, §6 'Iklan vs omzet')", () => {
+  const marketing = summarizeMarketing([
+    row({ category: "ads_shopee", channelId: "shopee", amount: 100_000 }),
+    row({ category: "ads_tiktok", channelId: "tiktok", amount: 100_000 }),
+    row({ category: "ads_meta", channelId: "web", amount: 50_000 }),
+    row({ category: "ads_meta", channelId: null, amount: 30_000 }),
+    row({ category: "endorsement", channelId: "instagram", amount: 150_000 }),
+  ]);
+  const omzet = new Map<string, number>([
+    ["shopee", 1_000_000],
+    ["tiktok", 500_000],
+    ["web", 300_000],
+    ["whatsapp", 200_000],
+    ["offline", 90_000],
+  ]);
+
+  test("one row per marketing channel, Tanpa kanal, and a Total over every channel's omzet", () => {
+    const rows = buildRoasRows(marketing, omzet);
+    expect(rows.map((entry) => entry.key)).toEqual(["shopee", "tiktok", "web", "instagram", "whatsapp", "untagged", "total"]);
+    const byKey = Object.fromEntries(rows.map((entry) => [entry.key, entry]));
+    expect(byKey.shopee).toMatchObject({ label: "Shopee", adSpend: 100_000, omzet: 1_000_000, roasTenths: 100, status: "above" });
+    expect(byKey.tiktok).toMatchObject({ label: "TikTok Shop", adSpend: 100_000, omzet: 500_000, roasTenths: 50, status: "below" });
+    expect(byKey.web).toMatchObject({ label: "Situs", adSpend: 50_000, omzet: 300_000, roasTenths: 60, status: "below" });
+    // Endorse/KOL tagged Instagram is not ad spend: no ROAS for Instagram.
+    expect(byKey.instagram).toMatchObject({ adSpend: 0, omzet: 0, roasTenths: null, status: null });
+    expect(byKey.whatsapp).toMatchObject({ adSpend: 0, omzet: 200_000, roasTenths: null, status: null });
+    // Untagged Meta has no omzet of its own; it only enters the total.
+    expect(byKey.untagged).toMatchObject({ label: "Tanpa kanal", adSpend: 30_000, omzet: null, roasTenths: null, status: null });
+    // Total omzet includes channels that are never advertised (offline).
+    expect(byKey.total).toMatchObject({ label: "Total", adSpend: 280_000, omzet: 2_090_000, roasTenths: 75, status: "below" });
+  });
+
+  test("no spend anywhere: every ROAS is null, Tanpa kanal is left out", () => {
+    const rows = buildRoasRows(summarizeMarketing([]), omzet);
+    expect(rows.every((entry) => entry.roasTenths === null && entry.status === null)).toBe(true);
+    expect(rows.map((entry) => entry.key)).not.toContain("untagged");
   });
 });

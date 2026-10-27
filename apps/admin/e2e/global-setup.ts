@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { startStorefrontStub } from "./helpers/storefront-stub";
 
@@ -91,6 +92,30 @@ export const E2E_PRODUCTION_PAYMENTS_EMAIL = "production-payments@e2e.ammari.tes
 // predefined CS role, which must get "Akses ditolak" on /ads-expenses and a 403 on a proof.
 export const E2E_EXPENSES_EMAIL = "expenses@e2e.ammari.test";
 export const E2E_EXPENSES_CS_EMAIL = "expenses-cs@e2e.ammari.test";
+// ads-expenses-summary.spec.ts (docs/plans/growth.md session S3): Iklan & Biaya "Ringkasan", the
+// Laba bersih tile and the "Gaji/Sewa belum dicatat" item. An owner, a Keuangan (`finance`) staff,
+// and a role with overview.view + orders.view + ads_expenses.manage but NOT finance.view_profit,
+// which must never receive a Laba bersih, an expense or the item (and is refused /ads-expenses).
+export const E2E_EXPENSE_SUMMARY_OWNER_EMAIL = "expense-summary-owner@e2e.ammari.test";
+export const E2E_EXPENSE_SUMMARY_FINANCE_EMAIL = "expense-summary-finance@e2e.ammari.test";
+export const E2E_EXPENSE_SUMMARY_NO_FINANCE_EMAIL = "expense-summary-no-finance@e2e.ammari.test";
+const E2E_EXPENSE_SUMMARY_NO_FINANCE_ROLE_KEY = "e2e_expense_summary_no_finance";
+// A fixed past month no other spec dates anything in (the import uses January 2026, the fee day
+// 10 March 2026), read through "Pilih bulan". All on 12 Feb 2026 10:00 WIB, counted: Shopee
+// Rp 1.000.000 (HPP 400.000, fees 30.000 + 20.000), TikTok Shop Rp 500.000 (HPP 200.000, no fee
+// rows: "belum lengkap"), a web checkout order Rp 300.000 (HPP 100.000, subsidy 20.000 of a
+// 35.000 quote), WhatsApp Rp 200.000 (HPP 80.000). Omzet 2.000.000, laba setelah biaya platform
+// 1.170.000. Expenses (non-voided): Iklan Shopee 100.000, Iklan TikTok 100.000, Iklan Meta Situs
+// 50.000, Iklan Meta tanpa kanal 30.000, Endorse/KOL 150.000, Gaji 400.000, Sewa 200.000; plus a
+// voided Sewa 999.000. Total biaya 1.030.000, Laba bersih 1.170.000 - 20.000 - 1.030.000 = 120.000.
+export const E2E_EXPENSE_SUMMARY_MONTH = "2026-02";
+// "Biaya bulanan belum dicatat" (owner answer A6): the reminder is switched on for Gaji and Sewa
+// (/settings "Pengingat biaya bulanan", off by default), and a Gaji is dated the 5th of this
+// Jakarta month, inside the 6th-to-5th window, so from the 6th the item names only Sewa. Its own
+// number, outside the BYA-YYYYMM- sequence nextDocumentNumber continues. overview.spec.ts's
+// settings test changes the categories and puts these two back.
+export const E2E_MONTHLY_BILL_CATEGORIES = ["salary", "rent"] as const;
+export const E2E_MONTHLY_BILLS_EXPENSE_NO = "BYA-E2E-GAJI";
 export const E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL = "production-payments-no-finance@e2e.ammari.test";
 const E2E_PRODUCTION_NO_FINANCE_ROLE_KEY = "e2e_production_no_finance";
 // A dedicated email/role for purchases-receipt.spec.ts (docs/plans/suppliers-goods-receipt.md
@@ -335,6 +360,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     stockReservations,
     auditLog,
     suppliers,
+    privateFiles,
+    businessExpenses,
+    salesGoal,
   } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
 
@@ -715,6 +743,105 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       await tx.insert(orderItems).values({ orderId: order.id, sku: E2E_OVERVIEW_SKU, qty: 1, unitPrice: seed.unitPrice, unitCost: seed.unitCost });
       const components = ["admin_fee", "service_fee"] as const;
       if (seed.fees.length > 0) await tx.insert(orderChannelFees).values(seed.fees.map((amount, index) => ({ orderId: order.id, component: components[index]!, amount })));
+    }
+  });
+
+  // Iklan & Biaya "Ringkasan" (see E2E_EXPENSE_SUMMARY_MONTH above).
+  await ensureStaffFixture(E2E_EXPENSE_SUMMARY_OWNER_EMAIL, "E2E Ringkasan Biaya (owner)", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_EXPENSE_SUMMARY_FINANCE_EMAIL, "E2E Ringkasan Biaya (Keuangan)", "finance");
+  await ensureLimitedRole(E2E_EXPENSE_SUMMARY_NO_FINANCE_ROLE_KEY, ["overview.view", "orders.view", "ads_expenses.manage"]);
+  await ensureStaffFixture(E2E_EXPENSE_SUMMARY_NO_FINANCE_EMAIL, "E2E Ringkasan Biaya (tanpa keuangan)", E2E_EXPENSE_SUMMARY_NO_FINANCE_ROLE_KEY);
+  await db.transaction(async (tx) => {
+    const [recorder] = await tx.select({ id: staffUsers.id }).from(staffUsers).where(eq(staffUsers.email, E2E_EXPENSE_SUMMARY_FINANCE_EMAIL));
+    if (!recorder) throw new Error("failed to find the e2e expense summary staff");
+    const orderDay = new Date(`${E2E_EXPENSE_SUMMARY_MONTH}-12T03:00:00Z`);
+    const checkout = {
+      paymentStatus: "paid" as const,
+      paidAt: orderDay,
+      paymentExpiresAt: orderDay,
+      checkoutAttemptId: randomUUID(),
+      termsAcceptedAt: orderDay,
+      promoOptIn: false,
+      placedWithSession: false,
+      shippingCostAmount: 35_000,
+      shippingSubsidyAmount: 20_000,
+      shippingCourierCode: "jne",
+      shippingServiceCode: "reg",
+      shippingCourierLabel: "JNE Reguler",
+      shippingWeightGrams: 900,
+      shippingDestinationId: "IDNP6IDNC148IDND843IDZ12250",
+      shippingQuotedAt: orderDay,
+    };
+    const orderSeeds = [
+      { orderNo: "ORD-E2E-BIAYA-1", channelId: "shopee" as const, channelOrderNo: "E2EBIAYA0001", unitPrice: 1_000_000, unitCost: 400_000, shipping: 0, fees: [30_000, 20_000], extra: {} },
+      { orderNo: "ORD-E2E-BIAYA-2", channelId: "tiktok" as const, channelOrderNo: "E2EBIAYA0002", unitPrice: 500_000, unitCost: 200_000, shipping: 0, fees: [], extra: {} },
+      { orderNo: "ORD-E2E-BIAYA-3", channelId: "web" as const, channelOrderNo: null, unitPrice: 300_000, unitCost: 100_000, shipping: 15_000, fees: [], extra: checkout },
+      { orderNo: "ORD-E2E-BIAYA-4", channelId: "whatsapp" as const, channelOrderNo: null, unitPrice: 200_000, unitCost: 80_000, shipping: 0, fees: [], extra: {} },
+    ];
+    for (const seed of orderSeeds) {
+      const [order] = await tx
+        .insert(orders)
+        .values({
+          channelId: seed.channelId,
+          orderNo: seed.orderNo,
+          channelOrderNo: seed.channelOrderNo,
+          status: "completed",
+          orderDate: orderDay,
+          subtotalAmount: seed.unitPrice,
+          shippingAmount: seed.shipping,
+          discountAmount: 0,
+          totalAmount: seed.unitPrice + seed.shipping,
+          ...seed.extra,
+        })
+        .returning({ id: orders.id });
+      if (!order) throw new Error(`failed to seed ${seed.orderNo}`);
+      await tx.insert(orderItems).values({ orderId: order.id, sku: E2E_OVERVIEW_SKU, qty: 1, unitPrice: seed.unitPrice, unitCost: seed.unitCost });
+      const components = ["admin_fee", "service_fee"] as const;
+      if (seed.fees.length > 0) await tx.insert(orderChannelFees).values(seed.fees.map((amount, index) => ({ orderId: order.id, component: components[index]!, amount })));
+    }
+
+    await tx.update(salesGoal).set({ monthlyBillCategories: [...E2E_MONTHLY_BILL_CATEGORIES] }).where(eq(salesGoal.id, 1));
+    const thisMonth = new Date(Date.now() + 7 * 60 * 60_000).toISOString().slice(0, 7);
+    type ExpenseSeed = { date: string; category: "ads_shopee" | "ads_tiktok" | "ads_meta" | "endorsement" | "salary" | "rent"; channelId: "shopee" | "tiktok" | "web" | null; amount: number; expenseNo?: string; voided?: boolean };
+    const feb = (day: string) => `${E2E_EXPENSE_SUMMARY_MONTH}-${day}`;
+    const expenseSeeds: ExpenseSeed[] = [
+      { date: `${thisMonth}-05`, category: "salary", channelId: null, amount: 3_000_000, expenseNo: E2E_MONTHLY_BILLS_EXPENSE_NO },
+      { date: feb("03"), category: "ads_shopee", channelId: "shopee", amount: 100_000 },
+      { date: feb("03"), category: "ads_tiktok", channelId: "tiktok", amount: 100_000 },
+      { date: feb("04"), category: "ads_meta", channelId: "web", amount: 50_000 },
+      { date: feb("04"), category: "ads_meta", channelId: null, amount: 30_000 },
+      { date: feb("05"), category: "endorsement", channelId: null, amount: 150_000 },
+      { date: feb("01"), category: "salary", channelId: null, amount: 400_000 },
+      { date: feb("02"), category: "rent", channelId: null, amount: 200_000 },
+      { date: feb("02"), category: "rent", channelId: null, amount: 999_000, voided: true },
+    ];
+    for (const [index, seed] of expenseSeeds.entries()) {
+      const fileId = randomUUID();
+      const sha = fileId.replaceAll("-", "").padEnd(64, "0");
+      await tx.insert(privateFiles).values({
+        id: fileId,
+        purpose: "expense_proof",
+        storageKey: `e2e/expense_proof/2026/02/${fileId}.jpg`,
+        contentType: "image/jpeg",
+        byteSize: 1,
+        sha256: sha,
+        originalFilename: "bukti.jpg",
+        originalContentType: "image/jpeg",
+        originalByteSize: 1,
+        originalSha256: sha,
+        uploadedByStaffUserId: recorder.id,
+      });
+      await tx.insert(businessExpenses).values({
+        expenseNo: seed.expenseNo ?? `BYA-202602-${String(901 + index)}`,
+        expenseDate: seed.date,
+        category: seed.category,
+        amount: seed.amount,
+        method: "transfer",
+        channelId: seed.channelId,
+        proofFileId: fileId,
+        recordedByStaffUserId: recorder.id,
+        ...(seed.voided ? { voidedAt: orderDay, voidedByStaffUserId: recorder.id, voidReason: "Salah nominal" } : {}),
+      });
     }
   });
 

@@ -17,7 +17,7 @@ import { nextDocumentNumber } from "@/lib/documents/document-number";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { privateFileValues, type PrivateFileRef } from "@/lib/supplier-payments/payment-records";
 import type { StoredPrivateFile } from "@/lib/supplier-payments/store-upload";
-import { expenseChannelError, expenseChannelRule, monthRange } from "./figures";
+import { expenseChannelError, expenseChannelRule, monthRange, type DateRange } from "./figures";
 import { EXPENSE_CATEGORY_GROUPS, type ExpenseCategoryGroup } from "./labels";
 
 // "Iklan & Biaya" write paths and list read (docs/plans/growth.md §5, session S2). Same shape as
@@ -171,8 +171,10 @@ export async function findProofHashUses(
 }
 
 export interface BusinessExpenseFilters {
-  /** "YYYY-MM", always set: the list is per month (owner answer Q3). */
+  /** "YYYY-MM", always set: the list is per month (owner answer Q3)... */
   month: string;
+  /** ...unless a date window is given (inclusive Jakarta dates), which replaces it. */
+  range?: DateRange;
   group?: ExpenseCategoryGroup;
   category?: BusinessExpenseCategory;
   showVoided?: boolean;
@@ -209,7 +211,7 @@ export async function listBusinessExpenses(
   rawPerPage: string | undefined,
   db: Database = defaultDb,
 ): Promise<{ rows: BusinessExpenseRow[]; pagination: Pagination; total: number }> {
-  const range = monthRange(filters.month);
+  const range = filters.range ?? monthRange(filters.month);
   const groupCategories = filters.group ? EXPENSE_CATEGORY_GROUPS.find((group) => group.key === filters.group)?.categories : undefined;
   const q = filters.q?.trim();
   const pattern = q ? `%${escapeLike(q)}%` : null;

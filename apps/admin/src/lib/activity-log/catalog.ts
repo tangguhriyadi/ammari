@@ -337,6 +337,13 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       update: { label: "Target penjualan diubah" },
     },
   },
+  monthly_bills_reminder: {
+    label: "Pengingat biaya bulanan",
+    area: "settings",
+    actions: {
+      update: { label: "Pengingat biaya bulanan diubah" },
+    },
+  },
   staff_user: {
     label: "Staf",
     area: "access",

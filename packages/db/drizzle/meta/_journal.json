@@ -302,6 +302,13 @@
       "when": 1793092406487,
       "tag": "0042_growth",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1793096866326,
+      "tag": "0043_monthly_bills_reminder",
+      "breakpoints": true
     }
   ]
 }

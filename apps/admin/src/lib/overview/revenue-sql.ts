@@ -69,6 +69,15 @@ export function orderPlatformFeeSql(): SQL {
   return sql`coalesce((select sum(f.amount) from ${orderChannelFees} f where f.order_id = o.id), 0)`;
 }
 
+/** One order's web shipping subsidy (SPEC §5.2, docs/plans/growth.md §4.1): the part of the quoted
+ * courier cost Ammari covers. Only placeOrder writes it, so every other order (manual, imported)
+ * adds 0. Not a platform fee and not in laba kotor; only Laba bersih subtracts it. */
+export function orderWebShippingSubsidySql(): SQL {
+  // Pinned to the web channel too, so a later writer on another channel can never leak into
+  // "Subsidi ongkir situs".
+  return sql`(case when o.channel_id = 'web' then coalesce(o.shipping_subsidy_amount, 0) else 0 end)`;
+}
+
 /** The order `o` is a marketplace order without a single fee row: its platform fees are not known
  * ("Biaya platform belum lengkap"). A row with amount 0 is a known zero, not missing. */
 /** `(... )` list of PLATFORM_FEE_CHANNEL_IDS, for an `in` condition on any channel id column. */

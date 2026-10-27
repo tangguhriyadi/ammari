@@ -1,11 +1,20 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const { getStaffSessionMock, saveSalesGoalMock } = vi.hoisted(() => ({ getStaffSessionMock: vi.fn(), saveSalesGoalMock: vi.fn() }));
+const { getStaffSessionMock, saveSalesGoalMock, saveMonthlyBillCategoriesMock } = vi.hoisted(() => ({
+  getStaffSessionMock: vi.fn(),
+  saveSalesGoalMock: vi.fn(),
+  saveMonthlyBillCategoriesMock: vi.fn(),
+}));
 vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMock }));
 // The write itself (and its audit row) is covered against the database in sales-goal.test.ts.
 vi.mock("@/lib/settings/sales-goal", () => ({ saveSalesGoal: saveSalesGoalMock }));
+// Same for the reminder write (monthly-bills.test.ts); its validation stays real.
+vi.mock("@/lib/settings/monthly-bills", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/settings/monthly-bills")>()),
+  saveMonthlyBillCategories: saveMonthlyBillCategoriesMock,
+}));
 
-const { saveSalesGoalAction } = await import("./actions");
+const { saveMonthlyBillsReminderAction, saveSalesGoalAction } = await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
   return {
@@ -19,6 +28,7 @@ const VALID = { revenueTarget: "1.000.000.000", startDate: "2026-11-01" };
 
 beforeEach(() => {
   saveSalesGoalMock.mockReset();
+  saveMonthlyBillCategoriesMock.mockReset();
   vi.useRealTimers();
 });
 
@@ -69,5 +79,34 @@ describe("saveSalesGoalAction", () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage", "finance.view_profit"]));
     const result = await saveSalesGoalAction({ revenueTarget: "1000", startDate: "2027-10-25" });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("saveMonthlyBillsReminderAction (docs/plans/growth.md §6, owner answer A6)", () => {
+  test("same gate as Target penjualan: settings.manage AND finance.view_profit", async () => {
+    for (const keys of [["finance.view_profit", "ads_expenses.manage"], ["settings.manage"], ["content.manage"]]) {
+      getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(keys));
+      await expect(saveMonthlyBillsReminderAction({ categories: ["salary"] })).rejects.toThrow(/forbidden\(\)/);
+    }
+    expect(saveMonthlyBillCategoriesMock).not.toHaveBeenCalled();
+  });
+
+  test("saves the validated categories in display order as the signed-in staff member; [] turns it off", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage", "finance.view_profit"]));
+    expect(await saveMonthlyBillsReminderAction({ categories: ["rent", "salary"] })).toEqual({ ok: true, data: undefined });
+    expect(saveMonthlyBillCategoriesMock).toHaveBeenLastCalledWith(["salary", "rent"], "staff-1");
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage", "finance.view_profit"]));
+    expect(await saveMonthlyBillsReminderAction({ categories: [] })).toEqual({ ok: true, data: undefined });
+    expect(saveMonthlyBillCategoriesMock).toHaveBeenLastCalledWith([], "staff-1");
+  });
+
+  test("refuses a category that is not offered, in Indonesian, and never writes", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage", "finance.view_profit"]));
+    expect(await saveMonthlyBillsReminderAction({ categories: ["salary", "ads_meta"] })).toEqual({
+      ok: false,
+      error: "Pilih kategori dari daftar.",
+      fieldErrors: { categories: "Pilih kategori dari daftar." },
+    });
+    expect(saveMonthlyBillCategoriesMock).not.toHaveBeenCalled();
   });
 });

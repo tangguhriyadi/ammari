@@ -4,7 +4,10 @@ import { ChevronRight } from "lucide-react";
 import { Badge, Card, Skeleton } from "@ammari/ui";
 import { formatNumber, formatRupiah, formatShortDate } from "@ammari/ui/lib";
 import { jakartaMidnight } from "@ammari/commerce/jakarta-day";
-import { formatCompactRupiah } from "@/lib/overview/format";
+import { expenseListHref } from "@/lib/expenses/search-params";
+import { getMonthlyBillsReminder } from "@/lib/expenses/summary";
+import { EXPENSE_CATEGORY_GROUPS, joinCategoryLabels } from "@/lib/expenses/labels";
+import { formatCompactRupiah, formatDateRange, formatMonthYear } from "@/lib/overview/format";
 import {
   CHECKOUT_EXPIRY_SOON_MINUTES,
   getAttentionOrders,
@@ -30,10 +33,12 @@ export interface NeedsActionAccess {
   production: boolean;
   /** finance.view_profit: amounts on Produksi belum lunas. */
   profit: boolean;
+  /** ads_expenses.manage AND finance.view_profit: "Gaji/Sewa belum dicatat" (docs/plans/growth.md §6). */
+  expenses: boolean;
 }
 
 export function hasAnyNeedsAction(access: NeedsActionAccess): boolean {
-  return access.orders || access.stock || access.supplierDebt || access.production;
+  return access.orders || access.stock || access.supplierDebt || access.production || access.expenses;
 }
 
 const SUPPLIER_DEBT_TOP = 3;
@@ -308,6 +313,41 @@ async function UnpaidProductionBlock({ profit }: { profit: boolean }) {
   );
 }
 
+/** Owner answer A6: from the 6th, last month's bills for the categories chosen on /settings
+ * ("Pengingat biaya bulanan"), each paid between the 6th of last month and the 5th of this one;
+ * Laba bersih cannot be trusted without them. Not shown at all while none is chosen. Only a month,
+ * a window and category names: no amount is ever read here. */
+async function MonthlyBillsBlock({ now }: { now: Date }) {
+  const reminder = await getMonthlyBillsReminder(now);
+  if (reminder.state === "off") return null;
+  const missing = reminder.state === "missing" ? reminder : null;
+  // The "Operasional" tab when every missing category is in it (Gaji, Sewa, Utilitas), else "Semua".
+  const operational: readonly string[] = EXPENSE_CATEGORY_GROUPS.find((group) => group.key === "operational")?.categories ?? [];
+  const group = missing?.missing.every((category) => operational.includes(category)) ? ("operational" as const) : undefined;
+  return (
+    <Block
+      title="Biaya bulanan belum dicatat"
+      count={missing ? 1 : 0}
+      countText={missing ? formatMonthYear(missing.month) : undefined}
+      href={
+        missing
+          ? expenseListHref({ month: missing.to.slice(0, 7), range: { from: missing.from, to: missing.to }, group, showVoided: false })
+          : "/ads-expenses"
+      }
+      hrefLabel="Catat di Iklan & Biaya"
+      testId="action-monthly-bills"
+      detail={
+        missing && (
+          <span>
+            Belum ada biaya {joinCategoryLabels(missing.missing)} untuk {formatMonthYear(missing.month)} yang dibayar {formatDateRange(missing.from, missing.to)}, jadi
+            Laba bersih bulan itu belum lengkap.
+          </span>
+        )
+      }
+    />
+  );
+}
+
 /**
  * "Perlu tindakan" (§5): not tied to the period. Each block renders only for a viewer holding its
  * module's permission, and only then queries; amounts only with finance.view_profit (D9).
@@ -347,6 +387,11 @@ export function OverviewNeedsAction({ access, now, className }: { access: NeedsA
           {access.production && (
             <Suspense fallback={<BlockSkeleton />}>
               <UnpaidProductionBlock profit={access.profit} />
+            </Suspense>
+          )}
+          {access.expenses && (
+            <Suspense fallback={<BlockSkeleton />}>
+              <MonthlyBillsBlock now={now} />
             </Suspense>
           )}
         </ul>

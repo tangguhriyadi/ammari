@@ -17,6 +17,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { checkArraySubset, checkIn, citext, timestamps, createdAtOnly } from "./columns";
 import {
+  BUSINESS_EXPENSE_CATEGORIES,
   CHANNEL_FEE_COMPONENTS,
   CHANNEL_IDS,
   EXPENSE_CATEGORIES,
@@ -27,6 +28,7 @@ import {
   ORDER_CANCEL_REASONS,
   ORDER_PAYMENT_STATUSES,
   ORDER_STATUSES,
+  type BusinessExpenseCategory,
   type ChannelFeeComponent,
   type ChannelId,
   type ImportBatchOrderAction,
@@ -489,18 +491,26 @@ export const targets = pgTable(
  * migration itself because the page depends on it; edited on /settings (`settings.manage`).
  * Deliberately not in store_settings: apps/web reads that row, and this is private. The goal year
  * runs `start_date` to `start_date + 1 year - 1 day`, as Asia/Jakarta calendar dates; NULL means
- * not configured yet. Unrelated to the per-month `targets` table above (seasonal weights, later). */
+ * not configured yet. Unrelated to the per-month `targets` table above (seasonal weights, later).
+ * Migration 0043 adds the "Pengingat biaya bulanan" categories to the same row: the same page,
+ * the same settings.manage + finance.view_profit gate, so no second one-row table. */
 export const salesGoal = pgTable(
   "sales_goal",
   {
     id: integer("id").primaryKey().default(1),
     revenueTargetAmount: bigint("revenue_target_amount", { mode: "number" }).notNull().default(1_000_000_000),
     startDate: date("start_date", { mode: "string" }),
+    // Expense categories that must be recorded every month (docs/plans/growth.md §6, owner answer
+    // A6, 2026-10-27): "Perlu tindakan" reminds about each one without a non-voided expense paid
+    // from the 6th of last month to the 5th of this one. Empty (the default) = reminder off.
+    monthlyBillCategories: text("monthly_bill_categories").array().$type<BusinessExpenseCategory[]>().notNull().default(sql`'{}'::text[]`),
     ...timestamps(),
   },
   (table) => [
     check("sales_goal_id_check", sql`${table.id} = 1`),
     check("sales_goal_revenue_target_amount_check", sql`${table.revenueTargetAmount} > 0`),
+    check("sales_goal_monthly_bill_categories_allowed_check", checkArraySubset(table.monthlyBillCategories, BUSINESS_EXPENSE_CATEGORIES)),
+    check("sales_goal_monthly_bill_categories_no_duplicates_check", sql`not text_array_has_duplicates(${table.monthlyBillCategories})`),
   ],
 );
 

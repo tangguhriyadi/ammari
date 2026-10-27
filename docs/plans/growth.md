@@ -1,13 +1,15 @@
 # Plan: Pertumbuhan (Iklan & Biaya, Pelanggan & Voucher)
 
-Status (2026-10-27): **Approved.** Owner answers recorded in §13 (A1, A3 to A14 accepted as
-recommended). **A2 (dropping the unused `expenses` / `ad_spend_daily` tables later) is applied as
-recommended but AWAITING OWNER CONFIRMATION**; nothing in S1 to S6 depends on it.
+Status (2026-10-27): **Approved.** Owner answers recorded in §13 (A1 to A14 accepted as
+recommended; A2, dropping the unused `expenses` / `ad_spend_daily` tables in a later cleanup
+migration, confirmed by the owner on 2026-10-27).
 
 Built: **S1** (migration `0042_growth`, schema, constants, permissions, pure figures and voucher
 status with TDD, migration test) and **S2** (expense write paths, `expense_proof` private-file
 plumbing, `/ads-expenses` Pengeluaran list + "Catat biaya" dialog + void, Log Aktivitas labels,
-e2e at 390px and 1280px). Not committed. S3 to S6 not started.
+e2e at 390px and 1280px), both committed, and **S3** (expense figures: "Ringkasan" tab, Laba bersih
+tile on `/`, "Biaya bulanan belum dicatat" item configurable on `/settings` with migration 0043,
+e2e). S4 to S6 not started.
 
 S1/S2 notes (where the build differs from or adds to the text below):
 - `business_expenses_channel_check` also refuses a missing channel on Iklan Shopee/TikTok (IS NOT
@@ -24,6 +26,29 @@ S1/S2 notes (where the build differs from or adds to the text below):
   (`?month=YYYY-MM`, default this Jakarta month, future months fall back), with "Semua / Iklan /
   Operasional" tabs, a category filter limited to the chosen group, search (No. biaya, kampanye,
   catatan) and "Tampilkan yang dibatalkan". The footer total always excludes voided rows.
+- S3: the web shipping subsidy is `PeriodMoney.webShippingSubsidy` in `getPeriodTotals` (one
+  more column of the counted-orders CTE, `orderWebShippingSubsidySql` in `revenue-sql.ts`), so it
+  follows the counted-order definition exactly (a refunded or chargeback checkout order's subsidy
+  is out with its omzet). DB reads in `lib/expenses/summary.ts` (`getExpenseBreakdown`,
+  `getExpenseTotal`, `getMonthlyBillsReminder`, `dateRangeToTimeRange`); pure `buildRoasRows`,
+  `shiftMonth`, `monthlyBillsReminderWindow`, `formatRoasTenths` in `figures.ts`; the summary period
+  in `search-params.ts` (`?tab=ringkasan&period=this_month|last_month|month|range`, `month=` /
+  `from=&to=` as `YYYY-MM`, invalid or > 12 months falls back to this month with an alert).
+- S3 UI: `/ads-expenses` has a "Pengeluaran / Ringkasan" tab bar; the Ringkasan tab
+  (`_components/expense-summary.tsx`) shows Omzet, Laba setelah biaya platform, Total biaya, Laba
+  bersih (+ "Subsidi ongkir situs"), the "belum lengkap" notes plus "Laba bersih belum lengkap"
+  when HPP or platform fees are incomplete, "Biaya per kategori" and "Iklan vs omzet" (both
+  `CardList` + `TableContainer`), "Biaya endorse" and "Biaya pemasaran". ROAS of Situs, Instagram,
+  WhatsApp and Total is labelled "(perkiraan)"; a channel without spend shows "Belum ada iklan".
+- S3 Ringkasan (`/`): the "Laba bersih" tile (`kpi-laba-bersih`) has the same delta line as the
+  other tiles (previous period = same stretch of last month, expenses by their dates); its link to
+  `/ads-expenses?tab=ringkasan` needs `ads_expenses.manage`. The Perlu tindakan block "Biaya
+  bulanan belum dicatat" needs `ads_expenses.manage` + `finance.view_profit`, is not rendered while
+  no category is chosen on `/settings`, collapses to "Tidak ada" when nothing is missing, names the
+  missing categories ("Sewa", "Gaji dan Sewa", "Gaji, Sewa, dan Utilitas") and links to the
+  Pengeluaran list for the payment window (`/ads-expenses?from=YYYY-MM-06&to=YYYY-MM-05&group=operational`;
+  the list accepts a `from`/`to` window of real dates, `from <= to <= today`, at most 366 days,
+  which replaces the month filter).
 - Pure functions live in `lib/expenses/figures.ts` (channel rules, `monthRange`, `monthToDate`,
   `sumExpensesInRange`, `labaBersih`, `summarizeMarketing`, `roasTenths`, `roasStatus`; ROAS is
   compared in integers: `omzet * 10 >= adSpend * 83`) and `lib/vouchers/status.ts`
@@ -132,7 +157,7 @@ Next migration number: **0042**.
 
 | # | Decision |
 |---|---|
-| G1 | New append-only table **`business_expenses`**; the unused `expenses` and `ad_spend_daily` are left untouched now and dropped later in a separate contract migration (A2, **awaiting owner confirmation**). Reusing `expenses` would mean dropping its `updated_at` trigger and columns and replacing its CHECK in the same deploy, for no benefit. |
+| G1 | New append-only table **`business_expenses`**; the unused `expenses` and `ad_spend_daily` are left untouched now and dropped later in a separate contract migration ([owner A2], confirmed 2026-10-27). Reusing `expenses` would mean dropping its `updated_at` trigger and columns and replacing its CHECK in the same deploy, for no benefit. |
 | G2 | [owner A1] Categories are a **fixed list in code** behind a CHECK, Indonesian labels in `apps/admin`. "Lainnya" requires a note. |
 | G3 | Same rules as supplier payments: proof **required**, no edit, no delete, void with required reason, voided rows stay visible struck through and stop counting. DB trigger enforces it. |
 | G4 | Proofs reuse the private bucket and route with a new purpose `expense_proof`. |
@@ -319,9 +344,22 @@ Two tabs (`Tabs`, `?tab=`):
 **Main Ringkasan (`/`)**: "Laba bersih" tile next to "Laba setelah biaya platform", only with
 `finance.view_profit` and period `month`; links to `/ads-expenses?tab=ringkasan`.
 
-**Perlu tindakan** (finance only, owner answer A6): one item "Belum ada biaya Gaji/Sewa
-tercatat untuk bulan lalu" from the 6th of the month, only if neither category has a non-voided
-row in the previous month. Cheap, and it is what makes Laba bersih trustworthy.
+**Perlu tindakan** (finance only, owner answer A6, window and configuration decided by the owner on
+2026-10-27): one item "Biaya bulanan belum dicatat" for LAST month, from the 6th of the current
+month, for the categories chosen on `/settings` ("Pengingat biaya bulanan": checkboxes Gaji, Sewa,
+Utilitas; the list can grow to any fixed category). **Default: none chosen = reminder off** (Ammari
+has no rent and no staff yet; both are planned). Each chosen category needs its own non-voided
+expense dated (Jakarta) from the 6th of last month through the 5th of the current month; the item
+names the missing ones. Example on 6 Mar: window 6 Feb to 5 Mar (a Gaji paid 28 Feb or 3 Mar
+counts for February; one paid 3 Feb is January's). The link opens the Pengeluaran list for that
+window. With none chosen the block is not rendered at all.
+
+Storage: `sales_goal.monthly_bill_categories text[] not null default '{}'` (migration **0043**,
+additive: CHECK subset of `BUSINESS_EXPENSE_CATEGORIES`, no duplicates). The one-row `sales_goal`
+already is the Ringkasan settings row on `/settings` under the same gate; `store_settings` is the
+public storefront's (read by `apps/web`, `content.manage`), so it does not fit. The section and its
+action need `settings.manage` + `finance.view_profit` (as Target penjualan); the save is audited as
+`monthly_bills_reminder` / `update` ("Pengingat biaya bulanan diubah").
 
 ## 7. Permissions (A)
 
@@ -590,17 +628,17 @@ S1 to S3 (A) and S4 to S5 (B) are independent after S1; B can go first if the ow
 
 ## 13. Owner answers (2026-10-27)
 
-All recommendations accepted except A2, which is applied as recommended **pending the owner's
-confirmation**. Each answer is folded into the sections above; this list is the record.
+All recommendations accepted (A2 confirmed separately on 2026-10-27). Each answer is folded into
+the sections above; this list is the record.
 
 | # | Question | Answer |
 |---|---|---|
 | A1 | Category list | Fixed list in code (the ten categories), "Lainnya" requires a note (G2). |
-| A2 | Unused `expenses` and `ad_spend_daily` tables | **AWAITING OWNER CONFIRMATION.** Applied for now as recommended: 0042 leaves both untouched; a later contract migration drops them once dev and prod are confirmed to have 0 rows. Ad-platform-reported GMV can come back later as an import if wanted. |
+| A2 | Unused `expenses` and `ad_spend_daily` tables | **Confirmed by the owner (2026-10-27).** Keep both for now: 0042 leaves them untouched; a later cleanup (contract) migration drops them once dev and prod are confirmed to have 0 rows. Ad-platform-reported GMV can come back later as an import if wanted. |
 | A3 | Monthly bills in short periods | Counted on the payment date; Laba bersih shown for whole months only, hidden for shorter periods (§4.2). |
 | A4 | Web shipping subsidy | Subtracted automatically as its own line ("Subsidi ongkir situs"); Biteship/courier top-ups are never recorded as expenses (§4.1, §4.3). |
 | A5 | Contacts in the customer list | Masked in the list, full on the detail page (§8.1). |
-| A6 | Ringkasan hooks | Laba bersih tile (month only, finance), voucher card (`customers.view`), Perlu tindakan "Gaji/Sewa bulan lalu belum dicatat" from the 6th (§6, §9.2). |
+| A6 | Ringkasan hooks | Laba bersih tile (month only, finance), voucher card (`customers.view`), Perlu tindakan "Gaji/Sewa bulan lalu belum dicatat" from the 6th (§6, §9.2). Window and configuration (2026-10-27): the categories are chosen on `/settings` ("Pengingat biaya bulanan", default none = off; migration 0043); each chosen one needs its own non-voided expense dated from the 6th of last month through the 5th of this month (Jakarta); the item names the missing ones and links to the list for that window. |
 | A7 | Recording a promo withdrawal | New key `customers.manage` for owner, super_admin and CS (§8.3; shipped in 0042). |
 | A8 | Voucher void and extend | Both, owner and super_admin only, reason required, extension max 3 months, reusing `vouchers.void` relabelled "Batalkan atau perpanjang voucher" (§9.3). |
 | A9 | Promo contact export | Yes, narrowly: consenting accounts only, four columns, owner/super_admin, audited, never uploaded to Meta/TikTok (§10; `customers.export` shipped in 0042). |

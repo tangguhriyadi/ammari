@@ -303,6 +303,9 @@ for (const layout of LAYOUTS) {
       const html = await (await page.request.get("/settings")).text();
       expect(html).not.toMatch(NO_RUPIAH);
       expect(html).not.toMatch(/Target penjualan|1\.000\.000\.000|1000000000/);
+      // Nor the reminder section (docs/plans/growth.md §6): same gate as the target.
+      expect(html).not.toMatch(/Pengingat biaya bulanan|monthly-bills/);
+      await expect(page.getByRole("checkbox", { name: "Gaji" })).toHaveCount(0);
 
       // Ringkasan: no target card, so no "Atur target" link either.
       await page.goto("/");
@@ -320,10 +323,20 @@ test.afterAll(async ({ browser }) => {
   await page.goto("/settings");
   await page.getByLabel("Target omzet per tahun").fill("1000000000");
   await page.getByLabel("Tanggal mulai").fill("2026-11-01");
-  await page.getByRole("button", { name: "Simpan" }).click();
+  await page.getByRole("button", { name: "Simpan", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Target penjualan disimpan");
+  // And the seeded reminder categories (global-setup E2E_MONTHLY_BILL_CATEGORIES: Gaji and Sewa).
+  await setMonthlyBills(page, ["Gaji", "Sewa"]);
   await page.close();
 });
+
+/** Ticks exactly `labels` in "Pengingat biaya bulanan" on /settings and saves. */
+async function setMonthlyBills(page: Page, labels: readonly string[]) {
+  const section = page.getByRole("form", { name: "Pengingat biaya bulanan" });
+  for (const label of ["Gaji", "Sewa", "Utilitas"]) await section.getByRole("checkbox", { name: label }).setChecked(labels.includes(label));
+  await section.getByRole("button", { name: "Simpan pengingat" }).click();
+  await expect(page.getByRole("status")).toContainText(labels.length > 0 ? "Pengingat biaya bulanan disimpan" : "Pengingat biaya bulanan dimatikan");
+}
 
 for (const layout of LAYOUTS) {
   test.describe(`Target penjualan settings at ${layout.label}`, () => {
@@ -339,19 +352,19 @@ for (const layout of LAYOUTS) {
 
       // Server-side validation, in Indonesian, nothing saved.
       await amount.fill("0");
-      await page.getByRole("button", { name: "Simpan" }).click();
+      await page.getByRole("button", { name: "Simpan", exact: true }).click();
       await expect(page.getByText("Target harus antara Rp 1 dan Rp 100.000.000.000.")).toBeVisible();
       await startDate.fill(jakartaDay(400));
       await amount.fill("600000000");
       await expect(amount).toHaveValue("600.000.000");
-      await page.getByRole("button", { name: "Simpan" }).click();
+      await page.getByRole("button", { name: "Simpan", exact: true }).click();
       await expect(page.getByText("Tanggal mulai paling lambat 1 tahun dari hari ini.")).toBeVisible();
 
       // A future start: the card waits for it.
       const futureStart = jakartaDay(30);
       await startDate.fill(futureStart);
       await expect(page.getByText(`Tahun target: ${dateLabel(futureStart)} s.d.`)).toBeVisible();
-      await page.getByRole("button", { name: "Simpan" }).click();
+      await page.getByRole("button", { name: "Simpan", exact: true }).click();
       await expect(page.getByRole("status")).toContainText("Target penjualan disimpan");
       await page.goto("/");
       await expect(page.getByTestId("overview-target-start")).toHaveText(`Tahun pertama dimulai ${dateLabel(futureStart)}`);
@@ -362,7 +375,7 @@ for (const layout of LAYOUTS) {
       await page.goto("/settings");
       await expect(amount).toHaveValue("600.000.000");
       await startDate.fill(pastStart);
-      await page.getByRole("button", { name: "Simpan" }).click();
+      await page.getByRole("button", { name: "Simpan", exact: true }).click();
       await expect(page.getByRole("status")).toContainText("Target penjualan disimpan");
       await page.goto("/");
       const card = page.getByTestId("overview-target-card");
@@ -379,6 +392,40 @@ for (const layout of LAYOUTS) {
       // 12 months, or 13 when the start is not the 1st (a part month at each end).
       expect(await cumulative.locator("table tbody tr").count()).toBeGreaterThanOrEqual(12);
       await expect(cumulative).toContainText("Target garis lurus");
+    });
+
+    test("owner sets Pengingat biaya bulanan; Perlu tindakan follows (docs/plans/growth.md §6)", async ({ page }) => {
+      await loginAs(page, E2E_OVERVIEW_SETTINGS_EMAIL);
+      await page.goto("/settings");
+      const section = page.getByRole("form", { name: "Pengingat biaya bulanan" });
+      await expect(section.getByRole("checkbox", { name: "Gaji" })).toBeChecked();
+      await expect(section.getByRole("checkbox", { name: "Sewa" })).toBeChecked();
+      await expect(section.getByRole("checkbox", { name: "Utilitas" })).not.toBeChecked();
+
+      // Add Utilitas: from the 6th the item names Sewa and Utilitas (global-setup records a Gaji in
+      // the window); before the 6th it is collapsed.
+      await setMonthlyBills(page, ["Gaji", "Sewa", "Utilitas"]);
+      await page.goto("/");
+      const bills = page.getByTestId("action-monthly-bills");
+      await expect(bills).toBeVisible();
+      if (Number(jakartaDay(0).slice(8, 10)) >= 6) {
+        await expect(bills).toContainText("Belum ada biaya Sewa dan Utilitas untuk");
+        await expect(bills.getByTestId("action-monthly-bills-all")).toHaveAttribute("href", /^\/ads-expenses\?from=\d{4}-\d{2}-06&to=\d{4}-\d{2}-05&group=operational$/);
+      } else {
+        await expect(bills.getByTestId("action-monthly-bills-count")).toHaveText("Tidak ada");
+      }
+
+      // Nothing ticked: the reminder is off and the block is gone.
+      await page.goto("/settings");
+      await expect(section.getByRole("checkbox", { name: "Utilitas" })).toBeChecked();
+      await setMonthlyBills(page, []);
+      await page.goto("/");
+      await expect(page.getByTestId("overview-needs-action")).toBeVisible();
+      await expect(page.getByTestId("action-monthly-bills")).toHaveCount(0);
+
+      // Back to the seeded Gaji and Sewa.
+      await page.goto("/settings");
+      await setMonthlyBills(page, ["Gaji", "Sewa"]);
     });
   });
 }

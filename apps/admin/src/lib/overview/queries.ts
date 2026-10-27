@@ -7,7 +7,15 @@ import { channelDisplayNameSql } from "@/lib/orders/channel-label";
 import { goalCumulativeSeries, type CumulativePoint, type SeriesGranularity, type SeriesPoint } from "./charts";
 import { computeGoalProgress, goalWindow, type GoalProgress, type SalesGoal } from "./goal";
 import type { TimeRange } from "./period";
-import { countedOrderSql, lineHppSql, orderOmzetSql, orderPlatformFeeMissingSql, orderPlatformFeeSql, platformFeeChannelListSql } from "./revenue-sql";
+import {
+  countedOrderSql,
+  lineHppSql,
+  orderOmzetSql,
+  orderPlatformFeeMissingSql,
+  orderPlatformFeeSql,
+  orderWebShippingSubsidySql,
+  platformFeeChannelListSql,
+} from "./revenue-sql";
 
 // Ringkasan aggregations (docs/plans/dashboard-overview.md §1, §3, §4, §7). Every money figure is
 // cost/profit-adjacent data (D9): with `canViewProfit = false` it is not selected at all, so it can
@@ -33,10 +41,13 @@ function orderDateInRangeSql(range: TimeRange): SQL {
 }
 
 /** The counted orders of a range as a CTE body (`id`, `channel_id`, and when allowed `omzet`; with
- * `withFees` also `platform_fee` and `fee_missing`). Only the tiles ask for the fees: a CTE used
- * twice is materialized with every column, so the breakdowns would pay for lookups they never read. */
+ * `withFees` also `platform_fee`, `fee_missing` and `shipping_subsidy`). Only the tiles ask for the
+ * fees: a CTE used twice is materialized with every column, so the breakdowns would pay for lookups
+ * they never read. */
 function countedOrdersCte(range: TimeRange, canViewProfit: boolean, { withFees = false }: { withFees?: boolean } = {}): SQL {
-  const fees = withFees ? sql`, ${orderPlatformFeeSql()} as platform_fee, ${orderPlatformFeeMissingSql()} as fee_missing` : sql``;
+  const fees = withFees
+    ? sql`, ${orderPlatformFeeSql()} as platform_fee, ${orderPlatformFeeMissingSql()} as fee_missing, ${orderWebShippingSubsidySql()} as shipping_subsidy`
+    : sql``;
   const money = canViewProfit ? sql`, ${orderOmzetSql()} as omzet${fees}` : sql``;
   return sql`select o.id, o.channel_id${money}
     from ${orders} o
@@ -98,6 +109,9 @@ export interface PeriodMoney {
   /** "Laba setelah biaya platform": laba kotor - platformFee. No fee is ever estimated. */
   labaSetelahBiayaPlatform: number;
   platformFees: PlatformFeeSummary;
+  /** "Subsidi ongkir situs": what Ammari covered of the counted web checkout orders' courier cost
+   * (docs/plans/growth.md §4.1, owner answer A4). Not in either laba above; Laba bersih subtracts it. */
+  webShippingSubsidy: number;
 }
 
 /** The fee side of the period, per channel that has platform fees at all (Shopee, TikTok Shop). */
@@ -128,6 +142,7 @@ type PeriodTotalsRow = {
   hpp?: string;
   lines_without_cost?: number;
   platform_fee?: string;
+  web_shipping_subsidy?: string;
   fee_channels?: { channel_id: string; channel_name: string; orders: number; orders_without_fees: number; platform_fee: string }[];
 };
 
@@ -156,6 +171,7 @@ export async function getPeriodTotals(range: TimeRange, { canViewProfit }: Profi
                   coalesce(lines.hpp, 0)::text as hpp,
                   coalesce(lines.lines_without_cost, 0) as lines_without_cost,
                   (select coalesce(sum(counted.platform_fee), 0) from counted)::text as platform_fee,
+                  (select coalesce(sum(counted.shipping_subsidy), 0) from counted)::text as web_shipping_subsidy,
                   (
                     select coalesce(json_agg(fc order by fc.platform_fee::bigint desc, fc.orders desc, fc.channel_id), '[]'::json)
                     from (
@@ -202,6 +218,7 @@ export async function getPeriodTotals(range: TimeRange, { canViewProfit }: Profi
         ordersWithoutFees: byChannel.reduce((sum, channel) => sum + channel.ordersWithoutFees, 0),
         byChannel,
       },
+      webShippingSubsidy: toAmount(row.web_shipping_subsidy),
     },
   };
 }

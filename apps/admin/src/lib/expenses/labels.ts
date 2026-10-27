@@ -49,3 +49,16 @@ export const MARKETING_CHANNEL_LABELS: Record<MarketingChannelId, string> = {
   instagram: "Instagram",
   whatsapp: "WhatsApp",
 };
+
+/** "Pengingat biaya bulanan" (docs/plans/growth.md §6, owner answer A6): the categories /settings
+ * offers as "must be recorded every month", in display order. Any fixed category may be added
+ * here later (the DB CHECK allows the whole list); none is chosen by default (reminder off). */
+export const MONTHLY_BILL_CATEGORY_OPTIONS = ["salary", "rent", "utilities"] as const satisfies readonly BusinessExpenseCategory[];
+export type MonthlyBillCategory = (typeof MONTHLY_BILL_CATEGORY_OPTIONS)[number];
+
+/** "Gaji", "Gaji dan Sewa", "Gaji, Sewa, dan Utilitas". */
+export function joinCategoryLabels(categories: readonly BusinessExpenseCategory[]): string {
+  const labels = categories.map((category) => EXPENSE_CATEGORY_LABELS[category]);
+  if (labels.length <= 2) return labels.join(" dan ");
+  return `${labels.slice(0, -1).join(", ")}, dan ${labels.at(-1)}`;
+}

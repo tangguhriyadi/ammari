@@ -4,6 +4,7 @@ import { jakartaDate } from "@ammari/commerce/jakarta-day";
 import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin, revalidateOverview } from "@/lib/admin-revalidate";
+import { MONTHLY_BILLS_MESSAGES, parseMonthlyBillCategories, saveMonthlyBillCategories } from "@/lib/settings/monthly-bills";
 import { saveSalesGoal } from "@/lib/settings/sales-goal";
 import { SALES_GOAL_PERMISSIONS } from "@/lib/settings/sales-goal-permissions";
 import { salesGoalSchema, type SalesGoalFormInput } from "@/lib/settings/sales-goal-schema";
@@ -25,6 +26,21 @@ export async function saveSalesGoalAction(input: SalesGoalFormInput): Promise<Ac
   }
   return runAction(async () => {
     await saveSalesGoal({ revenueTargetAmount: parsed.data.revenueTarget, startDate: parsed.data.startDate }, session.staffUser.id);
+    revalidateAdmin("/settings");
+    revalidateOverview();
+    return undefined;
+  });
+}
+
+/** "Pengingat biaya bulanan" (docs/plans/growth.md §6, owner answer A6): the same gate as Target
+ * penjualan (settings.manage AND finance.view_profit, on the server). Only offered categories are
+ * accepted; an empty list turns the reminder off. */
+export async function saveMonthlyBillsReminderAction(input: { categories: unknown }): Promise<ActionResult> {
+  const session = await requireAllPermissions(SALES_GOAL_PERMISSIONS);
+  const categories = parseMonthlyBillCategories(input?.categories);
+  if (!categories) return { ok: false, error: MONTHLY_BILLS_MESSAGES.invalid, fieldErrors: { categories: MONTHLY_BILLS_MESSAGES.invalid } };
+  return runAction(async () => {
+    await saveMonthlyBillCategories(categories, session.staffUser.id);
     revalidateAdmin("/settings");
     revalidateOverview();
     return undefined;

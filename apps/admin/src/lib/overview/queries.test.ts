@@ -124,6 +124,9 @@ describe("getPeriodTotals", () => {
               { channelId: "tiktok", channelName: "TikTok Shop", orders: 1, ordersWithoutFees: 1, platformFee: 0 },
             ],
           },
+          // Only the counted checkout order's subsidy (Rp 12.000 quote, fully covered); the refunded
+          // and chargeback ones are out with their omzet (docs/plans/growth.md §4.1).
+          webShippingSubsidy: 12_000,
         },
       });
 
@@ -150,6 +153,7 @@ describe("getPeriodTotals", () => {
           platformFee: 0,
           labaSetelahBiayaPlatform: 0,
           platformFees: { marketplaceOrders: 0, ordersWithoutFees: 0, byChannel: [] },
+          webShippingSubsidy: 0,
         },
       });
       // A refund that also covered the buyer's Rp 10.000 ongkir share: the goods amount is the floor.
@@ -161,7 +165,9 @@ describe("getPeriodTotals", () => {
         discountAmount: 30_000,
       });
       const totals = await getPeriodTotals(DAY, { canViewProfit: true }, tx);
-      expect(totals.money).toMatchObject({ omzet: 0, hpp: 45_000, labaKotor: -45_000, marginBps: null });
+      // The partially refunded checkout order still counts, and so does its Rp 20.000 subsidy
+      // (docs/plans/growth.md §4.1); it never touches laba kotor.
+      expect(totals.money).toMatchObject({ omzet: 0, hpp: 45_000, labaKotor: -45_000, marginBps: null, webShippingSubsidy: 20_000 });
     });
   });
 

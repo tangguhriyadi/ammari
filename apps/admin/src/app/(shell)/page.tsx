@@ -9,7 +9,7 @@ import { DEFAULT_OVERVIEW_PERIOD, periodParamsFromSearch, resolvePeriod, type Ov
 import { chartParamsFromSearch } from "@/lib/overview/search-params";
 import { canManageSalesGoal } from "@/lib/settings/sales-goal-permissions";
 import { OverviewBreakdownSkeleton, OverviewChannelBreakdown, OverviewProductTypeBreakdown } from "./_components/overview-breakdowns";
-import { OverviewKpiTiles, OverviewKpiTilesSkeleton } from "./_components/overview-kpi-tiles";
+import { OverviewKpiTiles, OverviewKpiTilesSkeleton, showsLabaBersih } from "./_components/overview-kpi-tiles";
 import { hasAnyNeedsAction, OverviewNeedsAction, OverviewNeedsActionSkeleton, type NeedsActionAccess } from "./_components/overview-needs-action";
 import { OverviewPeriodPicker } from "./_components/overview-period-picker";
 import { OverviewSalesChart, OverviewSalesChartSkeleton } from "./_components/overview-sales-chart";
@@ -56,6 +56,8 @@ export default async function RingkasanPage({ searchParams }: { searchParams: Pr
     supplierDebt: has("inventory.view") && canViewProfit,
     production: has("production.manage"),
     profit: canViewProfit,
+    // Iklan & Biaya needs both keys (docs/plans/growth.md §7); the item links there.
+    expenses: has("ads_expenses.manage") && canViewProfit,
   };
   const showActions = hasAnyNeedsAction(access);
 
@@ -108,8 +110,14 @@ export default async function RingkasanPage({ searchParams }: { searchParams: Pr
             customAttempted={Boolean(params.from || params.to)}
             today={today}
           />
-          <Suspense key={periodKey} fallback={<OverviewKpiTilesSkeleton canViewProfit={canViewProfit} />}>
-            <OverviewKpiTiles resolved={resolved} canViewProfit={canViewProfit} canViewStock={has("stock.view")} canViewImports={has("orders.import")} />
+          <Suspense key={periodKey} fallback={<OverviewKpiTilesSkeleton canViewProfit={canViewProfit} showNetProfit={showsLabaBersih(resolved.period, canViewProfit)} />}>
+            <OverviewKpiTiles
+              resolved={resolved}
+              canViewProfit={canViewProfit}
+              canViewStock={has("stock.view")}
+              canViewImports={has("orders.import")}
+              canViewExpenses={has("ads_expenses.manage")}
+            />
           </Suspense>
         </section>
 
