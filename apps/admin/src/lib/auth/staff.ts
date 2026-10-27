@@ -41,6 +41,12 @@ function googleConfig() {
 export const isGoogleConfigured = Boolean(googleConfig());
 
 const baseURL = requiredEnv("BETTER_AUTH_URL");
+
+/** The same sender the OTP emails use (Resend when configured, console locally, the no-op
+ * capturing sender in e2e), shared with the staff invite email (lib/staff/mutations.ts). */
+export const staffEmailSender = emailSender();
+/** The admin app's own origin, for links in emails (the invite tells people where to log in). */
+export const adminBaseUrl = baseURL;
 const secret = process.env.STAFF_BETTER_AUTH_SECRET ?? "";
 const google = googleConfig();
 
@@ -61,7 +67,7 @@ const expiresInSecondsOverride =
 
 export const staffAuth = createStaffAuth({
   db,
-  emailSender: emailSender(),
+  emailSender: staffEmailSender,
   baseURL,
   secret,
   google,

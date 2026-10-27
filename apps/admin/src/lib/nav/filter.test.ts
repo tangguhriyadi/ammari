@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
+import { PREDEFINED_ROLES } from "@ammari/db/rbac";
 import { NAV_ITEMS } from "./config";
-import { filterNavByPermissions, getMobilePrimaryItems } from "./filter";
+import { filterNavByPermissions, firstAllowedHref, getMobilePrimaryItems } from "./filter";
 
 describe("filterNavByPermissions", () => {
   test("super_admin (every permission) sees every item", () => {
@@ -9,7 +10,7 @@ describe("filterNavByPermissions", () => {
     expect(result).toHaveLength(NAV_ITEMS.length);
   });
 
-  test("owner (no roles.manage/staff.manage/audit_log.view) does not see Peran & Staf or Log Aktivitas", () => {
+  test("a role without roles.manage/staff.manage/audit_log.view does not see Peran & Staf or Log Aktivitas", () => {
     const ownerKeys = [
       "overview.view",
       "orders.view",
@@ -74,5 +75,29 @@ describe("getMobilePrimaryItems", () => {
     const filtered = filterNavByPermissions(NAV_ITEMS, ["overview.view"]);
     const primaries = getMobilePrimaryItems(filtered);
     expect(primaries.map((item) => item.label)).toEqual(["Ringkasan"]);
+  });
+});
+
+describe("firstAllowedHref", () => {
+  test("a role with overview.view starts at Ringkasan", () => {
+    expect(firstAllowedHref(NAV_ITEMS, ["overview.view", "orders.view"])).toBe("/");
+  });
+
+  test("the predefined Packing/Gudang role (no overview.view) lands on /packing, not /orders", () => {
+    const packing = PREDEFINED_ROLES.find((role) => role.key === "packing_warehouse")!;
+    expect(firstAllowedHref(NAV_ITEMS, packing.permissionKeys)).toBe("/packing");
+  });
+
+  test("the predefined Admin Konten role lands on /content, not /stock", () => {
+    const content = PREDEFINED_ROLES.find((role) => role.key === "content_admin")!;
+    expect(firstAllowedHref(NAV_ITEMS, content.permissionKeys)).toBe("/content");
+  });
+
+  test("otherwise the first allowed item in catalog order", () => {
+    expect(firstAllowedHref(NAV_ITEMS, ["products.manage", "inventory.view"])).toBe("/purchases");
+  });
+
+  test("no permissions means nowhere to go", () => {
+    expect(firstAllowedHref(NAV_ITEMS, [])).toBeNull();
   });
 });

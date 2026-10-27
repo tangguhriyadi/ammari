@@ -20,6 +20,7 @@ import type { ChannelId } from "./schema";
 import {
   OWNER_ROLE_KEY,
   PERMISSIONS,
+  PREDEFINED_ROLES,
   SUPER_ADMIN_ROLE_KEY,
   ownerDefaultPermissionKeys,
   superAdminDefaultPermissionKeys,
@@ -150,7 +151,39 @@ async function upsertSystemRole(
     );
 }
 
+/** Insert-only: creates the role with `permissionKeys` the first time, and never touches an
+ * existing role again — not its name, description, or grants. Used for every role an admin may
+ * edit in /roles-staff (owner, and the predefined roles), so a manual `db:seed` run on a real
+ * database (docs/deploy-prod.md §10) can never undo a super_admin's edit. New permission keys
+ * reach existing roles through their own migration instead (permissions.ts header). */
+async function insertRoleIfMissing(
+  db: Database,
+  role: { key: string; name: string; description: string; isSystem: boolean },
+  permissionKeys: readonly string[],
+) {
+  // One transaction: a role is never left behind with partial grants, which no later
+  // insert-only run would repair. A key missing from the catalog fails loudly for the same reason.
+  await db.transaction(async (tx) => {
+    const [created] = await tx.insert(roles).values(role).onConflictDoNothing({ target: roles.key }).returning();
+    if (!created || permissionKeys.length === 0) return;
+
+    const permissionRows = await tx
+      .select({ id: permissions.id })
+      .from(permissions)
+      .where(inArray(permissions.key, [...permissionKeys]));
+    if (permissionRows.length !== new Set(permissionKeys).size) {
+      throw new Error(`role "${role.key}": some of its permission keys are not in the catalog`);
+    }
+    await tx
+      .insert(rolePermissions)
+      .values(permissionRows.map((p) => ({ roleId: created.id, permissionId: p.id })))
+      .onConflictDoNothing({ target: [rolePermissions.roleId, rolePermissions.permissionId] });
+  });
+}
+
 async function seedSystemRoles(db: Database) {
+  // super_admin stays a full sync: it always holds every permission and is never editable
+  // (docs/SPEC.md §9), so there is no admin edit to preserve.
   await upsertSystemRole(
     db,
     SUPER_ADMIN_ROLE_KEY,
@@ -158,13 +191,28 @@ async function seedSystemRoles(db: Database) {
     "Every permission, including roles.manage, staff.manage, audit_log.view, and risky actions.",
     superAdminDefaultPermissionKeys(),
   );
-  await upsertSystemRole(
+  // owner's permissions are editable by super_admin (docs/SPEC.md §9), so insert-only.
+  await insertRoleIfMissing(
     db,
-    OWNER_ROLE_KEY,
-    "Owner",
-    "All business permissions; not roles.manage, staff.manage, or audit_log.view by default.",
+    {
+      key: OWNER_ROLE_KEY,
+      name: "Owner",
+      description: "All business permissions and staff.manage; not roles.manage or audit_log.view by default.",
+      isSystem: true,
+    },
     ownerDefaultPermissionKeys(),
   );
+}
+
+/** Same rows as migration 0041 — restores them after packages/db/test/e2e-db.ts's TRUNCATE. */
+async function seedPredefinedRoles(db: Database) {
+  for (const role of PREDEFINED_ROLES) {
+    await insertRoleIfMissing(
+      db,
+      { key: role.key, name: role.name, description: role.description, isSystem: false },
+      role.permissionKeys,
+    );
+  }
 }
 
 async function seedInitialCostAssumptions(db: Database) {
@@ -251,6 +299,7 @@ export async function seed(db: Database = defaultDb) {
   await seedStoreSettings(db);
   await syncPermissionCatalog(db);
   await seedSystemRoles(db);
+  await seedPredefinedRoles(db);
   await seedInitialCostAssumptions(db);
   await seedCostComponentDefaults(db);
   await seedDefaultProductType(db);

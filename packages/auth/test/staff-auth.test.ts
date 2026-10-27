@@ -121,6 +121,64 @@ describe("email OTP sign-in — the staff gate", () => {
   });
 });
 
+// docs/plans/roles-staff.md §3: a staff_users row is the invitation; one that was never used
+// before its invite_expires_at is treated exactly like an unknown email.
+describe("invitation expiry — the staff gate", () => {
+  const PAST = () => new Date(Date.now() - 60_000);
+  const FUTURE = () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  test("an expired, never-used invitation: send is a silent no-op and verify fails", async () => {
+    const staff = await createCommittedStaffUser({ inviteExpiresAt: PAST() });
+    staffUserIds.push(staff.id);
+    const { auth, emailSender } = buildStaffAuth();
+
+    const result = await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    expect(result.success).toBe(true); // same response shape as a real send
+    expect(emailSender.sent).toHaveLength(0);
+    await expect(auth.api.signInEmailOTP({ body: { email: staff.email, otp: "000000" } })).rejects.toThrow();
+  });
+
+  test("an unexpired invitation logs in, and the expiry stops mattering after the first login", async () => {
+    const staff = await createCommittedStaffUser({ inviteExpiresAt: FUTURE() });
+    staffUserIds.push(staff.id);
+    const { auth, emailSender } = buildStaffAuth();
+
+    await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    const otp = emailSender.sent[0]!.body.match(/\d{6}/)?.[0]!;
+    await auth.api.signInEmailOTP({ body: { email: staff.email, otp } });
+
+    const [row] = await testDb.select().from(staffUsers).where(eq(staffUsers.id, staff.id));
+    expect(row?.lastLoginAt).not.toBeNull();
+    // Expire the invitation after the fact: a returning staff member is unaffected.
+    await testDb.update(staffUsers).set({ inviteExpiresAt: PAST() }).where(eq(staffUsers.id, staff.id));
+    const [authUser] = await testDb.select().from(staffAuthUsers).where(eq(staffAuthUsers.staffUserId, staff.id));
+    expect(await isActiveStaffAuthUser(testDb, authUser!.id)).toBe(true);
+  });
+
+  test("a row with no expiry (pre-0041 rows, seed accounts) is admitted", async () => {
+    const staff = await createCommittedStaffUser();
+    staffUserIds.push(staff.id);
+    const { auth, emailSender } = buildStaffAuth();
+    await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    expect(emailSender.sent).toHaveLength(1);
+  });
+
+  test("a session for a never-logged-in row is refused once its invitation has expired", async () => {
+    const staff = await createCommittedStaffUser({ inviteExpiresAt: FUTURE() });
+    staffUserIds.push(staff.id);
+    const { auth, emailSender } = buildStaffAuth();
+    await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    const otp = emailSender.sent[0]!.body.match(/\d{6}/)?.[0]!;
+    await auth.api.signInEmailOTP({ body: { email: staff.email, otp } });
+    const [authUser] = await testDb.select().from(staffAuthUsers).where(eq(staffAuthUsers.staffUserId, staff.id));
+
+    // Simulate "auth row exists but last_login_at never got stamped": the live gate must still
+    // apply the expiry.
+    await testDb.update(staffUsers).set({ lastLoginAt: null, inviteExpiresAt: PAST() }).where(eq(staffUsers.id, staff.id));
+    expect(await isActiveStaffAuthUser(testDb, authUser!.id)).toBe(false);
+  });
+});
+
 describe("per-email OTP send cooldown + cap (auth_email_throttle)", () => {
   test("resending within 60s is a silent no-op; past 60s it succeeds and restarts the code", async () => {
     const staff = await createCommittedStaffUser({ isActive: true });
@@ -297,8 +355,9 @@ describe("RBAC permission loading", () => {
     const data = await loadStaffSessionData(testDb, staff.id);
     expect(data).not.toBeNull();
     expect(data!.permissionKeys).toContain("orders.view");
-    // owner does not get these by default (docs/SPEC.md §9)
-    expect(data!.permissionKeys).not.toContain("staff.manage");
+    // owner does not get these by default (docs/SPEC.md §9); staff.manage it does, since
+    // migration 0041 (docs/plans/roles-staff.md, owner answer 2)
+    expect(data!.permissionKeys).toContain("staff.manage");
     expect(data!.permissionKeys).not.toContain("roles.manage");
     expect(data!.permissionKeys).not.toContain("audit_log.view");
   });

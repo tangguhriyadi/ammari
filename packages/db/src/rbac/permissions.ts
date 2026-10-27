@@ -80,10 +80,10 @@ export const OWNER_ROLE_KEY = "owner";
 
 /** Permissions the `owner` role does NOT get by default (docs/SPEC.md §9). Computed sets below
  * derive from this instead of a duplicated static list, so both stay correct as the catalog
- * grows. */
+ * grows. `staff.manage` left this list in migration 0041 (docs/plans/roles-staff.md, owner
+ * answer 2): the owner manages staff, within the subset rule, but never roles or the audit log. */
 export const OWNER_EXCLUDED_PERMISSION_KEYS: readonly PermissionKey[] = [
   "roles.manage",
-  "staff.manage",
   "audit_log.view",
 ];
 
@@ -96,3 +96,56 @@ export function ownerDefaultPermissionKeys(): PermissionKey[] {
     (permission) => !OWNER_EXCLUDED_PERMISSION_KEYS.includes(permission.key),
   ).map((permission) => permission.key);
 }
+
+export interface PredefinedRoleDefinition {
+  key: string;
+  name: string;
+  description: string;
+  permissionKeys: readonly PermissionKey[];
+}
+
+/** The starting set of non-system roles (docs/plans/roles-staff.md §6). Shipped to every
+ * database by migration 0041, which inserts each role and its grants only if the role key does
+ * not exist yet; `seed.ts` does the same, insert-only, for test/e2e databases reset by TRUNCATE.
+ * Neither ever rewrites a role that already exists, so a super_admin's later edit in the admin UI
+ * survives. Keep this list and migration 0041 in sync by hand (migration-0041.test.ts checks). */
+export const PREDEFINED_ROLES: readonly PredefinedRoleDefinition[] = [
+  {
+    key: "packing_warehouse",
+    name: "Packing/Gudang",
+    description: "Antrean packing, cetak kartu dan stiker, tandai dikirim, lihat stok, terima barang datang.",
+    permissionKeys: ["orders.view", "orders.manage", "packing.print_cards", "stock.view", "inventory.view", "inventory.receive"],
+  },
+  {
+    key: "content_admin",
+    name: "Admin Konten",
+    description: "Konten toko online: beranda, halaman info, tabel ukuran, deskripsi produk.",
+    permissionKeys: ["content.manage", "stock.view"],
+  },
+  {
+    key: "customer_service",
+    name: "CS/Pesanan",
+    description: "Pesanan WhatsApp/Instagram/offline, status pesanan, data pelanggan, cek stok.",
+    permissionKeys: ["overview.view", "orders.view", "orders.manage", "customers.view", "stock.view"],
+  },
+  {
+    key: "finance",
+    name: "Keuangan",
+    description: "Laba, biaya, pembayaran supplier, impor marketplace. Tidak mengubah produk atau stok.",
+    permissionKeys: [
+      "overview.view",
+      "orders.view",
+      "orders.import",
+      "inventory.view",
+      "ads_expenses.manage",
+      "finance.view_profit",
+      "supplier_payments.manage",
+    ],
+  },
+] as const;
+
+/** Every staff/role write takes `pg_advisory_xact_lock(hashtext(STAFF_ACCESS_LOCK_KEY))` first
+ * (apps/admin lib/staff), and so does migration 0041's last-super_admin trigger, with this exact
+ * literal. One lock serializes all staff access changes, so "is this the last active super_admin"
+ * can never be decided on a stale count (write skew). Changing it means a new migration too. */
+export const STAFF_ACCESS_LOCK_KEY = "ammari.staff_access";

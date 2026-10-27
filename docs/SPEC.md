@@ -765,11 +765,16 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
     `staff.manage`, `audit_log.view`, and risky actions (data corrections, voiding vouchers).
   - `owner` (held by the wife): all business permissions (orders, import, packing, stock,
     production, products, `finance.view_profit`, targets and cost assumptions, customers and
-    vouchers), but not `roles.manage`, `staff.manage`, or `audit_log.view` by default.
-  - Additional roles for future staff are created from the admin UI.
+    vouchers), plus `staff.manage` (since migration 0041, docs/plans/roles-staff.md: she invites
+    and manages staff whose role fits inside her own permissions, never a super_admin), but not
+    `roles.manage` or `audit_log.view` by default.
+  - Predefined, editable roles for staff (migration 0041): Packing/Gudang, Admin Konten,
+    CS/Pesanan, Keuangan (`PREDEFINED_ROLES`). Custom roles are created by `super_admin` only.
 - Safety rules: `super_admin` cannot be deleted, cannot lose permissions, and can only be granted
-  by a `super_admin`. The system refuses to deactivate or demote the last active `super_admin`.
-  `owner` cannot be deleted; its permissions are editable by `super_admin` only.
+  by a `super_admin`. The system refuses to deactivate or demote the last active `super_admin`
+  (app check plus a deferred database trigger) or the last active `owner` (app check). Nobody
+  changes their own account, and anyone can only assign or manage a role whose permissions they
+  hold themselves. `owner` cannot be deleted; its permissions are editable by `super_admin` only.
 - Enforcement: permissions are checked on the server for every page, server action, and route
   handler — never only by hiding UI. Cost, profit, and payout figures are only returned to roles
   with `finance.view_profit`, including on Overview and Products.

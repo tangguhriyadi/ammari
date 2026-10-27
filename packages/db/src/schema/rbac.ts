@@ -1,4 +1,5 @@
-import { boolean, index, jsonb, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { type AnyPgColumn, boolean, check, index, jsonb, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { createdAtOnly, citext, timestamps } from "./columns";
 
 export const roles = pgTable("roles", {
@@ -46,9 +47,23 @@ export const staffUsers = pgTable(
       .references(() => roles.id, { onDelete: "restrict" }),
     isActive: boolean("is_active").notNull().default(true),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true, mode: "date" }),
+    // Invitation fields (docs/plans/roles-staff.md §3, migration 0041). A staff_users row IS the
+    // invitation: there is no separate invite table. `invite_expires_at` only matters until the
+    // first login (`last_login_at IS NULL`); NULL means "no expiry" (every row that existed before
+    // 0041, and seed-created accounts). The admission gate in @ammari/auth (staff-data.ts) refuses
+    // a never-logged-in row whose invite has expired.
+    invitedAt: timestamp("invited_at", { withTimezone: true, mode: "date" }),
+    inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true, mode: "date" }),
+    invitedByStaffUserId: uuid("invited_by_staff_user_id").references((): AnyPgColumn => staffUsers.id, {
+      onDelete: "restrict",
+    }),
+    deactivatedAt: timestamp("deactivated_at", { withTimezone: true, mode: "date" }),
     ...timestamps(),
   },
-  (table) => [index("staff_users_role_id_idx").on(table.roleId)],
+  (table) => [
+    index("staff_users_role_id_idx").on(table.roleId),
+    check("staff_users_invite_expiry_check", sql`${table.inviteExpiresAt} is null or ${table.invitedAt} is not null`),
+  ],
 );
 
 export const auditLog = pgTable(

@@ -28,6 +28,7 @@ export type AdminSection =
   | "/products"
   | "/purchases"
   | "/receipts"
+  | "/roles-staff"
   | "/settings"
   | "/stock"
   | "/suppliers";

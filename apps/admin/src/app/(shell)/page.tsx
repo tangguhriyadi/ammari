@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { Breadcrumb, PageHeader } from "@ammari/ui";
 import { formatDateTime } from "@ammari/ui/lib";
 import { jakartaDate } from "@ammari/commerce/jakarta-day";
-import { requirePermission } from "@/lib/auth/require-permission";
+import { requireOverviewOrRedirect } from "@/lib/auth/require-overview-or-redirect";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { formatDateRange } from "@/lib/overview/format";
 import { DEFAULT_OVERVIEW_PERIOD, periodParamsFromSearch, resolvePeriod, type OverviewPeriod, type PeriodParams } from "@/lib/overview/period";
@@ -32,7 +32,7 @@ const SALES_HEADINGS: Record<OverviewPeriod, string> = {
 const MAIN_ROWS = { 1: "xl:row-start-1", 2: "xl:row-start-2", 3: "xl:row-start-3" } as const;
 
 export default async function RingkasanPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const session = await requirePermission("overview.view");
+  const session = await requireOverviewOrRedirect();
   const has = (key: string) => session.permissionKeys.includes(key);
   const canViewProfit = has("finance.view_profit");
   const search = await searchParams;

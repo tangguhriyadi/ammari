@@ -96,11 +96,13 @@ describe("migration 0038 (supplier payments)", () => {
 
       await migrate(drizzle(client), { migrationsFolder });
 
-      // ---- Reference data: the permission, granted to super_admin and owner only. ----
+      // ---- Reference data: the permission, granted to super_admin and owner only (of the
+      // system roles: this migrates to the latest schema, where migration 0041's predefined
+      // Keuangan role holds it too). ----
       const grants = await client`
         select r.key from role_permissions rp
         join roles r on r.id = rp.role_id join permissions p on p.id = rp.permission_id
-        where p.key = 'supplier_payments.manage' order by r.key`;
+        where p.key = 'supplier_payments.manage' and r.is_system order by r.key`;
       expect(grants.map((row) => row.key)).toEqual(["owner", "super_admin"]);
       const [permission] = await client`select "group" from permissions where key = 'supplier_payments.manage'`;
       expect(permission).toEqual({ group: "finance" });
@@ -286,7 +288,8 @@ describe("migration 0038 (supplier payments)", () => {
       expect(after).toEqual(before);
       const [{ count: grantCount }] = (await client`
         select count(*)::int as count from role_permissions rp join permissions p on p.id = rp.permission_id
-        where p.key = 'supplier_payments.manage'`) as unknown as [{ count: number }];
+        join roles r on r.id = rp.role_id
+        where p.key = 'supplier_payments.manage' and r.is_system`) as unknown as [{ count: number }];
       expect(grantCount).toBe(2);
     } finally {
       await client.end();

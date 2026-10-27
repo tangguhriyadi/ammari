@@ -25,14 +25,14 @@ afterEach(async () => {
   await cleanupStaffUsers(staffUserIds);
 });
 
-function stubGoogleProfile(email: string) {
+function stubGoogleProfile(email: string, emailVerified = true) {
   const now = Math.floor(Date.now() / 1000);
   return {
-    user: { email, emailVerified: true, name: "Test Staff" },
+    user: { email, emailVerified, name: "Test Staff" },
     data: {
       sub: `google-${email}`,
       email,
-      email_verified: true,
+      email_verified: emailVerified,
       name: "Test Staff",
       given_name: "Test",
       family_name: "Staff",
@@ -83,6 +83,40 @@ describe("Google sign-in — the staff gate", () => {
 
   test("an inactive staff member's Google login is rejected", async () => {
     const staff = await createCommittedStaffUser({ isActive: false });
+    staffUserIds.push(staff.id);
+    const { auth } = buildStaffAuth({
+      google: {
+        clientId: "test-client-id",
+        clientSecret: "test-client-secret",
+        verifyIdToken: async () => true,
+        getUserInfo: async () => stubGoogleProfile(staff.email),
+      },
+    });
+
+    await expect(
+      auth.api.signInSocial({ body: { provider: "google", idToken: { token: "stub-id-token" } } }),
+    ).rejects.toThrow();
+  });
+
+  test("an active staff member's Google login is rejected when Google has not verified the email", async () => {
+    const staff = await createCommittedStaffUser({ isActive: true });
+    staffUserIds.push(staff.id);
+    const { auth } = buildStaffAuth({
+      google: {
+        clientId: "test-client-id",
+        clientSecret: "test-client-secret",
+        verifyIdToken: async () => true,
+        getUserInfo: async () => stubGoogleProfile(staff.email, false),
+      },
+    });
+
+    await expect(
+      auth.api.signInSocial({ body: { provider: "google", idToken: { token: "stub-id-token" } } }),
+    ).rejects.toThrow();
+  });
+
+  test("an expired, never-used invitation's Google login is rejected", async () => {
+    const staff = await createCommittedStaffUser({ inviteExpiresAt: new Date(Date.now() - 60_000) });
     staffUserIds.push(staff.id);
     const { auth } = buildStaffAuth({
       google: {

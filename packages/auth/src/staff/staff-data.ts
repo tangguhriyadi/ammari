@@ -1,4 +1,4 @@
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { db as defaultDb } from "@ammari/db";
 import {
   permissions,
@@ -21,15 +21,25 @@ export interface ActiveStaff {
   roleId: string;
 }
 
+/** Who may log in at all: an active row whose invitation has not expired. The expiry only
+ * applies until the first login (docs/plans/roles-staff.md §3): once `last_login_at` is set, or
+ * when the row never had an expiry (rows from before migration 0041, seed accounts), it never
+ * matters. Compared against Postgres `now()`, the same clock that set `invite_expires_at`. */
+const isAdmissibleStaff = and(
+  eq(staffUsers.isActive, true),
+  or(isNotNull(staffUsers.lastLoginAt), isNull(staffUsers.inviteExpiresAt), gt(staffUsers.inviteExpiresAt, sql`now()`)),
+);
+
 /** citext match is case-insensitive at the Postgres column level, so `OWNER@x.com` and
  * `owner@x.com` resolve to the same row — consistent with `staff_users.email`'s existing
- * citext convention. Returns `null` for both "no such email" and "inactive" — callers must
- * never distinguish the two (see docs/SPEC.md §10, generic-error requirement). */
+ * citext convention. Returns `null` for "no such email", "inactive" and "invitation expired"
+ * alike — callers must never distinguish them (see docs/SPEC.md §10, generic-error
+ * requirement). */
 export async function loadActiveStaffForEmail(db: Database, email: string): Promise<ActiveStaff | null> {
   const [row] = await db
     .select({ id: staffUsers.id, name: staffUsers.name, email: staffUsers.email, roleId: staffUsers.roleId })
     .from(staffUsers)
-    .where(and(eq(staffUsers.email, email), eq(staffUsers.isActive, true)))
+    .where(and(eq(staffUsers.email, email), isAdmissibleStaff))
     .limit(1);
   return row ?? null;
 }
@@ -80,12 +90,12 @@ export async function loadStaffSessionData(db: Database, staffUserId: string): P
  * which `validateUserInfo` does not re-run for — see its doc comment). */
 export async function isActiveStaffAuthUser(db: Database, staffAuthUserId: string): Promise<boolean> {
   const [row] = await db
-    .select({ isActive: staffUsers.isActive })
+    .select({ id: staffUsers.id })
     .from(staffAuthUsers)
     .innerJoin(staffUsers, eq(staffAuthUsers.staffUserId, staffUsers.id))
-    .where(eq(staffAuthUsers.id, staffAuthUserId))
+    .where(and(eq(staffAuthUsers.id, staffAuthUserId), isAdmissibleStaff))
     .limit(1);
-  return row?.isActive ?? false;
+  return Boolean(row);
 }
 
 /** `databaseHooks.session.create.after` — updates `staff_users.last_login_at` (docs/SPEC.md §10)

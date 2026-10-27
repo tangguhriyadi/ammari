@@ -130,10 +130,12 @@ describe("migration 0024", () => {
         select (select count(*)::int from fabric_stock_movements where supplier_id is not null) + (select count(*)::int from accessory_movements where supplier_id is not null) as n`;
       expect(withSupplier!.n).toBe(0);
 
-      // inventory.receive granted to super_admin and owner (and nobody else) by the migration itself.
+      // inventory.receive granted to super_admin and owner (and no other system role) by the
+      // migration itself. System roles only: this migrates to the LATEST schema, and migration
+      // 0041's predefined Packing/Gudang role holds it too.
       const granted = await client<{ key: string }[]>`
         select r.key from role_permissions rp join roles r on r.id = rp.role_id join permissions p on p.id = rp.permission_id
-        where p.key = 'inventory.receive' order by r.key`;
+        where p.key = 'inventory.receive' and r.is_system order by r.key`;
       expect(granted.map((row) => row.key)).toEqual(["owner", "super_admin"]);
 
       // The PREVIOUS release's purchase insert (no supplier_id column at all) still works.

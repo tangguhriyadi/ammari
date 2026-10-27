@@ -209,6 +209,9 @@ const E2E_SETTINGS_NO_FINANCE_ROLE_KEY = "e2e_settings_no_finance";
 // move.
 export const E2E_IMPORT_EMAIL = "import@e2e.ammari.test";
 export const E2E_IMPORT_NO_FINANCE_EMAIL = "import-no-finance@e2e.ammari.test";
+// nav-rbac.spec.ts (docs/plans/roles-staff.md, owner answer 6): a staffer on the PREDEFINED
+// Packing/Gudang role from migration 0041 (no overview.view), who must land on /packing, not a 403.
+export const E2E_LANDING_PACKING_EMAIL = "landing-packing@e2e.ammari.test";
 const E2E_IMPORT_NO_FINANCE_ROLE_KEY = "e2e_import_no_finance";
 export const E2E_IMPORT_PRODUCT_NAME = "E2E Gamis Impor";
 export const E2E_IMPORT_SKU_M = "E2E-IMPOR-M";
@@ -456,6 +459,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_IMPORT_EMAIL, "E2E Import", OWNER_ROLE_KEY);
   await ensureLimitedRole(E2E_IMPORT_NO_FINANCE_ROLE_KEY, ["orders.import", "orders.view"]);
   await ensureStaffFixture(E2E_IMPORT_NO_FINANCE_EMAIL, "E2E Import (no finance)", E2E_IMPORT_NO_FINANCE_ROLE_KEY);
+  await ensureStaffFixture(E2E_LANDING_PACKING_EMAIL, "E2E Landing (Packing/Gudang)", "packing_warehouse");
 
   await ensureStaffFixture(E2E_OVERVIEW_EMAIL, "E2E Overview", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_OVERVIEW_SETTINGS_EMAIL, "E2E Overview Settings", OWNER_ROLE_KEY);
@@ -889,6 +893,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_PRODUCT_TYPES_EMAIL,
         E2E_IMPORT_EMAIL,
         E2E_IMPORT_NO_FINANCE_EMAIL,
+        E2E_LANDING_PACKING_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);

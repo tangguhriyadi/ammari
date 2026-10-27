@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { seed } from "../src/seed";
 import { testDb } from "./helpers";
@@ -45,6 +45,41 @@ describe("db:seed", () => {
     await seed(testDb);
     const afterSecondRerun = await rowCounts();
     expect(afterSecondRerun).toEqual(before);
+  });
+
+  // docs/plans/roles-staff.md §9: owner and the predefined roles are editable by super_admin in
+  // /roles-staff, so a manual `db:seed` run (docs/deploy-prod.md §10) must never re-grant a
+  // permission removed there, or rename the role back. super_admin stays a full sync.
+  test("re-running the seed never undoes an edit to the owner role or a predefined role", async () => {
+    const [owner] = await testDb.select().from(roles).where(eq(roles.key, "owner"));
+    const [packing] = await testDb.select().from(roles).where(eq(roles.key, "packing_warehouse"));
+    const [voidPermission] = await testDb.select().from(permissions).where(eq(permissions.key, "vouchers.void"));
+    const [receivePermission] = await testDb.select().from(permissions).where(eq(permissions.key, "inventory.receive"));
+    if (!owner || !packing || !voidPermission || !receivePermission) throw new Error("seeded rows missing");
+    const grant = (roleId: string, permissionId: string) =>
+      and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId));
+
+    try {
+      await testDb.delete(rolePermissions).where(grant(owner.id, voidPermission.id));
+      await testDb.delete(rolePermissions).where(grant(packing.id, receivePermission.id));
+      await testDb.update(roles).set({ name: "Pemilik" }).where(eq(roles.id, owner.id));
+
+      await seed(testDb);
+
+      expect(await testDb.select().from(rolePermissions).where(grant(owner.id, voidPermission.id))).toHaveLength(0);
+      expect(await testDb.select().from(rolePermissions).where(grant(packing.id, receivePermission.id))).toHaveLength(0);
+      const [renamed] = await testDb.select({ name: roles.name }).from(roles).where(eq(roles.id, owner.id));
+      expect(renamed?.name).toBe("Pemilik");
+    } finally {
+      await testDb
+        .insert(rolePermissions)
+        .values([
+          { roleId: owner.id, permissionId: voidPermission.id },
+          { roleId: packing.id, permissionId: receivePermission.id },
+        ])
+        .onConflictDoNothing();
+      await testDb.update(roles).set({ name: owner.name }).where(eq(roles.id, owner.id));
+    }
   });
 
   // This is the one table seed.ts touches that holds genuine owner-authored content (every
