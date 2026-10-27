@@ -147,7 +147,7 @@ async function signInWithGoogle() {
 
 type Step = "email" | "sent";
 
-export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean }) {
+export function LoginForm({ isGoogleConfigured, initialEmail = null }: { isGoogleConfigured: boolean; initialEmail?: string | null }) {
   const router = useRouter();
   // Restores a still-valid in-flight OTP session after a refresh. `getServerSnapshot` returning
   // `null` is what keeps the server-rendered HTML (always the email step) consistent with
@@ -155,7 +155,7 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
   // without treating it as a mismatch, unlike computing it from a plain `useState` initializer.
   const restored = useSyncExternalStore(subscribeNever, getSnapshot, getServerSnapshot);
   const [step, setStep] = useState<Step>(() => (restored ? "sent" : "email"));
-  const [email, setEmail] = useState(() => restored?.email ?? "");
+  const [email, setEmail] = useState(() => restored?.email ?? initialEmail ?? "");
   const [sentAt, setSentAt] = useState<number | null>(() => restored?.sentAt ?? null);
   const [sendError, setSendError] = useState<string | undefined>();
   const [verifyError, setVerifyError] = useState<string | undefined>();
@@ -343,6 +343,8 @@ export function LoginForm({ isGoogleConfigured }: { isGoogleConfigured: boolean 
           )}
           <button
             type="submit"
+            // A prefilled address (the invite email's link) puts focus on the action; never sends.
+            autoFocus={initialEmail !== null}
             disabled={sendPending || isCooldownBlocked}
             className="h-12 w-full rounded-md bg-[#695A5A] text-base font-medium text-white disabled:opacity-60"
           >

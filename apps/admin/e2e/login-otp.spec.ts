@@ -104,3 +104,19 @@ test("an expired code is rejected", async ({ page }) => {
   await expect(page.getByText("Kode tidak valid atau akun tidak ditemukan.")).toBeVisible();
   await expect(page).toHaveURL(/\/login$/);
 });
+
+for (const [label, viewport] of [
+  ["desktop, 1280px", null],
+  ["mobile, 390px", { width: 390, height: 844 }],
+] as const) {
+  test(`/login?email= prefills the field and focuses Kirim kode without sending a code (${label})`, async ({ page }) => {
+    if (viewport) await page.setViewportSize(viewport);
+    await page.goto(`/login?email=${encodeURIComponent("Invitee+1@e2e.ammari.test")}`);
+    await expect(page.getByLabel("Email")).toHaveValue("invitee+1@e2e.ammari.test");
+    await expect(page.getByRole("button", { name: "Kirim kode" })).toBeFocused();
+    await expect(page.getByLabel("Kode (6 digit)")).toHaveCount(0);
+
+    await page.goto("/login?email=not-an-email");
+    await expect(page.getByLabel("Email")).toHaveValue("");
+  });
+}

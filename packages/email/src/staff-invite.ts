@@ -16,7 +16,14 @@ export interface StaffInviteEmailInput {
   logoUrl: string | null;
 }
 
+/** The admin login page with the invited address pre-filled (the page itself validates the param
+ * and never sends a code on its own). */
+export function staffInviteLoginLink(origin: string, email: string): string {
+  return `${origin.replace(/\/+$/, "")}/login?email=${encodeURIComponent(email)}`;
+}
+
 export function renderStaffInviteEmail(input: StaffInviteEmailInput): RenderedEmail {
+  const loginLink = staffInviteLoginLink(input.loginUrl, input.to);
   const expires = formatWib(input.inviteExpiresAt);
   return renderEmail({
     subject: "Undangan ke Admin Ammari",
@@ -25,9 +32,9 @@ export function renderStaffInviteEmail(input: StaffInviteEmailInput): RenderedEm
       heading("Undangan ke Admin Ammari"),
       paragraph(`Halo ${input.name},`),
       paragraph(`Anda diundang ke Admin Ammari sebagai ${input.roleName}.`),
-      button("Buka Admin Ammari", input.loginUrl),
+      button("Buka Admin Ammari", loginLink),
       details("Cara masuk", [
-        { label: "Alamat", value: input.loginUrl },
+        { label: "Alamat", value: loginLink },
         { label: "Email", value: input.to },
         { label: "Metode", value: "Google, atau kode lewat email" },
         { label: "Berlaku sampai", value: expires },

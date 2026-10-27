@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { EMAIL_CONTACT, emailLogoUrl } from "./brand";
 import { button, link, paragraph, renderEmail, type RenderedEmail } from "./layout";
 import { renderSignInCodeEmail } from "./sign-in-code";
-import { renderStaffInviteEmail } from "./staff-invite";
+import { renderStaffInviteEmail, staffInviteLoginLink } from "./staff-invite";
 
 // docs/plans/email-design.md: structure every Ammari email must keep.
 
@@ -101,7 +101,7 @@ describe("renderStaffInviteEmail", () => {
 
   test("has one button to the admin site and says which email to use and until when", () => {
     expect(email.html.match(/<a\s/g)).toHaveLength(1);
-    expect(email.html).toContain('<a href="https://admin.ammari.example"');
+    expect(email.html).toContain('<a href="https://admin.ammari.example/login?email=rina%40example.test"');
     expect(email.html).toContain(">Buka Admin Ammari</a>");
     for (const part of [email.text, email.html]) {
       expect(part).toContain("Admin Gudang");
@@ -109,7 +109,13 @@ describe("renderStaffInviteEmail", () => {
       expect(part).toContain("3 November 2026, 14.30 WIB");
       expect(part).toContain("Kalau Anda tidak merasa diundang, abaikan email ini.");
     }
-    expect(email.text).toContain("Buka Admin Ammari:\nhttps://admin.ammari.example");
+    expect(email.text).toContain("Buka Admin Ammari:\nhttps://admin.ammari.example/login?email=rina%40example.test");
+  });
+
+  test("encodes the address and tolerates a trailing slash on the origin", () => {
+    expect(staffInviteLoginLink("https://admin.ammari.example/", "a+b@example.test")).toBe(
+      "https://admin.ammari.example/login?email=a%2Bb%40example.test",
+    );
   });
 
   test("carries no token or code", () => {

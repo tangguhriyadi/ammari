@@ -99,6 +99,13 @@ async function sendCode(email: string): Promise<void> {
 }
 
 describe("LoginForm (admin)", () => {
+  test("a prefilled email fills the field, focuses Kirim kode and sends nothing", () => {
+    render(<LoginForm isGoogleConfigured={false} initialEmail="rina@example.test" />);
+    expect(screen.getByLabelText("Email")).toHaveValue("rina@example.test");
+    expect(screen.getByRole("button", { name: "Kirim kode" })).toHaveFocus();
+    expect(sendVerificationOtp).not.toHaveBeenCalled();
+  });
+
   test("submitting an email advances to the OTP step and shows the live expiry countdown", async () => {
     render(<LoginForm isGoogleConfigured={false} />);
     await sendCode("staff@example.test");
