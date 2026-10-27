@@ -128,3 +128,26 @@ export async function customerNameOf(customerId: string): Promise<string | null>
     return row?.name ?? null;
   });
 }
+
+/** promo-consent.spec.ts (growth session S6): the account's promo consent, set or read directly. */
+export async function setPromoConsentAt(customerId: string, at: Date | null): Promise<void> {
+  await withSql((sql) => sql`update customers set promo_consent_at = ${at} where id = ${customerId}`);
+}
+
+export async function promoConsentOf(customerId: string): Promise<Date | null> {
+  return withSql(async (sql) => {
+    const [row] = await sql<{ promo_consent_at: Date | null }[]>`select promo_consent_at from customers where id = ${customerId}`;
+    return row?.promo_consent_at ?? null;
+  });
+}
+
+/** The buyer's own promo changes in audit_log, oldest first. */
+export async function promoAuditActionsOf(customerId: string): Promise<string[]> {
+  return withSql(async (sql) => {
+    const rows = await sql<{ action: string }[]>`
+      select action from audit_log
+      where entity_type = 'customer' and entity_id = ${customerId} and action like 'promo_consent_%'
+      order by created_at, id`;
+    return rows.map((row) => row.action);
+  });
+}

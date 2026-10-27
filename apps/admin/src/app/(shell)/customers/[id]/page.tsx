@@ -165,7 +165,7 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
                 {detail.promoConsentAt
                   ? `Setuju sejak ${formatDateTime(detail.promoConsentAt)}`
                   : detail.promoWithdrawnAt
-                    ? `Ditarik pada ${formatDateTime(detail.promoWithdrawnAt)}`
+                    ? `Ditarik pada ${formatDateTime(detail.promoWithdrawnAt)}${detail.promoWithdrawnBy === "customer" ? " oleh pelanggan sendiri di akunnya" : ""}`
                     : "Belum"}
               </Field>
             </dl>

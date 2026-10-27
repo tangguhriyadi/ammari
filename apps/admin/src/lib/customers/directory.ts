@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { auditLog, channels, customerAuthAccounts, customerAuthUsers, customers, orders, staffUsers, thankYouCards, voucherAdjustments, vouchers, type OrderPaymentStatus, type OrderStatus, type VoucherAdjustmentKind, type VoucherStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
@@ -210,9 +210,11 @@ export interface CustomerDetail {
   createdAt: Date;
   pdpConsentAt: Date | null;
   promoConsentAt: Date | null;
-  /** When staff last recorded a promo withdrawal (§8.3), shown as "Ditarik pada ..." while the
-   * consent is not set again. Only the date leaves the audit log, nothing else of it. */
+  /** When the promo consent was last withdrawn, recorded by staff (§8.3) or by the customer on
+   * /account (A11, session S6), shown as "Ditarik pada ..." while the consent is not set again.
+   * Only the date and who withdrew leave the audit log, nothing else of it. */
   promoWithdrawnAt: Date | null;
+  promoWithdrawnBy: "staff" | "customer" | null;
   account: { createdAt: Date; methods: SignInMethod[] } | null;
   orderCount: number;
   totalSpend: number;
@@ -314,9 +316,9 @@ export async function getCustomerDetail(customerId: string, db: Database = defau
       .orderBy(sql`${thankYouCards.claimedAt} desc nulls last`),
     customer.promoConsentAt === null
       ? db
-          .select({ createdAt: auditLog.createdAt })
+          .select({ createdAt: auditLog.createdAt, action: auditLog.action })
           .from(auditLog)
-          .where(and(eq(auditLog.entityType, "customer"), eq(auditLog.entityId, customerId), eq(auditLog.action, "promo_consent_withdraw")))
+          .where(and(eq(auditLog.entityType, "customer"), eq(auditLog.entityId, customerId), inArray(auditLog.action, ["promo_consent_withdraw", "promo_consent_withdraw_self"])))
           .orderBy(desc(auditLog.createdAt))
           .limit(1)
       : Promise.resolve([]),
@@ -331,6 +333,7 @@ export async function getCustomerDetail(customerId: string, db: Database = defau
   return {
     ...customer,
     promoWithdrawnAt: withdrawalRows[0]?.createdAt ?? null,
+    promoWithdrawnBy: withdrawalRows[0] ? (withdrawalRows[0].action === "promo_consent_withdraw_self" ? "customer" : "staff") : null,
     account: authRows.length > 0 ? { createdAt: authRows[0]!.createdAt, methods: signInMethods(authRows.flatMap((row) => (row.providerId ? [row.providerId] : []))) } : null,
     orderCount: Number(summary?.order_count ?? 0),
     totalSpend: Number(summary?.total ?? 0),

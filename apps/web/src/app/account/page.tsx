@@ -15,6 +15,7 @@ import { AccountName } from "./account-name";
 import { ContactOfferCard } from "./contact-offer-card";
 import { LogoutButton } from "./logout-button";
 import { ProfileBanner } from "./profile-banner";
+import { PromoConsentSection } from "./promo-consent-section";
 import { SavedAddressSection } from "./saved-address-section";
 import { NOINDEX_ROBOTS } from "@/lib/seo/indexing";
 
@@ -59,6 +60,8 @@ export default async function AccountPage() {
       {/* Flag off: only while an address exists (the component decides), so a rollback never hides
           a buyer's saved data or the way to delete it. */}
       <SavedAddressSection address={savedAddress} showWhenEmpty={cartEnabled} />
+
+      <PromoConsentSection consentAt={customer.promoConsentAt} />
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">Voucher saya</h2>

@@ -164,8 +164,17 @@ pnpm workspaces + Turborepo:
 
 ### 3.2 Admin — first week of November 2026
 
-- Ads & expenses
-- Customers & vouchers
+- Ads & expenses — "Iklan & Biaya" (`/ads-expenses`, built in growth sessions S1 to S3 and S6,
+  [docs/plans/growth.md](plans/growth.md)): append-only expenses with a required proof and void
+  (`business_expenses`), and a "Ringkasan" tab per whole month or month range: Laba bersih, biaya
+  per kategori, iklan vs omzet (ROAS against the period's own break-even, §6), and "Unduh laporan
+  bulanan" as PDF or Excel (management P&L, per channel, expense and order rows; audited). Needs
+  `ads_expenses.manage` + `finance.view_profit`.
+- Customers & vouchers — "Pelanggan & Voucher" (`/customers`, growth sessions S4 to S6): customer
+  list with masked contacts and a full-contact detail (read-only identity), staff-recorded promo
+  withdrawal, voucher overview with owner void/extend and history (`voucher_adjustments`), and
+  "Unduh kontak promo" (CSV of customers whose promo consent is set and who have an account; for
+  Ammari's own promo only, never uploaded to an ad platform; owner/super_admin, audited).
 - Roles & staff — see §9
 
 ### 3.3 Main site — v1 (1 November 2026)
@@ -636,8 +645,16 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   `awaiting_payment` until paid, then enters the normal `to_ship` queue; `web` has no platform
   fee. Ongkir paid by the buyer is pass-through, not sales revenue; the subsidy is a shipping
   expense.
-- `ad_spend_daily` — unique on `(date, channel)`.
-- `expenses`
+- `business_expenses` (migration 0042, docs/plans/growth.md §3) — every ad and operating expense
+  that left the business: `expense_no` (`BYA-YYYYMM-NNN`), payment date (Jakarta), fixed category
+  (Iklan Meta/TikTok/Shopee, Endorse/KOL, Ongkir bahan, Packaging, Gaji, Sewa, Utilitas, Lainnya),
+  amount, method, optional channel for marketing categories, required proof (`private_files`,
+  purpose `expense_proof`). Append-only: no edit, no delete, void with a reason (trigger). Counted
+  on the payment date (cash basis). `sales_goal.monthly_bill_categories` (migration 0043) drives the
+  "Biaya bulanan belum dicatat" reminder.
+- `ad_spend_daily`, `expenses` — created by migration 0000, never read or written; superseded by
+  `business_expenses` and to be dropped by a later contract migration once dev and prod show 0 rows
+  (owner answer A2).
 - `targets` — one row per month (not used yet; seasonal weights for the target curve later).
 - `sales_goal` — one row (`id = 1`, migration 0039): the first-year revenue target and its start
   date (Asia/Jakarta). The row ships in the migration.
@@ -663,7 +680,14 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - `otp_codes` — stores a hash of the code, `expires_at`, `attempts`, `consumed_at`.
 - `thank_you_cards` — unique `order_id`; unique `token_hash`; `claim_deadline`; `status`.
 - `vouchers` — unique `card_id`; unique `used_order_id`; `status`
-  (`active` / `used` / `expired` / `void`).
+  (`active` / `used` / `expired` / `void`). An `active` voucher past `expires_at` is effectively
+  expired: every reader uses the effective status, never the stored one alone.
+- `voucher_adjustments` (migration 0042) — append-only history of owner voids and extensions
+  (kind, previous status and expiry, new expiry, reason, staff), visible on the customer page.
+- Promo consent (`customers.promo_consent_at`) is only ever set while logged in (checkout with a
+  session, the `/account` contact offer, or "Terima kabar promo" on `/account`). It is cleared by
+  the customer ("Berhenti terima promo" on `/account`) or recorded by staff on request
+  (`customers.manage`); each change is audited.
 - `resellers` — later (not v1).
 - `staff_users` — full RBAC columns in §9.
 - `audit_log`
@@ -700,7 +724,11 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   "Biaya platform belum lengkap untuk N pesanan"; other channels have no platform fee and never
   count as incomplete. `seller_shipping_subsidy` counts as a platform cost; web shipping subsidy and
   ad spend stay out. Profit from the actual payout (`order_settlements`, the income export) is later.
-- ROAS per channel — break-even ROAS is **8.3**.
+- ROAS per channel (Iklan & Biaya "Ringkasan", whole months) — ROAS = omzet ÷ biaya iklan, judged
+  against the period's own **titik impas ROAS** = omzet ÷ (laba setelah biaya platform − web
+  shipping subsidy), i.e. 1 ÷ contribution margin (growth session S6, owner decision 2026-10-27).
+  No omzet: not computed; contribution ≤ 0: no break-even (every ad loses). The earlier fixed 8.3
+  was 1 ÷ the 12% ads planning share in §7, a budget target, not a break-even.
 - Cancellations + returns rate vs. the 3% reserve target.
 - Vouchers printed / claimed / redeemed counts.
 
@@ -709,7 +737,7 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 | Assumption | Value |
 |---|---|
 | Marketplace fee | 18% (planning figure only; Ringkasan never applies it, see §6) |
-| Ads | 12% |
+| Ads | 12% (planning share only; ROAS is judged against the computed break-even, §6) |
 | Returns reserve | 3% |
 | Target net profit | 20% |
 | Packaging | IDR 4,000 / piece |
@@ -749,10 +777,16 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - Permissions are constants defined in code (e.g. `orders.view`, `orders.import`,
   `packing.print_cards`, `stock.view`, `stock.adjust`, `production.manage`, `products.manage`,
   `inventory.view`, `inventory.manage`, `inventory.receive`, `finance.view_profit`,
-  `settings.manage`, `customers.view`, `vouchers.void`, `staff.manage`, `roles.manage`,
-  `audit_log.view`). A startup/seed step syncs them into the `permissions` table, and any key the
+  `settings.manage`, `customers.view`, `customers.manage`, `customers.export`, `vouchers.void`,
+  `ads_expenses.manage`, `staff.manage`, `roles.manage`, `audit_log.view`). A startup/seed step syncs them into the `permissions` table, and any key the
   code matches by literal value also ships in a migration (CLAUDE.md). Roles and role→permission
   mappings live in the database and are editable from the admin UI.
+- Growth keys (migration 0042, docs/plans/growth.md §7, §8.1): `ads_expenses.manage` (+
+  `finance.view_profit`) opens Iklan & Biaya, records and voids expenses, views their proofs and
+  downloads the monthly report (Keuangan, owner, super_admin); `customers.view` reads Pelanggan &
+  Voucher (CS, owner, super_admin); `customers.manage` records a promo withdrawal (same three);
+  `customers.export` downloads the promo contacts (owner, super_admin only); `vouchers.void`
+  voids or extends a voucher (owner, super_admin; never CS).
 - Inventory split (§5.1a): `inventory.view` reads raw-material stock, suppliers and purchases;
   `inventory.receive` posts a goods receipt (purchase or production output) and nothing else, so
   the person standing next to the delivery can receive without editing documents;
@@ -1010,6 +1044,10 @@ separate links:
   WhatsApp number and promo choice only on the order. After any login, `/account` offers them (the
   number only if the account has none and no other account uses it; promo consent only when ticked
   again); nothing is copied without "Simpan".
+- **Promo consent on `/account`** (growth session S6, owner answer A11): "Kabar promo" shows the
+  current state with "Berhenti terima promo" (one press) or "Terima kabar promo"; one conditional
+  UPDATE each way, per-IP rate limit, audited as the buyer (`promo_consent_withdraw_self`,
+  `promo_consent_grant_self`).
 - The checkout finish page offers a third, separate path: "Masuk untuk melihat semua pesanan",
   which goes to `/login?next=/orders` with the contact email prefilled (email OTP).
 - Customer sessions still never reach admin endpoints (unchanged).

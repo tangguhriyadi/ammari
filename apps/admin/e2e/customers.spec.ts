@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 import { loginAs } from "./helpers/login";
 import {
@@ -14,7 +15,8 @@ import {
 // 1280px (CLAUDE.md's rule): every list renders a CardList on phones and a TableContainer on
 // tablet/desktop, so each pass asserts its own layout's rows and that the other layout's are
 // hidden. Each pass works on its own seeded customer (global-setup.ts), so the voids and
-// extensions of one pass never touch the other's vouchers.
+// extensions of one pass never touch the other's vouchers. Session S6: the owner downloads
+// "Unduh kontak promo" (A9) only after ticking the warning; CS has neither the button nor the route.
 
 interface Layout {
   key: "M" | "D";
@@ -139,7 +141,27 @@ async function ownerFlow(page: Page, layout: Layout): Promise<string> {
   await page.goto(`/customers?tab=voucher&status=expired&q=${encodeURIComponent(name)}`);
   await expect(page.getByText("Belum ada voucher", { exact: true })).toBeVisible();
 
-  // 7. Ringkasan: the voucher card for this month links to the tab.
+  // 7. Unduh kontak promo: the warning must be ticked; the CSV holds this consenting account
+  // holder (full contacts, the four columns) and never the unpaid guest.
+  await page.goto("/customers");
+  await page.getByRole("button", { name: "Unduh kontak promo" }).click();
+  const exportDialog = page.getByRole("dialog", { name: "Unduh kontak promo" });
+  await expect(exportDialog.getByTestId("promo-export-warning")).toContainText("Jangan unggah ke Meta, TikTok");
+  await exportDialog.getByRole("button", { name: "Unduh CSV" }).click();
+  await expect(exportDialog.getByText("Centang pernyataan di atas dulu.")).toBeVisible();
+  await exportDialog.getByLabel("Saya paham data ini hanya untuk promo Ammari sendiri dan tidak diunggah ke platform iklan.").check();
+  const [download] = await Promise.all([page.waitForEvent("download"), exportDialog.getByRole("button", { name: "Unduh CSV" }).click()]);
+  expect(download.suggestedFilename()).toMatch(/^kontak-promo-\d{4}-\d{2}-\d{2}\.csv$/);
+  const csv = (await readFile(await download.path())).toString("utf8").replace(/^\ufeff/, "");
+  const lines = csv.trimEnd().split("\r\n");
+  expect(lines[0]).toBe("Nama,Email,Nomor HP,Setuju promo sejak (WIB)");
+  const mine = lines.find((line) => line.includes(email));
+  expect(mine).toBeDefined();
+  expect(mine).toContain(`${name},${email},${phone.slice(1)},`);
+  expect(csv).not.toContain(E2E_GUEST_NAME(layout.key));
+  expect((await page.request.get("/customers/promo-export")).status()).toBe(400);
+
+  // 8. Ringkasan: the voucher card for this month links to the tab.
   await page.goto("/?period=month");
   const card = page.getByTestId("overview-voucher-card");
   await expect(card).toBeVisible();
@@ -152,6 +174,13 @@ async function csFlow(page: Page, layout: Layout, detailHref: string): Promise<v
   await loginAs(page, E2E_CUSTOMERS_CS_EMAIL);
   await page.goto(detailHref);
   await expect(page.getByRole("heading", { name: E2E_CUSTOMER_NAME(layout.key), level: 1 })).toBeVisible();
+  // No promo export for CS (A9): no button, and the route itself refuses.
+  await page.goto("/customers");
+  await expect(page.getByRole("heading", { name: "Pelanggan & Voucher" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Unduh kontak promo" })).toHaveCount(0);
+  expect((await page.request.get("/customers/promo-export?ack=1")).status()).toBe(403);
+  await page.goto(detailHref);
+
   // History visible, no void/extend for CS (roles-staff answer 9, A8).
   await expect(voucher(page, layout, 2).getByTestId("voucher-history")).toContainText("Kartu hilang");
   await expect(page.getByRole("button", { name: /^Batalkan voucher/ })).toHaveCount(0);

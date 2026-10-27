@@ -15,12 +15,14 @@ import {
 } from "@/lib/customers/search-params";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { CustomerList } from "./_components/customer-list";
+import { PromoExportButton } from "./_components/promo-export-button";
 import { VoucherTab } from "./_components/voucher-tab";
 
 // Pelanggan & Voucher (docs/plans/growth.md §8, §9; sessions S4 and S5). customers.view (owner,
 // super_admin, CS). Read-only for identity (A10). Tab "Pelanggan" lists customers with masked
 // contacts (A5), hiding by default those with no counted order and no account (A13); tab
-// "Voucher" (`?tab=voucher`) is the voucher overview.
+// "Voucher" (`?tab=voucher`) is the voucher overview. Session S6: "Unduh kontak promo" in the
+// header for customers.export (A9; the route re-checks).
 
 export default async function CustomersPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requirePermission("customers.view");
@@ -32,7 +34,11 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
   const header = (
     <>
       <Breadcrumb items={rootCrumbs("/customers")} />
-      <PageHeader title="Pelanggan & Voucher" description="Data pelanggan dan voucher kartu terima kasih. Data pribadi, hanya untuk keperluan layanan." />
+      <PageHeader
+        title="Pelanggan & Voucher"
+        description="Data pelanggan dan voucher kartu terima kasih. Data pribadi, hanya untuk keperluan layanan."
+        actions={session.permissionKeys.includes("customers.export") ? <PromoExportButton /> : undefined}
+      />
       <div className="mb-6 border-b border-neutral-200 pb-4">
         <Tabs
           aria-label="Bagian Pelanggan & Voucher"

@@ -92,6 +92,15 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       customer_address_deleted: { label: "Alamat tersimpan dihapus", ...BUYER },
       customer_login_link: { label: "Masuk lewat tautan di email pesanan", ...BUYER },
       promo_consent_withdraw: { label: "Penarikan persetujuan promo dicatat" },
+      promo_consent_withdraw_self: { label: "Pembeli berhenti menerima promo", ...BUYER },
+      promo_consent_grant_self: { label: "Pembeli setuju menerima promo", ...BUYER },
+    },
+  },
+  customer_export: {
+    label: "Kontak promo",
+    area: "cards",
+    actions: {
+      export_promo_contacts: { label: "Kontak promo diunduh (CSV)" },
     },
   },
   voucher: {
@@ -286,6 +295,13 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
     actions: {
       record: { label: "Biaya dicatat" },
       void: { label: "Biaya dibatalkan" },
+    },
+  },
+  expense_report: {
+    label: "Laporan keuangan",
+    area: "expenses",
+    actions: {
+      download: { label: "Laporan keuangan bulanan diunduh" },
     },
   },
   purchase_attachment: {

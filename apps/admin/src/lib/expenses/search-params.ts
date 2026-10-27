@@ -152,3 +152,20 @@ export function expenseSummaryHref({ period, fromMonth, toMonth }: { period: Exp
   }
   return `/ads-expenses?${search.toString()}`;
 }
+
+/** "Unduh laporan bulanan" (session S6): the report route for exactly the period shown, so the
+ * file and the screen read the same params through the same parser. */
+export function expenseReportHref(params: Pick<ExpenseSummaryParams, "period" | "fromMonth" | "toMonth">, format: "pdf" | "xlsx"): string {
+  const search = new URLSearchParams({ format });
+  // Whatever was shown is sent as an explicit month or range, so a report opened just after
+  // midnight on the 1st still describes the month the screen showed.
+  if (params.fromMonth === params.toMonth) {
+    search.set("period", "month");
+    search.set("month", params.fromMonth);
+  } else {
+    search.set("period", "range");
+    search.set("from", params.fromMonth);
+    search.set("to", params.toMonth);
+  }
+  return `/ads-expenses/report?${search.toString()}`;
+}

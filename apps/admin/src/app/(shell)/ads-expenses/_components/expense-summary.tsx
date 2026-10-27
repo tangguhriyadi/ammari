@@ -2,17 +2,19 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { Badge, Button, Card, CardList, EmptyState, Input, Label, TableContainer, TableHead, Tabs, Td, Th, Tr } from "@ammari/ui";
 import { formatNumber, formatRupiah } from "@ammari/ui/lib";
-import { buildRoasRows, formatRoasTenths, labaBersih, type RoasRow } from "@/lib/expenses/figures";
+import type { BreakEvenRoas, RoasRow } from "@/lib/expenses/figures";
 import { EXPENSE_CATEGORY_LABELS } from "@/lib/expenses/labels";
-import { expenseListHref, expenseSummaryHref, MAX_SUMMARY_MONTHS, type ExpenseSummaryParams, type ExpenseSummaryPeriod } from "@/lib/expenses/search-params";
-import { dateRangeToTimeRange, getExpenseBreakdown } from "@/lib/expenses/summary";
-import { formatCalendarDate, formatMonthYear, formatPercentBps } from "@/lib/overview/format";
-import { getChannelBreakdown, getPeriodTotals } from "@/lib/overview/queries";
+import { BREAK_EVEN_EXPLANATION, breakEvenText, reportPeriodLabel, roasStatusText, roasText } from "@/lib/expenses/report-content";
+import { expenseListHref, expenseReportHref, expenseSummaryHref, MAX_SUMMARY_MONTHS, type ExpenseSummaryParams, type ExpenseSummaryPeriod } from "@/lib/expenses/search-params";
+import { getExpenseSummary } from "@/lib/expenses/summary";
+import { formatPercentBps } from "@/lib/overview/format";
 
 // Iklan & Biaya, "Ringkasan" (docs/plans/growth.md §4, §6, session S3): Laba bersih and ad spend
 // vs omzet for whole months. The page already required ads_expenses.manage + finance.view_profit,
 // so every query here runs with canViewProfit: true. Omzet, laba and the web shipping subsidy come
-// from the Ringkasan queries (one definition); expenses count on their payment date.
+// from the Ringkasan queries (one definition); expenses count on their payment date. Session S6:
+// the figures come from getExpenseSummary, the same call "Unduh laporan bulanan" makes, and ROAS
+// is judged against the period's own "Titik impas ROAS" instead of the fixed 8.3.
 
 const PERIOD_LABELS: Record<ExpenseSummaryPeriod, string> = {
   this_month: "Bulan ini",
@@ -20,12 +22,6 @@ const PERIOD_LABELS: Record<ExpenseSummaryPeriod, string> = {
   month: "Pilih bulan",
   range: "Rentang bulan",
 };
-
-/** "Oktober 2026 (s.d. 27 Okt 2026)", "September 2026", "Januari 2026 s.d. Maret 2026". */
-function periodHeading(params: ExpenseSummaryParams, today: string): string {
-  const months = params.fromMonth === params.toMonth ? formatMonthYear(params.fromMonth) : `${formatMonthYear(params.fromMonth)} s.d. ${formatMonthYear(params.toMonth)}`;
-  return params.range.to === today ? `${months} (s.d. ${formatCalendarDate(today)})` : months;
-}
 
 function PeriodPicker({ params }: { params: ExpenseSummaryParams }) {
   return (
@@ -88,17 +84,57 @@ function Tile({ label, value, valueClassName, testId, children }: { label: strin
 }
 
 function RoasBadge({ row }: { row: RoasRow }) {
-  if (row.status === null) return <span className="text-sm text-neutral-600">Belum ada iklan</span>;
-  return row.status === "above" ? <Badge variant="success">Di atas titik impas</Badge> : <Badge variant="danger">Di bawah titik impas</Badge>;
+  if (row.status === "above") return <Badge variant="success">{roasStatusText(row)}</Badge>;
+  if (row.status === "below") return <Badge variant="danger">{roasStatusText(row)}</Badge>;
+  return <span className="text-sm text-neutral-600">{roasStatusText(row)}</span>;
 }
 
-/** Only Shopee and TikTok Shop ads are tied to their channel by category; every other ROAS mixes
- * in Meta, which drives buyers to several channels, so it is an estimate (§4.1). */
-const EXACT_ROAS_KEYS: readonly RoasRow["key"][] = ["shopee", "tiktok"];
+/** "Titik impas ROAS" (owner addition B): the number, how it is computed, and where the old 8.3
+ * came from, in words the owner can check against the tiles above. */
+function BreakEvenPanel({ breakEven, incomplete }: { breakEven: BreakEvenRoas; incomplete: boolean }) {
+  return (
+    <Card className="flex flex-col gap-1.5" data-testid="summary-break-even">
+      <h3 className="text-sm font-medium text-neutral-600">Titik impas ROAS</h3>
+      <p className="text-xl font-semibold tabular-nums text-neutral-900" data-testid="summary-break-even-value">
+        {breakEven.kind === "computed" ? breakEvenText(breakEven) : breakEven.kind === "no_margin" ? "Tidak ada" : "Belum bisa dihitung"}
+      </p>
+      {/* The reason only: the headline above already says "Tidak ada" / "Belum bisa dihitung". */}
+      {breakEven.kind !== "computed" && <p className="text-sm text-warning-700 text-pretty">{breakEvenText(breakEven).replace(/^[^:]*:\s*/, "").replace(/^./, (first) => first.toUpperCase())}.</p>}
+      {breakEven.kind === "computed" && incomplete && (
+        <p className="text-sm text-warning-700 text-pretty">HPP atau biaya platform belum lengkap, jadi titik impas sebenarnya lebih tinggi.</p>
+      )}
+      <p className="text-sm text-neutral-600 text-pretty">{BREAK_EVEN_EXPLANATION}</p>
+      <p className="text-sm text-neutral-600 text-pretty">
+        Contoh: margin kontribusi 33% berarti titik impas 1 dibagi 33% = 3,0. Angka 8,3 yang dulu dipakai berasal dari anggaran iklan 12% omzet (1 dibagi 12%), itu target
+        anggaran, bukan titik impas.
+      </p>
+    </Card>
+  );
+}
 
-function roasText(row: RoasRow): string {
-  if (row.roasTenths === null) return "-";
-  return EXACT_ROAS_KEYS.includes(row.key) ? formatRoasTenths(row.roasTenths) : `${formatRoasTenths(row.roasTenths)} (perkiraan)`;
+function DownloadLinks({ params }: { params: ExpenseSummaryParams }) {
+  // Plain <a download>, not <Link>: Link would prefetch the route handler, and every request to it
+  // writes an audit row.
+  const className =
+    "inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-neutral-500 bg-white px-4 text-base font-medium text-neutral-700 hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2";
+  return (
+    <section aria-labelledby="summary-download-heading" className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-0.5">
+        <h2 id="summary-download-heading" className="text-base font-semibold text-neutral-900">
+          Unduh laporan bulanan
+        </h2>
+        <p className="text-sm text-neutral-600 text-pretty">Laba rugi, per kanal, rincian biaya dan pesanan untuk periode ini. Angkanya sama dengan halaman ini.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:flex">
+        <a href={expenseReportHref(params, "pdf")} download className={className} data-testid="summary-download-pdf">
+          Unduh PDF
+        </a>
+        <a href={expenseReportHref(params, "xlsx")} download className={className} data-testid="summary-download-xlsx">
+          Unduh Excel
+        </a>
+      </div>
+    </section>
+  );
 }
 
 function percentOfOmzet(amount: number, omzet: number): string {
@@ -106,24 +142,15 @@ function percentOfOmzet(amount: number, omzet: number): string {
 }
 
 export async function ExpenseSummary({ params, today, now }: { params: ExpenseSummaryParams; today: string; now: Date }) {
-  const time = dateRangeToTimeRange(params.range, now);
-  const [totals, channels, expenses] = await Promise.all([
-    getPeriodTotals(time, { canViewProfit: true }),
-    getChannelBreakdown(time, { canViewProfit: true }),
-    getExpenseBreakdown(params.range),
-  ]);
-  const money = totals.money;
-  if (!money) throw new Error("expense summary needs the money totals");
-  const net = labaBersih({ labaSetelahBiayaPlatform: money.labaSetelahBiayaPlatform, webShippingSubsidy: money.webShippingSubsidy, expenses: expenses.total });
-  const incomplete = money.linesWithoutCost > 0 || money.platformFees.ordersWithoutFees > 0;
-  const roasRows = buildRoasRows(expenses.marketing, new Map(channels.map((channel) => [channel.channelId, channel.omzet ?? 0])));
+  const { totals, money, expenses, net, incomplete, breakEven, roasRows } = await getExpenseSummary(params.range, now);
 
   return (
     <div className="flex flex-col gap-6">
       <PeriodPicker params={params} />
+      <DownloadLinks params={params} />
       <section aria-labelledby="summary-heading" className="flex flex-col gap-3">
         <h2 id="summary-heading" className="text-lg font-semibold text-neutral-900" data-testid="summary-period">
-          {periodHeading(params, today)}
+          {reportPeriodLabel(params, today)}
         </h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Tile label="Omzet" value={money.omzet} testId="summary-omzet">
@@ -209,9 +236,10 @@ export async function ExpenseSummary({ params, today, now }: { params: ExpenseSu
             Iklan vs omzet
           </h2>
           <p className="text-sm text-neutral-600 text-pretty">
-            ROAS = omzet dibagi biaya iklan. Titik impas 8,3. Iklan Meta mendorong pembeli ke beberapa kanal, jadi ROAS Situs, Instagram, WhatsApp dan Total adalah perkiraan.
+            ROAS = omzet dibagi biaya iklan. Iklan Meta mendorong pembeli ke beberapa kanal, jadi ROAS Situs, Instagram, WhatsApp dan Total adalah perkiraan.
           </p>
         </div>
+        <BreakEvenPanel breakEven={breakEven} incomplete={incomplete} />
         <CardList>
           {roasRows.map((row) => (
             <li key={row.key} data-testid="summary-roas-card" data-channel={row.key}>

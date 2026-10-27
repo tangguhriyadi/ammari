@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertCustomer, insertOrder, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
-import { customerAuthAccounts, customerAuthUsers, payments, voucherAdjustments, vouchers } from "@ammari/db/schema";
+import { auditLog, customerAuthAccounts, customerAuthUsers, payments, voucherAdjustments, vouchers } from "@ammari/db/schema";
 import { getPeriodTotals } from "@/lib/overview/queries";
 import { getCustomerDetail, listCustomers } from "./directory";
 import type { CustomerListParams } from "./search-params";
@@ -167,6 +167,23 @@ describe("getCustomerDetail", () => {
       expect(byId.get(active.voucher.id)).toMatchObject({ status: "active", amount: 20_000, cardOrderNo: active.cardOrder.orderNo, adjustments: [] });
       expect(byId.get(lapsed.voucher.id)).toMatchObject({ status: "expired", adjustments: [{ kind: "extend", reason: "Sakit", staffName: staff.name }] });
       expect(detail?.claimedCards.map((card) => card.orderNo).sort()).toEqual([active.cardOrder.orderNo, lapsed.cardOrder.orderNo].sort());
+    });
+  });
+
+  test("the last promo withdrawal, by staff or by the customer on /account; none while consent is set", async () => {
+    await withRollback(async (tx) => {
+      const customer = await insertCustomer(tx, { promoConsentAt: null });
+      const audit = (action: string, createdAt: Date) =>
+        tx.insert(auditLog).values({ action, entityType: "customer", entityId: customer.id, before: { promoConsentAt: "2026-01-01T00:00:00.000Z" }, after: { promoConsentAt: null }, createdAt });
+      expect(await getCustomerDetail(customer.id, tx)).toMatchObject({ promoWithdrawnAt: null, promoWithdrawnBy: null });
+      await audit("promo_consent_withdraw", new Date("2026-02-01T00:00:00Z"));
+      expect(await getCustomerDetail(customer.id, tx)).toMatchObject({ promoWithdrawnAt: new Date("2026-02-01T00:00:00Z"), promoWithdrawnBy: "staff" });
+      await audit("promo_consent_withdraw_self", new Date("2026-03-01T00:00:00Z"));
+      expect(await getCustomerDetail(customer.id, tx)).toMatchObject({ promoWithdrawnAt: new Date("2026-03-01T00:00:00Z"), promoWithdrawnBy: "customer" });
+
+      const consenting = await insertCustomer(tx, { promoConsentAt: new Date() });
+      await tx.insert(auditLog).values({ action: "promo_consent_withdraw_self", entityType: "customer", entityId: consenting.id });
+      expect(await getCustomerDetail(consenting.id, tx)).toMatchObject({ promoWithdrawnAt: null, promoWithdrawnBy: null });
     });
   });
 

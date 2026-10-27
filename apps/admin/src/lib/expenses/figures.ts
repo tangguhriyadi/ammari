@@ -153,12 +153,9 @@ export function summarizeMarketing(rows: readonly Omit<ExpenseFigureRow, "expens
   return { adSpendByChannel, untaggedAdSpend, adSpendTotal, endorsement, marketingTotal: adSpendTotal + endorsement };
 }
 
-// ---------- ROAS (SPEC §6: break-even 8.3) ----------
+// ---------- ROAS and its break-even (growth session S6, owner addition B) ----------
 
-/** 8.3 in tenths, so every comparison stays in integers. */
-export const BREAK_EVEN_ROAS_TENTHS = 83;
-
-/** omzet / ad spend in tenths, rounded half up (83 = 8.3); null without ad spend. For display. */
+/** omzet / ad spend in tenths, rounded half up (83 = 8,3); null without ad spend. For display. */
 export function roasTenths(omzet: number, adSpend: number): number | null {
   if (adSpend <= 0) return null;
   return Math.floor((omzet * 20 + adSpend) / (adSpend * 2));
@@ -169,11 +166,45 @@ export function formatRoasTenths(tenths: number): string {
   return `${Math.floor(tenths / 10).toLocaleString("id-ID")},${tenths % 10}`;
 }
 
-/** At or above break-even is "above" (olive), under it "below" (brick), no spend null. Exact:
- * omzet / adSpend >= 8.3  <=>  omzet * 10 >= adSpend * 83. */
-export function roasStatus(omzet: number, adSpend: number): "above" | "below" | null {
+/**
+ * "Titik impas ROAS" of a period, from its own margin (replaces the fixed 8.3 of SPEC §6, which was
+ * 1 / 12%, the planning share for ads in cost_assumptions: an ad budget target, not a break-even).
+ *
+ *   contribution        = laba setelah biaya platform - subsidi ongkir situs
+ *                         (what one more rupiah of omzet leaves after HPP, platform fees and the web
+ *                         shipping subsidy; fixed costs such as Gaji or Sewa do not grow with an ad)
+ *   break-even ROAS     = omzet / contribution  (= 1 / contribution margin)
+ *
+ * An ad at exactly this ROAS earns back what it cost and nothing more. No omzet: nothing to
+ * compute ("no_omzet"). Contribution at or under zero: every ad rupiah only adds to the loss
+ * ("no_margin"). Kept as the two integers, so a comparison never rounds.
+ */
+export type BreakEvenRoas =
+  | { kind: "computed"; omzet: number; contribution: number; /** contribution / omzet. */ marginBps: number; /** For display only. */ tenths: number }
+  | { kind: "no_margin" }
+  | { kind: "no_omzet" };
+
+export function breakEvenRoas(input: { omzet: number; labaSetelahBiayaPlatform: number; webShippingSubsidy: number }): BreakEvenRoas {
+  if (input.omzet <= 0) return { kind: "no_omzet" };
+  const contribution = input.labaSetelahBiayaPlatform - input.webShippingSubsidy;
+  if (contribution <= 0) return { kind: "no_margin" };
+  return {
+    kind: "computed",
+    omzet: input.omzet,
+    contribution,
+    marginBps: Math.round((contribution * 10_000) / input.omzet),
+    tenths: roasTenths(input.omzet, contribution)!,
+  };
+}
+
+/** "above" (olive) at or over the break-even, "below" (brick) under it, "unknown" when the period
+ * has no omzet to take a margin from, null without ad spend. Exact, in BigInt (the cross products
+ * pass 2^53 for big periods): omzet / adSpend >= breakEvenOmzet / contribution. */
+export function roasStatus(omzet: number, adSpend: number, breakEven: BreakEvenRoas): "above" | "below" | "unknown" | null {
   if (adSpend <= 0) return null;
-  return omzet * 10 >= adSpend * BREAK_EVEN_ROAS_TENTHS ? "above" : "below";
+  if (breakEven.kind === "no_omzet") return "unknown";
+  if (breakEven.kind === "no_margin") return "below";
+  return BigInt(omzet) * BigInt(breakEven.contribution) >= BigInt(breakEven.omzet) * BigInt(adSpend) ? "above" : "below";
 }
 
 // ---------- "Iklan vs omzet" (plan §6) ----------
@@ -187,23 +218,24 @@ export interface RoasRow {
   /** Null on "Tanpa kanal": untagged Meta spend has no omzet of its own. */
   omzet: number | null;
   roasTenths: number | null;
-  status: "above" | "below" | null;
+  status: "above" | "below" | "unknown" | null;
 }
 
 /**
  * One row per channel an ad can be tagged with (Shopee, TikTok Shop, Situs, Instagram, WhatsApp),
  * "Tanpa kanal" when untagged Meta spend exists, and "Total": every ad rupiah against every
  * channel's omzet (offline and reseller included, owner answer A14). Endorse/KOL is never here.
- * `omzetByChannel` is the counted omzet per channel id of the same period.
+ * `omzetByChannel` is the counted omzet per channel id of the same period; every row is judged
+ * against the period's one `breakEven`.
  */
-export function buildRoasRows(marketing: MarketingSummary, omzetByChannel: ReadonlyMap<string, number>): RoasRow[] {
+export function buildRoasRows(marketing: MarketingSummary, omzetByChannel: ReadonlyMap<string, number>, breakEven: BreakEvenRoas): RoasRow[] {
   const row = (key: RoasRowKey, label: string, adSpend: number, omzet: number | null): RoasRow => ({
     key,
     label,
     adSpend,
     omzet,
     roasTenths: omzet === null ? null : roasTenths(omzet, adSpend),
-    status: omzet === null ? null : roasStatus(omzet, adSpend),
+    status: omzet === null ? null : roasStatus(omzet, adSpend, breakEven),
   });
   const rows = MARKETING_CHANNEL_OPTIONS.map((channelId) =>
     row(channelId, MARKETING_CHANNEL_LABELS[channelId], marketing.adSpendByChannel[channelId] ?? 0, omzetByChannel.get(channelId) ?? 0),

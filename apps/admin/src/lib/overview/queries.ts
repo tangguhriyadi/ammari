@@ -223,6 +223,75 @@ export async function getPeriodTotals(range: TimeRange, { canViewProfit }: Profi
   };
 }
 
+// ---------- Per order (the monthly report's "Pesanan" sheet) ----------
+
+export interface CountedOrderRow {
+  orderNo: string;
+  orderDate: Date;
+  channelId: string;
+  channelName: string;
+  omzet: number;
+  hpp: number;
+  /** Lines of the order whose locked unit_cost is 0. */
+  linesWithoutCost: number;
+  platformFee: number;
+  /** A marketplace order without a single fee row (its fee is unknown, not 0). */
+  feeMissing: boolean;
+  webShippingSubsidy: number;
+}
+
+type CountedOrderDbRow = {
+  order_no: string;
+  order_date: Date | string;
+  channel_id: string;
+  channel_name: string;
+  omzet: string;
+  hpp: string;
+  lines_without_cost: number;
+  platform_fee: string;
+  fee_missing: boolean;
+  shipping_subsidy: string;
+};
+
+/** Every counted order of the range, oldest first, from the same CTE and fragments as
+ * getPeriodTotals: the rows add up to its omzet, HPP, platform fee and subsidy exactly. At most
+ * `limit` rows (`truncated` says when more exist). Cost figures: finance.view_profit only. */
+export async function listCountedOrders(range: TimeRange, limit: number, db: Database = defaultDb): Promise<{ rows: CountedOrderRow[]; truncated: boolean }> {
+  const rows = await db.execute<CountedOrderDbRow>(sql`
+    with counted as (${countedOrdersCte(range, true, { withFees: true })}),
+    order_lines as (
+      select oi.order_id, sum(${lineHppSql()})::bigint as hpp, count(*) filter (where oi.unit_cost = 0)::int as lines_without_cost
+      from ${orderItems} oi
+      join counted c on c.id = oi.order_id
+      group by oi.order_id
+    )
+    select o.order_no, o.order_date, c.channel_id, ${channelDisplayNameSql(sql`c.channel_id`, sql`ch.name`)} as channel_name,
+           c.omzet::text as omzet, coalesce(ol.hpp, 0)::text as hpp, coalesce(ol.lines_without_cost, 0) as lines_without_cost,
+           c.platform_fee::text as platform_fee, c.fee_missing, c.shipping_subsidy::text as shipping_subsidy
+    from counted c
+    join ${orders} o on o.id = c.id
+    join ${channels} ch on ch.id = c.channel_id
+    left join order_lines ol on ol.order_id = c.id
+    order by o.order_date, o.order_no
+    limit ${limit + 1}
+  `);
+  return {
+    rows: rows.slice(0, limit).map((row) => ({
+      orderNo: row.order_no,
+      orderDate: new Date(row.order_date),
+      channelId: row.channel_id,
+      channelName: row.channel_name,
+      omzet: toAmount(row.omzet),
+      hpp: toAmount(row.hpp),
+      linesWithoutCost: row.lines_without_cost,
+      platformFee: toAmount(row.platform_fee),
+      feeMissing: row.fee_missing,
+      webShippingSubsidy: toAmount(row.shipping_subsidy),
+    })),
+    truncated: rows.length > limit,
+  };
+}
+
 // ---------- Breakdowns ----------
 
 export interface ChannelBreakdownRow {

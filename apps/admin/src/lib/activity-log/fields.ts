@@ -157,6 +157,17 @@ export const FIELD_LABELS: Record<string, string> = {
   previousExpiresAt: "Berlaku sampai (sebelumnya)",
   newExpiresAt: "Berlaku sampai (baru)",
   staffUserId: "Staf (ID)",
+  by: "Oleh",
+  consentText: "Teks persetujuan",
+  filter: "Filter",
+  rowCount: "Jumlah baris",
+  // Reports (Iklan & Biaya "Unduh laporan bulanan")
+  format: "Format",
+  fromMonth: "Dari bulan",
+  toMonth: "Sampai bulan",
+  expenseRows: "Baris biaya",
+  orderRows: "Baris pesanan",
+  ordersTruncated: "Pesanan dipotong",
   // Content and settings
   monthlyBillCategories: "Kategori wajib dicatat tiap bulan",
   content: "Isi",

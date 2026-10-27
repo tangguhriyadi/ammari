@@ -5,7 +5,19 @@ import { addCalendarDays, jakartaMidnight } from "@ammari/commerce/jakarta-day";
 import { defaultDb, type Database } from "@/lib/db";
 import { getMonthlyBillCategories } from "@/lib/settings/monthly-bills";
 import type { TimeRange } from "@/lib/overview/period";
-import { monthlyBillsReminderWindow, summarizeMarketing, type DateRange, type MarketingSummary, type MonthlyBillsWindow } from "./figures";
+import { getChannelBreakdown, getPeriodTotals, type ChannelBreakdownRow, type PeriodMoney, type PeriodTotals } from "@/lib/overview/queries";
+import {
+  breakEvenRoas,
+  buildRoasRows,
+  labaBersih,
+  monthlyBillsReminderWindow,
+  summarizeMarketing,
+  type BreakEvenRoas,
+  type DateRange,
+  type MarketingSummary,
+  type MonthlyBillsWindow,
+  type RoasRow,
+} from "./figures";
 
 // "Iklan & Biaya" figures read from the database (docs/plans/growth.md §4, session S3). Every
 // number here is a cost figure: callers check ads_expenses.manage / finance.view_profit on the
@@ -74,6 +86,45 @@ export async function getExpenseTotal(range: DateRange, db: Database = defaultDb
     .from(businessExpenses)
     .where(and(isNull(businessExpenses.voidedAt), gte(businessExpenses.expenseDate, range.from), lte(businessExpenses.expenseDate, range.to)));
   return toAmount(row?.total);
+}
+
+export interface ExpenseSummary {
+  totals: PeriodTotals;
+  money: PeriodMoney;
+  channels: ChannelBreakdownRow[];
+  expenses: ExpenseBreakdown;
+  /** Laba bersih (plan §4.1). */
+  net: number;
+  /** HPP or platform fees are missing for some counted order: every laba, and the break-even
+   * ROAS, is higher than the truth. */
+  incomplete: boolean;
+  breakEven: BreakEvenRoas;
+  roasRows: RoasRow[];
+}
+
+/** Every figure of the "Ringkasan" tab for a range of whole months. The tab and "Unduh laporan
+ * bulanan" (report.ts) both read this one function, so the downloaded numbers are the screen's.
+ * Callers have checked ads_expenses.manage + finance.view_profit (hence canViewProfit: true). */
+export async function getExpenseSummary(range: DateRange, now: Date = new Date(), db: Database = defaultDb): Promise<ExpenseSummary> {
+  const time = dateRangeToTimeRange(range, now);
+  const [totals, channels, expenses] = await Promise.all([
+    getPeriodTotals(time, { canViewProfit: true }, db),
+    getChannelBreakdown(time, { canViewProfit: true }, db),
+    getExpenseBreakdown(range, db),
+  ]);
+  const money = totals.money;
+  if (!money) throw new Error("expense summary needs the money totals");
+  const breakEven = breakEvenRoas(money);
+  return {
+    totals,
+    money,
+    channels,
+    expenses,
+    net: labaBersih({ labaSetelahBiayaPlatform: money.labaSetelahBiayaPlatform, webShippingSubsidy: money.webShippingSubsidy, expenses: expenses.total }),
+    incomplete: money.linesWithoutCost > 0 || money.platformFees.ordersWithoutFees > 0,
+    breakEven,
+    roasRows: buildRoasRows(expenses.marketing, new Map(channels.map((channel) => [channel.channelId, channel.omzet ?? 0])), breakEven),
+  };
 }
 
 export type MonthlyBillsReminder =

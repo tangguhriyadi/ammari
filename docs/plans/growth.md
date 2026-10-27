@@ -9,7 +9,9 @@ status with TDD, migration test) and **S2** (expense write paths, `expense_proof
 plumbing, `/ads-expenses` Pengeluaran list + "Catat biaya" dialog + void, Log Aktivitas labels,
 e2e at 390px and 1280px), both committed, and **S3** (expense figures: "Ringkasan" tab, Laba bersih
 tile on `/`, "Biaya bulanan belum dicatat" item configurable on `/settings` with migration 0043,
-e2e). S4 to S6 not started.
+e2e), **S4 + S5** (Pelanggan & Voucher, committed together in bf0180f) and **S6** (promo export,
+self-serve promo opt-out on `/account`, "Unduh laporan bulanan" PDF + Excel, break-even ROAS from
+the period's own margin; owner additions A and B of 2026-10-27). All sessions built.
 
 S1/S2 notes (where the build differs from or adds to the text below):
 - `business_expenses_channel_check` also refuses a missing channel on Iklan Shopee/TikTok (IS NOT
@@ -53,6 +55,82 @@ S1/S2 notes (where the build differs from or adds to the text below):
   `sumExpensesInRange`, `labaBersih`, `summarizeMarketing`, `roasTenths`, `roasStatus`; ROAS is
   compared in integers: `omzet * 10 >= adSpend * 83`) and `lib/vouchers/status.ts`
   (`effectiveVoucherStatus`, 14-day "segera berakhir").
+
+S4/S5 notes (customers and vouchers; written in S6, where the build differs from or adds to the text
+below):
+- List (`lib/customers/directory.ts` `listCustomers`): masking on the server (`mask.ts`:
+  `nu***@gmail.com`, `+62 812 **** 4567`), so the list payload never carries a full contact.
+  Filters `?filter=account|buyer|promo|voucher` ("Punya akun", "Pernah belanja", "Setuju promo",
+  "Voucher aktif"), sorts `newest|spend|last_order`, `all=1` = "Termasuk yang belum pernah
+  belanja" (A13). Search: name and email `ilike`, phone as a prefix of the normalised `+62...`
+  number (`phoneSearchPrefix`, so `0812...` finds `+62812...`).
+- Detail (`getCustomerDetail`): order rows carry only id, no., date, channel, status, payment
+  status, total, counted (a test pins the key list so a contact snapshot can never slip in). "Ditarik
+  pada" is the newest withdrawal audit row's date (only read while consent is NULL).
+- Withdrawal (`lib/customers/consent.ts`): sources WhatsApp / Email / Lainnya (note required for
+  Lainnya, ≤ 300; the dialog warns not to type a number or email). Row locked `FOR UPDATE` only so
+  the audit keeps the exact cleared timestamp; the conditional UPDATE decides. Audit
+  `customer` / `promo_consent_withdraw` with `{promoConsentAt}` before and `{source, note}` after.
+  Re-opt-in at checkout is covered in `place-order.test.ts`.
+- Vouchers: SQL twin of the effective status in `lib/vouchers/status-sql.ts`; overview and period
+  stats in `lib/vouchers/overview.ts` ("Nilai voucher aktif" read only for finance.view_profit).
+  Void/extend live in `@ammari/commerce/voucher-adjustments` (`packages/commerce/src/vouchers/adjustments.ts`),
+  not in the admin app, so checkout's redemption and the adjustments sit next to each other: one
+  conditional UPDATE each (row locked first only for the history snapshot), reason ≤ 500, extension
+  to the end of a chosen Jakarta day, after today and after the current expiry, ≤ 3 months from today.
+  Concurrency (void vs redeem, extend vs redeem) is tested there.
+- Ringkasan voucher card (`overview-voucher-card.tsx`): counts only (Kartu dicetak, Kartu diklaim,
+  Voucher dipakai) for the period on screen, `customers.view`, links to `/customers?tab=voucher`.
+- e2e `customers.spec.ts`: owner, CS and a role without `customers.view`, each pass on its own
+  seeded customer at 390px and 1280px.
+
+S6 notes:
+- **Promo export** (§10): `GET /customers/promo-export?ack=1` (`customers.view` + `customers.export`,
+  400 without `ack=1`, so a bare link cannot skip the warning). Rows: `promo_consent_at IS NOT NULL`
+  **and** a `customer_auth_users` row **and** an email (the account guard keeps "consent given while
+  logged in" true even if another writer appears). CSV via `buildCsv` (formula-safe, BOM), columns
+  Nama, Email, Nomor HP (digits only, `62812...`, the form WhatsApp tools import; no formula guard needed), Setuju promo sejak (WIB). Audit `customer_export` /
+  `export_promo_contacts`, `{filter, rowCount}` only. UI: "Unduh kontak promo" on the Pelanggan &
+  Voucher header (owner/super_admin), dialog with the four rules (own promo only, never Meta/TikTok
+  or any ad platform, re-export before every send, delete after) and the required tick.
+- **Self-serve promo on `/account`** (A11): section "Kabar promo" with "Berhenti terima promo" (one
+  press, no dialog) and, when off, "Terima kabar promo" with the consent sentence above the button.
+  `apps/web/src/lib/account/promo-consent.ts` `setPromoConsent`: row locked, one conditional UPDATE
+  each way (withdraw only while set; opt in stamps `now()` only while unset, so an existing consent
+  keeps its date). Audit (buyer, actor NULL) `customer` / `promo_consent_withdraw_self` and
+  `promo_consent_grant_self`, `{promoConsentAt}` before/after plus `by: "customer"`; an opt-in
+  also stores `consentText`, the exact sentence shown above the button (consent evidence). Per-IP limit
+  `promo_consent_change` (30 per 10 min, as "Hapus alamat"). The admin detail's "Ditarik pada" now
+  also reads the self-serve row and adds "oleh pelanggan sendiri di akunnya".
+- **Titik impas ROAS** (owner addition B): the fixed 8.3 was 1 ÷ 12%, the "Ads 12%" planning share
+  in `cost_assumptions` (SPEC §7): an ad budget target, not a break-even. Replaced by a figure
+  computed per period (`breakEvenRoas` in `figures.ts`):
+  `contribution = laba setelah biaya platform − subsidi ongkir situs`,
+  `titik impas ROAS = omzet ÷ contribution` (= 1 ÷ contribution margin). Fixed costs (Gaji, Sewa,
+  ...) stay out: they do not grow with an ad. Comparison is exact in BigInt
+  (`omzet_ch × contribution ≥ omzet × adSpend`). Fallbacks: no omzet → "Belum bisa dihitung"
+  (status `unknown`, no colour); contribution ≤ 0 → "Tidak ada" (every row with spend is below).
+  HPP/fees incomplete → shown with "titik impas sebenarnya lebih tinggi". Chosen over a `/settings`
+  value: it needs no migration, moves with real margins (Shopee fees, discounts), and cannot go stale.
+  One figure per period for every row (per-channel margins are a possible follow-up; TikTok fee rows
+  are often still missing, which would make a per-channel figure misleading today).
+- **Unduh laporan bulanan** (owner addition A): `GET /ads-expenses/report?format=pdf|xlsx&period=...`
+  (`ads_expenses.manage` + `finance.view_profit`; same params and parser as the Ringkasan tab; the
+  links send the shown months explicitly). Both files are built from `getExpenseSummary`
+  (`summary.ts`), the one call the tab itself now makes, so the numbers are identical.
+  `report.ts` adds the non-voided expense rows and `listCountedOrders` (`overview/queries.ts`, same
+  counted-orders CTE as `getPeriodTotals`; capped at 50.000 rows with a note). PDF: pdf-lib (already
+  a dependency) with built-in Helvetica, A4, brand mark from `apps/admin/public/logos/ammari-mark-512.png`
+  (copied from apps/web; drawn without it if unreadable), P&L, per-channel table, notes, footer
+  "Laporan manajemen, bukan laporan keuangan resmi." + generated-at. **No new dependency** and no
+  headless browser. Excel: vendored SheetJS, sheets Ringkasan, Per kanal, Biaya, Pesanan; typed cells
+  (text never a formula) plus `neutralizeFormula` on text. Audit `expense_report` / `download`
+  ("Laporan keuangan bulanan diunduh"), `{format, fromMonth, toMonth, expenseRows, orderRows,
+  ordersTruncated}`, written only after the file was built.
+- Contract-migration note (A2): `expenses` and `ad_spend_daily` are still unused (no reader or
+  writer in `apps/*/src` or `packages/*/src`). Drop them in a later migration once dev and prod show
+  0 rows (`select count(*) from expenses; select count(*) from ad_spend_daily;`), together with the
+  old `EXPENSE_CATEGORIES` constant and SPEC §5.2's two bullets. Not part of S6.
 
 Two admin pages under the "Pertumbuhan" nav group, both `ComingSoonPage` today:
 

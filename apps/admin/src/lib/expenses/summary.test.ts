@@ -7,7 +7,7 @@ import { businessExpenses, orderItems, privateFiles, salesGoal, type BusinessExp
 import { jakartaMidnight } from "@ammari/commerce/jakarta-day";
 import { getChannelBreakdown, getPeriodTotals } from "@/lib/overview/queries";
 import { buildRoasRows, labaBersih, monthRange } from "./figures";
-import { dateRangeToTimeRange, getExpenseBreakdown, getExpenseTotal, getMonthlyBillsReminder } from "./summary";
+import { dateRangeToTimeRange, getExpenseBreakdown, getExpenseSummary, getExpenseTotal, getMonthlyBillsReminder } from "./summary";
 
 // docs/plans/growth.md §4 and §12.1 (session S3): expense figures from the database. Expenses are
 // inserted directly (recordBusinessExpense refuses a future date) and dated in 2031, so whatever
@@ -146,7 +146,8 @@ describe("Laba bersih and ROAS on a fixture (plan §4.1)", () => {
       await insertExpense(tx, staff.id, { expenseDate: "2031-03-04", category: "endorsement", amount: 150_000 });
       await insertExpense(tx, staff.id, { expenseDate: "2031-03-20", category: "rent", amount: 5_000_000, voided: true });
 
-      const time = dateRangeToTimeRange(MONTH, new Date("2032-01-01T00:00:00Z"));
+      const now = new Date("2032-01-01T00:00:00Z");
+      const time = dateRangeToTimeRange(MONTH, now);
       const totals = await getPeriodTotals(time, { canViewProfit: true }, tx);
       const breakdown = await getExpenseBreakdown(MONTH, tx);
       const money = totals.money!;
@@ -156,11 +157,21 @@ describe("Laba bersih and ROAS on a fixture (plan §4.1)", () => {
       expect(breakdown.total).toBe(700_000);
       expect(labaBersih({ labaSetelahBiayaPlatform: money.labaSetelahBiayaPlatform, webShippingSubsidy: money.webShippingSubsidy, expenses: breakdown.total })).toBe(200_000);
 
+      // getExpenseSummary (the tab and the monthly report) is exactly these figures.
+      const summary = await getExpenseSummary(MONTH, now, tx);
+      expect(summary.money).toEqual(money);
+      expect(summary.expenses).toEqual(breakdown);
+      expect(summary.net).toBe(200_000);
+      expect(summary.incomplete).toBe(true);
+      // Break-even: 1.500.000 / (920.000 - 20.000) = 1,67 -> 1,7.
+      expect(summary.breakEven).toEqual({ kind: "computed", omzet: 1_500_000, contribution: 900_000, marginBps: 6_000, tenths: 17 });
+
       const channels = await getChannelBreakdown(time, { canViewProfit: true }, tx);
-      const rows = buildRoasRows(breakdown.marketing, new Map(channels.map((channel) => [channel.channelId, channel.omzet ?? 0])));
-      const byKey = Object.fromEntries(rows.map((row) => [row.key, row]));
+      expect(summary.channels).toEqual(channels);
+      expect(summary.roasRows).toEqual(buildRoasRows(breakdown.marketing, new Map(channels.map((channel) => [channel.channelId, channel.omzet ?? 0])), summary.breakEven));
+      const byKey = Object.fromEntries(summary.roasRows.map((row) => [row.key, row]));
       expect(byKey.shopee).toMatchObject({ adSpend: 100_000, omzet: 1_000_000, roasTenths: 100, status: "above" });
-      expect(byKey.web).toMatchObject({ adSpend: 50_000, omzet: 300_000, roasTenths: 60, status: "below" });
+      expect(byKey.web).toMatchObject({ adSpend: 50_000, omzet: 300_000, roasTenths: 60, status: "above" });
       expect(byKey.total).toMatchObject({ adSpend: 150_000, omzet: 1_500_000, roasTenths: 100, status: "above" });
       expect(byKey.untagged).toBeUndefined();
     });

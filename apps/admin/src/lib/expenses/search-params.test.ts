@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { expenseListHref, expenseSummaryHref, parseExpenseListParams, parseExpenseSummaryParams, parseExpenseTab } from "./search-params";
+import { expenseListHref, expenseReportHref, expenseSummaryHref, parseExpenseListParams, parseExpenseSummaryParams, parseExpenseTab } from "./search-params";
 
 const NOW = new Date("2026-10-27T05:00:00Z");
 
@@ -124,5 +124,12 @@ describe("expenseSummaryHref", () => {
     expect(expenseSummaryHref({ period: "month", fromMonth: "2026-02" })).toBe("/ads-expenses?tab=ringkasan&period=month&month=2026-02");
     expect(expenseSummaryHref({ period: "range", fromMonth: "2026-01", toMonth: "2026-03" })).toBe("/ads-expenses?tab=ringkasan&period=range&from=2026-01&to=2026-03");
     expect(expenseSummaryHref({ period: "month" })).toBe("/ads-expenses?tab=ringkasan&period=month");
+  });
+});
+
+describe("expenseReportHref (session S6)", () => {
+  test("the shown months as an explicit month or range", () => {
+    expect(expenseReportHref({ period: "this_month", fromMonth: "2026-10", toMonth: "2026-10" }, "pdf")).toBe("/ads-expenses/report?format=pdf&period=month&month=2026-10");
+    expect(expenseReportHref({ period: "range", fromMonth: "2026-01", toMonth: "2026-03" }, "xlsx")).toBe("/ads-expenses/report?format=xlsx&period=range&from=2026-01&to=2026-03");
   });
 });
