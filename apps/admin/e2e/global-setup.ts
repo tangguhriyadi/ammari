@@ -220,6 +220,16 @@ export const E2E_ROLES_STAFF_ADMIN_EMAIL = "roles-staff-admin@e2e.ammari.test";
 export const E2E_ROLES_STAFF_OWNER_EMAIL = "roles-staff-owner@e2e.ammari.test";
 export const E2E_ROLES_STAFF_PACKING_EMAIL = "roles-staff-packing@e2e.ammari.test";
 export const E2E_CONTENT_ADMIN_EMAIL = "content-admin@e2e.ammari.test";
+// activity-log.spec.ts (docs/plans/activity-log.md): its own super_admin (audit_log.view) and owner
+// (no audit_log.view), same "fresh email, clean OTP throttle" reasoning as every fixture above, and
+// three audit rows it reads back: a supplier rename by the super_admin, a buyer's card claim whose
+// payload carries a token hash (must render redacted), and an entity/action the catalog does not
+// know (must render as its raw key).
+export const E2E_ACTIVITY_LOG_ADMIN_EMAIL = "activity-log-admin@e2e.ammari.test";
+export const E2E_ACTIVITY_LOG_OWNER_EMAIL = "activity-log-owner@e2e.ammari.test";
+export const E2E_ACTIVITY_LOG_SUPPLIER_NAME = "E2E Log Supplier Baru";
+export const E2E_ACTIVITY_LOG_TOKEN_HASH = "e2e-log-token-hash-must-not-render";
+export const E2E_ACTIVITY_LOG_UNKNOWN_ACTION = "e2e_unknown_action";
 const E2E_IMPORT_NO_FINANCE_ROLE_KEY = "e2e_import_no_finance";
 export const E2E_IMPORT_PRODUCT_NAME = "E2E Gamis Impor";
 export const E2E_IMPORT_SKU_M = "E2E-IMPOR-M";
@@ -317,6 +327,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     orderChannelFees,
     payments,
     stockReservations,
+    auditLog,
+    suppliers,
   } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
 
@@ -472,6 +484,40 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_ROLES_STAFF_OWNER_EMAIL, "E2E Peran Owner", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_ROLES_STAFF_PACKING_EMAIL, "E2E Peran Packing", "packing_warehouse");
   await ensureStaffFixture(E2E_CONTENT_ADMIN_EMAIL, "E2E Admin Konten", "content_admin");
+  await ensureStaffFixture(E2E_ACTIVITY_LOG_ADMIN_EMAIL, "E2E Log Super Admin", SUPER_ADMIN_ROLE_KEY);
+  await ensureStaffFixture(E2E_ACTIVITY_LOG_OWNER_EMAIL, "E2E Log Owner", OWNER_ROLE_KEY);
+  {
+    // ammari_e2e is TRUNCATEd above on every run, so these rows are always fresh and inside the
+    // page's default last-7-days range.
+    const [logAdmin] = await db.select({ id: staffUsers.id }).from(staffUsers).where(eq(staffUsers.email, E2E_ACTIVITY_LOG_ADMIN_EMAIL)).limit(1);
+    if (!logAdmin) throw new Error("activity log admin fixture missing");
+    const [supplier] = await db
+      .insert(suppliers)
+      .values({ name: E2E_ACTIVITY_LOG_SUPPLIER_NAME })
+      .onConflictDoUpdate({ target: suppliers.name, set: { name: E2E_ACTIVITY_LOG_SUPPLIER_NAME } })
+      .returning();
+    if (!supplier) throw new Error("failed to upsert the activity log supplier fixture");
+    const cardId = crypto.randomUUID();
+    await db.insert(auditLog).values([
+      {
+        actorStaffUserId: logAdmin.id,
+        action: "update",
+        entityType: "supplier",
+        entityId: supplier.id,
+        before: { id: supplier.id, name: "E2E Log Supplier Lama", isActive: true, notes: null },
+        after: { id: supplier.id, name: E2E_ACTIVITY_LOG_SUPPLIER_NAME, isActive: true, notes: null },
+      },
+      {
+        actorStaffUserId: null,
+        action: "claim",
+        entityType: "thank_you_card",
+        entityId: cardId,
+        before: { id: cardId, status: "active", tokenHash: E2E_ACTIVITY_LOG_TOKEN_HASH, stickerCode: "E2E-LOG-1" },
+        after: { id: cardId, status: "claimed", tokenHash: E2E_ACTIVITY_LOG_TOKEN_HASH, stickerCode: "E2E-LOG-1" },
+      },
+      { actorStaffUserId: null, action: E2E_ACTIVITY_LOG_UNKNOWN_ACTION, entityType: "e2e_widget", entityId: "widget-1" },
+    ]);
+  }
 
   await ensureStaffFixture(E2E_OVERVIEW_EMAIL, "E2E Overview", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_OVERVIEW_SETTINGS_EMAIL, "E2E Overview Settings", OWNER_ROLE_KEY);
@@ -910,6 +956,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_ROLES_STAFF_OWNER_EMAIL,
         E2E_ROLES_STAFF_PACKING_EMAIL,
         E2E_CONTENT_ADMIN_EMAIL,
+        E2E_ACTIVITY_LOG_ADMIN_EMAIL,
+        E2E_ACTIVITY_LOG_OWNER_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);
