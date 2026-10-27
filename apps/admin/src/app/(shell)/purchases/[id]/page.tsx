@@ -78,13 +78,14 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
   const canEdit = canManage && canViewProfit && document.status === "ordered" && !document.hasReceipts;
   const nothingArrived = document.lines.every((line) => line.accepted === 0 && line.rejected === 0);
   const isTerminal = TERMINAL_PURCHASE_STATUSES.includes(document.status);
-  // §3.1: closing below what was paid is allowed (it is about goods), the dialog warns first.
-  const overpaidOnClose = isOpen && canManage && canViewProfit ? await overpaidIfClosed(document.id, nothingArrived ? "cancelled" : "closed") : null;
   // Defect actions (inventory.manage, D10) on every line still holding defect stock.
   const actionableLines = canManage ? document.lines.filter((line) => line.defectHeld > 0) : [];
+  // §3.1: closing below what was paid is allowed (it is about goods), the dialog warns first.
+  const overpaidOnClosePromise =
+    isOpen && canManage && canViewProfit ? overpaidIfClosed(document.id, nothingArrived ? "cancelled" : "closed") : Promise.resolve(null);
   // Cost data: queried only for finance.view_profit (the disposal preview and the §4.3 panel).
-  const [lineTotals, variance] = canViewProfit
-    ? await Promise.all([
+  const costReads = canViewProfit
+    ? Promise.all([
         Promise.all(
           actionableLines.map(async (line) => [line.id, await getLineDefectTotals({ purchaseItemId: line.id })] as const),
         ).then((entries) => new Map<string, LineDefectTotals>(entries)),
@@ -100,7 +101,9 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
             : null;
         }),
       ])
-    : [new Map<string, LineDefectTotals>(), null];
+    : Promise.resolve([new Map<string, LineDefectTotals>(), null] as const);
+  // Independent reads, awaited together (docs/plans/admin-performance.md).
+  const [[lineTotals, variance], overpaidOnClose] = await Promise.all([costReads, overpaidOnClosePromise]);
 
   return (
     <>

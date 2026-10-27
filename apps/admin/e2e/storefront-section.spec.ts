@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { type Page } from "@playwright/test";
+import { clickAndWaitForAction, expect, test } from "./fixtures";
 import { loginAs } from "./helpers/login";
 import { createPublishablePhotoReadyProduct, createSizeChart } from "./helpers/publishable-product";
 import { openProductStep } from "./helpers/product";
@@ -36,8 +37,7 @@ async function runStorefrontFlow(page: Page, label: string): Promise<void> {
   // --- Write a formatted description, save, and confirm it persists after reload. ---
   await expect(section.getByRole("heading", { name: "Toko online", exact: true })).toBeVisible();
   await writeFormattedDescription(page);
-  await section.getByRole("button", { name: "Simpan" }).click();
-  await page.waitForLoadState("networkidle");
+  await clickAndWaitForAction(page, section.getByRole("button", { name: "Simpan" }));
 
   await page.goto(page.url());
   const editorAfterReload = page.getByTestId("storefront-description-editor");
@@ -86,8 +86,7 @@ async function runStorefrontFlow(page: Page, label: string): Promise<void> {
 
   // --- Publish toggle: now succeeds (active + size chart + weight + alt text present). ---
   await section.getByRole("switch", { name: "Tayang di toko online" }).click();
-  await section.getByRole("button", { name: "Simpan" }).click();
-  await page.waitForLoadState("networkidle");
+  await clickAndWaitForAction(page, section.getByRole("button", { name: "Simpan" }));
 
   await page.goto(page.url());
   await expect(section.getByRole("switch", { name: "Tayang di toko online" })).toHaveAttribute("aria-checked", "true");

@@ -561,43 +561,45 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
     .limit(1);
   if (!order) return null;
 
-  const itemRows = await db
-    .select({
-      id: orderItems.id,
-      sku: orderItems.sku,
-      productName: products.name,
-      colorName: fabricColors.name,
-      size: productVariants.size,
-      qty: orderItems.qty,
-      unitPrice: orderItems.unitPrice,
-      listUnitPrice: orderItems.listUnitPrice,
-      unitCost: orderItems.unitCost,
-    })
-    .from(orderItems)
-    .innerJoin(productVariants, eq(productVariants.sku, orderItems.sku))
-    .innerJoin(products, eq(products.id, productVariants.productId))
-    .innerJoin(fabricColors, eq(fabricColors.id, productVariants.fabricColorId))
-    .where(eq(orderItems.orderId, id))
-    .orderBy(orderItems.createdAt);
-
+  // Independent reads, in parallel (docs/plans/admin-performance.md).
   // At most one claimed card normally exists per order (voidActiveCardForOrder/mintThankYouCard
   // never touch an already-claimed card), but `desc(claimedAt).limit(1)` is defensive rather
   // than assuming that invariant holds forever.
-  const [claimedCard] = await db
-    .select({ claimedAt: thankYouCards.claimedAt })
-    .from(thankYouCards)
-    .where(and(eq(thankYouCards.orderId, id), eq(thankYouCards.status, "claimed")))
-    .orderBy(desc(thankYouCards.claimedAt))
-    .limit(1);
-
-  const [full] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
-  const checkout =
-    full && full.paymentStatus !== null ? await getCheckoutOrderDetail({ ...full, paymentStatus: full.paymentStatus }, db) : null;
+  const [itemRows, [claimedCard], [full]] = await Promise.all([
+    db
+      .select({
+        id: orderItems.id,
+        sku: orderItems.sku,
+        productName: products.name,
+        colorName: fabricColors.name,
+        size: productVariants.size,
+        qty: orderItems.qty,
+        unitPrice: orderItems.unitPrice,
+        listUnitPrice: orderItems.listUnitPrice,
+        unitCost: orderItems.unitCost,
+      })
+      .from(orderItems)
+      .innerJoin(productVariants, eq(productVariants.sku, orderItems.sku))
+      .innerJoin(products, eq(products.id, productVariants.productId))
+      .innerJoin(fabricColors, eq(fabricColors.id, productVariants.fabricColorId))
+      .where(eq(orderItems.orderId, id))
+      .orderBy(orderItems.createdAt),
+    db
+      .select({ claimedAt: thankYouCards.claimedAt })
+      .from(thankYouCards)
+      .where(and(eq(thankYouCards.orderId, id), eq(thankYouCards.status, "claimed")))
+      .orderBy(desc(thankYouCards.claimedAt))
+      .limit(1),
+    db.select().from(orders).where(eq(orders.id, id)).limit(1),
+  ]);
 
   const imported = full !== undefined && (full.importBatchId !== null || full.channelSyncedAt !== null);
-  const feeRows = imported
-    ? await db.select({ component: orderChannelFees.component, amount: orderChannelFees.amount }).from(orderChannelFees).where(eq(orderChannelFees.orderId, id))
-    : [];
+  const [checkout, feeRows] = await Promise.all([
+    full && full.paymentStatus !== null ? getCheckoutOrderDetail({ ...full, paymentStatus: full.paymentStatus }, db) : Promise.resolve(null),
+    imported
+      ? db.select({ component: orderChannelFees.component, amount: orderChannelFees.amount }).from(orderChannelFees).where(eq(orderChannelFees.orderId, id))
+      : Promise.resolve([]),
+  ]);
   const marketplace: MarketplaceOrderDetail | null = imported
     ? {
         channelStatus: full.channelStatus,

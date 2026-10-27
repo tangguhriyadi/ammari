@@ -3,10 +3,9 @@ import { notFound } from "next/navigation";
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { getStaffSession } from "@/lib/auth/staff-session";
 import {
   getFabricById,
-  getFabricColorUsageCount,
+  getFabricColorUsageCounts,
   getFabricUsageCount,
   listFabricColors,
 } from "@/lib/products/fabric-queries";
@@ -16,24 +15,24 @@ import { FabricForm } from "../_components/fabric-form";
 import { FabricColorsSection } from "../_components/fabric-colors-section";
 
 export default async function BahanEditPage({ params }: { params: Promise<{ id: string }> }) {
-  await requirePermission("products.manage");
+  const session = await requirePermission("products.manage");
   const { id } = await params;
   const fabric = await getFabricById(id);
   if (!fabric) notFound();
 
-  const [productCount, colors] = await Promise.all([getFabricUsageCount(id), listFabricColors(id)]);
-  const usageCounts: Record<string, number> = {};
-  for (const color of colors) {
-    usageCounts[color.id] = await getFabricColorUsageCount(color.id);
-  }
-
   // Stock (qty/avg cost) is a separate permission domain (inventory.*) from this page's own
   // products.manage gate — a products.manage-only session simply doesn't see this block, same
   // "viewing requires inventory.view" rule the /stock and /purchases pages enforce.
-  const session = await getStaffSession();
-  const canViewStock = session?.permissionKeys.includes("inventory.view") ?? false;
-  const canViewProfit = session?.permissionKeys.includes("finance.view_profit") ?? false;
-  const balance = canViewStock ? await getFabricBalance(id) : null;
+  const canViewStock = session.permissionKeys.includes("inventory.view");
+  const canViewProfit = session.permissionKeys.includes("finance.view_profit");
+
+  // Independent reads in parallel; the per-color usage counts are one grouped query
+  // (docs/plans/admin-performance.md).
+  const [productCount, [colors, usageCounts], balance] = await Promise.all([
+    getFabricUsageCount(id),
+    listFabricColors(id).then(async (colors) => [colors, await getFabricColorUsageCounts(colors.map((color) => color.id))] as const),
+    canViewStock ? getFabricBalance(id) : Promise.resolve(null),
+  ]);
   const avgCost = balance && canViewProfit && balance.qty > 0 ? Math.round(balance.valueAmount / balance.qty) : null;
 
   return (

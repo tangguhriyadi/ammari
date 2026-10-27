@@ -8,10 +8,9 @@ import { SizeChartForm, type SizeChartRowValues } from "../_components/size-char
 export default async function SizeChartDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await requirePermission("content.manage");
   const { id } = await params;
-  const chart = await getSizeChartDetail(id);
+  const [chart, charts] = await Promise.all([getSizeChartDetail(id), listSizeCharts()]);
   if (!chart) notFound();
 
-  const charts = await listSizeCharts();
   const productCount = charts.find((candidate) => candidate.id === id)?.productCount ?? 0;
 
   const rows: SizeChartRowValues[] = chart.rows.map((row) => ({

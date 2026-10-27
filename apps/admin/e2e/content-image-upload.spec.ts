@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { type Page } from "@playwright/test";
+import { clickAndWaitForAction, expect, nextActionResponse, test } from "./fixtures";
 import sharp from "sharp";
 import { loginAs } from "./helpers/login";
 import { E2E_STOREFRONT_EMAIL } from "./global-setup";
@@ -17,7 +18,11 @@ async function runHeroImageUploadFlow(page: Page, label: string): Promise<void> 
   await page.getByLabel("Label tombol").fill("Belanja Sekarang");
 
   const photo = await jpegFixture(1600, 900, { r: 150, g: 120, b: 130 });
+  // Wait for the upload action itself: on the second pass the alt-text field is already on screen
+  // from the first pass's draft, so its visibility alone does not mean this upload has finished.
+  const uploaded = nextActionResponse(page);
   await page.getByTestId("content-image-input-desktop").setInputFiles({ name: `hero-${label}.jpg`, mimeType: "image/jpeg", buffer: photo });
+  await uploaded;
 
   // Upload happens immediately on file pick (no separate "staged" step, unlike product photos —
   // there's no DB row to defer here, see content-image-field.tsx's own doc comment) — wait for
@@ -26,8 +31,7 @@ async function runHeroImageUploadFlow(page: Page, label: string): Promise<void> 
   await expect(altTextInput).toBeVisible({ timeout: 15_000 });
   await altTextInput.fill(`Model memakai gamis ${label}`);
 
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await page.waitForLoadState("networkidle");
+  await clickAndWaitForAction(page, page.getByRole("button", { name: "Simpan", exact: true }));
 
   // Reload to confirm the image round-tripped through the draft save, not just client state.
   await page.goto(page.url());
@@ -35,8 +39,7 @@ async function runHeroImageUploadFlow(page: Page, label: string): Promise<void> 
 
   await page.goto("/content");
   await expect(page.getByTestId("unpublished-changes-banner")).toBeVisible();
-  await page.getByRole("button", { name: "Terbitkan" }).click();
-  await page.waitForLoadState("networkidle");
+  await clickAndWaitForAction(page, page.getByRole("button", { name: "Terbitkan" }));
   await expect(page.getByTestId("unpublished-changes-banner")).toHaveCount(0);
 }
 

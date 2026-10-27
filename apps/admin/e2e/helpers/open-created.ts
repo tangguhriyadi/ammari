@@ -16,6 +16,9 @@ export async function openCreated(page: Page, listPath: string, search?: string)
   await expect(page).toHaveURL(new RegExp(`^http://[^/]+${listPath}$`), { timeout: 15_000 });
   if (search) await page.goto(`${listPath}?q=${encodeURIComponent(search)}`);
 
+  // The list streams in behind its route skeleton (loading.tsx); the read below is one-shot, so
+  // wait until the skeleton has been replaced by the real list first.
+  await expect(page.locator('main [aria-busy="true"]')).toHaveCount(0, { timeout: 15_000 });
   // `:visible` — both the phone card list and the desktop table render a link per row, and only
   // the layout for the current viewport is displayed.
   const hrefs = await page

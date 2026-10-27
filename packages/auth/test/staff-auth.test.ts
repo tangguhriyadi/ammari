@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
-import { authEmailThrottle, staffAuthUsers, staffUsers } from "@ammari/db/schema";
+import { authEmailThrottle, permissions, rolePermissions, roles, staffAuthUsers, staffUsers } from "@ammari/db/schema";
 import { isActiveStaffAuthUser, loadStaffSessionData } from "../src/staff";
 import {
   buildStaffAuth,
@@ -381,5 +381,43 @@ describe("RBAC permission loading", () => {
     const staff = await createCommittedStaffUser({ isActive: false, roleKey: "owner" });
     staffUserIds.push(staff.id);
     expect(await loadStaffSessionData(testDb, staff.id)).toBeNull();
+  });
+
+  test("returns exactly the role's permission keys, once each, with staff and role fields", async () => {
+    const staff = await createCommittedStaffUser({ isActive: true, roleKey: "owner" });
+    staffUserIds.push(staff.id);
+
+    const expected = await testDb
+      .select({ key: permissions.key })
+      .from(rolePermissions)
+      .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
+      .innerJoin(roles, eq(rolePermissions.roleId, roles.id))
+      .where(eq(roles.key, "owner"));
+
+    const data = await loadStaffSessionData(testDb, staff.id);
+    expect(data).not.toBeNull();
+    expect([...data!.permissionKeys].sort()).toEqual(expected.map((row) => row.key).sort());
+    expect(data!.staffUser).toEqual({ id: staff.id, name: staff.name, email: staff.email, roleId: staff.roleId });
+    expect(data!.role.key).toBe("owner");
+    expect(data!.role.id).toBe(staff.roleId);
+  });
+
+  test("a role with no permissions resolves to an empty list, not null", async () => {
+    const [role] = await testDb
+      .insert(roles)
+      .values({ key: `e2e-empty-${Date.now()}`, name: "Tanpa izin" })
+      .returning({ id: roles.id, key: roles.key });
+    const staff = await createCommittedStaffUser({ isActive: true, roleKey: role!.key });
+    staffUserIds.push(staff.id);
+    try {
+      const data = await loadStaffSessionData(testDb, staff.id);
+      expect(data).not.toBeNull();
+      expect(data!.permissionKeys).toEqual([]);
+      expect(data!.role.key).toBe(role!.key);
+    } finally {
+      await cleanupStaffUsers([staff.id]);
+      staffUserIds = staffUserIds.filter((id) => id !== staff.id);
+      await testDb.delete(roles).where(eq(roles.id, role!.id));
+    }
   });
 });

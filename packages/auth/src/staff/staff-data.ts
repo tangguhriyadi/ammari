@@ -54,6 +54,10 @@ export interface StaffSessionData {
  * never trusts a cached session payload. Returns `null` if the staff user is missing, inactive,
  * or (defensively) if their role record is gone — any of which must deny access, not throw. */
 export async function loadStaffSessionData(db: Database, staffUserId: string): Promise<StaffSessionData | null> {
+  // One round trip, not two: this runs on every admin request (docs/plans/admin-performance.md).
+  // Left joins + an aggregate that skips NULLs, so a role with no permissions still resolves to
+  // its staff/role row with an empty list. Grouping by the two primary keys is enough for
+  // Postgres to allow selecting their other columns.
   const [row] = await db
     .select({
       staffUser: {
@@ -63,23 +67,20 @@ export async function loadStaffSessionData(db: Database, staffUserId: string): P
         roleId: staffUsers.roleId,
       },
       role: { id: roles.id, key: roles.key, name: roles.name },
+      permissionKeys: sql<string[]>`coalesce(array_agg(${permissions.key}) filter (where ${permissions.key} is not null), '{}')`,
     })
     .from(staffUsers)
     .innerJoin(roles, eq(staffUsers.roleId, roles.id))
+    .leftJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+    .leftJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
     .where(and(eq(staffUsers.id, staffUserId), eq(staffUsers.isActive, true)))
-    .limit(1);
+    .groupBy(staffUsers.id, roles.id);
   if (!row) return null;
-
-  const permissionRows = await db
-    .select({ key: permissions.key })
-    .from(rolePermissions)
-    .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
-    .where(eq(rolePermissions.roleId, row.role.id));
 
   return {
     staffUser: row.staffUser,
     role: row.role,
-    permissionKeys: permissionRows.map((p) => p.key as PermissionKey),
+    permissionKeys: row.permissionKeys as PermissionKey[],
   };
 }
 

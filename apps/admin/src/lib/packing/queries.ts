@@ -123,7 +123,21 @@ export async function listPackingQueue(
   );
   const where = and(...conditions);
 
-  const [totalCountRow] = await db.select({ totalCount: count() }).from(orders).where(where);
+  // Sticker-code preview (docs/plans/thermal-stickers.md): scoped to the WHOLE to_ship queue —
+  // never just this page, and never narrowed by `filters.channelId` either — a collision between
+  // two orders must be caught even if the staffer is currently looking at a single-channel
+  // filtered view that only shows one of them. Orders that already have an active card show
+  // their PERSISTED code instead (never recomputed here); only genuinely unprinted orders need a
+  // preview. Independent of the page's rows, so it runs alongside the count
+  // (docs/plans/admin-performance.md).
+  const stickerInputs = Promise.all([
+    getUnprintedToShipOrderIds(db).then((unprintedOrderIds) => getStickerCodeInputsForOrders(unprintedOrderIds, db)),
+    getFixedStickerCodesForToShipQueue([], db),
+  ]);
+  const [[totalCountRow], [previewInputs, fixedEntries]] = await Promise.all([
+    db.select({ totalCount: count() }).from(orders).where(where),
+    stickerInputs,
+  ]);
   const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const activeCard = db
@@ -181,15 +195,6 @@ export async function listPackingQueue(
   const orderIds = rows.map((row) => row.id);
   const items = orderIds.length > 0 ? await listPickListItems(orderIds, db) : new Map<string, PackingPickListItem[]>();
 
-  // Sticker-code preview (docs/plans/thermal-stickers.md): scoped to the WHOLE to_ship queue —
-  // never just this page, and never narrowed by `filters.channelId` either — a collision between
-  // two orders must be caught even if the staffer is currently looking at a single-channel
-  // filtered view that only shows one of them. Orders that already have an active card show
-  // their PERSISTED code instead (never recomputed here); only genuinely unprinted orders need a
-  // preview.
-  const unprintedOrderIds = await getUnprintedToShipOrderIds(db);
-  const fixedEntries = await getFixedStickerCodesForToShipQueue([], db);
-  const previewInputs = await getStickerCodeInputsForOrders(unprintedOrderIds, db);
   const previewMap = assignStickerCodes(previewInputs, fixedEntries);
 
   const rowsWithStickerCodes: PackingQueueRow[] = rows.map(({ persistedStickerCode, paymentStatus, shipmentStatus, shipmentAwb, shipmentProviderStatus, ...row }) => {

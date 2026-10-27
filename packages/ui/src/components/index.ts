@@ -11,7 +11,7 @@ export { Card } from "./Card";
 export { Badge, type BadgeProps, type BadgeVariant } from "./Badge";
 export { PageHeader, type PageHeaderProps } from "./PageHeader";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
-export { Skeleton } from "./Skeleton";
+export { Skeleton, LoadingRegion, type LoadingRegionProps } from "./Skeleton";
 export { Dialog, type DialogProps } from "./Dialog";
 export { Pagination, type PaginationProps } from "./Pagination";
 export { PerPageSelect, type PerPageSelectProps } from "./PerPageSelect";

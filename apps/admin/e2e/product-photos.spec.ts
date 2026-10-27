@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import sharp from "sharp";
 import { loginAs } from "./helpers/login";
 import { addVariants, createProductDraft, openProductStep } from "./helpers/product";

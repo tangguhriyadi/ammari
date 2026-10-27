@@ -32,6 +32,11 @@ const SALES_HEADINGS: Record<OverviewPeriod, string> = {
 /** Desktop rows of the main column (literal classes, so Tailwind generates them). */
 const MAIN_ROWS = { 1: "xl:row-start-1", 2: "xl:row-start-2", 3: "xl:row-start-3", 4: "xl:row-start-4" } as const;
 
+// Deliberately no loading.tsx for `/` (docs/plans/admin-performance.md): requireOverviewOrRedirect
+// must redirect a role without overview.view (e.g. Packing/Gudang, who land here after login)
+// before anything streams, so it stays a real server redirect instead of a dashboard skeleton
+// flashing first. The page streams its own per-section skeletons (the Suspense fallbacks below)
+// right after that one session check.
 export default async function RingkasanPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requireOverviewOrRedirect();
   const has = (key: string) => session.permissionKeys.includes(key);

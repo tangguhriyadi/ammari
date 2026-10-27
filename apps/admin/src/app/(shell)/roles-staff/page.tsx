@@ -29,8 +29,7 @@ export default async function RolesStaffPage({ searchParams }: { searchParams: P
   const statusFilter = isStaffStatusFilter(rawStatus) ? rawStatus : undefined;
   const viewer = { staffUserId: session.staffUser.id, roleKey: session.role.key, permissionKeys: session.permissionKeys };
 
-  const roles = await listRoles();
-  const staff = tab === "staf" ? await listStaff() : [];
+  const [roles, staff] = await Promise.all([listRoles(), tab === "staf" ? listStaff() : Promise.resolve([])]);
 
   return (
     <>

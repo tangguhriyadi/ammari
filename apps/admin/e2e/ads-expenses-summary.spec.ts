@@ -100,7 +100,7 @@ for (const layout of LAYOUTS) {
       await page.getByRole("navigation", { name: "Pilih periode" }).getByRole("link", { name: "Pilih bulan" }).click();
       await expect(page).toHaveURL(/period=month$/);
       await page.goto("/ads-expenses?tab=ringkasan&period=month&month=2999-01");
-      await expect(page.getByRole("alert")).toContainText("Sekarang menampilkan bulan ini.");
+      await expect(page.getByRole("main").getByRole("alert")).toContainText("Sekarang menampilkan bulan ini.");
       await page.getByLabel("Bulan", { exact: true }).fill(E2E_EXPENSE_SUMMARY_MONTH);
       await page.getByRole("button", { name: "Tampilkan" }).click();
       await expect(page).toHaveURL(new RegExp(`period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`));
@@ -188,7 +188,7 @@ for (const layout of LAYOUTS) {
 
       // Rentang bulan: more than 12 months is refused; a one-month range equals Pilih bulan.
       await page.goto("/ads-expenses?tab=ringkasan&period=range&from=2025-01&to=2026-02");
-      await expect(page.getByRole("alert")).toContainText("paling lama 12 bulan");
+      await expect(page.getByRole("main").getByRole("alert")).toContainText("paling lama 12 bulan");
       await page.getByLabel("Dari bulan").fill("2026-02");
       await page.getByLabel("Sampai bulan").fill("2026-02");
       await page.getByRole("button", { name: "Tampilkan" }).click();

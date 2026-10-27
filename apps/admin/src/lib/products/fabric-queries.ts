@@ -1,5 +1,5 @@
 import "server-only";
-import { and, count, eq, ilike } from "drizzle-orm";
+import { and, count, eq, ilike, inArray } from "drizzle-orm";
 import { fabricColors, fabrics, productImages, productVariants, products } from "@ammari/db/schema";
 import type { FabricPriceUnit } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
@@ -317,6 +317,20 @@ export async function getFabricColorById(id: string, db: Database = defaultDb) {
 export async function getFabricColorUsageCount(id: string, db: Database = defaultDb): Promise<number> {
   const [row] = await db.select({ usedByCount: count() }).from(productVariants).where(eq(productVariants.fabricColorId, id));
   return row?.usedByCount ?? 0;
+}
+
+/** `getFabricColorUsageCount` for every color of a page at once: one grouped query instead of one
+ * per color (docs/plans/admin-performance.md). Colors no variant uses are present with 0. */
+export async function getFabricColorUsageCounts(colorIds: readonly string[], db: Database = defaultDb): Promise<Record<string, number>> {
+  const counts: Record<string, number> = Object.fromEntries(colorIds.map((id) => [id, 0]));
+  if (colorIds.length === 0) return counts;
+  const rows = await db
+    .select({ fabricColorId: productVariants.fabricColorId, usedByCount: count() })
+    .from(productVariants)
+    .where(inArray(productVariants.fabricColorId, [...colorIds]))
+    .groupBy(productVariants.fabricColorId);
+  for (const row of rows) counts[row.fabricColorId] = row.usedByCount;
+  return counts;
 }
 
 /** Product images also hold an `ON DELETE RESTRICT` FK to `fabric_colors`, independent of

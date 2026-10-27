@@ -115,14 +115,15 @@ async function DraftView({
   batch: NonNullable<Awaited<ReturnType<typeof getBatchDetail>>>;
   canViewProfit: boolean;
 }) {
-  const eligibleSkus = await listEligibleSkusForFabric(batch.fabricId);
-
-  // Never fetched at all for a session without finance.view_profit — same ProductBatasHpp
-  // pattern used by products/[id]/page.tsx.
-  const extraCosts = canViewProfit ? await getBatchExtraCosts(batch.id) : [];
-  const activeCostComponents = canViewProfit ? await listActiveCostComponents() : [];
-  const supplierOptions = canViewProfit ? await listActiveSupplierOptions("service") : [];
-  const fabricBalance = canViewProfit ? await getFabricBalance(batch.fabricId) : { qty: 0, valueAmount: 0 };
+  // Cost data is never fetched at all for a session without finance.view_profit: same
+  // ProductBatasHpp pattern used by products/[id]/page.tsx. Independent reads, so in parallel.
+  const [eligibleSkus, extraCosts, activeCostComponents, supplierOptions, fabricBalance] = await Promise.all([
+    listEligibleSkusForFabric(batch.fabricId),
+    canViewProfit ? getBatchExtraCosts(batch.id) : Promise.resolve([]),
+    canViewProfit ? listActiveCostComponents() : Promise.resolve([]),
+    canViewProfit ? listActiveSupplierOptions("service") : Promise.resolve([]),
+    canViewProfit ? getFabricBalance(batch.fabricId) : Promise.resolve({ qty: 0, valueAmount: 0 }),
+  ]);
 
   return (
     <>

@@ -1,15 +1,57 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type MouseEvent, type ReactNode, createContext, useContext, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@ammari/ui";
 import { isNavItemActive } from "@/lib/nav/is-active";
+import { isPlainLeftClick, type NavPendingState, resolveNavPath, syncNavPending } from "@/lib/nav/pending-nav";
 
 export interface NavLinkItem {
   href: string;
   label: string;
   icon: ReactNode;
+}
+
+const NavPendingContext = createContext<{ navPath: string; startNav: (href: string) => void } | null>(null);
+
+/** Shared by the sidebar, bottom nav and "Lainnya" sheet so a click highlights its item at once,
+ * in every nav, while the new page is still loading (each route's loading.tsx fills the content
+ * area). Any pathname change ends the pending click (syncNavPending). */
+export function NavPendingProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  const [state, setState] = useState<NavPendingState>({ pathname, pending: null });
+  // Adjusting state during render (React's documented alternative to an effect): a pathname
+  // change ends the pending click before this render's output is used.
+  const synced = syncNavPending(state, pathname);
+  if (synced !== state) setState(synced);
+  const navPath = resolveNavPath(pathname, synced.pending);
+  const startNav = (href: string) => setState({ pathname, pending: href === pathname ? null : { href, from: pathname } });
+  return <NavPendingContext value={{ navPath, startNav }}>{children}</NavPendingContext>;
+}
+
+/** Intent-only prefetch: `prefetch={false}` until the pointer or keyboard focus reaches the link,
+ * then the default (`null`: the route down to its loading.tsx). Viewport prefetch would fire one
+ * request per visible nav item on every page load, each running proxy.ts's database-backed session
+ * check (docs/plans/admin-performance.md). */
+function useNavLinkBehavior(href: string, onClick?: () => void) {
+  const context = useContext(NavPendingContext);
+  if (!context) throw new Error("NavLink must be used inside <NavPendingProvider>");
+  const [intent, setIntent] = useState(false);
+  const showIntent = () => setIntent(true);
+  return {
+    active: isNavItemActive(context.navPath, href),
+    linkProps: {
+      prefetch: intent ? null : false,
+      onPointerEnter: showIntent,
+      onTouchStart: showIntent,
+      onFocus: showIntent,
+      onClick: (event: MouseEvent<HTMLAnchorElement>) => {
+        if (isPlainLeftClick(event)) context.startNav(href);
+        onClick?.();
+      },
+    },
+  };
 }
 
 /** The only piece of the nav that genuinely needs to be a Client Component: active-link
@@ -24,14 +66,13 @@ export function NavLink({
   variant = "sidebar",
   onClick,
 }: NavLinkItem & { variant?: "sidebar" | "bottom" | "rail"; onClick?: () => void }) {
-  const pathname = usePathname();
-  const active = isNavItemActive(pathname, href);
+  const { active, linkProps } = useNavLinkBehavior(href, onClick);
 
   if (variant === "bottom") {
     return (
       <Link
         href={href}
-        onClick={onClick}
+        {...linkProps}
         aria-current={active ? "page" : undefined}
         className={cn(
           "flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs font-medium",
@@ -46,13 +87,13 @@ export function NavLink({
   }
 
   if (variant === "rail") {
-    return <SidebarLink href={href} icon={icon} label={label} active={active} onClick={onClick} />;
+    return <SidebarLink href={href} icon={icon} label={label} active={active} linkProps={linkProps} />;
   }
 
   return (
     <Link
       href={href}
-      onClick={onClick}
+      {...linkProps}
       aria-current={active ? "page" : undefined}
       className={cn(
         "flex min-h-11 items-center gap-3 rounded-md px-3 text-base font-medium",
@@ -74,8 +115,8 @@ function SidebarLink({
   icon,
   label,
   active,
-  onClick,
-}: NavLinkItem & { active: boolean; onClick?: () => void }) {
+  linkProps,
+}: NavLinkItem & { active: boolean; linkProps: ReturnType<typeof useNavLinkBehavior>["linkProps"] }) {
   const [tip, setTip] = useState<{ top: number; left: number } | null>(null);
 
   const showTip = (element: HTMLElement) => {
@@ -87,11 +128,12 @@ function SidebarLink({
     <>
       <Link
         href={href}
-        onClick={onClick}
+        {...linkProps}
         aria-current={active ? "page" : undefined}
         onMouseEnter={(event) => showTip(event.currentTarget)}
         onMouseLeave={() => setTip(null)}
         onFocus={(event) => {
+          linkProps.onFocus();
           if (event.currentTarget.matches(":focus-visible")) showTip(event.currentTarget);
         }}
         onBlur={() => setTip(null)}

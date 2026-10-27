@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { type Page } from "@playwright/test";
+import { clickAndWaitForAction, expect, test } from "./fixtures";
 import { loginAs } from "./helpers/login";
 import { createAndPublishProduct } from "./helpers/publishable-product";
 import { E2E_PRODUCTS_NO_FINANCE_EMAIL, E2E_STOREFRONT_EMAIL } from "./global-setup";
@@ -12,24 +13,20 @@ async function runPublishAndDiscardFlow(page: Page, label: string): Promise<void
   await page.goto("/content/hero");
   await page.getByLabel("Headline").fill(`Headline Terbit ${label}`);
   await page.getByLabel("Label tombol").fill("Belanja Sekarang");
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await page.waitForLoadState("networkidle");
+  await clickAndWaitForAction(page, page.getByRole("button", { name: "Simpan", exact: true }));
 
   await page.goto("/content");
   await expect(page.getByTestId("unpublished-changes-banner")).toBeVisible();
-  await page.getByRole("button", { name: "Terbitkan" }).click();
-  await page.waitForLoadState("networkidle");
+  await clickAndWaitForAction(page, page.getByRole("button", { name: "Terbitkan" }));
   await expect(page.getByTestId("unpublished-changes-banner")).toHaveCount(0);
 
   await page.goto("/content/hero");
   await page.getByLabel("Headline").fill(`Headline Belum Terbit ${label}`);
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await page.waitForLoadState("networkidle");
+  await clickAndWaitForAction(page, page.getByRole("button", { name: "Simpan", exact: true }));
 
   await page.goto("/content");
   await expect(page.getByTestId("unpublished-changes-banner")).toBeVisible();
-  await page.getByRole("button", { name: "Batalkan perubahan" }).click();
-  await page.waitForLoadState("networkidle");
+  await clickAndWaitForAction(page, page.getByRole("button", { name: "Batalkan perubahan" }));
   await expect(page.getByTestId("unpublished-changes-banner")).toHaveCount(0);
 
   await page.goto("/content/hero");
@@ -70,8 +67,7 @@ async function runProductGridReorderFlow(page: Page, label: string): Promise<voi
   names = await tileNames(page);
   expect(indexOfTile(names, second.productName)).toBeLessThan(indexOfTile(names, first.productName));
 
-  await page.getByRole("button", { name: "Simpan", exact: true }).click();
-  await page.waitForLoadState("networkidle");
+  await clickAndWaitForAction(page, page.getByRole("button", { name: "Simpan", exact: true }));
   await page.goto(page.url());
 
   names = await tileNames(page);
@@ -118,8 +114,7 @@ test.describe("Konten: Beranda (homepage sections)", () => {
     await page.goto("/content/hero");
     await page.getByLabel("Headline").fill(`Headline Section Banner ${Date.now()}`);
     await page.getByLabel("Label tombol").fill("Belanja Sekarang");
-    await page.getByRole("button", { name: "Simpan", exact: true }).click();
-    await page.waitForLoadState("networkidle");
+    await clickAndWaitForAction(page, page.getByRole("button", { name: "Simpan", exact: true }));
 
     // Reload the SAME section page (not /content) — the banner names Hero and appears right
     // here, without needing a trip to the overview.
@@ -129,8 +124,7 @@ test.describe("Konten: Beranda (homepage sections)", () => {
     await expect(banner).toContainText("Hero");
     await expect(banner).toContainText("semua bagian beranda sekaligus");
 
-    await banner.getByRole("button", { name: "Terbitkan" }).click();
-    await page.waitForLoadState("networkidle");
+    await clickAndWaitForAction(page, banner.getByRole("button", { name: "Terbitkan" }));
     await expect(page.getByTestId("hero-unpublished-banner")).toHaveCount(0);
   });
 

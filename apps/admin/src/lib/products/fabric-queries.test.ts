@@ -10,6 +10,7 @@ import {
   createFabricWithColors,
   deleteFabric,
   deleteFabricColor,
+  getFabricColorUsageCounts,
   listFabricColors,
   listAllFabricsWithUsage,
   listFabricsWithUsage,
@@ -269,6 +270,38 @@ describe("listAllFabricsWithUsage (pickers on /products/new, /products/[id], /pr
       const names = (await listAllFabricsWithUsage(tx)).map((row) => row.name).filter((name) => name.startsWith(prefix));
       expect(names).toHaveLength(25);
       expect(names[24]).toBe(`${prefix} 24`);
+    });
+  });
+});
+
+describe("getFabricColorUsageCounts", () => {
+  test("one variant count per color, zero for unused colors, in one call", async () => {
+    await withRollback(async (tx) => {
+      const fabric = await createFabricFixture(tx);
+      const sage = await createFabricColor(fabric.id, { name: "Sage" }, ACTOR_ID, tx);
+      const navy = await createFabricColor(fabric.id, { name: "Navy" }, ACTOR_ID, tx);
+      const unused = await createFabricColor(fabric.id, { name: "Maroon" }, ACTOR_ID, tx);
+      const product = await createProductFixture(tx, fabric.id);
+      await addVariants(
+        {
+          productId: product.id,
+          selections: [
+            { fabricColorId: sage.id, sizes: ["S", "M", "L"] },
+            { fabricColorId: navy.id, sizes: ["M"] },
+          ],
+        },
+        ACTOR_ID,
+        tx,
+      );
+
+      const counts = await getFabricColorUsageCounts([sage.id, navy.id, unused.id], tx);
+      expect(counts).toEqual({ [sage.id]: 3, [navy.id]: 1, [unused.id]: 0 });
+    });
+  });
+
+  test("no colors: no query, an empty map", async () => {
+    await withRollback(async (tx) => {
+      expect(await getFabricColorUsageCounts([], tx)).toEqual({});
     });
   });
 });

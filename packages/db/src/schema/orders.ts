@@ -225,6 +225,10 @@ export const orders = pgTable(
     // §7, migration 0039). Plain, not partial on the counted statuses: statuses change.
     index("orders_order_date_idx").on(table.orderDate),
     index("orders_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
+    // The admin order list's default ORDER BY created_at DESC, id DESC (migration 0044,
+    // docs/plans/admin-performance.md): ascending on purpose, served by a backward scan that
+    // matches DESC's default NULLS FIRST (a `.desc()` index is NULLS LAST and would not).
+    index("orders_created_at_id_idx").on(table.createdAt, table.id),
     check("orders_status_check", checkIn(table.status, ORDER_STATUSES)),
     check("orders_subtotal_amount_check", sql`${table.subtotalAmount} >= 0`),
     check("orders_shipping_amount_check", sql`${table.shippingAmount} >= 0`),
