@@ -5,6 +5,8 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Ammari Admin",
   description: "Ammari | admin dashboard",
+  // Never indexed (also robots.txt and the X-Robots-Tag header, next.config.ts).
+  robots: { index: false, follow: false },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

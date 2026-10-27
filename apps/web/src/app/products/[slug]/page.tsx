@@ -7,6 +7,12 @@ import { getCachedRelatedProducts, getCachedStorefrontProduct } from "@/lib/cont
 import { priceTiles, priceValidUntil, resolveStorefrontPrice, toStorefrontPrice } from "@/lib/content/storefront-price";
 import { PRODUCT_PLACEHOLDER_OG_PATH } from "@/lib/content/product-placeholder";
 import { getStoragePublicBaseUrl, storageImageUrl } from "@/lib/storage/public-url";
+import { siteOrigin } from "@/lib/site-origin";
+import { productMetaDescription } from "@/lib/seo/descriptions";
+import { publicPageRobots } from "@/lib/seo/indexing";
+import { htmlToPlainText } from "@/lib/seo/text";
+import { buildBreadcrumbJsonLd, buildProductJsonLd, HOME_BREADCRUMB_NAME, SITE_NAME } from "@/lib/seo/json-ld";
+import { JsonLd } from "@/components/json-ld";
 import { isCartEnabled } from "@/lib/cart-flag";
 import { getStoreContact, getWhatsappNumber } from "@/lib/store-settings";
 import { Container } from "@/components/container";
@@ -26,15 +32,30 @@ import { RelatedProductsSection } from "@/components/pdp/related-products-sectio
 // app/page.tsx's own comment on the build-time-DB bug that `/` once had).
 export const dynamic = "force-dynamic";
 
-function siteOrigin(): string {
-  return (process.env.BETTER_AUTH_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+/** Admin stores every photo at most 1600px on its longer side, never enlarged
+ * (apps/admin lib/products/image-processing.ts: `fit: "inside"`, `withoutEnlargement`). */
+function size1600Dimensions(width: number, height: number): { width: number; height: number } {
+  const scale = Math.min(1, 1600 / Math.max(width, height));
+  return { width: Math.round(width * scale), height: Math.round(height * scale) };
 }
 
-/** The product's representative photo as an absolute URL (OG image, JSON-LD), or the static
- * placeholder when the product has no photo at all, so shares never show a blank preview. */
-function primaryImageUrl(view: ReturnType<typeof buildProductView>): string {
+/** The product's representative photo (OG image, JSON-LD) as an absolute URL with its served
+ * size, or the static 1200x630 placeholder when the product has no photo at all, so shares never
+ * show a blank preview. */
+function primaryOgImage(view: ReturnType<typeof buildProductView>): { url: string; width: number; height: number; alt: string; type: string } {
   const image = getPrimaryImage(view);
-  return image ? storageImageUrl(image.storageKey, 1600) : `${siteOrigin()}${PRODUCT_PLACEHOLDER_OG_PATH}`;
+  if (!image) return { url: `${siteOrigin()}${PRODUCT_PLACEHOLDER_OG_PATH}`, width: 1200, height: 630, alt: view.name, type: "image/jpeg" };
+  return { url: storageImageUrl(image.storageKey, 1600), ...size1600Dimensions(image.width, image.height), alt: image.altText, type: "image/webp" };
+}
+
+/** Every photo once, gallery order, for JSON-LD (Google may pick any of them). */
+function productImageUrls(view: ReturnType<typeof buildProductView>): string[] {
+  const urls = buildProductGallery(view).images.map((image) => storageImageUrl(image.storageKey, 1600));
+  return urls.length > 0 ? urls.slice(0, 10) : [primaryOgImage(view).url];
+}
+
+function sanitizedDescriptionOf(product: { storefrontDescription: string | null }): string | null {
+  return product.storefrontDescription ? sanitizeStorefrontDescriptionHtml(product.storefrontDescription) : null;
 }
 
 async function loadProduct(slug: string) {
@@ -50,22 +71,31 @@ export async function generateMetadata({ params }: PageProps<"/products/[slug]">
 
   // The metadata carries no price (only the OG image needs the view).
   const view = buildProductView(product, toStorefrontPrice(resolveStorefrontPrice(product.pricing, new Date())));
-  const description = product.storefrontDescription
-    ? sanitizeStorefrontDescriptionHtml(product.storefrontDescription).replace(/<[^>]+>/g, " ").trim().slice(0, 160)
-    : `${product.name}, Ammari syar'i gamis.`;
+  const description = productMetaDescription({
+    name: product.name,
+    sanitizedDescriptionHtml: sanitizedDescriptionOf(product),
+    colorNames: view.colors.map((color) => color.name),
+  });
+  const canonical = `/products/${product.slug}`;
 
   return {
     title: `${product.name} | Ammari`,
     description,
     // DEPLOY_ENV convention matches app/robots.ts — only "production" is ever indexable.
-    robots: { index: process.env.DEPLOY_ENV === "production", follow: process.env.DEPLOY_ENV === "production" },
+    robots: publicPageRobots(process.env.DEPLOY_ENV),
     // Every `?color=` link is the same product page: one canonical URL without it (owner answer,
     // docs/plans/pdp-gallery.md §13 #7). Relative, resolved against the layout's `metadataBase`.
-    alternates: { canonical: `/products/${slug}` },
+    alternates: { canonical },
+    // Replaces the layout's openGraph as a whole, so the site-wide fields are repeated here.
+    // twitter:image follows og:image (see lib/content/site-og-image.ts).
     openGraph: {
+      type: "website",
+      siteName: SITE_NAME,
+      locale: "id_ID",
+      url: canonical,
       title: product.name,
       description,
-      images: [{ url: primaryImageUrl(view) }],
+      images: [primaryOgImage(view)],
     },
   };
 }
@@ -90,7 +120,7 @@ export default async function ProductPage({
     getStoreContact(),
   ]);
 
-  const sanitizedDescription = product.storefrontDescription ? sanitizeStorefrontDescriptionHtml(product.storefrontDescription) : null;
+  const sanitizedDescription = sanitizedDescriptionOf(product);
   const pageUrl = `${siteOrigin()}/products/${slug}${selectedColorId ? `?color=${selectedColorId}` : ""}`;
 
   const accordionItems: AccordionItemDef[] = [
@@ -157,31 +187,27 @@ export default async function ProductPage({
     },
   ];
 
-  const plainTextDescription = sanitizedDescription ? sanitizedDescription.replace(/<[^>]+>/g, " ").trim() : undefined;
-
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "Product",
+  const canonicalUrl = `${siteOrigin()}/products/${product.slug}`;
+  const productJsonLd = buildProductJsonLd({
     name: product.name,
-    description: plainTextDescription,
-    image: primaryImageUrl(view),
-    offers: {
-      "@type": "Offer",
-      priceCurrency: "IDR",
-      // The price charged right now (product discount included); priceValidUntil only while a
-      // discount with an end time is active.
-      price: price.unitPrice,
-      priceValidUntil: priceValidUntil(price),
-      availability: product.variants.some((variant) => variant.available)
-        ? "https://schema.org/InStock"
-        : "https://schema.org/OutOfStock",
-      url: pageUrl,
-    },
-  };
+    description: sanitizedDescription ? htmlToPlainText(sanitizedDescription) : "",
+    url: canonicalUrl,
+    images: productImageUrls(view),
+    // The price charged right now (product discount included); priceValidUntil only while a
+    // discount with an end time is active.
+    price: price.unitPrice,
+    priceValidUntil: priceValidUntil(price),
+    soldOut: view.soldOut,
+  });
+  const breadcrumbJsonLd = buildBreadcrumbJsonLd([
+    { name: HOME_BREADCRUMB_NAME, url: `${siteOrigin()}/` },
+    { name: product.name, url: canonicalUrl },
+  ]);
 
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <JsonLd data={productJsonLd} />
+      <JsonLd data={breadcrumbJsonLd} />
       <Container className="flex flex-col gap-10 py-6 md:py-10">
         <ProductPurchasePanel
           view={view}

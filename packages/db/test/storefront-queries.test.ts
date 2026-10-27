@@ -25,6 +25,7 @@ import {
   getPublishedInfoPage,
   getStorefrontProductBySlug,
   getStoreSettings,
+  getStorefrontSitemapData,
 } from "../src/storefront/queries";
 import { ANNOUNCEMENT_BAR_DEFAULT_TEXT } from "../src/storefront/settings";
 import { insertStaffUser, insertStockReservation } from "./fixtures";
@@ -439,6 +440,44 @@ describe("getPublishedInfoPage", () => {
     await withRollback(async (tx) => {
       const result = await getPublishedInfoPage("not-a-real-slug", tx);
       expect(result).toBeNull();
+    });
+  });
+});
+
+describe("getStorefrontSitemapData", () => {
+  // "Inactive but published" cannot exist (products_is_published_on_storefront_active_check), so
+  // unpublished is the one product case to exclude.
+  test("lists published products and published info pages only, with their timestamps", async () => {
+    await withRollback(async (tx) => {
+      const { product } = await seedFullProductFixture(tx);
+      const hidden = await seedFullProductFixture(tx);
+      await tx.update(products).set({ isPublishedOnStorefront: false }).where(eq(products.id, hidden.product.id));
+
+      const publishedAt = new Date("2026-10-20T03:00:00.000Z");
+      await tx.update(infoPages).set({ publishedBody: "<p>isi</p>", publishedAt }).where(eq(infoPages.slug, "how-to-order"));
+      await tx.update(infoPages).set({ publishedBody: null, publishedAt: null }).where(eq(infoPages.slug, "shipping"));
+      const homepageAt = new Date("2026-10-21T03:00:00.000Z");
+      await tx.update(storefrontHomepageSections).set({ publishedAt: homepageAt }).where(eq(storefrontHomepageSections.key, "hero"));
+      await tx.update(storefrontHomepageSections).set({ publishedAt: new Date("2026-10-01T00:00:00.000Z") }).where(eq(storefrontHomepageSections.key, "product_grid"));
+
+      const data = await getStorefrontSitemapData(tx);
+      const slugs = data.products.map((row) => row.slug);
+      expect(slugs).toContain(product.slug);
+      expect(slugs).not.toContain(hidden.product.slug);
+      expect(data.products.find((row) => row.slug === product.slug)?.updatedAt).toBeInstanceOf(Date);
+
+      expect(data.infoPages).toContainEqual({ slug: "how-to-order", publishedAt });
+      expect(data.infoPages.map((page) => page.slug)).not.toContain("shipping");
+      expect(data.homepagePublishedAt).toEqual(homepageAt);
+    });
+  });
+
+  test("returns only slugs and timestamps, never descriptions or prices", async () => {
+    await withRollback(async (tx) => {
+      await seedFullProductFixture(tx);
+      const data = await getStorefrontSitemapData(tx);
+      for (const row of data.products) expect(Object.keys(row).sort()).toEqual(["slug", "updatedAt"]);
+      for (const row of data.infoPages) expect(Object.keys(row).sort()).toEqual(["publishedAt", "slug"]);
     });
   });
 });

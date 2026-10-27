@@ -3,6 +3,8 @@ import { storefrontFontVariables } from "@/lib/fonts";
 import { getAnnouncementBarText, getStoreContact, getWhatsappNumber } from "@/lib/store-settings";
 import { getSiteOgImage, siteOgImageMetadata } from "@/lib/content/site-og-image";
 import { siteOrigin } from "@/lib/site-origin";
+import { publicPageRobots } from "@/lib/seo/indexing";
+import { HOMEPAGE_META_DESCRIPTION_DEFAULT } from "@ammari/db/storefront-settings";
 import { AnnouncementBar } from "@/components/announcement-bar";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
@@ -19,12 +21,17 @@ import "./globals.css";
 // editable og:title/og:description), and `/products/[slug]` replaces it with the product photo.
 // og:title/og:description are left unset here: Next fills them from each page's own title and
 // description, which keeps every page's "Name | Ammari" title in its social preview.
+//
+// `robots` here is the default for every page that sets none: noindex off production (the meta
+// tag; src/proxy.ts sends the X-Robots-Tag header), nothing on production. A private page sets its
+// own NOINDEX_ROBOTS, which replaces this (docs/plans/seo.md §2).
 export async function generateMetadata(): Promise<Metadata> {
   const { images, twitter } = siteOgImageMetadata(await getSiteOgImage());
   return {
     metadataBase: new URL(siteOrigin()),
     title: "Ammari",
-    description: "Ammari | syar'i gamis",
+    description: HOMEPAGE_META_DESCRIPTION_DEFAULT,
+    robots: publicPageRobots(process.env.DEPLOY_ENV),
     openGraph: { type: "website", siteName: "Ammari", locale: "id_ID", images },
     twitter,
   };

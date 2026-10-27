@@ -1,8 +1,16 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getCustomerSession } from "@/lib/auth/customer-session";
 import { isGoogleConfigured } from "@/lib/auth/customer";
 import { sanitizeNextPath } from "@/lib/auth/next-path";
 import { LoginForm } from "./login-form";
+import { NOINDEX_ROBOTS } from "@/lib/seo/indexing";
+
+// Per-visitor page: never indexed (docs/plans/seo.md).
+export const metadata: Metadata = {
+  title: "Masuk | Ammari",
+  robots: NOINDEX_ROBOTS,
+};
 
 export default async function LoginPage({
   searchParams,

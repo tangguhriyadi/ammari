@@ -36,6 +36,13 @@ const nextConfig: NextConfig = {
       { source: "/log-aktivitas", destination: "/activity-log", permanent: true },
     ];
   },
+  // The admin is never indexable, on dev or prod, so this is static config (no DEPLOY_ENV
+  // involved). Every path, public/ and build output included; the proxy's /login redirect gets it
+  // too (src/proxy.ts sets it on that response itself).
+  // Prod's Caddy no longer adds it (deploy-prod/caddy/Caddyfile), so this is the one layer there.
+  async headers() {
+    return [{ source: "/:path*", headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }] }];
+  },
   experimental: {
     // Required for next/navigation's forbidden() — see apps/admin/src/app/forbidden.tsx and
     // lib/auth/require-permission.ts.

@@ -10,7 +10,9 @@ import { staffAuth } from "@/lib/auth/staff";
 // NOT check permissions — that's requirePermission()'s job in every page/action/route handler.
 // Per Next's own data-security guide, Server Functions aren't separate routes in this matcher
 // chain, so this can never be the only authorization boundary.
-const PUBLIC_PATHS = ["/login"];
+// "/robots.txt" (app/robots.ts, disallow-all) must be readable by a crawler with no session, or
+// it would get the /login redirect instead of the rule.
+const PUBLIC_PATHS = ["/login", "/robots.txt"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -36,7 +38,10 @@ export async function proxy(request: NextRequest) {
 
   const session = await staffAuth.api.getSession({ headers: request.headers });
   if (!session) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    const response = NextResponse.redirect(new URL("/login", request.url));
+    // A response built here does not reliably carry next.config.ts headers(); set it explicitly.
+    response.headers.set("X-Robots-Tag", "noindex, nofollow");
+    return response;
   }
 
   return NextResponse.next();

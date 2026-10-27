@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db as defaultDb } from "../client";
 import {
   fabricColors,
@@ -593,4 +593,37 @@ export async function getRelatedStorefrontProducts(
     candidates.map((candidate) => ({ productId: candidate.id, fabricColorId: null })),
     db,
   );
+}
+
+export interface StorefrontSitemapData {
+  /** Latest "Terbitkan" of any homepage section; null if never published. */
+  homepagePublishedAt: Date | null;
+  /** Active AND published on the storefront: exactly the products `/products/[slug]` renders. */
+  products: { slug: string; updatedAt: Date }[];
+  /** Published info pages only: an unpublished one renders a "sedang disiapkan" stub. */
+  infoPages: { slug: InfoPageSlug; publishedAt: Date | null }[];
+}
+
+/** Backs apps/web's sitemap.xml (docs/plans/seo.md). Same filters as getStorefrontProductBySlug /
+ * getPublishedInfoPage, so the sitemap never lists a URL that would 404 or show a stub. Explicit
+ * column lists, slugs and timestamps only. */
+export async function getStorefrontSitemapData(db: Database = defaultDb): Promise<StorefrontSitemapData> {
+  const [homepage, productRows, infoPageRows] = await Promise.all([
+    db.select({ publishedAt: sql<Date | null>`max(${storefrontHomepageSections.publishedAt})`.mapWith(storefrontHomepageSections.publishedAt) }).from(storefrontHomepageSections),
+    db
+      .select({ slug: products.slug, updatedAt: products.updatedAt })
+      .from(products)
+      .where(and(eq(products.isActive, true), eq(products.isPublishedOnStorefront, true)))
+      .orderBy(products.slug),
+    db
+      .select({ slug: infoPages.slug, publishedAt: infoPages.publishedAt })
+      .from(infoPages)
+      .where(isNotNull(infoPages.publishedBody))
+      .orderBy(infoPages.slug),
+  ]);
+  return {
+    homepagePublishedAt: homepage[0]?.publishedAt ?? null,
+    products: productRows,
+    infoPages: infoPageRows.map((row) => ({ slug: row.slug as InfoPageSlug, publishedAt: row.publishedAt })),
+  };
 }

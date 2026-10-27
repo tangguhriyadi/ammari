@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge, EmptyState } from "@ammari/ui";
 import { formatDate, formatRupiah } from "@ammari/ui/lib";
@@ -15,6 +16,13 @@ import { ContactOfferCard } from "./contact-offer-card";
 import { LogoutButton } from "./logout-button";
 import { ProfileBanner } from "./profile-banner";
 import { SavedAddressSection } from "./saved-address-section";
+import { NOINDEX_ROBOTS } from "@/lib/seo/indexing";
+
+// Per-visitor page: never indexed (docs/plans/seo.md).
+export const metadata: Metadata = {
+  title: "Akun Saya | Ammari",
+  robots: NOINDEX_ROBOTS,
+};
 
 const VOUCHER_STATUS_LABELS: Record<string, string> = {
   active: "Aktif",

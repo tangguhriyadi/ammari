@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
-import { getPublishedInfoPage } from "@ammari/db/storefront";
 import { InfoPageBody } from "@/components/info-page";
+import { JsonLd } from "@/components/json-ld";
+import { getCachedPublishedInfoPage, infoPageBreadcrumb, infoPageMetadata } from "@/lib/content/info-page-data";
 
-export const metadata: Metadata = {
-  title: "Kebijakan Privasi | Ammari",
-};
+const NAME = "Kebijakan Privasi";
+
+export function generateMetadata(): Promise<Metadata> {
+  return infoPageMetadata("privacy-policy", NAME, "Kebijakan privasi Ammari: data apa yang kami kumpulkan saat kamu berbelanja, untuk apa dipakai, dan bagaimana kami menjaganya.");
+}
 
 // `/privacy-policy` must keep this EXACT URL — registered in the Google OAuth consent screen and
 // used for payment-gateway verification (docs/plans/storefront-cms.md Phase 2). Content now comes
@@ -18,6 +21,11 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function PrivacyPolicyPage() {
-  const page = await getPublishedInfoPage("privacy-policy");
-  return <InfoPageBody title="Kebijakan Privasi" body={page?.body ?? null} />;
+  const page = await getCachedPublishedInfoPage("privacy-policy");
+  return (
+    <>
+      <JsonLd data={infoPageBreadcrumb("privacy-policy", NAME)} />
+      <InfoPageBody title={NAME} body={page?.body ?? null} />
+    </>
+  );
 }

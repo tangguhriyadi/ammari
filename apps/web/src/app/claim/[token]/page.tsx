@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -10,6 +11,13 @@ import { recordClaimAttemptAndCount, CLAIM_VIEW_WINDOW_SECONDS, CLAIM_VIEW_LIMIT
 import { defaultDb } from "@/lib/db";
 import { CLAIM_ALREADY_MINE_MESSAGE, CLAIM_RATE_LIMITED_MESSAGE, CLAIM_REJECTION_MESSAGES } from "@/lib/claim/messages";
 import { ClaimForm } from "./claim-form";
+import { NOINDEX_ROBOTS } from "@/lib/seo/indexing";
+
+// Per-visitor page: never indexed (docs/plans/seo.md).
+export const metadata: Metadata = {
+  title: "Klaim Voucher | Ammari",
+  robots: NOINDEX_ROBOTS,
+};
 
 export default async function ClaimTokenPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;

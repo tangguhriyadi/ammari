@@ -4,12 +4,15 @@ import { collectHomepageProductRefs, resolveHomepageView } from "@/lib/content/h
 import { getCachedHomepageProductTiles, getCachedPublishedHomepageContent } from "@/lib/content/homepage-data";
 import { priceTiles } from "@/lib/content/storefront-price";
 import { HomepageSections } from "@/components/homepage/homepage-sections";
-import { getHomepageMeta } from "@/lib/store-settings";
+import { getHomepageMeta, getStoreContact, getWhatsappNumber } from "@/lib/store-settings";
 import { getSiteOgImage, siteOgImageMetadata } from "@/lib/content/site-og-image";
 import { VOUCHER_CLAIMED_PARAM, VOUCHER_CLAIMED_VALUE, voucherClaimedMessage } from "@/lib/claim/claimed-notice";
 import { findJustClaimedVoucherExpiry } from "@/lib/claim/claimed-notice-data";
 import { getCustomerSession } from "@/lib/auth/customer-session";
 import { VoucherClaimedNotice } from "@/components/voucher-claimed-notice";
+import { JsonLd } from "@/components/json-ld";
+import { buildOrganizationJsonLd, buildWebSiteJsonLd } from "@/lib/seo/json-ld";
+import { siteOrigin } from "@/lib/site-origin";
 
 // `/` has no dynamic route segment, so without this Next would attempt to prerender it once
 // during `next build` itself — which runs against a non-connecting placeholder DATABASE_URL in
@@ -40,6 +43,8 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: { absolute: title },
     description,
+    // The claimed-voucher notice adds a query param; the page is the same.
+    alternates: { canonical: "/" },
     openGraph: { type: "website", siteName: "Ammari", locale: "id_ID", url: "/", title, description, images },
     twitter,
   };
@@ -72,9 +77,20 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
   const resolvedSearchParams = await searchParams;
   // Where a successful voucher claim lands (lib/claim/claimed-notice.ts).
   const voucherClaimed = resolvedSearchParams[VOUCHER_CLAIMED_PARAM] === VOUCHER_CLAIMED_VALUE;
-  const [view, claimedMessage] = await Promise.all([getHomepageView(), voucherClaimed ? getVoucherClaimedMessage() : null]);
+  const [view, claimedMessage, meta, contact, whatsappNumber] = await Promise.all([
+    getHomepageView(),
+    voucherClaimed ? getVoucherClaimedMessage() : null,
+    getHomepageMeta(),
+    getStoreContact(),
+    getWhatsappNumber(),
+  ]);
+  const origin = siteOrigin();
   return (
     <>
+      <JsonLd data={buildOrganizationJsonLd({ origin, supportEmail: contact.supportEmail, whatsappNumber })} />
+      <JsonLd data={buildWebSiteJsonLd({ origin, description: meta.description })} />
+      {/* The Hero carries the page's h1; without a published Hero the page still gets one. */}
+      {!view.hero && <h1 className="sr-only">Ammari, busana syar&apos;i</h1>}
       <HomepageSections view={view} />
       {claimedMessage && <VoucherClaimedNotice message={claimedMessage} />}
     </>

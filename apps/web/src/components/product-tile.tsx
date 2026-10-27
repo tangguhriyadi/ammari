@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { PricedProductTile } from "@/lib/content/storefront-price";
 import { storageImageUrl } from "@/lib/storage/public-url";
+import { productImageAltText } from "@/lib/content/product-view";
 import { ProductImage } from "./product-image";
 import { ProductPrice } from "./product-price";
 
@@ -24,7 +25,7 @@ export function ProductTile({ tile, imagePriority = false }: { tile: PricedProdu
             (getStorefrontProductTiles); null only when the product has no photo at all. */}
         <ProductImage
           src={tile.image ? storageImageUrl(tile.image.storageKey, 800) : null}
-          alt={tile.image?.altText ?? tile.name}
+          alt={tile.image?.altText ?? productImageAltText(tile.name, tile.colorName)}
           placeholderAlt=""
           placeholderSize={800}
           priority={imagePriority}

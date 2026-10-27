@@ -126,8 +126,8 @@ const nextConfig: NextConfig = {
     ];
   },
   // The "Lihat pesanan" token is swapped for a cookie before any page renders (§9.2): the request
-  // with `?t=` goes to the token route, which redirects to the token-free URL. No proxy file
-  // (apps/web has none by design); a beforeFiles rewrite, so it wins over the order page itself.
+  // with `?t=` goes to the token route, which redirects to the token-free URL. No auth proxy
+  // (src/proxy.ts only sets X-Robots-Tag); a beforeFiles rewrite, so it wins over the order page itself.
   async rewrites() {
     return {
       beforeFiles: [{ source: "/orders/:orderNo", has: [{ type: "query", key: "t" }], destination: "/api/orders/:orderNo/view" }],

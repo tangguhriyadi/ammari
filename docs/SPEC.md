@@ -130,6 +130,11 @@ pnpm workspaces + Turborepo:
   into the backups bucket's `private-files/` (docs/plans/purchase-payments.md §5, A7).
 - **DNS:** Cloudflare.
 - Dev domains (`ammari.my.id`, `admin.ammari.my.id`) sit behind a login and are marked `noindex`.
+- **Indexing** (docs/plans/seo.md): the storefront is indexable only when `DEPLOY_ENV=production`;
+  any other value serves robots.txt disallow-all, a `noindex` meta and `X-Robots-Tag: noindex`
+  (apps/web `src/proxy.ts`, header only). Private routes (cart, checkout, account, orders, login,
+  claim, consent, preview, api) are `noindex` everywhere and never in `sitemap.xml`. Both admins
+  are never indexed, in any environment (robots.txt, meta, header, from the app itself).
 
 ### 2.5 Responsiveness
 

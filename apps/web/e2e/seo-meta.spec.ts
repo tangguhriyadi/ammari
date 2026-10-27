@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { E2E_HERO_ALT_TEXT, E2E_HERO_OG_IMAGE_KEY, E2E_PRODUCT_NAME, E2E_PRODUCT_SLUG } from "./storefront-fixtures";
+import { E2E_HERO_ALT_TEXT, E2E_HERO_OG_IMAGE_KEY, E2E_PRODUCT_NAME, E2E_PRODUCT_SLUG, E2E_SOLD_OUT_PRODUCT_SLUG } from "./storefront-fixtures";
 import { E2E_STOREFRONT_SETTINGS_DEFAULTS, setStorefrontSettings } from "./helpers/store-settings-db";
 
 // Open Graph / Twitter tags and the editable homepage meta (docs/design/storefront.md §9 "SEO
@@ -71,6 +71,83 @@ test.describe("Open Graph image", () => {
       const canonical = await page.locator('link[rel="canonical"]').getAttribute("href");
       expect(canonical).toMatch(new RegExp(`^https?://[^/]+/products/${E2E_PRODUCT_SLUG}$`));
     }
+  });
+});
+
+async function jsonLd(page: Page): Promise<Record<string, unknown>[]> {
+  const scripts = await page.locator('script[type="application/ld+json"]').allTextContents();
+  return scripts.flatMap((text) => {
+    const parsed = JSON.parse(text) as Record<string, unknown> | Record<string, unknown>[];
+    return Array.isArray(parsed) ? parsed : [parsed];
+  });
+}
+
+function ofType(items: Record<string, unknown>[], type: string): Record<string, unknown> {
+  const found = items.find((item) => item["@type"] === type);
+  if (!found) throw new Error(`no ${type} JSON-LD`);
+  return found;
+}
+
+test.describe("product page SEO (docs/plans/seo.md)", () => {
+  test("canonical, Open Graph and a clean meta description", async ({ page }) => {
+    await page.goto(`/products/${E2E_PRODUCT_SLUG}?color=any-colour-id`);
+    const canonical = `${STORAGE_BASE}/products/${E2E_PRODUCT_SLUG}`;
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", canonical);
+    expect(await meta(page, "property", "og:url")).toBe(canonical);
+    expect(await meta(page, "property", "og:site_name")).toBe("Ammari");
+    expect(await meta(page, "property", "og:locale")).toBe("id_ID");
+    expect(await meta(page, "property", "og:type")).toBe("website");
+    expect(await meta(page, "property", "og:image:type")).toBe("image/webp");
+    expect(Number(await meta(page, "property", "og:image:width"))).toBeGreaterThan(0);
+    expect(Number(await meta(page, "property", "og:image:height"))).toBeGreaterThan(0);
+    expect(await meta(page, "property", "og:image:alt")).toBeTruthy();
+
+    // storefront-fixtures.ts: "<p>Potongan lurus ...</p><ul><li>Resleting ...</li><li>Saku ...</li></ul>"
+    const description = await meta(page, "name", "description");
+    expect(description).toBe("Potongan lurus yang tetap jatuh flowy. Resleting depan tertutup kain Saku tersembunyi");
+    expect(await meta(page, "property", "og:description")).toBe(description);
+  });
+
+  test("Product and BreadcrumbList JSON-LD at the canonical URL", async ({ page }) => {
+    await page.goto(`/products/${E2E_PRODUCT_SLUG}?color=any-colour-id`);
+    const items = await jsonLd(page);
+    const canonical = `${STORAGE_BASE}/products/${E2E_PRODUCT_SLUG}`;
+
+    const product = ofType(items, "Product");
+    expect(product).toMatchObject({ name: E2E_PRODUCT_NAME, url: canonical, brand: { "@type": "Brand", name: "Ammari" } });
+    expect(Array.isArray(product.image) && product.image.length).toBeGreaterThan(0);
+    const offers = product.offers as Record<string, unknown>;
+    expect(offers).toMatchObject({ "@type": "Offer", url: canonical, priceCurrency: "IDR", availability: "https://schema.org/InStock" });
+    expect(typeof offers.price).toBe("number");
+
+    expect(ofType(items, "BreadcrumbList").itemListElement).toEqual([
+      { "@type": "ListItem", position: 1, name: "Beranda", item: `${STORAGE_BASE}/` },
+      { "@type": "ListItem", position: 2, name: E2E_PRODUCT_NAME, item: canonical },
+    ]);
+  });
+
+  test("a sold-out product is OutOfStock", async ({ page }) => {
+    await page.goto(`/products/${E2E_SOLD_OUT_PRODUCT_SLUG}`);
+    const offers = ofType(await jsonLd(page), "Product").offers as Record<string, unknown>;
+    expect(offers.availability).toBe("https://schema.org/OutOfStock");
+  });
+
+  test("the homepage has Organization + WebSite JSON-LD, a canonical URL and one h1", async ({ page }) => {
+    await page.goto("/?voucher=claimed");
+    // Next prints the root canonical without the trailing slash; same URL.
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", STORAGE_BASE);
+    const items = await jsonLd(page);
+    expect(ofType(items, "Organization")).toMatchObject({ name: "Ammari", url: `${STORAGE_BASE}/`, logo: `${STORAGE_BASE}/logos/ammari-primary.png` });
+    expect(ofType(items, "WebSite")).toMatchObject({ name: "Ammari", inLanguage: "id-ID" });
+    await expect(page.locator("h1")).toHaveCount(1);
+    await expect(page.locator("html")).toHaveAttribute("lang", "id");
+  });
+
+  test("an info page has a description, canonical URL and breadcrumb", async ({ page }) => {
+    await page.goto("/shipping");
+    expect(await meta(page, "name", "description")).toBe("Pengiriman E2E dikirim via kurir pilihan.");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `${STORAGE_BASE}/shipping`);
+    expect(ofType(await jsonLd(page), "BreadcrumbList").itemListElement).toHaveLength(2);
   });
 });
 

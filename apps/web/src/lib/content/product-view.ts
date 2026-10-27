@@ -84,6 +84,12 @@ export interface ProductView {
   soldOut: boolean;
 }
 
+/** Alt text for a photo with none stored: same wording apps/admin stores by default
+ * (lib/products/alt-text.ts there), so a legacy null alt reads like every other photo. */
+export function productImageAltText(productName: string, colorName: string | null): string {
+  return colorName ? `${productName} warna ${colorName}` : productName;
+}
+
 function toGalleryImage(
   image: { id: string; storageKey: string; altText: string | null; width: number; height: number },
   fallbackAlt: string,
@@ -95,8 +101,9 @@ function toGalleryImage(
 export function buildProductView(product: Omit<StorefrontProduct, "pricing">, price: StorefrontPrice): ProductView {
   const imagesByColor: Record<string, ProductGalleryImage[]> = {};
   const generalImages: ProductGalleryImage[] = [];
+  const colorNameById = new Map(product.colors.map((color) => [color.id, color.name]));
   for (const image of [...product.images].sort((a, b) => a.sortOrder - b.sortOrder)) {
-    const view = toGalleryImage(image, product.name);
+    const view = toGalleryImage(image, productImageAltText(product.name, image.fabricColorId ? (colorNameById.get(image.fabricColorId) ?? null) : null));
     if (image.fabricColorId) {
       (imagesByColor[image.fabricColorId] ??= []).push(view);
     } else {

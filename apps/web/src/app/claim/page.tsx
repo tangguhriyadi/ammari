@@ -1,5 +1,13 @@
+import type { Metadata } from "next";
 import { Button, Input, Label } from "@ammari/ui";
 import { enterClaimCodeAction } from "./actions";
+import { NOINDEX_ROBOTS } from "@/lib/seo/indexing";
+
+// Per-visitor page: never indexed (docs/plans/seo.md).
+export const metadata: Metadata = {
+  title: "Klaim Voucher | Ammari",
+  robots: NOINDEX_ROBOTS,
+};
 
 export default async function ClaimEntryPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { error } = await searchParams;

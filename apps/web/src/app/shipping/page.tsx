@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
-import { getPublishedInfoPage } from "@ammari/db/storefront";
 import { InfoPageBody } from "@/components/info-page";
+import { JsonLd } from "@/components/json-ld";
+import { getCachedPublishedInfoPage, infoPageBreadcrumb, infoPageMetadata } from "@/lib/content/info-page-data";
 
-export const metadata: Metadata = {
-  title: "Pengiriman | Ammari",
-};
+const NAME = "Pengiriman";
+
+export function generateMetadata(): Promise<Metadata> {
+  return infoPageMetadata("shipping", NAME, "Informasi pengiriman pesanan Ammari: kurir, ongkos kirim, dan perkiraan waktu tiba.");
+}
 
 // Now CMS-driven — see how-to-order/page.tsx's own comment for the pattern. Never names the
 // shipping origin city (CLAUDE.md / design spec §2) once the owner publishes real content —
@@ -12,6 +15,11 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function ShippingPage() {
-  const page = await getPublishedInfoPage("shipping");
-  return <InfoPageBody title="Pengiriman" body={page?.body ?? null} />;
+  const page = await getCachedPublishedInfoPage("shipping");
+  return (
+    <>
+      <JsonLd data={infoPageBreadcrumb("shipping", NAME)} />
+      <InfoPageBody title={NAME} body={page?.body ?? null} />
+    </>
+  );
 }

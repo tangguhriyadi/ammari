@@ -1,5 +1,13 @@
+import type { Metadata } from "next";
 import { requireConsentedSession } from "@/lib/auth/require-customer";
 import { CompleteProfileForm } from "./complete-profile-form";
+import { NOINDEX_ROBOTS } from "@/lib/seo/indexing";
+
+// Per-visitor page: never indexed (docs/plans/seo.md).
+export const metadata: Metadata = {
+  title: "Lengkapi Profil | Ammari",
+  robots: NOINDEX_ROBOTS,
+};
 
 export default async function CompleteProfilePage() {
   const customer = await requireConsentedSession("/account/complete-profile");
