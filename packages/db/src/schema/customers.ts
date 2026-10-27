@@ -1,7 +1,14 @@
 import { sql } from "drizzle-orm";
 import { bigint, check, index, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { checkIn, citext, timestamps } from "./columns";
-import { CUSTOMER_TYPES, THANK_YOU_CARD_STATUSES, VOUCHER_STATUSES } from "./constants";
+import { checkIn, citext, createdAtOnly, timestamps } from "./columns";
+import {
+  CUSTOMER_TYPES,
+  THANK_YOU_CARD_STATUSES,
+  VOUCHER_ADJUSTMENT_KINDS,
+  VOUCHER_STATUSES,
+  type VoucherAdjustmentKind,
+  type VoucherStatus,
+} from "./constants";
 import { staffUsers } from "./rbac";
 import { orders } from "./orders";
 
@@ -126,5 +133,43 @@ export const vouchers = pgTable(
       "vouchers_used_consistency_check",
       sql`(${table.status} = 'used') = (${table.usedOrderId} is not null and ${table.usedAt} is not null)`,
     ),
+  ],
+);
+
+// ---------- Voucher void/extend history — migration 0042 ----------
+// docs/plans/growth.md §9.3. One row per owner void or extension of a voucher, always with a
+// reason, written in the same transaction as the voucher's conditional UPDATE (and its audit
+// entry). Lets CS see a voucher's history on the customer page without audit_log.view. Immutable:
+// the hand-authored trigger in 0042 refuses every UPDATE and DELETE.
+export const voucherAdjustments = pgTable(
+  "voucher_adjustments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    voucherId: uuid("voucher_id")
+      .notNull()
+      .references(() => vouchers.id, { onDelete: "restrict" }),
+    kind: text("kind").$type<VoucherAdjustmentKind>().notNull(),
+    // The voucher as it was just before the change (stored status; an "active" past its expiry is
+    // what the admin shows as Kedaluwarsa).
+    previousStatus: text("previous_status").$type<VoucherStatus>().notNull(),
+    previousExpiresAt: timestamp("previous_expires_at", { withTimezone: true, mode: "date" }).notNull(),
+    // Set exactly for an extension.
+    newExpiresAt: timestamp("new_expires_at", { withTimezone: true, mode: "date" }),
+    reason: text("reason").notNull(),
+    staffUserId: uuid("staff_user_id")
+      .notNull()
+      .references(() => staffUsers.id, { onDelete: "restrict" }),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    index("voucher_adjustments_voucher_id_created_at_idx").on(table.voucherId, table.createdAt),
+    index("voucher_adjustments_staff_user_id_idx").on(table.staffUserId),
+    check("voucher_adjustments_kind_check", checkIn(table.kind, VOUCHER_ADJUSTMENT_KINDS)),
+    check("voucher_adjustments_previous_status_check", checkIn(table.previousStatus, VOUCHER_STATUSES)),
+    check(
+      "voucher_adjustments_new_expires_at_check",
+      sql`(${table.kind} = 'extend') = (${table.newExpiresAt} is not null) and (${table.newExpiresAt} is null or ${table.newExpiresAt} > ${table.previousExpiresAt})`,
+    ),
+    check("voucher_adjustments_reason_check", sql`btrim(${table.reason}) <> '' and char_length(${table.reason}) <= 500`),
   ],
 );

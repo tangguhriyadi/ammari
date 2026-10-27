@@ -44,10 +44,12 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   // edit, close or reverse documents. Shipped to existing databases by migration 0024. Since S4
   // (migration 0025) it also receives a posted production batch's output.
   { key: "inventory.receive", group: "inventory", description: "Receive goods against purchase documents and production batches" },
+  // docs/plans/growth.md §7: record and void ad/operating expenses and view their proofs. Every use
+  // also requires finance.view_profit. Description updated by migration 0042.
   {
     key: "ads_expenses.manage",
     group: "ads_expenses",
-    description: "Record ad spend and expenses",
+    description: "Record and void ad and operating expenses, and view their proofs",
   },
   { key: "finance.view_profit", group: "finance", description: "View cost, profit, and payout figures" },
   // docs/plans/purchase-payments.md P10 — writing money records (and opening their proofs) is a
@@ -61,7 +63,14 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   },
   { key: "settings.manage", group: "settings", description: "Manage targets, cost assumptions, and settings" },
   { key: "customers.view", group: "customers", description: "View customers" },
-  { key: "vouchers.void", group: "vouchers", description: "Void a voucher" },
+  // docs/plans/growth.md §8.3, owner answer Q7: record a customer's promo-consent withdrawal.
+  // Shipped by migration 0042 (owner, super_admin, and the predefined CS role).
+  { key: "customers.manage", group: "customers", description: "Record a customer's promo-consent withdrawal" },
+  // docs/plans/growth.md §10, owner answer Q9: download the promo-consenting customers' contacts.
+  // Shipped by migration 0042 (owner and super_admin only).
+  { key: "customers.export", group: "customers", description: "Export promo-consenting customer contacts" },
+  // Owner answer Q8: the same key also extends a voucher (description updated by migration 0042).
+  { key: "vouchers.void", group: "vouchers", description: "Void or extend a voucher" },
   {
     key: "content.manage",
     group: "content",
@@ -108,7 +117,9 @@ export interface PredefinedRoleDefinition {
  * database by migration 0041, which inserts each role and its grants only if the role key does
  * not exist yet; `seed.ts` does the same, insert-only, for test/e2e databases reset by TRUNCATE.
  * Neither ever rewrites a role that already exists, so a super_admin's later edit in the admin UI
- * survives. Keep this list and migration 0041 in sync by hand (migration-0041.test.ts checks). */
+ * survives. Keep this list in sync by hand with migration 0041 and the later grants that extend a
+ * predefined role (0042: customers.manage for CS); migration-0041.test.ts and
+ * migration-0042.test.ts check. */
 export const PREDEFINED_ROLES: readonly PredefinedRoleDefinition[] = [
   {
     key: "packing_warehouse",
@@ -126,7 +137,8 @@ export const PREDEFINED_ROLES: readonly PredefinedRoleDefinition[] = [
     key: "customer_service",
     name: "CS/Pesanan",
     description: "Pesanan WhatsApp/Instagram/offline, status pesanan, data pelanggan, cek stok.",
-    permissionKeys: ["overview.view", "orders.view", "orders.manage", "customers.view", "stock.view"],
+    // customers.manage added by migration 0042 (docs/plans/growth.md owner answer Q7).
+    permissionKeys: ["overview.view", "orders.view", "orders.manage", "customers.view", "customers.manage", "stock.view"],
   },
   {
     key: "finance",

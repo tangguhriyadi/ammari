@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { Button, Dialog, Label, Textarea, useToast } from "@ammari/ui";
 import type { ActionResult } from "@/lib/action-result";
 
-// "Batalkan" for a payment or a nota (docs/plans/purchase-payments.md P6): a required reason,
-// confirmed in the admin dialog. Nothing is deleted: the row stays in the history as
+// "Batalkan" for a payment or a nota (docs/plans/purchase-payments.md P6) and for an expense
+// (docs/plans/growth.md G3): a required reason, confirmed in the admin dialog. Nothing is deleted: the row stays in the history as
 // "Dibatalkan" and stops counting. The server voids it once (conditional UPDATE).
 
 const COPY = {
@@ -16,6 +16,13 @@ const COPY = {
     description: "Pembayaran tetap tercatat di riwayat sebagai Dibatalkan dan tidak dihitung lagi. Tidak bisa diulang.",
     confirm: "Batalkan pembayaran",
     done: (label: string) => `Pembayaran ${label} dibatalkan`,
+  },
+  expense: {
+    button: "Batalkan",
+    title: (label: string) => `Batalkan biaya ${label}?`,
+    description: "Biaya tetap tercatat sebagai Dibatalkan dan tidak dihitung lagi. Tidak bisa diulang.",
+    confirm: "Batalkan biaya",
+    done: (label: string) => `Biaya ${label} dibatalkan`,
   },
   attachment: {
     button: "Batalkan",
@@ -32,10 +39,11 @@ export function VoidRecordButton({
   label,
   voidAction,
 }: {
-  kind: "payment" | "attachment";
+  kind: "payment" | "expense" | "attachment";
   id: string;
   label: string;
-  /** voidSupplierPaymentAction for a payment, the purchase's voidPurchaseAttachmentAction for a nota. */
+  /** voidSupplierPaymentAction for a payment, voidBusinessExpenseAction for an expense, the
+   * purchase's voidPurchaseAttachmentAction for a nota. */
   voidAction: (input: { id: string; reason: string }) => Promise<ActionResult>;
 }) {
   const router = useRouter();
@@ -72,7 +80,7 @@ export function VoidRecordButton({
       <Button
         type="button"
         variant="secondary"
-        aria-label={kind === "payment" ? `Batalkan pembayaran ${label}` : `Batalkan nota ${label}`}
+        aria-label={kind === "payment" ? `Batalkan pembayaran ${label}` : kind === "expense" ? `Batalkan biaya ${label}` : `Batalkan nota ${label}`}
         onClick={() => {
           setReason("");
           setError(null);

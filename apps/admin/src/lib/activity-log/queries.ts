@@ -7,6 +7,7 @@ import {
   accessories,
   accessoryMovements,
   auditLog,
+  businessExpenses,
   costComponents,
   customers,
   defectMovements,
@@ -136,6 +137,7 @@ export async function resolveSearchTargets(db: Database, q: string, cap: number 
     db.select({ entityType: typed("accessory_movement"), id: asText(accessoryMovements, accessoryMovements.id) }).from(accessoryMovements).where(inArray(accessoryMovements.accessoryId, matchedAccessoryIds)),
     db.select({ entityType: typed("supplier"), id: asText(suppliers, suppliers.id) }).from(suppliers).where(ilike(suppliers.name, pattern)),
     db.select({ entityType: typed("supplier_payment"), id: asText(supplierPayments, supplierPayments.id) }).from(supplierPayments).where(or(ilike(supplierPayments.paymentNo, pattern), ilike(supplierPayments.supplierName, pattern))),
+    db.select({ entityType: typed("business_expense"), id: asText(businessExpenses, businessExpenses.id) }).from(businessExpenses).where(or(ilike(businessExpenses.expenseNo, pattern), ilike(businessExpenses.campaign, pattern), ilike(businessExpenses.note, pattern))),
     db.select({ entityType: typed("purchase"), id: asText(purchases, purchases.id) }).from(purchases).where(inArray(purchases.id, matchedPurchaseIds)),
     db.select({ entityType: typed("purchase_attachment"), id: asText(purchaseAttachments, purchaseAttachments.id) }).from(purchaseAttachments).where(inArray(purchaseAttachments.purchaseId, matchedPurchaseIds)),
     db.select({ entityType: typed("goods_receipt"), id: asText(goodsReceipts, goodsReceipts.id) }).from(goodsReceipts).where(ilike(goodsReceipts.receiptNo, pattern)),
@@ -464,6 +466,10 @@ const LOOKUPS: Record<string, Lookup> = {
       label: row.paymentNo,
       href: row.purchaseId ? `/purchases/${row.purchaseId}` : row.batchId ? `/production/${row.batchId}` : row.supplierId ? `/suppliers/${row.supplierId}` : null,
     }));
+  },
+  business_expense: async (db, ids) => {
+    const rows = await db.select({ id: businessExpenses.id, expenseNo: businessExpenses.expenseNo }).from(businessExpenses).where(inArray(businessExpenses.id, uuids(ids)));
+    return byId(rows, (row) => ({ label: row.expenseNo, href: `/ads-expenses?q=${encodeURIComponent(row.expenseNo)}` }));
   },
   production_batch: async (db, ids) => {
     const rows = await db.select({ id: productionBatches.id, batchNo: productionBatches.batchNo }).from(productionBatches).where(inArray(productionBatches.id, uuids(ids)));

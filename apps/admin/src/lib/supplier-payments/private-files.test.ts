@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { withRollback, type TestTx } from "@ammari/db/test-utils";
 import { insertStaffUser } from "@ammari/db/test-fixtures";
-import { privateFiles, purchaseAttachments, purchases, supplierPayments, suppliers, type PrivateFilePurpose } from "@ammari/db/schema";
+import { businessExpenses, privateFiles, purchaseAttachments, purchases, supplierPayments, suppliers, type PrivateFilePurpose } from "@ammari/db/schema";
 import { buildPrivateFileKey, findServablePrivateFile, PRIVATE_FILE_VIEW_PERMISSIONS } from "./private-files";
 
 const HEX = "a".repeat(64);
@@ -54,6 +54,10 @@ describe("PRIVATE_FILE_VIEW_PERMISSIONS", () => {
   test("a proof needs supplier_payments.manage + finance.view_profit; a nota inventory.view + finance.view_profit (plan §7)", () => {
     expect(PRIVATE_FILE_VIEW_PERMISSIONS.payment_proof).toEqual(["supplier_payments.manage", "finance.view_profit"]);
     expect(PRIVATE_FILE_VIEW_PERMISSIONS.purchase_invoice).toEqual(["inventory.view", "finance.view_profit"]);
+  });
+
+  test("an expense proof needs ads_expenses.manage + finance.view_profit (docs/plans/growth.md §5)", () => {
+    expect(PRIVATE_FILE_VIEW_PERMISSIONS.expense_proof).toEqual(["ads_expenses.manage", "finance.view_profit"]);
   });
 });
 
@@ -122,6 +126,23 @@ describe("findServablePrivateFile", () => {
 
       const servable = await findServablePrivateFile(tx, file.id);
       expect(servable).toMatchObject({ purpose: "purchase_invoice", contentType: "application/pdf", downloadName: `${purchase.purchaseNo}-nota.pdf` });
+    });
+  });
+
+  test("an expense proof is served as <expense_no>.jpg, also after the expense is voided", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const file = await insertFile(tx, staff.id, "expense_proof");
+      const [expense] = await tx
+        .insert(businessExpenses)
+        .values({ expenseNo: "BYA-202610-901", expenseDate: "2026-10-05", category: "packaging", amount: 250_000, method: "cash", proofFileId: file.id, recordedByStaffUserId: staff.id })
+        .returning();
+      expect(await findServablePrivateFile(tx, file.id)).toMatchObject({ purpose: "expense_proof", downloadName: "BYA-202610-901.jpg" });
+      await tx
+        .update(businessExpenses)
+        .set({ voidedAt: new Date(), voidedByStaffUserId: staff.id, voidReason: "salah input" })
+        .where(eq(businessExpenses.id, expense!.id));
+      expect((await findServablePrivateFile(tx, file.id))?.downloadName).toBe("BYA-202610-901.jpg");
     });
   });
 });

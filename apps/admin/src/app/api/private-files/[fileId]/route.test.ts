@@ -146,6 +146,16 @@ describe("GET /api/private-files/[fileId]: serving", () => {
     expect((await get()).status).toBe(200);
   });
 
+  test("an expense proof is served with ads_expenses.manage + finance.view_profit, and refused without it", async () => {
+    findServablePrivateFile.mockResolvedValue(proof({ purpose: "expense_proof", downloadName: "BYA-202610-001.jpg" }));
+    getStaffSession.mockResolvedValue(session(["supplier_payments.manage", "finance.view_profit"]));
+    expect((await get()).status).toBe(403);
+    getStaffSession.mockResolvedValue(session(["ads_expenses.manage", "finance.view_profit"]));
+    const response = await get();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toBe('inline; filename="BYA-202610-001.jpg"');
+  });
+
   test("500 (logged) when a referenced object is missing from storage", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     findServablePrivateFile.mockResolvedValue(proof({ storageKey: "test/payment_proof/2026/10/gone.jpg" }));

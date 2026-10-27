@@ -11,3 +11,4 @@ export * from "./auth-throttle";
 export * from "./claim-throttle";
 export * from "./shipments";
 export * from "./supplier-payments";
+export * from "./expenses";

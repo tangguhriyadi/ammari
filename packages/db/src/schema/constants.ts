@@ -347,6 +347,9 @@ export const CHANNEL_FEE_COMPONENTS = [
 ] as const;
 export type ChannelFeeComponent = (typeof CHANNEL_FEE_COMPONENTS)[number];
 
+/** Backs only the CHECK of the never-used `expenses` table (migration 0000). Not the "Iklan &
+ * Biaya" categories: those are BUSINESS_EXPENSE_CATEGORIES below. Kept until a contract migration
+ * drops that table (docs/plans/growth.md Q2, awaiting owner confirmation). */
 export const EXPENSE_CATEGORIES = [
   "packaging",
   "shipping",
@@ -388,7 +391,7 @@ export const CUTTING_RATIO: Record<CuttingSize, number> = {
 /** What a private (never public) stored file is for (docs/plans/purchase-payments.md §4.1). Each
  * table that points at private_files pins its own purpose through a composite FK, so a nota can
  * never be filed as a payment proof or the other way round. */
-export const PRIVATE_FILE_PURPOSES = ["payment_proof", "purchase_invoice"] as const;
+export const PRIVATE_FILE_PURPOSES = ["payment_proof", "purchase_invoice", "expense_proof"] as const;
 export type PrivateFilePurpose = (typeof PRIVATE_FILE_PURPOSES)[number];
 
 /** The only stored formats (§6): photos are re-encoded to JPEG, PDFs stored as-is. */
@@ -406,3 +409,43 @@ export type SupplierPaymentMethod = (typeof SUPPLIER_PAYMENT_METHODS)[number];
 /** Kinds of file attached to a purchase document (§4.3). Only the supplier's invoice/nota today. */
 export const PURCHASE_ATTACHMENT_KINDS = ["invoice"] as const;
 export type PurchaseAttachmentKind = (typeof PURCHASE_ATTACHMENT_KINDS)[number];
+
+// ---------- Iklan & Biaya (docs/plans/growth.md §3, migration 0042) ----------
+
+/** A FIXED set (owner answer Q1): ads, endorse and operating costs. Indonesian labels live in
+ * apps/admin (lib/expenses/labels.ts), never in the DB. "other" (Lainnya) requires a note
+ * (business_expenses_other_note_check). Adding one is a CHECK widen in a migration. */
+export const BUSINESS_EXPENSE_CATEGORIES = [
+  "ads_meta",
+  "ads_tiktok",
+  "ads_shopee",
+  "endorsement",
+  "material_shipping",
+  "packaging",
+  "salary",
+  "rent",
+  "utilities",
+  "other",
+] as const;
+export type BusinessExpenseCategory = (typeof BUSINESS_EXPENSE_CATEGORIES)[number];
+
+/** "Biaya iklan": what ROAS divides by (plan §4.1). Endorse/KOL is marketing but not in ROAS. */
+export const AD_EXPENSE_CATEGORIES = ["ads_meta", "ads_tiktok", "ads_shopee"] as const satisfies readonly BusinessExpenseCategory[];
+export type AdExpenseCategory = (typeof AD_EXPENSE_CATEGORIES)[number];
+
+/** Categories that may name the sales channel they are for (business_expenses.channel_id). */
+export const MARKETING_EXPENSE_CATEGORIES = [...AD_EXPENSE_CATEGORIES, "endorsement"] as const satisfies readonly BusinessExpenseCategory[];
+export type MarketingExpenseCategory = (typeof MARKETING_EXPENSE_CATEGORIES)[number];
+
+/** Ad categories tied to exactly one channel (business_expenses_channel_check). Every other
+ * marketing category takes an optional channel; non-marketing categories never have one. */
+export const FIXED_EXPENSE_CHANNELS = { ads_shopee: "shopee", ads_tiktok: "tiktok" } as const satisfies Partial<Record<BusinessExpenseCategory, ChannelId>>;
+
+/** Tunai, Transfer, Kartu (debit/kredit, e.g. Meta billing), Saldo platform (Saldo Penjual
+ * Shopee/TikTok). Labels live in apps/admin. */
+export const BUSINESS_EXPENSE_METHODS = ["cash", "transfer", "card", "platform_balance"] as const;
+export type BusinessExpenseMethod = (typeof BUSINESS_EXPENSE_METHODS)[number];
+
+/** voucher_adjustments.kind (plan §9.3): an owner void or extension, always with a reason. */
+export const VOUCHER_ADJUSTMENT_KINDS = ["void", "extend"] as const;
+export type VoucherAdjustmentKind = (typeof VOUCHER_ADJUSTMENT_KINDS)[number];

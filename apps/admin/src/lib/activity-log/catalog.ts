@@ -7,6 +7,7 @@ export const ACTIVITY_AREAS = {
   orders: "Pesanan",
   shipping: "Pengiriman",
   payments: "Pembayaran",
+  expenses: "Iklan & Biaya",
   products: "Produk & Diskon",
   stock: "Stok",
   production: "Produksi & Pembelian",
@@ -268,6 +269,14 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
     actions: {
       record: { label: "Pembayaran supplier dicatat" },
       void: { label: "Pembayaran supplier dibatalkan" },
+    },
+  },
+  business_expense: {
+    label: "Biaya",
+    area: "expenses",
+    actions: {
+      record: { label: "Biaya dicatat" },
+      void: { label: "Biaya dibatalkan" },
     },
   },
   purchase_attachment: {

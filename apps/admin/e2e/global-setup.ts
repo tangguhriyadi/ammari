@@ -85,6 +85,12 @@ export const E2E_PAYMENTS_NO_FINANCE_EMAIL = "payments-no-finance@e2e.ammari.tes
 // (no finance.view_profit): it must see the batch's payment badge but never an amount, a proof,
 // or "Catat pembayaran" (A8).
 export const E2E_PRODUCTION_PAYMENTS_EMAIL = "production-payments@e2e.ammari.test";
+// Dedicated emails for ads-expenses.spec.ts (docs/plans/growth.md session S2), same "fresh email,
+// clean OTP throttle" reasoning. The first sits on the predefined Keuangan role (`finance`:
+// ads_expenses.manage + finance.view_profit, as shipped by migration 0041); the second on the
+// predefined CS role, which must get "Akses ditolak" on /ads-expenses and a 403 on a proof.
+export const E2E_EXPENSES_EMAIL = "expenses@e2e.ammari.test";
+export const E2E_EXPENSES_CS_EMAIL = "expenses-cs@e2e.ammari.test";
 export const E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL = "production-payments-no-finance@e2e.ammari.test";
 const E2E_PRODUCTION_NO_FINANCE_ROLE_KEY = "e2e_production_no_finance";
 // A dedicated email/role for purchases-receipt.spec.ts (docs/plans/suppliers-goods-receipt.md
@@ -447,6 +453,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_PRODUCTION_PAYMENTS_EMAIL, "E2E Production Payments", OWNER_ROLE_KEY);
   await ensureLimitedRole(E2E_PRODUCTION_NO_FINANCE_ROLE_KEY, ["production.manage"]);
   await ensureStaffFixture(E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL, "E2E Production Payments (no finance)", E2E_PRODUCTION_NO_FINANCE_ROLE_KEY);
+  await ensureStaffFixture(E2E_EXPENSES_EMAIL, "E2E Keuangan", "finance");
+  await ensureStaffFixture(E2E_EXPENSES_CS_EMAIL, "E2E CS", "customer_service");
 
   await ensureLimitedRole(E2E_PURCHASES_ROLE_KEY, [
     "products.manage",

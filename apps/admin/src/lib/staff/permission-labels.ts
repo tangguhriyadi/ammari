@@ -56,9 +56,16 @@ export const PERMISSION_LABELS: Record<PermissionKey, PermissionLabel> = {
     sensitive: true,
     warning: "Bisa mencatat uang keluar ke supplier.",
   },
-  "ads_expenses.manage": { area: "Keuangan", label: "Catat biaya iklan dan pengeluaran" },
+  "ads_expenses.manage": { area: "Keuangan", label: "Catat dan batalkan biaya iklan dan operasional, lihat buktinya" },
   "customers.view": { area: "Pelanggan", label: "Lihat data pelanggan (data pribadi)" },
-  "vouchers.void": { area: "Pelanggan", label: "Batalkan voucher" },
+  "customers.manage": { area: "Pelanggan", label: "Catat penarikan persetujuan promo pelanggan" },
+  "customers.export": {
+    area: "Pelanggan",
+    label: "Unduh kontak pelanggan yang setuju promo",
+    sensitive: true,
+    warning: "Bisa mengunduh data pribadi pelanggan. Hanya untuk promo Ammari sendiri, jangan diunggah ke platform iklan.",
+  },
+  "vouchers.void": { area: "Pelanggan", label: "Batalkan atau perpanjang voucher" },
   "content.manage": { area: "Konten", label: "Kelola beranda, halaman info, tabel ukuran, deskripsi produk" },
   "settings.manage": { area: "Pengaturan", label: "Ubah target, asumsi biaya, pengaturan" },
   "staff.manage": {
