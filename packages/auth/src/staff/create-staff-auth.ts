@@ -175,8 +175,12 @@ export function createStaffAuth(options: CreateStaffAuthOptions) {
       // and OAuth sign-in) — see the plan's §2 revision for why this replaces
       // disableSignUp/disableImplicitSignUp (both block the row Better Auth needs to create on a
       // legitimate staff member's very first login, before our own hooks ever get to run).
-      validateUserInfo: async ({ user }) => {
+      validateUserInfo: async ({ user, source }) => {
         if (!user.email) return { error: "invalid_account" };
+        // A Google profile whose email Google itself has not verified proves nothing about who
+        // owns the address (docs/plans/roles-staff.md §8). Better Auth's Google provider passes
+        // the profile's `email_verified` through as `emailVerified`; refuse anything but true.
+        if (source.method === "oauth" && user.emailVerified !== true) return { error: "invalid_account" };
         const staff = await loadActiveStaffForEmail(db, user.email);
         if (!staff) return { error: "invalid_account" };
       },

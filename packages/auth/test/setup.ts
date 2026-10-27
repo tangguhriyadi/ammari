@@ -54,7 +54,14 @@ export async function cleanupAuthTables(): Promise<void> {
  * a rolled-back transaction would be invisible to them. Callers must delete the returned id via
  * `cleanupStaffUsers` after `cleanupAuthTables()` has run (FK is ON DELETE RESTRICT). */
 export async function createCommittedStaffUser(
-  overrides: { roleKey?: string; isActive?: boolean; email?: string } = {},
+  overrides: {
+    roleKey?: string;
+    isActive?: boolean;
+    email?: string;
+    invitedAt?: Date;
+    inviteExpiresAt?: Date;
+    lastLoginAt?: Date;
+  } = {},
 ) {
   const [role] = await testDb.select().from(roles).where(eq(roles.key, overrides.roleKey ?? "owner")).limit(1);
   if (!role) throw new Error(`role "${overrides.roleKey ?? "owner"}" was not seeded`);
@@ -65,6 +72,9 @@ export async function createCommittedStaffUser(
       email: overrides.email ?? `staff-${randomUUID()}@example.test`,
       roleId: role.id,
       isActive: overrides.isActive ?? true,
+      invitedAt: overrides.invitedAt ?? (overrides.inviteExpiresAt ? new Date() : null),
+      inviteExpiresAt: overrides.inviteExpiresAt ?? null,
+      lastLoginAt: overrides.lastLoginAt ?? null,
     })
     .returning();
   if (!staffUser) throw new Error("failed to insert staff user fixture");
