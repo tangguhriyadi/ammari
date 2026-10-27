@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { PageHeader, Button, Input, Label, Pagination, Breadcrumb, Select } from "@ammari/ui";
-import { requirePermission } from "@/lib/auth/require-permission";
+import { requireAnyPermission } from "@/lib/auth/require-any-permission";
 import { listProducts } from "@/lib/products/queries";
 import { listProductTypeFilterOptions } from "@/lib/product-types/queries";
 import { isProductTypeCode } from "@/lib/product-types/codes";
@@ -12,7 +12,11 @@ export default async function ProdukPage({
 }: {
   searchParams: Promise<{ q?: string; type?: string; page?: string; perPage?: string }>;
 }) {
-  await requirePermission("products.manage");
+  // content.manage alone may open the list too (docs/plans/roles-staff.md, owner answer 5): Admin
+  // Konten finds a product here and edits its content fields only; the product page then opens on
+  // the Toko step and gates every other section on products.manage itself.
+  const session = await requireAnyPermission(["products.manage", "content.manage"]);
+  const canManageProducts = session.permissionKeys.includes("products.manage");
   const { q, type: rawType, page, perPage } = await searchParams;
   // A malformed `type` is ignored (all types), never sent to the query; an unknown but
   // well-formed one simply matches nothing.
@@ -30,9 +34,11 @@ export default async function ProdukPage({
         title="Produk"
         description="Produk dan variannya."
         actions={
-          <Link href="/products/new">
-            <Button>Tambah produk</Button>
-          </Link>
+          canManageProducts ? (
+            <Link href="/products/new">
+              <Button>Tambah produk</Button>
+            </Link>
+          ) : undefined
         }
       />
       <div className="flex flex-col gap-3">

@@ -273,6 +273,15 @@ While S5 is live nobody can return, release or reverse a defect, the line tables
 shows everything that ever arrived defective (not what is still held), and the variance panels
 are gone. Nothing needs repairing after rolling forward again.
 
+### 2.2 Never run `db:seed` from an older image after 0041 (roles-staff)
+
+Once migration `0041_staff_invites` has run on prod, **never run `src/seed.ts` from an image built
+before it** (§10's command with an older `<the-deployed-sha>`, or after a rollback past 0041). The
+older seed re-syncs the `owner` role to its old default list, which silently removes
+`staff.manage` from the owner again (and prunes any permission edits a super_admin made in
+**Peran & Staf**). Rolling the app itself back is fine; only the seed is the problem. If you need
+§10 after a rollback, run the seed from the current `main` image instead.
+
 ---
 
 ## 3. Changing an env value
@@ -791,6 +800,9 @@ docker run --rm --network ammari-prod_internal --env-file env/admin.env \
 `staff_users.email`. Re-running it for an email that's already seeded (even under a different
 role env var) is a silent no-op: no new row, no update, and the script prints nothing to flag the
 conflict.
+
+**Use an image from 0041 (roles-staff) or later.** An older image's seed resets the owner role's
+permissions (see §2.2).
 
 **The owner's own personal account** (role `owner`, not `super_admin`) is deliberately **not**
 seeded this way — create it later, once logged in as `super_admin`, through the admin UI's

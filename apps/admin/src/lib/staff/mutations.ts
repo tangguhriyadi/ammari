@@ -1,5 +1,5 @@
 import "server-only";
-import { and, count, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, count, eq, gt, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { EmailSender } from "@ammari/auth";
 import {
   auditLog,
@@ -28,6 +28,8 @@ import { buildStaffInviteEmail } from "./invite-email";
 const INVITE_VALID_DAYS = 7;
 const ACTOR_INVITES_PER_HOUR = 20;
 const TARGET_INVITE_EMAIL_COOLDOWN_MINUTES = 10;
+/** Hard per-person cap that no cooldown relaxation (failed send, corrected email) can bypass. */
+const TARGET_INVITES_PER_HOUR = 3;
 /** A hung provider must not hold the server action open forever after the commit. */
 const INVITE_EMAIL_TIMEOUT_MS = 15_000;
 
@@ -203,9 +205,27 @@ async function assertActorInviteBudget(tx: Tx, actorStaffUserId: string): Promis
   if ((recent?.count ?? 0) >= ACTOR_INVITES_PER_HOUR) throw new ActionError("Terlalu banyak undangan. Coba lagi nanti.");
 }
 
+/** At most one invite email per person per 10 minutes, unless that email never reached them: the
+ * send failed, or the address was corrected since (§11a: "Kirim ulang undangan" is offered right
+ * after either, so it must not be refused). */
 async function assertTargetInviteCooldown(tx: Tx, staffUserId: string): Promise<void> {
-  const [recent] = await tx
+  // Security review: "correct the email, resend" (or a provider that keeps failing) would
+  // otherwise re-arm at once every time, up to the actor's 20/h, at one address.
+  const [lastHour] = await tx
     .select({ count: count() })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.entityType, ENTITY_TYPE),
+        eq(auditLog.entityId, staffUserId),
+        inArray(auditLog.action, INVITE_EMAIL_ACTIONS),
+        gt(auditLog.createdAt, sql`now() - interval '1 hour'`),
+      ),
+    );
+  if ((lastHour?.count ?? 0) >= TARGET_INVITES_PER_HOUR) throw new ActionError("Terlalu banyak undangan untuk staf ini. Coba lagi nanti.");
+
+  const [recent] = await tx
+    .select({ at: sql<Date | null>`max(${auditLog.createdAt})`.mapWith(auditLog.createdAt) })
     .from(auditLog)
     .where(
       and(
@@ -215,7 +235,26 @@ async function assertTargetInviteCooldown(tx: Tx, staffUserId: string): Promise<
         gt(auditLog.createdAt, sql`now() - make_interval(mins => ${TARGET_INVITE_EMAIL_COOLDOWN_MINUTES})`),
       ),
     );
-  if ((recent?.count ?? 0) > 0) {
+  if (!recent?.at) return;
+  // Both kinds of row are written in a later transaction than the invite itself (the failure
+  // audit after the commit, a correction by its own action), so "at or after" is enough.
+  const [undelivered] = await tx
+    .select({ id: auditLog.id })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.entityType, ENTITY_TYPE),
+        eq(auditLog.entityId, staffUserId),
+        gte(auditLog.createdAt, recent.at),
+        or(
+          eq(auditLog.action, STAFF_AUDIT_ACTIONS.inviteEmailFailed),
+          // Matches the `after` payload updateStaffProfile writes ({ email } only when it changed).
+          and(eq(auditLog.action, STAFF_AUDIT_ACTIONS.update), sql`${auditLog.after} ->> 'email' is not null`),
+        ),
+      ),
+    )
+    .limit(1);
+  if (!undelivered) {
     throw new ActionError(`Undangan baru saja dikirim. Coba lagi dalam ${TARGET_INVITE_EMAIL_COOLDOWN_MINUTES} menit.`);
   }
 }

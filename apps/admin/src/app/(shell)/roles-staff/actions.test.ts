@@ -18,6 +18,12 @@ const { mutationSpies } = vi.hoisted(() => ({
   },
 }));
 vi.mock("@/lib/staff/mutations", () => mutationSpies);
+const { roleMutationSpies } = vi.hoisted(() => ({
+  roleMutationSpies: { createRole: vi.fn(), updateRole: vi.fn() },
+}));
+vi.mock("@/lib/staff/role-mutations", () => roleMutationSpies);
+// revalidatePath needs a Next request store; the one happy-path test below only checks the call.
+vi.mock("@/lib/admin-revalidate", () => ({ revalidateAdmin: vi.fn() }));
 
 const {
   inviteStaffAction,
@@ -27,6 +33,8 @@ const {
   deactivateStaffAction,
   reactivateStaffAction,
   revokeStaffSessionsAction,
+  createRoleAction,
+  updateRoleAction,
 } = await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
@@ -92,5 +100,58 @@ describe("staff action input validation", () => {
     const result = await deactivateStaffAction("'; drop table staff_users; --");
     expect(result).toEqual({ ok: false, error: "Staf tidak ditemukan." });
     expect(mutationSpies.deactivateStaff).not.toHaveBeenCalled();
+  });
+});
+
+describe("role actions require roles.manage", () => {
+  const calls: [string, () => Promise<unknown>][] = [
+    ["createRoleAction", () => createRoleAction({ name: "Gudang 2", description: "", permissionKeys: ["stock.view"] })],
+    [
+      "updateRoleAction",
+      () => updateRoleAction({ roleId: SOME_ID, name: "Gudang 2", description: "", permissionKeys: ["stock.view"], expectedPermissionKeys: [] }),
+    ],
+  ];
+
+  test.each(calls)("%s rejects the owner (staff.manage, no roles.manage)", async (_name, call) => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["staff.manage", "finance.view_profit", "settings.manage"]));
+    await expect(call()).rejects.toThrow(/forbidden\(\)/);
+    for (const spy of Object.values(roleMutationSpies)) expect(spy).not.toHaveBeenCalled();
+  });
+
+  test.each(calls)("%s redirects an unauthenticated request", async (_name, call) => {
+    getStaffSessionMock.mockResolvedValueOnce(null);
+    await expect(call()).rejects.toThrow(/NEXT_REDIRECT/);
+    for (const spy of Object.values(roleMutationSpies)) expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("role action input validation", () => {
+  test("an unknown permission key, an empty or control-character name, and a non-uuid role are refused", async () => {
+    const cases: [() => Promise<{ ok: boolean; fieldErrors?: Record<string, string> }>, string][] = [
+      [() => createRoleAction({ name: "Gudang 2", description: "", permissionKeys: ["stock.view", "everything.admin"] }), "permissionKeys"],
+      [() => createRoleAction({ name: "   ", description: "", permissionKeys: [] }), "name"],
+      [() => createRoleAction({ name: "Gudang\u202e2", description: "", permissionKeys: [] }), "name"],
+      [() => createRoleAction({ name: "Gudang", description: "baris\nbaru", permissionKeys: [] }), "description"],
+      [() => updateRoleAction({ roleId: "not-a-uuid", name: "Gudang", description: "", permissionKeys: [], expectedPermissionKeys: [] }), "roleId"],
+      [
+        () => updateRoleAction({ roleId: SOME_ID, name: "Gudang", description: "", permissionKeys: "stock.view" as unknown as string[], expectedPermissionKeys: [] }),
+        "permissionKeys",
+      ],
+    ];
+    for (const [call, field] of cases) {
+      getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["roles.manage"]));
+      const result = await call();
+      expect(result.ok).toBe(false);
+      expect(result.fieldErrors).toHaveProperty(field);
+    }
+    for (const spy of Object.values(roleMutationSpies)) expect(spy).not.toHaveBeenCalled();
+  });
+
+  test("a valid request reaches the mutation with trimmed values and an empty description as null", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["roles.manage"]));
+    roleMutationSpies.createRole.mockResolvedValueOnce({ roleId: SOME_ID });
+    const result = await createRoleAction({ name: "  Gudang 2 ", description: "  ", permissionKeys: ["stock.view"] });
+    expect(result).toEqual({ ok: true, data: { roleId: SOME_ID } });
+    expect(roleMutationSpies.createRole).toHaveBeenCalledWith({ name: "Gudang 2", description: null, permissionKeys: ["stock.view"] }, "staff-1");
   });
 });

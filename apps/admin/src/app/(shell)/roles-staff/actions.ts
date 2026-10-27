@@ -1,18 +1,22 @@
 "use server";
 
 import { z } from "zod";
+import { PERMISSIONS } from "@ammari/db/rbac";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { adminBaseUrl, staffEmailSender } from "@/lib/auth/staff";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
 import { staffEmailSchema } from "@/lib/staff/email";
 import * as staffMutations from "@/lib/staff/mutations";
+import * as roleMutations from "@/lib/staff/role-mutations";
 
-// The staff write path's thin action layer (docs/plans/roles-staff.md §5): requirePermission,
+// The staff and role write paths' thin action layer (docs/plans/roles-staff.md §5): requirePermission,
 // zod, runAction. Every rule (self, subset, last super_admin/owner, rate limits, audit, session
-// revocation) lives in lib/staff/mutations.ts, under the staff-access lock, never here.
+// revocation, super_admin-only role edits) lives in lib/staff/mutations.ts and
+// lib/staff/role-mutations.ts, under the staff-access lock, never here.
 
 const PERMISSION = "staff.manage";
+const ROLES_PERMISSION = "roles.manage";
 
 // A person's name as shown in the list and greeted in the invite email: no control, format
 // (bidi overrides) or line/paragraph separator characters, which could reshape the plain-text
@@ -123,6 +127,68 @@ export async function revokeStaffSessionsAction(staffUserId: string): Promise<Ac
   if (!parsed.success) return validationError(parsed.error);
   return runAction(async () => {
     const result = await staffMutations.revokeStaffSessions(parsed.data, session.staffUser.id);
+    revalidateAdmin("/roles-staff");
+    return result;
+  });
+}
+
+// ---------- Roles (roles.manage; the mutations also require the actor to be super_admin) ----------
+
+const roleNameSchema = z
+  .string({ error: "Nama peran wajib diisi." })
+  .trim()
+  .min(1, "Nama peran wajib diisi.")
+  .max(60, "Nama peran terlalu panjang.")
+  .refine((name) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(name), "Nama peran tidak boleh berisi karakter khusus.");
+
+// One line of plain text; empty means "no description".
+const roleDescriptionSchema = z
+  .string({ error: "Deskripsi tidak valid." })
+  .trim()
+  .max(300, "Deskripsi terlalu panjang.")
+  .refine((text) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(text), "Deskripsi tidak boleh berisi karakter khusus.")
+  .transform((text) => (text === "" ? null : text));
+
+const CATALOG_KEYS = new Set<string>(PERMISSIONS.map((permission) => permission.key));
+const permissionKeysSchema = z
+  .array(z.string({ error: "Izin tidak valid." }), { error: "Izin tidak valid." })
+  .max(CATALOG_KEYS.size, "Izin tidak valid.")
+  .refine((keys) => keys.every((key) => CATALOG_KEYS.has(key)), "Ada izin yang tidak dikenal.");
+
+const createRoleSchema = z.object({
+  name: roleNameSchema,
+  description: roleDescriptionSchema,
+  permissionKeys: permissionKeysSchema,
+  copiedFromRoleId: roleIdSchema.nullish(),
+});
+
+export async function createRoleAction(input: z.input<typeof createRoleSchema>): Promise<ActionResult<{ roleId: string }>> {
+  const session = await requirePermission(ROLES_PERMISSION);
+  const parsed = createRoleSchema.safeParse(input);
+  if (!parsed.success) return validationError(parsed.error);
+  return runAction(async () => {
+    const result = await roleMutations.createRole(parsed.data, session.staffUser.id);
+    revalidateAdmin("/roles-staff");
+    return result;
+  });
+}
+
+// The role editor's one save (details + permissions in one transaction, role-mutations.ts).
+const updateRoleSchema = z.object({
+  roleId: roleIdSchema,
+  name: roleNameSchema,
+  description: roleDescriptionSchema,
+  permissionKeys: permissionKeysSchema,
+  expectedPermissionKeys: permissionKeysSchema,
+});
+
+export async function updateRoleAction(input: z.input<typeof updateRoleSchema>): Promise<ActionResult<{ changed: boolean }>> {
+  const session = await requirePermission(ROLES_PERMISSION);
+  const parsed = updateRoleSchema.safeParse(input);
+  if (!parsed.success) return validationError(parsed.error);
+  return runAction(async () => {
+    const { roleId, ...role } = parsed.data;
+    const result = await roleMutations.updateRole(roleId, role, session.staffUser.id);
     revalidateAdmin("/roles-staff");
     return result;
   });

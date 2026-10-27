@@ -1,9 +1,9 @@
 # Peran & Staf (`/roles-staff`): staff accounts and roles
 
-Status: **owner decisions recorded 2026-10-27 (§12). Sessions S1 and S2 built** (migration
-`0041_staff_invites`, admission/landing changes, `apps/admin/src/lib/staff/mutations.ts` and
-`app/(shell)/roles-staff/actions.ts`). S3 to S5 not started; the page itself is still a
-`ComingSoonPage` gated by `requireAnyPermission(["staff.manage", "roles.manage"])`.
+Status: **owner decisions recorded 2026-10-27 (§12). Sessions S1 to S4 built** (migration
+`0041_staff_invites`, admission/landing changes, `apps/admin/src/lib/staff/mutations.ts`,
+`role-mutations.ts`, `queries.ts`, and the `/roles-staff` Staf and Peran tabs with staff and role
+pages). S5 (onboarding, ops only) not started.
 
 Goal: the owner (super_admin) can add his wife (co-owner) and limited staff (packing/gudang,
 konten, CS/pesanan, keuangan) himself, from the admin UI, without the seed script or SQL.
@@ -453,8 +453,8 @@ E2E (Playwright, **390px and 1280px** for list pages):
 |---|---|---|---|
 | S1 ✅ | Schema + admission + landing | Migration 0041 (columns, owner `staff.manage`, predefined roles, trigger), seed changes, admission expiry predicate, Google verified-email check, `firstAllowedHref` + `/` redirect; tests 1-3, 9, 10; nav-rbac e2e | database, security, typescript |
 | S2 ✅ | Staff write path | `lib/staff/*`: invite, renew, update, role change, deactivate/reactivate, revoke sessions, subset rule, advisory lock, rate limits, audit rows, invite email; actions; tests 4-8 | security, database, typescript |
-| S3 | Staff UI | Staf tab list (both layouts), invite sheet (with the WhatsApp reminder, answer 8), detail page; read queries; e2e 12-14, 16 | react, typescript |
-| S4 | Roles UI | Peran tab, labels, read-only matrix, editor for `roles.manage`, create/copy role; test 7, 11, e2e 15. Product-list fix for `content.manage` (answer 5) | react, security, typescript |
+| S3 ✅ | Staff UI | Staf tab list (both layouts), invite sheet (with the WhatsApp reminder, answer 8), detail page; read queries; e2e 12-14, 16 | react, typescript |
+| S4 ✅ | Roles UI | Peran tab, labels, read-only matrix, editor for `roles.manage`, create/copy role; test 7, 11, e2e 15. Product-list fix for `content.manage` (answer 5) | react, security, typescript |
 | S5 | Onboarding (ops, no code) | Owner invites wife (owner role) and first staff on dev, then prod after release; SPEC/deploy docs updated | - |
 
 S1 and S2 can ship before the UI (no user-visible change). S4 can slip without blocking the
@@ -500,6 +500,28 @@ Follow-ups (not done, by design or for later sessions):
 - Rollback note for deploy docs (S5): running an OLDER image's `db:seed` re-syncs the owner role
   and removes `staff.manage` again. Don't run seed from an older image.
 - `validationError` is duplicated from product-types actions (could move to `lib/action-result.ts`).
+
+## 11b. Built details (S3+S4, 2026-10-27)
+
+- Pages: `/roles-staff` (Staf tab with status chips, Peran tab via `?tab=peran`),
+  `/roles-staff/staff/[id]`, `/roles-staff/roles/[id]`, `/roles-staff/roles/new` (`?copyFrom=`).
+  Reads in `lib/staff/queries.ts`; what the staff page offers mirrors the guard rails in
+  `lib/staff/capabilities.ts` (UI only, the mutations still decide).
+- Role writes (`lib/staff/role-mutations.ts`): every one takes `STAFF_ACCESS_LOCK_KEY` first and
+  requires an active actor whose role is `super_admin` AND holds `roles.manage` (answer 1). The
+  editor saves name, description and permissions in ONE transaction (`updateRole`), refuses if
+  the role's permissions changed since the page loaded, and never grants `roles.manage` /
+  `audit_log.view`. Role names are unique case-insensitively (checked under the lock). New role
+  keys are `custom_<random>`.
+- Intentional: a super_admin may rename or change the permissions of the `owner` system role
+  (only `super_admin` is fixed); a super_admin always remains to undo it.
+- Invite cooldown (§11a follow-up): the 10-minute per-person cooldown is skipped right after a
+  failed send or a corrected email, so "Kirim ulang undangan" works there; a hard cap of 3 invite
+  emails per person per hour still applies (security review).
+- `PermissionKey` is a plain `string` type (PERMISSIONS is annotated), so the label map is
+  checked by `permission-labels.test.ts` at runtime, not by the compiler.
+- `content.manage` opens `/products` and its nav item (answer 5); "Tambah produk" and every
+  non-content step stay behind `products.manage`.
 
 ## 12. Owner decisions (2026-10-27)
 

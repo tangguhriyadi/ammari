@@ -243,6 +243,64 @@ describe("renewStaffInvite", () => {
     });
   });
 
+  // §11a: "Kirim ulang undangan" is offered right after a failed send and after correcting a
+  // pending invite's address, so the cooldown must not refuse it in those two cases.
+  test("allowed at once after a failed invite email", async () => {
+    await withRollback(async (tx) => {
+      const actor = await staff(tx, "super_admin");
+      const invited = await inviteStaff(
+        { name: "Gagal", email: `gagal-${randomUUID()}@example.test`, roleId: await roleId(tx, "finance") },
+        actor.id,
+        { db: tx, emailSender: new FakeEmailSender(true), loginUrl: LOGIN_URL },
+      );
+      expect(invited.emailSent).toBe(false);
+
+      const sender = new FakeEmailSender();
+      const renewed = await renewStaffInvite(invited.staffUserId, actor.id, { db: tx, emailSender: sender, loginUrl: LOGIN_URL });
+      expect(renewed.emailSent).toBe(true);
+      expect(sender.sent).toHaveLength(1);
+      // A delivered email starts the cooldown again. now() is frozen inside this one test
+      // transaction, so date the failure before the renewal, as separate transactions would.
+      await tx
+        .update(auditLog)
+        .set({ createdAt: sql`now() - interval '1 minute'` })
+        .where(and(eq(auditLog.entityId, invited.staffUserId), inArray(auditLog.action, [STAFF_AUDIT_ACTIONS.invite, STAFF_AUDIT_ACTIONS.inviteEmailFailed])));
+      await expectActionError(renewStaffInvite(invited.staffUserId, actor.id, { db: tx }), /Coba lagi dalam 10 menit/);
+    });
+  });
+
+  test("allowed at once after the pending invite's email is corrected, not after a name-only edit", async () => {
+    await withRollback(async (tx) => {
+      const actor = await staff(tx, "super_admin");
+      const sender = new FakeEmailSender();
+      const deps = { db: tx, emailSender: sender, loginUrl: LOGIN_URL };
+      const invited = await inviteStaff({ name: "Salah", email: `salah-${randomUUID()}@example.test`, roleId: await roleId(tx, "finance") }, actor.id, deps);
+
+      await updateStaffProfile(invited.staffUserId, { name: "Salah Ketik", email: (await tx.select().from(staffUsers).where(eq(staffUsers.id, invited.staffUserId)))[0]!.email }, actor.id, tx);
+      await expectActionError(renewStaffInvite(invited.staffUserId, actor.id, deps), /Coba lagi dalam 10 menit/);
+
+      const corrected = `benar-${randomUUID()}@example.test`;
+      await updateStaffProfile(invited.staffUserId, { name: "Salah Ketik", email: corrected }, actor.id, tx);
+      const renewed = await renewStaffInvite(invited.staffUserId, actor.id, deps);
+      expect(renewed.emailSent).toBe(true);
+      expect(sender.sent.at(-1)!.to).toBe(corrected);
+    });
+  });
+
+  test("at most 3 invite emails per person per hour, even through email corrections", async () => {
+    await withRollback(async (tx) => {
+      const actor = await staff(tx, "super_admin");
+      const deps = { db: tx, emailSender: new FakeEmailSender(), loginUrl: LOGIN_URL };
+      const invited = await inviteStaff({ name: "Spam", email: `spam-${randomUUID()}@example.test`, roleId: await roleId(tx, "finance") }, actor.id, deps);
+      for (let i = 0; i < 2; i++) {
+        await updateStaffProfile(invited.staffUserId, { name: "Spam", email: `spam-${i}-${randomUUID()}@example.test` }, actor.id, tx);
+        await renewStaffInvite(invited.staffUserId, actor.id, deps);
+      }
+      await updateStaffProfile(invited.staffUserId, { name: "Spam", email: `spam-x-${randomUUID()}@example.test` }, actor.id, tx);
+      await expectActionError(renewStaffInvite(invited.staffUserId, actor.id, deps), /Terlalu banyak undangan untuk staf ini/);
+    });
+  });
+
   test("refused for someone who already logged in, or is deactivated", async () => {
     await withRollback(async (tx) => {
       const actor = await staff(tx, "super_admin");

@@ -114,7 +114,9 @@ export const NAV_ITEMS: readonly NavItem[] = [
     // labels are derived from this file only — nothing asserts the string, and rootCrumbs()
     // reads it straight back out for the breadcrumb.
     group: "Data Master",
-    permissionKeys: ["products.manage"],
+    // content.manage too (docs/plans/roles-staff.md, owner answer 5): Admin Konten edits product
+    // descriptions from here.
+    permissionKeys: ["products.manage", "content.manage"],
     mobilePrimary: false,
   },
   {
