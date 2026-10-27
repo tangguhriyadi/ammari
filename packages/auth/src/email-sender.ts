@@ -3,7 +3,8 @@ export interface EmailMessage {
   subject: string;
   /** The plain-text part (always sent). */
   body: string;
-  /** Optional HTML part (order emails, docs/plans/cart-checkout.md §8); OTP emails are text only. */
+  /** The HTML part (docs/plans/email-design.md): every Ammari email has one; optional only so a
+   * text-only message stays expressible. */
   html?: string;
   /** Sent as the provider's idempotency key, so a retried send of the same message is delivered
    * once (Resend keeps a key for 24 hours). */

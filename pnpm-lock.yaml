@@ -187,6 +187,9 @@ importers:
       '@ammari/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@ammari/email':
+        specifier: workspace:*
+        version: link:../../packages/email
       '@ammari/storage':
         specifier: workspace:*
         version: link:../../packages/storage
@@ -329,6 +332,9 @@ importers:
       '@ammari/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@ammari/email':
+        specifier: workspace:*
+        version: link:../../packages/email
       '@ammari/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -408,6 +414,9 @@ importers:
       '@ammari/db':
         specifier: workspace:*
         version: link:../db
+      '@ammari/email':
+        specifier: workspace:*
+        version: link:../email
       better-auth:
         specifier: 1.7.7
         version: 1.7.7(drizzle-kit@0.31.11)(drizzle-orm@0.45.3(kysely@0.29.6)(postgres@3.4.9))(next@16.3.7(@babel/core@7.29.7(supports-color@7.2.0))(@playwright/test@1.63.0)(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.2(@types/node@26.6.3)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)))
@@ -433,6 +442,9 @@ importers:
       '@ammari/db':
         specifier: workspace:*
         version: link:../db
+      '@ammari/email':
+        specifier: workspace:*
+        version: link:../email
       drizzle-orm:
         specifier: 0.45.3
         version: 0.45.3(kysely@0.29.6)(postgres@3.4.9)
@@ -446,6 +458,9 @@ importers:
       '@types/node':
         specifier: 26.6.3
         version: 26.6.3
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -490,6 +505,18 @@ importers:
       drizzle-kit:
         specifier: 0.31.11
         version: 0.31.11
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@26.6.3)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0))
+
+  packages/email:
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.3
+        version: 26.6.3
       typescript:
         specifier: 6.0.3
         version: 6.0.3

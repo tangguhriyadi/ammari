@@ -196,6 +196,24 @@ describe("templates", () => {
     }
   });
 
+  test("every email is in the shared Ammari layout: preheader, plain-text part, footer contact, https images only (docs/plans/email-design.md)", () => {
+    const emails = allRendered();
+    expect(emails).toHaveLength(14);
+    for (const email of emails) {
+      expect(email.html.startsWith("<!doctype html>")).toBe(true);
+      expect(email.html).toContain("max-width:600px");
+      const preheader = email.html.match(/<div style="display:none;[^"]*">([^<&]*)/)?.[1] ?? "";
+      expect(preheader.trim().length).toBeGreaterThan(0);
+      for (const part of [email.text, email.html]) {
+        expect(part).toContain("ammariofc@gmail.com");
+        expect(part).toContain("+62 888 0854 1442");
+      }
+      expect(email.text.trim().length).toBeGreaterThan(0);
+      expect(email.text).not.toMatch(/<\/?(?:table|tr|td|a|br|div|p|span|img|s)\b/i);
+      for (const [, src] of email.html.matchAll(/<img[^>]*\ssrc="([^"]*)"/g)) expect(src).toMatch(/^https:\/\//);
+    }
+  });
+
   test("money as Rp with dots, the deadline in WIB, the ongkir subsidy line, voucher and total", () => {
     const email = renderCreatedEmail({ ...baseView, paymentDeadline: deadline, paymentUrl: "https://pay.example/x" });
     expect(email.subject).toBe("Pesanan ORD-202612-0007 menunggu pembayaran");
@@ -222,7 +240,7 @@ describe("templates", () => {
   test("the header shows the logo mark (absolute https, sized, alt Ammari) next to AMMARI; text part unchanged; no URL keeps the text wordmark", () => {
     const withLogo = renderPaidEmail(baseView, "confirmed");
     expect(withLogo.html).toContain('<img src="https://ammari.example/logos/ammari-primary.png" width="24" height="28" alt="Ammari"');
-    expect(withLogo.html).toMatch(/alt="Ammari"[^>]*><\/td><td style="[^"]*">AMMARI<\/td>/);
+    expect(withLogo.html).toMatch(/alt="Ammari"[^>]*><\/td><td class="am-serif" style="[^"]*">AMMARI<\/td>/);
     const without = renderPaidEmail({ ...baseView, logoUrl: null }, "confirmed");
     expect(without.html).not.toContain("<img");
     expect(without.html).toContain(">AMMARI</td>");

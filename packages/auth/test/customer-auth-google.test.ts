@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { eq } from "drizzle-orm";
-import { customerAuthUsers, customers } from "@ammari/db/schema";
+import { customerAuthAccounts, customerAuthUsers, customers } from "@ammari/db/schema";
 import { buildCustomerAuth, cleanupCustomerAuthTables, cleanupCustomers, createCommittedCustomer, testDb } from "./customer-setup";
 
 // Mirrors packages/auth/test/staff-auth-google.test.ts's own approach: stubs Google at the
@@ -105,5 +105,52 @@ describe("Google sign-in — customer self sign-up (link-vs-create hook)", () =>
     // Confirms this really was refused, not silently linked under a different code path.
     const authUsers = await testDb.select().from(customerAuthUsers).where(eq(customerAuthUsers.email, existing.email!));
     expect(authUsers).toHaveLength(0);
+  });
+
+  // docs/SPEC.md §10.3, same check and same generic error code as the staff path
+  // (staff-auth-google.test.ts): Google has not verified this address, so the profile proves
+  // nothing about who owns it.
+  test("an UNVERIFIED brand-new Google email is refused: no account, no customers row", async () => {
+    const email = `google-unverified-${Date.now()}@example.test`;
+    const { auth } = buildCustomerAuth({
+      google: {
+        clientId: "test-client-id",
+        clientSecret: "test-client-secret",
+        verifyIdToken: async () => true,
+        getUserInfo: async () => stubGoogleProfile(email, false),
+      },
+    });
+
+    await expect(auth.api.signInSocial({ body: { provider: "google", idToken: { token: "stub-id-token" } } })).rejects.toMatchObject({
+      body: { code: "invalid_account" },
+    });
+
+    expect(await testDb.select().from(customerAuthUsers).where(eq(customerAuthUsers.email, email))).toHaveLength(0);
+    expect(await testDb.select().from(customers).where(eq(customers.email, email))).toHaveLength(0);
+  });
+
+  test("an UNVERIFIED Google email cannot sign in to or link the account an email code already made", async () => {
+    const email = `google-otp-first-${Date.now()}@example.test`;
+    const { auth, emailSender } = buildCustomerAuth({
+      google: {
+        clientId: "test-client-id",
+        clientSecret: "test-client-secret",
+        verifyIdToken: async () => true,
+        getUserInfo: async () => stubGoogleProfile(email, false),
+      },
+    });
+    await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+    const otp = emailSender.sent[0]!.body.match(/\d{6}/)?.[0]!;
+    await auth.api.signInEmailOTP({ body: { email, otp } });
+    const [authUser] = await testDb.select().from(customerAuthUsers).where(eq(customerAuthUsers.email, email));
+    customerIds.push(authUser!.customerId!);
+
+    // Better Auth's own account linking refuses this before our validateUserInfo runs ("account
+    // not linked": Google with an unverified email is not trusted for linking); the gate in
+    // create-customer-auth.ts is the second line for the same case.
+    await expect(auth.api.signInSocial({ body: { provider: "google", idToken: { token: "stub-id-token" } } })).rejects.toThrow();
+
+    const accounts = await testDb.select().from(customerAuthAccounts).where(eq(customerAuthAccounts.userId, authUser!.id));
+    expect(accounts.map((account) => account.providerId)).not.toContain("google");
   });
 });

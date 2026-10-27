@@ -1,5 +1,6 @@
 import { DISCOUNT_COLOR_HEX } from "@ammari/db/pricing";
 import { SHIPPING_DISPLAY_LABELS, shippingDisplay } from "../shipping/rules";
+import { button, details, divider, EMAIL_COLOR, EMAIL_FONT, type EmailSection, heading, link, muted, paragraph, renderEmail, type RenderedEmail } from "@ammari/email";
 import { escapeHtml, formatRupiah, formatWib } from "./format";
 
 // Order email templates (docs/plans/cart-checkout.md §8). Pure: a view in, `{ subject, text, html }`
@@ -9,9 +10,8 @@ import { escapeHtml, formatRupiah, formatWib } from "./format";
 // data. The owner email (to store_settings.support_email only) also carries the buyer's contact
 // and address.
 //
-// HTML is table-based with inline styles only (Gmail drops most <style> rules and all external
-// CSS), one 560px column that shrinks on phones, system fonts, and a plain-text part with the same
-// content.
+// The page around the content (header, footer with contact, dark mode, client quirks) is the
+// shared Ammari layout in @ammari/email (docs/plans/email-design.md); the order rows are this file's.
 
 export interface OrderEmailLine {
   productName: string;
@@ -103,11 +103,7 @@ export interface OwnerPaidEmailView {
   logoUrl: string | null;
 }
 
-export interface RenderedEmail {
-  subject: string;
-  text: string;
-  html: string;
-}
+export type { RenderedEmail };
 
 // ---------- blocks: one description, rendered as text and as HTML ----------
 
@@ -122,8 +118,8 @@ type Block =
   | { kind: "details"; title: string; rows: { label: string; value: string }[] }
   | { kind: "divider" };
 
-const COLOR = { brand: "#695A5A", text: "#000000", muted: "#6B6161", line: "#E7E2E2", page: "#F6F4F4", white: "#FFFFFF", highlight: "#F6F3F1", discount: DISCOUNT_COLOR_HEX };
-const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+const COLOR = { ...EMAIL_COLOR, discount: DISCOUNT_COLOR_HEX };
+const FONT = EMAIL_FONT;
 
 function lineLabel(line: OrderEmailLine): string {
   return `${line.colorName}, ${line.sizeLabel} x ${line.qty}`;
@@ -162,144 +158,100 @@ function totalRows(totals: OrderEmailTotals, savings: number): TotalRow[] {
   ];
 }
 
-function blockText(block: Block): string {
-  switch (block.kind) {
-    case "heading":
-      return block.text;
-    case "paragraph":
-    case "muted":
-      return block.text;
-    case "button":
-    case "link":
-      return `${block.label}:\n${block.url}`;
-    case "lines":
-      return block.lines
-        .map((line) => {
-          const struck = struckLineTotal(line);
-          const normal = struck === null ? "" : ` (harga normal ${formatRupiah(struck)})`;
-          return `${line.productName}\n${lineLabel(line)}: ${formatRupiah(line.lineTotal)}${normal}`;
-        })
-        .join("\n\n");
-    case "totals":
-      return totalRows(block.totals, block.savings)
-        .map((row) => `${row.label}: ${row.value}`)
-        .join("\n");
-    case "details":
-      return [block.title, ...block.rows.map((row) => `${row.label}: ${row.value}`)].join("\n");
-    case "divider":
-      return "----";
-  }
-}
-
 const cell = (style: string, content: string) => `<tr><td style="${style}">${content}</td></tr>`;
 
-function blockHtml(block: Block): string {
+function linesSection(lines: OrderEmailLine[]): EmailSection {
   const text = `font-family:${FONT};font-size:15px;line-height:1.6;color:${COLOR.text};`;
+  const rows = lines
+    .map((line) => {
+      const struck = struckLineTotal(line);
+      // Discounted: the normal price struck through and muted above the paid price in the
+      // discount red (the storefront's look; no CSS variables in email).
+      const price =
+        struck === null
+          ? escapeHtml(formatRupiah(line.lineTotal))
+          : `<s style="font-size:13px;color:${COLOR.muted};">${escapeHtml(formatRupiah(struck))}</s><br><span style="color:${COLOR.discount};">${escapeHtml(formatRupiah(line.lineTotal))}</span>`;
+      return (
+        `<tr><td style="padding:10px 0;border-bottom:1px solid ${COLOR.line};${text}">${escapeHtml(line.productName)}<br><span style="font-size:13px;color:${COLOR.muted};">${escapeHtml(lineLabel(line))}</span></td>` +
+        `<td style="padding:10px 0 10px 12px;border-bottom:1px solid ${COLOR.line};${text}text-align:right;white-space:nowrap;vertical-align:top;">${price}</td></tr>`
+      );
+    })
+    .join("");
+  return {
+    text: lines
+      .map((line) => {
+        const struck = struckLineTotal(line);
+        const normal = struck === null ? "" : ` (harga normal ${formatRupiah(struck)})`;
+        return `${line.productName}\n${lineLabel(line)}: ${formatRupiah(line.lineTotal)}${normal}`;
+      })
+      .join("\n\n"),
+    html: cell("padding:0 0 8px;", `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>`),
+  };
+}
+
+function totalsSection(totals: OrderEmailTotals, savings: number): EmailSection {
+  const text = `font-family:${FONT};font-size:15px;line-height:1.6;color:${COLOR.text};`;
+  const rows = totalRows(totals, savings)
+    .map((row) => {
+      if (row.style === "savings") {
+        // Only the discount colour, never the body text colour as well: the layout's dark mode
+        // matches on `color:#000000` and would turn the row white.
+        const savingsStyle = `font-family:${FONT};font-size:15px;line-height:1.6;color:${COLOR.discount};`;
+        return (
+          `<tr><td style="padding:4px 0;${savingsStyle}">${escapeHtml(row.label)}</td>` +
+          `<td style="padding:4px 0 4px 12px;${savingsStyle}text-align:right;white-space:nowrap;">${escapeHtml(row.value)}</td></tr>`
+        );
+      }
+      if (row.style === "highlight") {
+        const highlight = `font-family:${FONT};font-size:15px;line-height:1.6;color:${COLOR.brand};font-weight:600;background-color:${COLOR.highlight};`;
+        return (
+          `<tr><td style="padding:6px 8px;${highlight}">${escapeHtml(row.label)}</td>` +
+          `<td style="padding:6px 8px 6px 12px;${highlight}text-align:right;white-space:nowrap;">${escapeHtml(row.value)}</td></tr>`
+        );
+      }
+      const weight = row.style === "strong" ? "font-weight:600;" : "";
+      const value = row.style === "struck" ? `<s style="color:${COLOR.muted};">${escapeHtml(row.value)}</s>` : escapeHtml(row.value);
+      const label = row.style === "struck" ? `color:${COLOR.muted};` : "";
+      return (
+        `<tr><td style="padding:4px 0;${text}${weight}${label}">${escapeHtml(row.label)}</td>` +
+        `<td style="padding:4px 0 4px 12px;${text}${weight}text-align:right;white-space:nowrap;">${value}</td></tr>`
+      );
+    })
+    .join("");
+  return {
+    text: totalRows(totals, savings)
+      .map((row) => `${row.label}: ${row.value}`)
+      .join("\n"),
+    html: cell("padding:0 0 24px;", `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>`),
+  };
+}
+
+/** The order rows (lines, totals) are this file's own; everything else is the shared layout's. */
+function blockSection(block: Block): EmailSection {
   switch (block.kind) {
     case "heading":
-      return cell(`padding:0 0 12px;font-family:${FONT};font-size:20px;line-height:1.4;font-weight:600;color:${COLOR.text};`, escapeHtml(block.text));
+      return heading(block.text);
     case "paragraph":
-      return cell(`padding:0 0 16px;${text}`, escapeHtml(block.text));
+      return paragraph(block.text);
     case "muted":
-      return cell(`padding:0 0 16px;font-family:${FONT};font-size:13px;line-height:1.6;color:${COLOR.muted};`, escapeHtml(block.text));
+      return muted(block.text);
     case "button":
-      return cell(
-        "padding:4px 0 24px;",
-        `<a href="${escapeHtml(block.url)}" style="display:inline-block;padding:14px 28px;background-color:${COLOR.brand};color:${COLOR.white};font-family:${FONT};font-size:15px;font-weight:600;line-height:1.2;text-decoration:none;border-radius:4px;">${escapeHtml(block.label)}</a>`,
-      );
+      return button(block.label, block.url);
     case "link":
-      return cell(`padding:0 0 16px;${text}`, `<a href="${escapeHtml(block.url)}" style="color:${COLOR.brand};text-decoration:underline;">${escapeHtml(block.label)}</a>`);
-    case "lines": {
-      const rows = block.lines
-        .map((line) => {
-          const struck = struckLineTotal(line);
-          // Discounted: the normal price struck through and muted above the paid price in the
-          // discount red (the storefront's look; no CSS variables in email).
-          const price =
-            struck === null
-              ? escapeHtml(formatRupiah(line.lineTotal))
-              : `<s style="font-size:13px;color:${COLOR.muted};">${escapeHtml(formatRupiah(struck))}</s><br><span style="color:${COLOR.discount};">${escapeHtml(formatRupiah(line.lineTotal))}</span>`;
-          return (
-            `<tr><td style="padding:10px 0;border-bottom:1px solid ${COLOR.line};${text}">${escapeHtml(line.productName)}<br><span style="font-size:13px;color:${COLOR.muted};">${escapeHtml(lineLabel(line))}</span></td>` +
-            `<td style="padding:10px 0 10px 12px;border-bottom:1px solid ${COLOR.line};${text}text-align:right;white-space:nowrap;vertical-align:top;">${price}</td></tr>`
-          );
-        })
-        .join("");
-      return cell("padding:0 0 8px;", `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>`);
-    }
-    case "totals": {
-      const rows = totalRows(block.totals, block.savings)
-        .map((row) => {
-          if (row.style === "savings") {
-            return (
-              `<tr><td style="padding:4px 0;${text}color:${COLOR.discount};">${escapeHtml(row.label)}</td>` +
-              `<td style="padding:4px 0 4px 12px;${text}color:${COLOR.discount};text-align:right;white-space:nowrap;">${escapeHtml(row.value)}</td></tr>`
-            );
-          }
-          if (row.style === "highlight") {
-            const highlight = `font-family:${FONT};font-size:15px;line-height:1.6;color:${COLOR.brand};font-weight:600;background-color:${COLOR.highlight};`;
-            return (
-              `<tr><td style="padding:6px 8px;${highlight}">${escapeHtml(row.label)}</td>` +
-              `<td style="padding:6px 8px 6px 12px;${highlight}text-align:right;white-space:nowrap;">${escapeHtml(row.value)}</td></tr>`
-            );
-          }
-          const weight = row.style === "strong" ? "font-weight:600;" : "";
-          const value = row.style === "struck" ? `<s style="color:${COLOR.muted};">${escapeHtml(row.value)}</s>` : escapeHtml(row.value);
-          const label = row.style === "struck" ? `color:${COLOR.muted};` : "";
-          return (
-            `<tr><td style="padding:4px 0;${text}${weight}${label}">${escapeHtml(row.label)}</td>` +
-            `<td style="padding:4px 0 4px 12px;${text}${weight}text-align:right;white-space:nowrap;">${value}</td></tr>`
-          );
-        })
-        .join("");
-      return cell("padding:0 0 24px;", `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>`);
-    }
-    case "details": {
-      const rows = block.rows
-        .map(
-          (row) =>
-            `<tr><td style="padding:2px 12px 2px 0;font-family:${FONT};font-size:14px;line-height:1.5;color:${COLOR.muted};vertical-align:top;white-space:nowrap;">${escapeHtml(row.label)}</td>` +
-            `<td style="padding:2px 0;font-family:${FONT};font-size:14px;line-height:1.5;color:${COLOR.text};word-break:break-word;">${escapeHtml(row.value)}</td></tr>`,
-        )
-        .join("");
-      return cell(
-        "padding:0 0 20px;",
-        `<p style="margin:0 0 6px;font-family:${FONT};font-size:14px;font-weight:600;color:${COLOR.text};">${escapeHtml(block.title)}</p><table role="presentation" cellpadding="0" cellspacing="0" border="0">${rows}</table>`,
-      );
-    }
+      return link(block.label, block.url);
+    case "lines":
+      return linesSection(block.lines);
+    case "totals":
+      return totalsSection(block.totals, block.savings);
+    case "details":
+      return details(block.title, block.rows);
     case "divider":
-      return cell("padding:8px 0 24px;", `<div style="border-top:1px solid ${COLOR.line};font-size:0;line-height:0;">&nbsp;</div>`);
+      return divider();
   }
 }
 
-/** "AMMARI" in the header, with the logo mark to its left when there is a public URL for it (the
- * storefront's own `/logos/ammari-primary.png`, 94x112, shown 24x28). */
-function headerHtml(logoUrl: string | null): string {
-  const wordmark = `font-family:${FONT};font-size:18px;letter-spacing:4px;font-weight:600;color:${COLOR.brand};`;
-  if (!logoUrl) return `<tr><td style="padding:28px 24px 8px;${wordmark}">AMMARI</td></tr>`;
-  return (
-    `<tr><td style="padding:28px 24px 8px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>` +
-    `<td style="padding:0 8px 0 0;vertical-align:middle;"><img src="${escapeHtml(logoUrl)}" width="24" height="28" alt="Ammari" style="display:block;width:24px;height:28px;border:0;outline:none;text-decoration:none;"></td>` +
-    `<td style="vertical-align:middle;${wordmark}">AMMARI</td>` +
-    `</tr></table></td></tr>`
-  );
-}
-
-function render(subject: string, preheader: string, blocks: Block[], footer: string, logoUrl: string | null): RenderedEmail {
-  const text = [...blocks.map(blockText), "", footer].join("\n\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
-  const html =
-    `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
-    `<meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"><title>${escapeHtml(subject)}</title></head>` +
-    `<body style="margin:0;padding:0;background-color:${COLOR.page};">` +
-    // The inbox preview line, hidden in the body.
-    `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${escapeHtml(preheader)}</div>` +
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${COLOR.page};"><tr><td align="center" style="padding:24px 12px;">` +
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background-color:${COLOR.white};border-radius:6px;">` +
-    headerHtml(logoUrl) +
-    `<tr><td style="padding:16px 24px 8px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${blocks.map(blockHtml).join("")}</table></td></tr>` +
-    `<tr><td style="padding:16px 24px 28px;border-top:1px solid ${COLOR.line};font-family:${FONT};font-size:12px;line-height:1.6;color:${COLOR.muted};">${escapeHtml(footer).replace(/\n/g, "<br>")}</td></tr>` +
-    `</table></td></tr></table></body></html>`;
-  return { subject, text, html };
+function render(subject: string, preheader: string, blocks: Block[], footerNote: string, logoUrl: string | null): RenderedEmail {
+  return renderEmail({ subject, preheader, sections: blocks.map(blockSection), footerNote, logoUrl });
 }
 
 // ---------- shared pieces ----------
@@ -345,7 +297,7 @@ function contactLine(whatsappNumber: string | null): Block[] {
 }
 
 function customerFooter(view: CustomerOrderEmailView): string {
-  return `Ammari\nEmail ini dikirim karena ada pesanan dengan alamat email ini di ${view.siteHost}.`;
+  return `Email ini dikirim karena ada pesanan dengan alamat email ini di ${view.siteHost}.`;
 }
 
 // ---------- customer emails ----------
@@ -536,5 +488,5 @@ export function renderOwnerPaidEmail(view: OwnerPaidEmailView): RenderedEmail {
         ]
       : []),
   ];
-  return render(head.subject, head.heading, blocks, "Ammari admin\nEmail ini berisi data pembeli. Jangan diteruskan.", view.logoUrl);
+  return render(head.subject, head.heading, blocks, "Email ini untuk admin Ammari dan berisi data pembeli. Jangan diteruskan.", view.logoUrl);
 }

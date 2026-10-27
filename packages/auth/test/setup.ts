@@ -13,13 +13,13 @@ import {
 } from "@ammari/db/schema";
 import { createStaffAuth } from "../src/staff";
 import type { CreateStaffAuthOptions } from "../src/staff";
-import type { EmailSender } from "../src/email-sender";
+import type { EmailMessage, EmailSender } from "../src/email-sender";
 
 export { testDb };
 
 export class RecordingEmailSender implements EmailSender {
-  sent: { to: string; subject: string; body: string }[] = [];
-  async send(params: { to: string; subject: string; body: string }): Promise<void> {
+  sent: EmailMessage[] = [];
+  async send(params: EmailMessage): Promise<void> {
     this.sent.push(params);
   }
 }

@@ -19,6 +19,7 @@ import {
   type OrderStatus,
 } from "@ammari/db/schema";
 import { qualifiedColumn } from "@ammari/db/sql-helpers";
+import { emailLogoUrl } from "@ammari/email";
 import type { Database } from "../db";
 import { errorLogFields } from "../errors";
 import { ORDER_ACCESS_TOKEN_DAYS, hashOrderAccessToken } from "../checkout/access-token";
@@ -401,26 +402,9 @@ function addressOf(order: LoadedOrder, withNotes: boolean): OrderEmailAddress | 
   return { recipientName, phone, addressText: `${parts.join(", ")}${notes ? `. Catatan: ${notes}` : ""}` };
 }
 
-/** The storefront's own logo file (docs/design/storefront.md §9, the same PNG the header shows),
- * which is public wherever the storefront is. Only over https: a local `http://localhost` origin
- * is not reachable from a mail client, so those emails keep the text wordmark. */
-export const EMAIL_LOGO_PATH = "/logos/ammari-primary.png";
-
 /** The storefront's "Pengembalian & penukaran" page (apps/web `/returns-exchange`), linked from
  * "Pesanan sudah sampai". */
 export const RETURNS_PAGE_PATH = "/returns-exchange";
-
-function emailLogoUrl(origin: string): string | null {
-  try {
-    const url = new URL(EMAIL_LOGO_PATH, origin);
-    if (url.protocol === "https:") return url.href;
-    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") console.warn("[emails] site origin is not https; emails go out without the logo", { origin: url.origin });
-    return null;
-  } catch {
-    console.warn("[emails] site origin is not a URL; emails go out without the logo");
-    return null;
-  }
-}
 
 function siteHost(origin: string): string {
   try {

@@ -63,6 +63,8 @@ export interface StaffMutationDeps {
   emailSender?: EmailSender;
   /** The admin app's own origin, shown in the invite email. */
   loginUrl?: string;
+  /** The logo in the invite email's header (an absolute https URL), or null/omitted for text only. */
+  emailLogoUrl?: string | null;
 }
 
 interface LockedTarget {
@@ -286,7 +288,7 @@ interface InviteEmailTarget {
  * is the invitation; the UI tells the owner to message the person) and is recorded in audit_log
  * with a short reason only, never the provider's response body. */
 async function sendInviteEmail(target: InviteEmailTarget, actorStaffUserId: string, deps: StaffMutationDeps): Promise<boolean> {
-  const { emailSender, loginUrl } = deps;
+  const { emailSender, loginUrl, emailLogoUrl = null } = deps;
   if (!emailSender || !loginUrl) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -297,6 +299,7 @@ async function sendInviteEmail(target: InviteEmailTarget, actorStaffUserId: stri
         roleName: target.roleName,
         loginUrl,
         inviteExpiresAt: target.inviteExpiresAt,
+        logoUrl: emailLogoUrl,
         idempotencyKey: `staff-invite:${target.id}:${target.inviteExpiresAt.toISOString()}`,
       }),
     );

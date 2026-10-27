@@ -5,6 +5,7 @@ import { createStaffAuth } from "@ammari/auth/staff";
 import { ConsoleEmailSender, ResendEmailSender, UnconfiguredEmailSender } from "@ammari/auth";
 import { CapturingEmailSender } from "@ammari/auth/testing";
 import { db } from "@ammari/db";
+import { emailLogoUrl } from "@ammari/email";
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -47,6 +48,10 @@ const baseURL = requiredEnv("BETTER_AUTH_URL");
 export const staffEmailSender = emailSender();
 /** The admin app's own origin, for links in emails (the invite tells people where to log in). */
 export const adminBaseUrl = baseURL;
+/** The logo in the header of every staff email, served by the storefront (MAIN_SITE_URL); null
+ * (text wordmark only) when that is unset or not https. Read leniently here, not through
+ * lib/main-site-url.ts, so a missing MAIN_SITE_URL never stops sign-in. */
+export const staffEmailLogoUrl = emailLogoUrl(process.env.MAIN_SITE_URL);
 const secret = process.env.STAFF_BETTER_AUTH_SECRET ?? "";
 const google = googleConfig();
 
@@ -73,6 +78,7 @@ export const staffAuth = createStaffAuth({
   google,
   globalHourlyCap,
   expiresInSecondsOverride,
+  emailLogoUrl: staffEmailLogoUrl,
   extraPlugins: [nextCookies()],
   // Runs sendVerificationOTP's whole body (throttle check + staff lookup + email send) after the
   // HTTP response is already sent, so an unknown/inactive/throttled email and a real one take

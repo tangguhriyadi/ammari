@@ -7,6 +7,7 @@ import * as schema from "@ammari/db/schema";
 import type { EmailSender } from "../email-sender";
 import { recordEmailThrottleAttempt } from "../shared/email-throttle";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "../shared/otp-timing";
+import { signInCodeMessage } from "../shared/sign-in-code-email";
 import { CUSTOMER_PLACEHOLDER_NAME, type Database, loadOrCreateCustomerForEmail } from "./customer-data";
 import { orderLoginLink } from "./order-login-link-plugin";
 
@@ -67,6 +68,9 @@ export interface CreateCustomerAuthOptions {
   /** "Masuk ke akun" (./order-login-link-plugin.ts): where a login by link lands, and the confirm
    * page failures go back to. Defaults to "/orders" ("Pesanan saya") and "/login/link". */
   orderLoginLink?: { successPath?: string; pagePath?: string };
+  /** The Ammari logo for the sign-in code email's header: an absolute https URL on the storefront
+   * (@ammari/email `emailLogoUrl`), or null/omitted for the text wordmark only. */
+  emailLogoUrl?: string | null;
 }
 
 export function createCustomerAuth(options: CreateCustomerAuthOptions) {
@@ -83,7 +87,9 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
     expiresInSecondsOverride,
     disableSendThrottle = false,
     orderLoginLink: orderLoginLinkPaths = {},
+    emailLogoUrl = null,
   } = options;
+  const otpExpiresInSeconds = expiresInSecondsOverride ?? OTP_EXPIRES_IN_SECONDS;
 
   if (process.env.NODE_ENV === "production" && !secret) {
     throw new Error(
@@ -142,9 +148,15 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
       additionalFields: {
         customerId: { type: "string", required: false, input: false },
       },
-      // Deliberately NO validateUserInfo gate here — the opposite of staff's closed admission
-      // gate. Self sign-up is allowed for anyone; databaseHooks.user.create.before below decides
-      // link-vs-create, not admission.
+      // Not an admission gate (self sign-up is open to anyone; databaseHooks.user.create.before
+      // below decides link-vs-create). The one refusal is staff's own: a Google profile whose
+      // email Google itself has not verified proves nothing about who owns the address, so it
+      // may neither create an account for that address nor sign in to or link the one that
+      // already has it (docs/SPEC.md §10.3). Same check, same generic error code as staff.
+      // validateUserInfo runs for every OAuth create-user, link-account and sign-in.
+      validateUserInfo: async ({ user, source }) => {
+        if (source.method === "oauth" && user.emailVerified !== true) return { error: "invalid_account" };
+      },
     },
     ...(google ? { socialProviders: { google } } : {}),
     databaseHooks: {
@@ -171,7 +183,7 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
     plugins: [
       emailOTP({
         otpLength: 6,
-        expiresIn: expiresInSecondsOverride ?? OTP_EXPIRES_IN_SECONDS,
+        expiresIn: otpExpiresInSeconds,
         allowedAttempts: OTP_MAX_ATTEMPTS,
         storeOTP: "hashed",
         sendVerificationOTP: async ({ email, otp, type }) => {
@@ -198,11 +210,9 @@ export function createCustomerAuth(options: CreateCustomerAuthOptions) {
           }
 
           try {
-            await emailSender.send({
-              to: email,
-              subject: "Kode masuk Ammari",
-              body: `Kode masuk kamu: ${otp}\n\nBerlaku 5 menit. Jangan bagikan kode ini ke siapa pun.`,
-            });
+            await emailSender.send(
+              signInCodeMessage({ audience: "customer", to: email, otp, expiresInSeconds: otpExpiresInSeconds, logoUrl: emailLogoUrl }),
+            );
           } catch (error) {
             // better-auth's own endpoint (dist/plugins/email-otp/routes.mjs) unconditionally
             // returns `{ success: true }` regardless of whether this promise rejects — it runs

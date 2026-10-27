@@ -65,6 +65,22 @@ describe("email OTP sign-in — customer self sign-up (link-vs-create hook)", ()
     expect(matchingCustomers).toHaveLength(1); // linked, never duplicated — customers.email is citext UNIQUE anyway
   });
 
+  test("the code email is the branded one: same subject, the code as text in both parts, no link (docs/plans/email-design.md)", async () => {
+    const email = `branded-${Date.now()}@example.test`;
+    const { auth, emailSender } = buildCustomerAuth();
+
+    await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+    const sent = emailSender.sent[0]!;
+    const otp = sent.body.match(/\d{6}/)?.[0]!;
+    expect(sent.subject).toBe("Kode masuk Ammari");
+    expect(sent.subject).not.toContain(otp);
+    expect(sent.body).toContain("abaikan saja email ini");
+    expect(sent.html).toContain(`>${otp}</td>`);
+    // http://localhost: no logo, the text wordmark only.
+    expect(sent.html).not.toContain("<img");
+    expect(sent.html).not.toMatch(/<a\s/i);
+  });
+
   test("linking backfills email_verified_at on a pre-existing unverified customer", async () => {
     const existing = await createCommittedCustomer({ emailVerifiedAt: null });
     customerIds.push(existing.id);

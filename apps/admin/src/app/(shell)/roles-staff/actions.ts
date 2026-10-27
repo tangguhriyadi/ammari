@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { PERMISSIONS } from "@ammari/db/rbac";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { adminBaseUrl, staffEmailSender } from "@/lib/auth/staff";
+import { adminBaseUrl, staffEmailLogoUrl, staffEmailSender } from "@/lib/auth/staff";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
 import { staffEmailSchema } from "@/lib/staff/email";
@@ -50,6 +50,7 @@ export async function inviteStaffAction(
     const result = await staffMutations.inviteStaff(parsed.data, session.staffUser.id, {
       emailSender: staffEmailSender,
       loginUrl: adminBaseUrl,
+      emailLogoUrl: staffEmailLogoUrl,
     });
     revalidateAdmin("/roles-staff");
     return { ...result, inviteExpiresAt: result.inviteExpiresAt.toISOString() };
@@ -66,6 +67,7 @@ export async function renewStaffInviteAction(
     const result = await staffMutations.renewStaffInvite(parsed.data, session.staffUser.id, {
       emailSender: staffEmailSender,
       loginUrl: adminBaseUrl,
+      emailLogoUrl: staffEmailLogoUrl,
     });
     revalidateAdmin("/roles-staff");
     return { inviteExpiresAt: result.inviteExpiresAt.toISOString(), emailSent: result.emailSent };

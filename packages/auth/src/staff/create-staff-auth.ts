@@ -13,6 +13,7 @@ import {
 } from "./staff-data";
 import { recordEmailThrottleAttempt } from "../shared/email-throttle";
 import { OTP_EXPIRES_IN_SECONDS, OTP_RESEND_COOLDOWN_SECONDS } from "../shared/otp-timing";
+import { signInCodeMessage } from "../shared/sign-in-code-email";
 
 // 6 digits / 5 attempts: CLAUDE.md's OTP rules. Expiry itself comes from shared/otp-timing.ts —
 // the ONE place the server config and the client countdown UI both read "5 minutes" from.
@@ -99,6 +100,9 @@ export interface CreateStaffAuthOptions {
    * sets this, even in e2e mode — login-otp.spec.ts specifically needs the REAL throttle
    * behavior to still apply there. Never set in production. */
   disableSendThrottle?: boolean;
+  /** The Ammari logo for the sign-in code email's header: an absolute https URL on the storefront
+   * (@ammari/email `emailLogoUrl`), or null/omitted for the text wordmark only. */
+  emailLogoUrl?: string | null;
 }
 
 export function createStaffAuth(options: CreateStaffAuthOptions) {
@@ -114,7 +118,9 @@ export function createStaffAuth(options: CreateStaffAuthOptions) {
     globalHourlyCap = DEFAULT_OTP_GLOBAL_HOURLY_CAP,
     expiresInSecondsOverride,
     disableSendThrottle = false,
+    emailLogoUrl = null,
   } = options;
+  const otpExpiresInSeconds = expiresInSecondsOverride ?? OTP_EXPIRES_IN_SECONDS;
 
   if (process.env.NODE_ENV === "production" && !secret) {
     throw new Error(
@@ -218,7 +224,7 @@ export function createStaffAuth(options: CreateStaffAuthOptions) {
     plugins: [
       emailOTP({
         otpLength: 6,
-        expiresIn: expiresInSecondsOverride ?? OTP_EXPIRES_IN_SECONDS,
+        expiresIn: otpExpiresInSeconds,
         allowedAttempts: OTP_MAX_ATTEMPTS,
         storeOTP: "hashed",
         sendVerificationOTP: async ({ email, otp, type }) => {
@@ -253,11 +259,9 @@ export function createStaffAuth(options: CreateStaffAuthOptions) {
           const staff = await loadActiveStaffForEmail(db, email);
           if (!staff) return; // same no-op — no enumeration signal either way
 
-          await emailSender.send({
-            to: email,
-            subject: "Kode masuk Ammari Admin",
-            body: `Kode masuk kamu: ${otp}\n\nBerlaku 5 menit. Jangan bagikan kode ini ke siapa pun.`,
-          });
+          await emailSender.send(
+            signInCodeMessage({ audience: "staff", to: email, otp, expiresInSeconds: otpExpiresInSeconds, logoUrl: emailLogoUrl }),
+          );
           onOtpGenerated?.({ email, otp });
         },
       }),

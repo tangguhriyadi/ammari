@@ -34,3 +34,6 @@ deploy-prod/env/*.env
 
 # scratch space for inspecting package tarballs, etc. (see AGENTS.md agent guidance)
 .tmp/
+
+# local email previews (pnpm --filter @ammari/commerce emails:preview), never committed
+.email-preview/

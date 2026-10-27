@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  transpilePackages: ["@ammari/db", "@ammari/auth", "@ammari/commerce", "@ammari/ui"],
+  transpilePackages: ["@ammari/db", "@ammari/auth", "@ammari/commerce", "@ammari/email", "@ammari/ui"],
   // `next dev`'s own floating "N" build-activity badge has nothing to do with this storefront's
   // UI — it's a dev-only overlay (never shown by `next start`), but it still shows up baked into
   // any full-page screenshot taken against the dev server (e2e/visual-screenshots.spec.ts),

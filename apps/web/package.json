@@ -19,6 +19,7 @@
     "@ammari/commerce": "workspace:*",
     "@ammari/content-sanitize": "workspace:*",
     "@ammari/db": "workspace:*",
+    "@ammari/email": "workspace:*",
     "@ammari/ui": "workspace:*",
     "better-auth": "1.7.7",
     "lucide-react": "1.49.0",

@@ -17,6 +17,7 @@
     "@ammari/commerce": "workspace:*",
     "@ammari/content-sanitize": "workspace:*",
     "@ammari/db": "workspace:*",
+    "@ammari/email": "workspace:*",
     "@ammari/storage": "workspace:*",
     "@ammari/ui": "workspace:*",
     "@tiptap/core": "3.32.0",

@@ -87,6 +87,21 @@ describe("email OTP sign-in — the staff gate", () => {
     expect(row?.staffUserId).toBe(staff.id);
   });
 
+  test("the code email is the branded one: same subject, the code as text in both parts, no link, the storefront logo (docs/plans/email-design.md)", async () => {
+    const staff = await createCommittedStaffUser({ isActive: true });
+    staffUserIds.push(staff.id);
+    const { auth, emailSender } = buildStaffAuth({ emailLogoUrl: "https://ammari.example/logos/ammari-primary.png" });
+
+    await auth.api.sendVerificationOTP({ body: { email: staff.email, type: "sign-in" } });
+    const sent = emailSender.sent[0]!;
+    const otp = sent.body.match(/\d{6}/)?.[0]!;
+    expect(sent.subject).toBe("Kode masuk Ammari Admin");
+    expect(sent.body).toContain("Berlaku 5 menit, sampai pukul ");
+    expect(sent.html).toContain(`>${otp}</td>`);
+    expect(sent.html).toContain('src="https://ammari.example/logos/ammari-primary.png"');
+    expect(sent.html).not.toMatch(/<a\s/i);
+  });
+
   test("6th wrong OTP attempt is rejected (allowedAttempts: 5)", async () => {
     const staff = await createCommittedStaffUser({ isActive: true });
     staffUserIds.push(staff.id);

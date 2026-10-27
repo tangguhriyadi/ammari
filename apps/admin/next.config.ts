@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  transpilePackages: ["@ammari/db", "@ammari/auth", "@ammari/commerce", "@ammari/storage", "@ammari/ui"],
+  transpilePackages: ["@ammari/db", "@ammari/auth", "@ammari/commerce", "@ammari/email", "@ammari/storage", "@ammari/ui"],
   // Next 16 takes an exclusive, cross-process lock at `<distDir>/lock` and REFUSES to start a
   // second `next dev` for the same project directory, even on a different port — discovered the
   // hard way debugging a "/packing shows nothing" report: `playwright.config.ts`'s own `next

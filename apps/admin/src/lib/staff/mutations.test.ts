@@ -126,6 +126,9 @@ describe("inviteStaff", () => {
       expect(sender.sent[0]!.body).toContain("Packing/Gudang");
       expect(sender.sent[0]!.body).toContain(LOGIN_URL);
       expect(sender.sent[0]!.body).not.toMatch(/token|kode:\s*\d/i);
+      // The branded HTML part (docs/plans/email-design.md): one button, to the admin site.
+      expect(sender.sent[0]!.html).toContain(`<a href="${LOGIN_URL}"`);
+      expect(sender.sent[0]!.html?.match(/<a\s/g)).toHaveLength(1);
     });
   });
 
