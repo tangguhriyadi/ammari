@@ -33,6 +33,7 @@ import {
   supplierPayments,
   suppliers,
   thankYouCards,
+  vouchers,
 } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
@@ -111,6 +112,7 @@ export async function resolveSearchTargets(db: Database, q: string, cap: number 
   const asText = (table: Table, column: AnyColumn) => sql<string>`${qualifiedColumn(table, column)}::text`;
   const typed = (entityType: string) => sql<string>`${entityType}::text`;
 
+  const matchedCustomerIds = db.select({ id: customers.id }).from(customers).where(or(ilike(customers.name, pattern), ilike(customers.email, pattern), ilike(customers.phone, pattern)));
   const matchedOrderIds = db.select({ id: orders.id }).from(orders).where(or(ilike(orders.orderNo, pattern), ilike(orders.channelOrderNo, pattern)));
   const variantMatchProductIds = db.select({ id: productVariants.productId }).from(productVariants).where(ilike(productVariants.sku, pattern));
   const matchedProductIds = db.select({ id: products.id }).from(products).where(or(ilike(products.name, pattern), ilike(products.code, pattern), inArray(products.id, variantMatchProductIds)));
@@ -147,6 +149,7 @@ export async function resolveSearchTargets(db: Database, q: string, cap: number 
     db.select({ entityType: typed("info_page"), id: asText(infoPages, infoPages.id) }).from(infoPages).where(or(ilike(infoPages.title, pattern), ilike(infoPages.slug, pattern))),
     db.select({ entityType: typed("import_batch"), id: asText(importBatches, importBatches.id) }).from(importBatches).where(ilike(importBatches.filename, pattern)),
     db.select({ entityType: typed("customer"), id: asText(customers, customers.id) }).from(customers).where(or(ilike(customers.name, pattern), ilike(customers.email, pattern), ilike(customers.phone, pattern))),
+    db.select({ entityType: typed("voucher"), id: asText(vouchers, vouchers.id) }).from(vouchers).where(inArray(vouchers.customerId, matchedCustomerIds)),
     db.select({ entityType: typed("staff_user"), id: asText(staffUsers, staffUsers.id) }).from(staffUsers).where(or(ilike(staffUsers.name, pattern), ilike(staffUsers.email, pattern))),
     db.select({ entityType: typed("role"), id: asText(roles, roles.id) }).from(roles).where(or(ilike(roles.name, pattern), ilike(roles.key, pattern))),
   ).limit(cap + 1);
@@ -361,7 +364,15 @@ const LOOKUPS: Record<string, Lookup> = {
   },
   customer: async (db, ids) => {
     const rows = await db.select({ id: customers.id, name: customers.name }).from(customers).where(inArray(customers.id, uuids(ids)));
-    return byId(rows, (row) => ({ label: row.name, href: null }));
+    return byId(rows, (row) => ({ label: row.name, href: `/customers/${row.id}` }));
+  },
+  voucher: async (db, ids) => {
+    const rows = await db
+      .select({ id: vouchers.id, customerId: customers.id, name: customers.name })
+      .from(vouchers)
+      .innerJoin(customers, eq(customers.id, vouchers.customerId))
+      .where(inArray(vouchers.id, uuids(ids)));
+    return byId(rows, (row) => ({ label: `Voucher ${row.name}`, href: `/customers/${row.customerId}` }));
   },
   product: productLookup,
   product_accessory_recipe: productLookup,

@@ -26,7 +26,8 @@
     "./shipping-rules": "./src/shipping/rules.ts",
     "./size-label": "./src/size-label.ts",
     "./stock": "./src/stock/index.ts",
-    "./thank-you-cards": "./src/thank-you-cards.ts"
+    "./thank-you-cards": "./src/thank-you-cards.ts",
+    "./voucher-adjustments": "./src/vouchers/adjustments.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -15,6 +15,7 @@ import { OverviewPeriodPicker } from "./_components/overview-period-picker";
 import { OverviewSalesChart, OverviewSalesChartSkeleton } from "./_components/overview-sales-chart";
 import { OverviewTargetCard, OverviewTargetCardSkeleton } from "./_components/overview-target-card";
 import { OverviewTopProducts, OverviewTopProductsSkeleton } from "./_components/overview-top-products";
+import { OverviewVoucherCard, OverviewVoucherCardSkeleton } from "./_components/overview-voucher-card";
 
 // Ringkasan (docs/plans/dashboard-overview.md §3 to §8): the page the owner opens every morning on
 // the phone. Every money figure is gated on the session's finance.view_profit in the query layer
@@ -29,7 +30,7 @@ const SALES_HEADINGS: Record<OverviewPeriod, string> = {
 };
 
 /** Desktop rows of the main column (literal classes, so Tailwind generates them). */
-const MAIN_ROWS = { 1: "xl:row-start-1", 2: "xl:row-start-2", 3: "xl:row-start-3" } as const;
+const MAIN_ROWS = { 1: "xl:row-start-1", 2: "xl:row-start-2", 3: "xl:row-start-3", 4: "xl:row-start-4" } as const;
 
 export default async function RingkasanPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requireOverviewOrRedirect();
@@ -68,9 +69,10 @@ export default async function RingkasanPage({ searchParams }: { searchParams: Pr
   // when taller than the screen. Inside the main column, tiles and charts follow the column's own
   // width (container queries), not the viewport's, since the aside takes part of it.
   const twoColumns = showActions;
-  const mainRow = (row: 1 | 2 | 3) => (twoColumns ? `xl:col-start-1 ${MAIN_ROWS[row]}` : "");
+  const mainRow = (row: 1 | 2 | 3 | 4) => (twoColumns ? `xl:col-start-1 ${MAIN_ROWS[row]}` : "");
   const salesRow = canViewProfit ? 2 : 1;
   const chartsRow = canViewProfit ? 3 : 2;
+  const vouchersRow = canViewProfit ? 4 : 3;
   return (
     <>
       <Breadcrumb items={rootCrumbs("/")} />
@@ -154,6 +156,15 @@ export default async function RingkasanPage({ searchParams }: { searchParams: Pr
             </Suspense>
           </div>
         </section>
+
+        {/* The voucher card (docs/plans/growth.md §9.2, A6): counts only, for customers.view. */}
+        {has("customers.view") && (
+          <div className={`min-w-0 ${mainRow(vouchersRow)}`}>
+            <Suspense key={`${periodKey}:vouchers`} fallback={<OverviewVoucherCardSkeleton />}>
+              <OverviewVoucherCard resolved={resolved} />
+            </Suspense>
+          </div>
+        )}
       </div>
     </>
   );

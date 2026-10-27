@@ -116,6 +116,32 @@ export const E2E_EXPENSE_SUMMARY_MONTH = "2026-02";
 // settings test changes the categories and puts these two back.
 export const E2E_MONTHLY_BILL_CATEGORIES = ["salary", "rent"] as const;
 export const E2E_MONTHLY_BILLS_EXPENSE_NO = "BYA-E2E-GAJI";
+// customers.spec.ts (docs/plans/growth.md sessions S4 and S5): Pelanggan & Voucher. An owner (voids
+// and extends vouchers), a CS staff on the predefined customer_service role (records a promo
+// withdrawal, never voids or extends), and a role with overview.view + orders.view but NOT
+// customers.view (refused the pages, no voucher card on Ringkasan). Each layout (390px, 1280px)
+// gets its own customers, named by E2E_CUSTOMER_NAME, so the two passes never share a voucher:
+// an account holder with promo consent, a counted WhatsApp order in June 2025 (a month no other
+// spec dates anything in) carrying a contact snapshot and address that must never show on the
+// customer page, and four vouchers from claimed cards (orders ORD-E2E-CUST-<L>-1..4): 1 active,
+// expiring in 5 days ("Segera berakhir"); 2 active, 60 days left (voided by the owner); 3 active
+// past its date, shown Kedaluwarsa (extended by the owner); 4 used on ORD-E2E-CUST-<L>-U. Plus an
+// unpaid guest checkout customer (expired, cancelled), hidden from the list by default (A13).
+export const E2E_CUSTOMERS_OWNER_EMAIL = "customers-owner@e2e.ammari.test";
+export const E2E_CUSTOMERS_CS_EMAIL = "customers-cs@e2e.ammari.test";
+export const E2E_CUSTOMERS_NO_ACCESS_EMAIL = "customers-no-access@e2e.ammari.test";
+const E2E_CUSTOMERS_NO_ACCESS_ROLE_KEY = "e2e_customers_no_access";
+export const E2E_CUSTOMER_LAYOUTS = ["M", "D"] as const;
+export function E2E_CUSTOMER_NAME(layout: (typeof E2E_CUSTOMER_LAYOUTS)[number]): string {
+  return `E2E Pelanggan ${layout === "M" ? "Ponsel" : "Desktop"}`;
+}
+export function E2E_GUEST_NAME(layout: (typeof E2E_CUSTOMER_LAYOUTS)[number]): string {
+  return `E2E Tamu ${layout === "M" ? "Ponsel" : "Desktop"}`;
+}
+export function E2E_CUSTOMER_EMAIL(layout: (typeof E2E_CUSTOMER_LAYOUTS)[number]): string {
+  return `pelanggan-${layout.toLowerCase()}@e2e.ammari.test`;
+}
+export const E2E_CUSTOMER_PHONE: Record<(typeof E2E_CUSTOMER_LAYOUTS)[number], string> = { M: "+6281299004567", D: "+6281299007654" };
 export const E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL = "production-payments-no-finance@e2e.ammari.test";
 const E2E_PRODUCTION_NO_FINANCE_ROLE_KEY = "e2e_production_no_finance";
 // A dedicated email/role for purchases-receipt.spec.ts (docs/plans/suppliers-goods-receipt.md
@@ -363,6 +389,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     privateFiles,
     businessExpenses,
     salesGoal,
+    customers,
+    customerAuthUsers,
+    thankYouCards,
+    vouchers,
   } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
 
@@ -845,6 +875,84 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     }
   });
 
+  // Pelanggan & Voucher (see E2E_CUSTOMERS_OWNER_EMAIL above).
+  await ensureStaffFixture(E2E_CUSTOMERS_OWNER_EMAIL, "E2E Pelanggan (owner)", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_CUSTOMERS_CS_EMAIL, "E2E Pelanggan (CS)", "customer_service");
+  await ensureLimitedRole(E2E_CUSTOMERS_NO_ACCESS_ROLE_KEY, ["overview.view", "orders.view"]);
+  await ensureStaffFixture(E2E_CUSTOMERS_NO_ACCESS_EMAIL, "E2E Pelanggan (tanpa akses)", E2E_CUSTOMERS_NO_ACCESS_ROLE_KEY);
+  await db.transaction(async (tx) => {
+    const [printer] = await tx.select({ id: staffUsers.id }).from(staffUsers).where(eq(staffUsers.email, E2E_CUSTOMERS_OWNER_EMAIL));
+    if (!printer) throw new Error("failed to find the e2e customers owner");
+    const now = Date.now();
+    const day = 86_400_000;
+    const orderDay = new Date("2025-06-10T03:00:00Z");
+    for (const layout of E2E_CUSTOMER_LAYOUTS) {
+      const [customer] = await tx
+        .insert(customers)
+        .values({ name: E2E_CUSTOMER_NAME(layout), email: E2E_CUSTOMER_EMAIL(layout), phone: E2E_CUSTOMER_PHONE[layout], emailVerifiedAt: orderDay, pdpConsentAt: orderDay, promoConsentAt: orderDay })
+        .returning({ id: customers.id });
+      if (!customer) throw new Error(`failed to seed the e2e customer ${layout}`);
+      await tx.insert(customerAuthUsers).values({ customerId: customer.id, name: E2E_CUSTOMER_NAME(layout), email: E2E_CUSTOMER_EMAIL(layout), emailVerified: true });
+      const order = async (orderNo: string, extra: Partial<typeof orders.$inferInsert> = {}) => {
+        const [row] = await tx
+          .insert(orders)
+          .values({ channelId: "whatsapp", orderNo, status: "completed", customerId: customer.id, orderDate: orderDay, subtotalAmount: 300_000, shippingAmount: 0, discountAmount: 0, totalAmount: 300_000, ...extra })
+          .returning({ id: orders.id });
+        if (!row) throw new Error(`failed to seed ${orderNo}`);
+        return row.id;
+      };
+      await order(`ORD-E2E-CUST-${layout}-0`, { contactEmail: `rahasia-${layout.toLowerCase()}@e2e.ammari.test`, shippingAddress: "Jl. Rahasia No. 9, Bandung" });
+      const usedOrderId = await order(`ORD-E2E-CUST-${layout}-U`, { subtotalAmount: 250_000, discountAmount: 20_000, totalAmount: 230_000 });
+      const voucherSeeds: { issuedAt: Date; expiresAt: Date; used?: boolean }[] = [
+        { issuedAt: new Date(now - 10 * day), expiresAt: new Date(now + 5 * day) },
+        { issuedAt: new Date(now - 10 * day), expiresAt: new Date(now + 60 * day) },
+        { issuedAt: new Date(now - 100 * day), expiresAt: new Date(now - 3 * day) },
+        { issuedAt: new Date(now - 40 * day), expiresAt: new Date(now + 50 * day), used: true },
+      ];
+      for (const [index, seed] of voucherSeeds.entries()) {
+        const cardOrderId = await order(`ORD-E2E-CUST-${layout}-${index + 1}`);
+        const [card] = await tx
+          .insert(thankYouCards)
+          .values({ orderId: cardOrderId, tokenHash: `e2e-customer-card-${layout}-${index}-${randomUUID()}`, status: "claimed", claimDeadline: new Date(now + 20 * day), printedByStaffUserId: printer.id, claimedByCustomerId: customer.id, claimedAt: seed.issuedAt })
+          .returning({ id: thankYouCards.id });
+        if (!card) throw new Error("failed to seed an e2e customer card");
+        await tx.insert(vouchers).values({
+          cardId: card.id,
+          customerId: customer.id,
+          issuedAt: seed.issuedAt,
+          expiresAt: seed.expiresAt,
+          ...(seed.used ? { status: "used", usedOrderId, usedAt: new Date(now - day) } : {}),
+        });
+      }
+
+      const [guest] = await tx.insert(customers).values({ name: E2E_GUEST_NAME(layout), email: `tamu-${layout.toLowerCase()}@e2e.ammari.test` }).returning({ id: customers.id });
+      if (!guest) throw new Error(`failed to seed the e2e guest ${layout}`);
+      await order(`ORD-E2E-CUST-${layout}-G`, {
+        channelId: "web",
+        customerId: guest.id,
+        status: "cancelled",
+        cancelReason: "payment_expired",
+        cancelledAt: orderDay,
+        paymentStatus: "expired",
+        paymentExpiresAt: orderDay,
+        checkoutAttemptId: randomUUID(),
+        termsAcceptedAt: orderDay,
+        promoOptIn: false,
+        placedWithSession: false,
+        shippingAmount: 15_000,
+        totalAmount: 315_000,
+        shippingCostAmount: 35_000,
+        shippingSubsidyAmount: 20_000,
+        shippingCourierCode: "jne",
+        shippingServiceCode: "reg",
+        shippingCourierLabel: "JNE Reguler",
+        shippingWeightGrams: 900,
+        shippingDestinationId: "IDNP6IDNC148IDND843IDZ12250",
+        shippingQuotedAt: orderDay,
+      });
+    }
+  });
+
   // The marketplace import product (see E2E_IMPORT_EMAIL above).
   await db.transaction(async (tx) => {
     const [fabric] = await tx.insert(fabrics).values({ name: "E2E Impor Fabric" }).returning({ id: fabrics.id });
@@ -1093,6 +1201,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_CONTENT_ADMIN_EMAIL,
         E2E_ACTIVITY_LOG_ADMIN_EMAIL,
         E2E_ACTIVITY_LOG_OWNER_EMAIL,
+        E2E_CUSTOMERS_OWNER_EMAIL,
+        E2E_CUSTOMERS_CS_EMAIL,
+        E2E_CUSTOMERS_NO_ACCESS_EMAIL,
       ]),
     );
   await db.delete(staffAuthRateLimits);

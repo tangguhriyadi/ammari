@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { describe, expect, test, vi } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
-import { insertCustomer, insertOrder, insertProductVariant, insertThankYouCard } from "@ammari/db/test-fixtures";
+import { insertCustomer, insertOrder, insertProductVariant, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
 import {
   auditLog,
   cartItems,
@@ -23,11 +23,14 @@ import {
   stockMovements,
   stockReservations,
   thankYouCards,
+  voucherAdjustments,
   vouchers,
 } from "@ammari/db/schema";
 import { hashCartToken } from "../cart/token";
 import type { Database } from "../db";
 import { transitionOrderStatus } from "../orders/lifecycle";
+import { VOUCHER_ADJUSTMENT_MESSAGES, endOfJakartaDay, extendVoucher, voidVoucher } from "../vouchers/adjustments";
+import { jakartaDate } from "../jakarta-day";
 import { changePaymentMethod, reopenPaymentPage } from "../payments/attempts";
 import { createFakePaymentProvider } from "../payments/fake";
 import type { CreatePaymentInput, PaymentProvider } from "../payments/provider";
@@ -369,6 +372,25 @@ describe("placeOrder", () => {
       expect(after?.pdpConsentAt).toBeInstanceOf(Date);
       expect(after?.promoConsentAt).toBeNull();
       expect(after?.phone).toBe("+6281299990001");
+    });
+  });
+
+  test("after staff recorded a promo withdrawal (docs/plans/growth.md §8.3), opting in again at checkout stamps it anew", async () => {
+    await withRollback(async (tx) => {
+      const { variant } = await sellableSku(tx);
+      const customer = await insertCustomer(tx, { promoConsentAt: new Date("2026-01-05T03:00:00Z") });
+      // What apps/admin's withdrawPromoConsent leaves behind.
+      await tx.update(customers).set({ promoConsentAt: null }).where(eq(customers.id, customer.id));
+      await customerCart(tx, customer.id, [{ sku: variant.sku, qty: 1 }]);
+      const areaId = await areaQuoting(tx, 12_000);
+      const result = await placeOrder(tx, deps(), {
+        ...guestInput({ shippingAreaId: areaId, guestTokenHash: null, expectedTotal: PRICE }),
+        customer: { id: customer.id, email: customer.email },
+        promoOptIn: true,
+      });
+      if (!result.ok) throw new Error(result.reason);
+      const [after] = await tx.select().from(customers).where(eq(customers.id, customer.id));
+      expect(after?.promoConsentAt?.getTime()).toBeGreaterThan(new Date("2026-01-05T03:00:00Z").getTime());
     });
   });
 
@@ -1032,6 +1054,7 @@ interface Created {
   customerIds: string[];
   cartIds: string[];
   areaIds: string[];
+  staffIds: string[];
 }
 
 async function cleanUp(created: Created): Promise<void> {
@@ -1050,12 +1073,20 @@ async function cleanUp(created: Created): Promise<void> {
   }
   const voucherRows = created.customerIds.length > 0 ? await testDb.select().from(vouchers).where(inArray(vouchers.customerId, created.customerIds)) : [];
   if (voucherRows.length > 0) {
+    const voucherIds = voucherRows.map((row) => row.id);
+    // Owner voids/extensions from the voucher races (append-only history, trigger off to clean up).
+    await withTriggerDisabled(testDb, "voucher_adjustments", "prevent_voucher_adjustment_mutation", () =>
+      testDb.delete(voucherAdjustments).where(inArray(voucherAdjustments.voucherId, voucherIds)),
+    );
+    await testDb.delete(auditLog).where(inArray(auditLog.entityId, voucherIds));
     await testDb.delete(vouchers).where(inArray(vouchers.id, voucherRows.map((row) => row.id)));
     const cards = await testDb.select().from(thankYouCards).where(inArray(thankYouCards.id, voucherRows.map((row) => row.cardId)));
     await testDb.delete(thankYouCards).where(inArray(thankYouCards.id, cards.map((card) => card.id)));
     await testDb.delete(orders).where(inArray(orders.id, cards.map((card) => card.orderId)));
     await testDb.delete(staffUsers).where(inArray(staffUsers.id, cards.map((card) => card.printedByStaffUserId)));
   }
+  // The voucher races' owner, after the adjustments and audit rows that name them.
+  if (created.staffIds.length > 0) await testDb.delete(staffUsers).where(inArray(staffUsers.id, created.staffIds));
   if (created.cartIds.length > 0) await testDb.delete(carts).where(inArray(carts.id, created.cartIds));
   const customerRows = await testDb
     .select({ id: customers.id })
@@ -1083,7 +1114,7 @@ async function cleanUp(created: Created): Promise<void> {
 }
 
 function emptyCreated(): Created {
-  return { skus: [], productIds: [], colorIds: [], fabricIds: [], emails: [], customerIds: [], cartIds: [], areaIds: [] };
+  return { skus: [], productIds: [], colorIds: [], fabricIds: [], emails: [], customerIds: [], cartIds: [], areaIds: [], staffIds: [] };
 }
 
 async function committedSku(created: Created, stock: number) {
@@ -1214,6 +1245,95 @@ describe("placeOrder races", () => {
       const orderRows = await testDb.select().from(orders).where(eq(orders.customerId, customer.id));
       expect(orderRows.filter((row) => row.paymentStatus !== null)).toHaveLength(1);
       expect((await testDb.select().from(vouchers).where(eq(vouchers.id, voucher.id)))[0]).toMatchObject({ status: "used", usedOrderId: orderRows.find((row) => row.paymentStatus)?.id });
+    } finally {
+      await cleanUp(created);
+    }
+  });
+
+  // docs/plans/growth.md §9.3 (session S5): an owner void/extension and checkout's redemption are
+  // each one conditional UPDATE on the voucher row; whichever commits first wins.
+  async function voucherRace(created: Created) {
+    const { variant } = await committedSku(created, 5);
+    const customer = await insertCustomer(testDb);
+    created.customerIds.push(customer.id);
+    created.emails.push(customer.email!);
+    const staff = await insertStaffUser(testDb);
+    created.staffIds.push(staff.id);
+    const areaId = await areaQuoting(testDb, 12_000);
+    created.areaIds.push(areaId);
+    const checkout = (voucherId: string) => ({
+      ...guestInput({ shippingAreaId: areaId, guestTokenHash: null, expectedTotal: PRICE - 20_000 }),
+      customer: { id: customer.id, email: customer.email },
+      voucherId,
+    });
+    return { variant, customer, staff, checkout };
+  }
+
+  test("an owner void racing checkout's redemption: exactly one wins, and the history matches the winner", async () => {
+    const created = emptyCreated();
+    try {
+      const { variant, customer, staff, checkout } = await voucherRace(created);
+      for (let round = 0; round < 3; round++) {
+        const voucher = await voucherFor(testDb, customer.id);
+        await customerCart(testDb, customer.id, [{ sku: variant.sku, qty: 1 }]);
+        const [placed, voided] = await Promise.allSettled([
+          placeOrder(testDb, deps(), checkout(voucher.id)),
+          voidVoucher({ voucherId: voucher.id, reason: "Balapan", actorStaffUserId: staff.id }, testDb),
+        ]);
+        if (placed.status !== "fulfilled") throw placed.reason;
+        const orderWon = placed.value.ok;
+        const voidWon = voided.status === "fulfilled";
+        expect(orderWon !== voidWon).toBe(true);
+        const [after] = await testDb.select().from(vouchers).where(eq(vouchers.id, voucher.id));
+        const adjustments = await testDb.select().from(voucherAdjustments).where(eq(voucherAdjustments.voucherId, voucher.id));
+        const voidAudits = await testDb.select().from(auditLog).where(and(eq(auditLog.entityId, voucher.id), eq(auditLog.action, "void")));
+        if (orderWon) {
+          expect(after).toMatchObject({ status: "used" });
+          expect(voided).toMatchObject({ status: "rejected", reason: { message: VOUCHER_ADJUSTMENT_MESSAGES.notVoidable } });
+          expect(adjustments).toHaveLength(0);
+          expect(voidAudits).toHaveLength(0);
+        } else {
+          expect(placed.value).toMatchObject({ ok: false, reason: "voucher_unusable" });
+          expect(after).toMatchObject({ status: "void", usedOrderId: null });
+          expect(adjustments).toMatchObject([{ kind: "void", previousStatus: "active" }]);
+          expect(voidAudits).toHaveLength(1);
+          // The refused checkout left the cart for another try; empty it for the next round.
+          const [cart] = await testDb.select().from(carts).where(eq(carts.customerId, customer.id));
+          await testDb.delete(cartItems).where(eq(cartItems.cartId, cart!.id));
+        }
+      }
+    } finally {
+      await cleanUp(created);
+    }
+  });
+
+  test("an extension racing checkout's redemption stays consistent: the order always wins the voucher, the extension only before it", async () => {
+    const created = emptyCreated();
+    try {
+      const { variant, customer, staff, checkout } = await voucherRace(created);
+      const newDate = jakartaDate(new Date(Date.now() + 60 * 86_400_000));
+      for (let round = 0; round < 3; round++) {
+        const voucher = await voucherFor(testDb, customer.id);
+        await customerCart(testDb, customer.id, [{ sku: variant.sku, qty: 1 }]);
+        const [placed, extended] = await Promise.allSettled([
+          placeOrder(testDb, deps(), checkout(voucher.id)),
+          extendVoucher({ voucherId: voucher.id, newExpiryDate: newDate, reason: "Balapan", actorStaffUserId: staff.id }, testDb),
+        ]);
+        if (placed.status !== "fulfilled") throw placed.reason;
+        // Active either way, so the order always redeems it.
+        expect(placed.value.ok).toBe(true);
+        const [after] = await testDb.select().from(vouchers).where(eq(vouchers.id, voucher.id));
+        expect(after?.status).toBe("used");
+        const adjustments = await testDb.select().from(voucherAdjustments).where(eq(voucherAdjustments.voucherId, voucher.id));
+        if (extended.status === "fulfilled") {
+          expect(after?.expiresAt).toEqual(endOfJakartaDay(newDate));
+          expect(adjustments).toMatchObject([{ kind: "extend", previousStatus: "active" }]);
+        } else {
+          expect(extended.reason).toMatchObject({ message: VOUCHER_ADJUSTMENT_MESSAGES.notExtendable });
+          expect(after?.expiresAt).toEqual(voucher.expiresAt);
+          expect(adjustments).toHaveLength(0);
+        }
+      }
     } finally {
       await cleanUp(created);
     }
