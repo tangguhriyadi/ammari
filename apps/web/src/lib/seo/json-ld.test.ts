@@ -60,7 +60,7 @@ describe("buildOrganizationJsonLd", () => {
       "@id": `${ORIGIN}/#organization`,
       name: "Ammari",
       url: `${ORIGIN}/`,
-      logo: `${ORIGIN}/logos/ammari-primary.png`,
+      logo: `${ORIGIN}/logos/ammari-mark-512.png`,
       email: "halo@ammari.id",
     });
     expect(ld.contactPoint).toEqual([

@@ -7,7 +7,7 @@ export const SITE_NAME = "Ammari";
 export const ORGANIZATION_FALLBACK_EMAIL = "ammariofc@gmail.com";
 export const ORGANIZATION_FALLBACK_WHATSAPP = "6288808541442";
 
-export const ORGANIZATION_LOGO_PATH = "/logos/ammari-primary.png";
+export const ORGANIZATION_LOGO_PATH = "/logos/ammari-mark-512.png";
 
 type JsonLd = Record<string, unknown>;
 

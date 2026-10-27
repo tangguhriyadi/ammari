@@ -80,8 +80,6 @@ e2e server, canonical/OG/JSON-LD on a product page, unknown product = 404.
 
 - Product OG image is the 1600px WebP; a 1200x630 JPEG per product (like the Hero's) would be
   safer for older scrapers.
-- Organization logo `public/logos/ammari-primary.png` is 94x112; Google wants at least 112x112.
-  A square ≥512px logo from the owner.
 - `ProductGroup` + per-colour/size variant offers, shipping/return-policy details on Offer
   (Merchant Listing fields) — a larger structured-data change.
 - Social profile URLs (Instagram/TikTok/Shopee) in Pengaturan Toko, then `sameAs`.
