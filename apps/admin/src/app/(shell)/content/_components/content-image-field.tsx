@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Loader2, X } from "lucide-react";
 import { Button, Input, Label } from "@ammari/ui";
 import { downscaleImageForUpload } from "@/lib/products/client-image-resize";
@@ -131,6 +131,13 @@ export function ContentImageField({
   const [mobileStatus, setMobileStatus] = useState<string | null>(null);
   const desktopInputRef = useRef<HTMLInputElement>(null);
   const mobileInputRef = useRef<HTMLInputElement>(null);
+  // The value as of the latest render. An upload finishes asynchronously; building the new value
+  // from `value` as it was when the upload started would overwrite anything edited meanwhile
+  // (alt text typed during the upload).
+  const latestValueRef = useRef(value);
+  useEffect(() => {
+    latestValueRef.current = value;
+  }, [value]);
 
   async function handleFile(variant: "desktop" | "mobile", file: File) {
     const setError = variant === "desktop" ? setDesktopError : setMobileError;
@@ -166,11 +173,12 @@ export function ContentImageField({
         return;
       }
 
+      const current = latestValueRef.current;
       if (variant === "desktop") {
-        onChange({ ...result.data, altText: value?.altText ?? "", mobile: value?.mobile ?? null });
+        onChange({ ...result.data, altText: current?.altText ?? "", mobile: current?.mobile ?? null });
       } else {
-        if (!value) return; // mobile crop requires an existing desktop image — UI never offers it otherwise
-        onChange({ ...value, mobile: result.data });
+        if (!current) return; // mobile crop requires an existing desktop image — UI never offers it otherwise
+        onChange({ ...current, mobile: result.data });
       }
     } catch {
       setError("Gagal mengunggah gambar. Coba lagi.");

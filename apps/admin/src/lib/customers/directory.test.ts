@@ -4,6 +4,7 @@ import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertCustomer, insertOrder, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
 import { auditLog, customerAuthAccounts, customerAuthUsers, payments, voucherAdjustments, vouchers } from "@ammari/db/schema";
 import { getPeriodTotals } from "@/lib/overview/queries";
+import { withdrawPromoConsent } from "./consent";
 import { getCustomerDetail, listCustomers } from "./directory";
 import type { CustomerListParams } from "./search-params";
 
@@ -85,6 +86,31 @@ describe("listCustomers", () => {
       expect(await ids("buyer")).toEqual([withVoucher.id, lapsed.id].sort());
       expect(await ids("promo")).toEqual([promo.id]);
       expect(await ids("voucher")).toEqual([withVoucher.id]);
+    });
+  });
+
+  test("Setuju promo: current consent only, counted like its rows; the account badge is per customer", async () => {
+    await withRollback(async (tx) => {
+      const marker = `Promo-${randomUUID().slice(0, 8)}`;
+      const staff = await insertStaffUser(tx);
+      const consenting = await insertCustomer(tx, { name: `${marker} in`, promoConsentAt: new Date() });
+      await withAccount(tx, consenting, ["google"]);
+      const withdrawn = await insertCustomer(tx, { name: `${marker} withdrawn`, promoConsentAt: new Date() });
+      await withAccount(tx, withdrawn, []);
+      await withdrawPromoConsent({ customerId: withdrawn.id, source: "email" }, staff.id, tx);
+      // Promo ticked only on a guest web checkout: the order's flag is not customer consent.
+      const guestCheckout = await insertCustomer(tx, { name: `${marker} checkout`, promoConsentAt: null });
+      await insertOrder(tx, { ...checkoutOrderValues(), customerId: guestCheckout.id, promoOptIn: true });
+
+      const promo = await listCustomers(params({ q: marker, filter: "promo", includeNonBuyers: true }), undefined, undefined, tx);
+      expect(promo.rows.map((row) => row.id)).toEqual([consenting.id]);
+      expect(promo.pagination.totalCount).toBe(1);
+
+      // has_account is correlated per customer: only the two with their own account show it.
+      const all = await listCustomers(params({ q: marker, includeNonBuyers: true }), undefined, undefined, tx);
+      const origins = Object.fromEntries(all.rows.map((row) => [row.id, row.origin]));
+      expect(origins).toEqual({ [consenting.id]: "account", [withdrawn.id]: "account", [guestCheckout.id]: "guest" });
+      expect(all.pagination.totalCount).toBe(3);
     });
   });
 

@@ -1,6 +1,7 @@
 import "server-only";
 import { and, asc, exists, isNotNull, sql } from "drizzle-orm";
 import { customerAuthUsers, customers } from "@ammari/db/schema";
+import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { jakartaDate } from "@ammari/commerce/jakarta-day";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 
@@ -29,7 +30,14 @@ export async function listPromoContacts(db: Database = defaultDb): Promise<Promo
       and(
         isNotNull(customers.promoConsentAt),
         isNotNull(customers.email),
-        exists(db.select({ one: sql`1` }).from(customerAuthUsers).where(sql`${customerAuthUsers.customerId} = ${customers.id}`)),
+        // Correlated per customer: both sides fully qualified (qualifiedColumn, see sql-helpers.ts),
+        // so the match never depends on how drizzle renders a join-less outer query.
+        exists(
+          db
+            .select({ one: sql`1` })
+            .from(customerAuthUsers)
+            .where(sql`${qualifiedColumn(customerAuthUsers, customerAuthUsers.customerId)} = ${qualifiedColumn(customers, customers.id)}`),
+        ),
       ),
     )
     .orderBy(asc(customers.promoConsentAt), asc(customers.id));
