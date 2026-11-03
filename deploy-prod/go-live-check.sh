@@ -481,6 +481,24 @@ check_checkout_config() {
     esac
   done
 
+  # Wrong in every mode once MIDTRANS_IS_PRODUCTION=true (or when that flag could not be read):
+  # without the newer dashboard's signature key, every production notification is refused as a bad
+  # signature (go-live-check-lib.sh).
+  local sig_problems
+  sig_problems="$(midtrans_signature_key_problems <<<"$output")"
+  if [ -n "$sig_problems" ]; then
+    while IFS= read -r line; do fail "checkout: $line"; done <<<"$sig_problems"
+  elif grep -qx 'CFGKV:web.env:MIDTRANS_IS_PRODUCTION=true' <<<"$output"; then
+    pass "checkout: MIDTRANS_SIGNATURE_KEY is set in web.env and the running web slot has the same one"
+    # Not provably wrong (an older account signs with the server key), but on the newer dashboard
+    # the two are different secrets: the same value twice still refuses every notification.
+    if grep -qx 'SAME:midtrans-signature-vs-server:same' <<<"$output"; then
+      warn "checkout: MIDTRANS_SIGNATURE_KEY equals MIDTRANS_SERVER_KEY in web.env — on the newer Midtrans dashboard it must be the separate Signature Secret Key (checkout-prod.md 2.4)"
+    fi
+  else
+    info "checkout: MIDTRANS_SIGNATURE_KEY not checked (web.env MIDTRANS_IS_PRODUCTION is not true)"
+  fi
+
   # Needed in every mode: admin's storefront revalidation goes through this alias.
   if grep -q '^WEBALIAS:ok$' <<<"$output"; then
     pass "internal alias http://web:3000 answers (admin revalidation, cron)"

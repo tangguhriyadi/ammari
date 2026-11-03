@@ -174,18 +174,24 @@ describe("POST /api/internal/payments/sweep", () => {
       const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
       vi.stubEnv("MIDTRANS_SERVER_KEY", "");
       vi.stubEnv("MIDTRANS_IS_PRODUCTION", "");
+      // A malformed signature key is named like the server key, never shown.
+      const badSignatureKey = "not:a signature key";
+      vi.stubEnv("MIDTRANS_SIGNATURE_KEY", badSignatureKey);
       for (let run = 0; run < 2; run++) {
         const response = await call(sweep, "/api/internal/payments/sweep");
         expect(response.status).toBe(503);
-        expect(await response.json()).toEqual({
+        const text = await response.text();
+        expect(text).not.toContain(badSignatureKey);
+        expect(JSON.parse(text)).toEqual({
           error: "payment provider not configured",
-          problems: expect.arrayContaining(["MIDTRANS_SERVER_KEY is not set", "MIDTRANS_IS_PRODUCTION must be true or false"]),
+          problems: expect.arrayContaining(["MIDTRANS_SERVER_KEY is not set", "MIDTRANS_IS_PRODUCTION must be true or false", "MIDTRANS_SIGNATURE_KEY has an unexpected format"]),
         });
       }
       // Not deduplicated like the checkout runtime's log: one line per cron run, names only.
       const refusals = errors.mock.calls.filter(([message]) => message === "[payments] sweep refused: payment provider not configured");
       expect(refusals).toHaveLength(2);
-      expect(refusals[0]?.[1]).toEqual({ problems: expect.arrayContaining(["MIDTRANS_SERVER_KEY is not set"]) });
+      expect(refusals[0]?.[1]).toEqual({ problems: expect.arrayContaining(["MIDTRANS_SERVER_KEY is not set", "MIDTRANS_SIGNATURE_KEY has an unexpected format"]) });
+      expect(JSON.stringify(errors.mock.calls)).not.toContain(badSignatureKey);
       expect(await orderStatus(tx, fixture.orderId)).toMatchObject({ status: "awaiting_payment", paymentStatus: "pending" });
       vi.unstubAllEnvs();
     });

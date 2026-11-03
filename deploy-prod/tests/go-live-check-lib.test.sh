@@ -47,6 +47,30 @@ expect_headers "CSP frame-ancestors counts as frame protection" index "" \
   $'HTTP/2 200\r\nstrict-transport-security: max-age=1\r\nx-content-type-options: nosniff\r\nreferrer-policy: no-referrer\r\ncontent-security-policy: frame-ancestors \'none\'\r\n'
 expect_headers "unknown policy is refused" both "unknown indexing policy: both (index or noindex)" "$BASE_HEADERS"
 
+# expect_sig NAME EXPECTED_OUTPUT REMOTE_OUTPUT — midtrans_signature_key_problems in a fresh `set -u` bash.
+expect_sig() {
+  local got
+  got="$(printf '%s' "$3" | bash -c 'set -u; . "$1"; midtrans_signature_key_problems' _ "$LIB" 2>&1)"
+  if [ "$got" = "$2" ]; then ok "$1"; else bad "$1 (got: $got)"; fi
+}
+PROD=$'CFGKV:web.env:MIDTRANS_IS_PRODUCTION=true\n'
+SIG_MISSING_MSG="web.env MIDTRANS_SIGNATURE_KEY is missing (MIDTRANS_IS_PRODUCTION=true needs it; set it from ~/ammari-secrets/prod-midtrans-signature-key, checkout-prod.md 2.4)"
+expect_sig "signature key: set in the file and the same in the running slot" "" \
+  "${PROD}"$'CFG:web.env:MIDTRANS_SIGNATURE_KEY:set\nRUNENV:web:MIDTRANS_SIGNATURE_KEY:match\n'
+expect_sig "signature key: missing everywhere fails twice" "$SIG_MISSING_MSG"$'\nrunning web slot MIDTRANS_SIGNATURE_KEY: unset-in-both' \
+  "${PROD}"$'CFG:web.env:MIDTRANS_SIGNATURE_KEY:missing\nRUNENV:web:MIDTRANS_SIGNATURE_KEY:unset-in-both\n'
+expect_sig "signature key: empty in the file fails" "web.env MIDTRANS_SIGNATURE_KEY is empty (MIDTRANS_IS_PRODUCTION=true needs it; set it from ~/ammari-secrets/prod-midtrans-signature-key, checkout-prod.md 2.4)"$'\nrunning web slot MIDTRANS_SIGNATURE_KEY: unset-in-both' \
+  "${PROD}"$'CFG:web.env:MIDTRANS_SIGNATURE_KEY:empty\nRUNENV:web:MIDTRANS_SIGNATURE_KEY:unset-in-both\n'
+expect_sig "signature key: set in the file but the slot was not recreated" "running web slot has no MIDTRANS_SIGNATURE_KEY although env/web.env sets it — run ./recreate-active-slot.sh web on the VPS" \
+  "${PROD}"$'CFG:web.env:MIDTRANS_SIGNATURE_KEY:set\nRUNENV:web:MIDTRANS_SIGNATURE_KEY:unset-in-container\n'
+expect_sig "signature key: running slot differs" "running web slot's MIDTRANS_SIGNATURE_KEY differs from env/web.env — run ./recreate-active-slot.sh web on the VPS" \
+  "${PROD}"$'CFG:web.env:MIDTRANS_SIGNATURE_KEY:set\nRUNENV:web:MIDTRANS_SIGNATURE_KEY:differs\n'
+expect_sig "signature key: no data from the VPS fails" "web.env MIDTRANS_SIGNATURE_KEY is no data (MIDTRANS_IS_PRODUCTION=true needs it; set it from ~/ammari-secrets/prod-midtrans-signature-key, checkout-prod.md 2.4)"$'\nrunning web slot MIDTRANS_SIGNATURE_KEY: no data' "$PROD"
+expect_sig "signature key: no MIDTRANS_IS_PRODUCTION data at all fails" "no MIDTRANS_IS_PRODUCTION data for web.env from the VPS; MIDTRANS_SIGNATURE_KEY not verified" \
+  $'CFG:web.env:MIDTRANS_SIGNATURE_KEY:missing\n'
+expect_sig "signature key: not required when MIDTRANS_IS_PRODUCTION is not true" "" \
+  $'CFGKV:web.env:MIDTRANS_IS_PRODUCTION=false\nCFG:web.env:MIDTRANS_SIGNATURE_KEY:missing\nRUNENV:web:MIDTRANS_SIGNATURE_KEY:unset-in-both\n'
+
 if bash -c 'set -u; . "$1"; command -v nc_probe >/dev/null' _ "$LIB"; then ok "nc_probe defined"; else bad "nc_probe defined"; fi
 
 echo "bash ${BASH_VERSION}: ${FAILS} failure(s)"

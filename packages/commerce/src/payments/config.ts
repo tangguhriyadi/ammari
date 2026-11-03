@@ -45,6 +45,7 @@ function minutes(value: string | undefined, fallback: number): number | null {
  * `SHIPPING_RATE_PROVIDER=fake`), so a deployed container can never take fake payments.
  *
  * Midtrans needs `MIDTRANS_SERVER_KEY` and an explicit `MIDTRANS_IS_PRODUCTION` (`true` / `false`);
+ * `MIDTRANS_SIGNATURE_KEY` is optional (verifies notifications only; the server key when unset);
  * `MIDTRANS_NOTIFICATION_URL` is optional (sent as X-Override-Notification, D8; https only). Real
  * money only where it belongs: the production environment (`DEPLOY_ENV=production`, or a production
  * build that does not say which environment it is) must use production mode, and production mode
@@ -96,6 +97,14 @@ export function paymentRuntimeFromEnv(env: PaymentEnv, options: { siteOrigin: st
   return { ok: true, runtime: { provider, orderIdPrefix, paymentExpiryMinutes, stockHoldMinutes } };
 }
 
+/** True when Midtrans runs in production mode without `MIDTRANS_SIGNATURE_KEY`, so notifications
+ * are verified with the server key. Valid for older accounts, but on the newer dashboard every
+ * notification is then refused as a bad signature; the web app warns once per process (names only)
+ * so the fallback is never silent. */
+export function midtransSignatureKeyFallsBackInProduction(env: PaymentEnv): boolean {
+  return (env.PAYMENT_PROVIDER?.trim() || "midtrans") === "midtrans" && env.MIDTRANS_IS_PRODUCTION?.trim() === "true" && !env.MIDTRANS_SIGNATURE_KEY?.trim();
+}
+
 const NOTIFICATION_URL_MAX = 255;
 const MIDTRANS_SERVER_KEY_PATTERN = /^[A-Za-z0-9_~-]{10,200}$/;
 
@@ -106,6 +115,12 @@ function midtransFromEnv(env: PaymentEnv, problems: string[]): PaymentProvider |
   // `~` too: keys from the newer Midtrans dashboard (one key per set of permissions) carry it. Still
   // no whitespace, quotes, `:` (it would end the Basic auth user) or anything compose would change.
   else if (!MIDTRANS_SERVER_KEY_PATTERN.test(serverKey)) problems.push("MIDTRANS_SERVER_KEY has an unexpected format");
+  // The newer dashboard signs HTTP notifications with a separate "Signature Secret Key" (Settings ->
+  // Access Keys -> Payment), not the server key. Optional: unset, notifications are verified with the
+  // server key (sandbox and older accounts). Only the signature check uses it; every API call keeps
+  // the server key.
+  const signatureKey = env.MIDTRANS_SIGNATURE_KEY?.trim() || null;
+  if (signatureKey !== null && !MIDTRANS_SERVER_KEY_PATTERN.test(signatureKey)) problems.push("MIDTRANS_SIGNATURE_KEY has an unexpected format");
 
   const mode = env.MIDTRANS_IS_PRODUCTION?.trim();
   if (mode !== "true" && mode !== "false") problems.push("MIDTRANS_IS_PRODUCTION must be true or false");
@@ -137,5 +152,5 @@ function midtransFromEnv(env: PaymentEnv, problems: string[]): PaymentProvider |
   }
 
   if (problems.length > before) return null;
-  return createMidtransPaymentProvider({ serverKey, isProduction, notificationUrl });
+  return createMidtransPaymentProvider({ serverKey, signatureKey, isProduction, notificationUrl });
 }

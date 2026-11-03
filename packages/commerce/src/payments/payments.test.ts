@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { paymentProviderFromEnv, paymentRuntimeFromEnv } from "./config";
+import { midtransSignatureKeyFallsBackInProduction, paymentProviderFromEnv, paymentRuntimeFromEnv } from "./config";
 import { createFakePaymentProvider } from "./fake";
 import { buildPaymentLines, providerOrderId } from "./lines";
 import { PaymentProviderError } from "./provider";
-import { fakeMidtransServerKey, fakeMidtransTildeServerKey } from "../../test/fake-keys";
+import { fakeMidtransServerKey, fakeMidtransSignatureKey, fakeMidtransTildeServerKey } from "../../test/fake-keys";
+import { midtransSignature } from "./status";
 
 // docs/plans/cart-checkout.md D7, §4.5.6, §12: the pure payment helpers, the fake provider and
 // the env runtime. Nothing here reaches a gateway.
@@ -202,6 +203,51 @@ describe("paymentRuntimeFromEnv", () => {
     expect(problems(`SB-${tildeKey}`)).toEqual(["MIDTRANS_SERVER_KEY is a sandbox key but MIDTRANS_IS_PRODUCTION is true"]);
     // Names only, never the key.
     expect(problems(`${tildeKey} x`).join(" ")).not.toContain(tildeKey);
+  });
+
+  test("MIDTRANS_SIGNATURE_KEY verifies notifications when set; the server key does then not; unset falls back to the server key", () => {
+    const prod = { NODE_ENV: "production", DEPLOY_ENV: "production", MIDTRANS_IS_PRODUCTION: "true", MIDTRANS_SERVER_KEY: fakeMidtransTildeServerKey() };
+    const signatureKey = fakeMidtransSignatureKey();
+    const fields = { orderId: "ORD-202611-00000001-1", statusCode: "200", grossAmount: "354000.00" };
+    const signedWith = (key: string) => ({ ...fields, signatureKey: midtransSignature(fields, key) });
+    const providerFor = (env: Record<string, string | undefined>) => {
+      const result = paymentProviderFromEnv(env, origin);
+      if (!result.ok) throw new Error(result.problems.join("; "));
+      return result.provider;
+    };
+
+    const withSignatureKey = providerFor({ ...prod, MIDTRANS_SIGNATURE_KEY: signatureKey });
+    expect(withSignatureKey.verifyNotificationSignature(signedWith(signatureKey))).toBe(true);
+    expect(withSignatureKey.verifyNotificationSignature(signedWith(prod.MIDTRANS_SERVER_KEY))).toBe(false);
+    // Surrounding whitespace in the env file is ignored, as for the server key.
+    expect(providerFor({ ...prod, MIDTRANS_SIGNATURE_KEY: ` ${signatureKey}\n` }).verifyNotificationSignature(signedWith(signatureKey))).toBe(true);
+
+    for (const unset of [{}, { MIDTRANS_SIGNATURE_KEY: "" }, { MIDTRANS_SIGNATURE_KEY: "  " }]) {
+      const fallback = providerFor({ ...prod, ...unset });
+      expect(fallback.verifyNotificationSignature(signedWith(prod.MIDTRANS_SERVER_KEY))).toBe(true);
+      expect(fallback.verifyNotificationSignature(signedWith(signatureKey))).toBe(false);
+    }
+  });
+
+  test("the production fallback to the server key is detectable (the web app warns once)", () => {
+    const prod = { DEPLOY_ENV: "production", MIDTRANS_IS_PRODUCTION: "true", MIDTRANS_SERVER_KEY: PRODUCTION_KEY };
+    expect(midtransSignatureKeyFallsBackInProduction(prod)).toBe(true);
+    expect(midtransSignatureKeyFallsBackInProduction({ ...prod, MIDTRANS_SIGNATURE_KEY: "  " })).toBe(true);
+    expect(midtransSignatureKeyFallsBackInProduction({ ...prod, MIDTRANS_SIGNATURE_KEY: fakeMidtransSignatureKey() })).toBe(false);
+    expect(midtransSignatureKeyFallsBackInProduction({ ...prod, MIDTRANS_IS_PRODUCTION: "false" })).toBe(false);
+    expect(midtransSignatureKeyFallsBackInProduction({ ...prod, PAYMENT_PROVIDER: "fake" })).toBe(false);
+  });
+
+  test("a malformed MIDTRANS_SIGNATURE_KEY makes the provider not configured, by name only", () => {
+    const sandbox = { MIDTRANS_SERVER_KEY: SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "false", DEPLOY_ENV: "dev" };
+    const signatureKey = fakeMidtransSignatureKey();
+    for (const bad of [`${signatureKey.slice(0, 10)}:${signatureKey.slice(10)}`, `${signatureKey.slice(0, 10)} ${signatureKey.slice(10)}`, `${signatureKey}"`, "short~key", `${signatureKey}${"0".repeat(200)}`]) {
+      const provider = paymentProviderFromEnv({ ...sandbox, MIDTRANS_SIGNATURE_KEY: bad }, origin);
+      expect(provider).toEqual({ ok: false, problems: ["MIDTRANS_SIGNATURE_KEY has an unexpected format"] });
+      const runtime = paymentRuntimeFromEnv({ ...sandbox, MIDTRANS_SIGNATURE_KEY: bad }, origin);
+      expect(runtime.ok ? [] : runtime.problems).toEqual(["MIDTRANS_SIGNATURE_KEY has an unexpected format"]);
+      expect(JSON.stringify(provider)).not.toContain(signatureKey.slice(0, 10));
+    }
   });
 
   test("an unknown DEPLOY_ENV fails closed; the notification route's provider ignores checkout timing problems", () => {

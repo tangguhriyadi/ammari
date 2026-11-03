@@ -6,10 +6,12 @@ import type { Database } from "../db";
 import { applyPaymentStatus, type ApplyOutcome } from "./apply-status";
 import { PAYMENT_STATUS_TIMEOUT_MS, PaymentProviderError, type PaymentProvider } from "./provider";
 
-// The payment notification (docs/plans/cart-checkout.md §6.1, D6). Every notification is written
-// to `payment_notifications` first, so none is ever lost, even when the rest fails. Then:
-// signature (SHA-512 with the server key, constant time) -> the attempt by provider order id ->
-// the attempt's status fetched from the gateway server to server -> the one state machine
+// The payment notification (docs/plans/cart-checkout.md §6.1, D6). Every notification for one of
+// our attempts is written to `payment_notifications` before it is acted on, so none is ever lost,
+// even when the rest fails. Order: signature (SHA-512 with MIDTRANS_SIGNATURE_KEY, or the server
+// key when that is unset; constant time) -> the attempt by provider order id (a verified
+// notification for an order id we never created is answered 200 and not stored) -> the row -> the
+// attempt's status fetched from the gateway server to server -> the one state machine
 // (./apply-status.ts). The notification body itself never decides anything; it only says which
 // attempt to look at, so a replayed, duplicated or out-of-order notification just re-reads the
 // current status.
@@ -156,25 +158,33 @@ export async function handlePaymentNotification(
   });
   if (!signatureValid) {
     if (await mayLogUnverified()) await logNotification(db, { ...identity, signatureValid: false, payload: unverifiedPayload(object), result: "bad_signature" });
-    // Loud: one of these is a forgery, but a steady stream of them means MIDTRANS_SERVER_KEY does
-    // not match the account sending the notifications (every real payment would be refused).
-    console.error("[payments] notification with a bad signature refused (forged, or MIDTRANS_SERVER_KEY does not match the sending account)", {
+    // Loud: one of these is a forgery, but a steady stream of them means the verifying key does not
+    // match the account sending the notifications (every real payment would be refused).
+    console.error("[payments] notification with a bad signature refused (forged, or MIDTRANS_SIGNATURE_KEY / MIDTRANS_SERVER_KEY when the former is unset, does not match the sending account's signature key)", {
       providerOrderId: signed.order_id,
     });
     return answer(403, "bad_signature");
   }
 
+  // An attempt we never created (another environment's on the shared Sandbox account, a Payment
+  // Link or other dashboard-made transaction on the production account, a stale test): answered 200
+  // so the gateway stops retrying, and nothing is written, since the row could never be acted on.
+  // A database error here is answered 503 without a row; the gateway's retry is the record.
+  let attempt: { id: string } | undefined;
+  try {
+    [attempt] = await db.select({ id: payments.id }).from(payments).where(eq(payments.providerOrderId, signed.order_id)).limit(1);
+  } catch (error) {
+    console.error("[payments] notification attempt lookup failed; answered 503 so it is retried", { providerOrderId: signed.order_id, ...errorFields(error) });
+    return answer(503, "error");
+  }
+  if (!attempt) {
+    console.info("[payments] notification for an unknown attempt ignored", { providerOrderId: signed.order_id });
+    return answer(200, "unknown_order");
+  }
+
   const logId = await logNotification(db, { ...identity, signatureValid: true, payload: verifiedPayload(object), result: null });
 
   try {
-    const [attempt] = await db.select({ id: payments.id }).from(payments).where(eq(payments.providerOrderId, signed.order_id)).limit(1);
-    if (!attempt) {
-      // Another environment's attempt on the shared Sandbox account, or a stale test: nothing to do.
-      await finish(db, logId, "unknown_order");
-      console.info("[payments] notification for an unknown attempt", { providerOrderId: signed.order_id });
-      return answer(200, "unknown_order");
-    }
-
     let report;
     try {
       report = await provider.getPaymentStatus(signed.order_id, { signal: AbortSignal.timeout(options.statusTimeoutMs ?? PAYMENT_STATUS_TIMEOUT_MS) });

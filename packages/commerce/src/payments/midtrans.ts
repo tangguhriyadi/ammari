@@ -60,6 +60,9 @@ const CUSTOMER_NAME_MAX = 30;
 
 export interface MidtransProviderOptions {
   serverKey: string;
+  /** `MIDTRANS_SIGNATURE_KEY`: the newer dashboard's "Signature Secret Key", used only to verify
+   * notifications; null or absent means the server key signs them (sandbox, older accounts). */
+  signatureKey?: string | null;
   isProduction: boolean;
   /** `MIDTRANS_NOTIFICATION_URL`, sent as X-Override-Notification (D8); already validated. */
   notificationUrl: string | null;
@@ -257,7 +260,7 @@ export function createMidtransPaymentProvider(options: MidtransProviderOptions):
     },
 
     verifyNotificationSignature(fields: NotificationSignatureFields): boolean {
-      return verifyMidtransSignature(fields, options.serverKey);
+      return verifyMidtransSignature(fields, options.signatureKey ?? options.serverKey);
     },
   };
 }

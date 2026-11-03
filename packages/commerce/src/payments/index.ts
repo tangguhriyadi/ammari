@@ -28,6 +28,7 @@ export { MIDTRANS_ENABLED_PAYMENTS, createMidtransPaymentProvider, type Midtrans
 export { midtransSignature, parsePaymentStatusBody, verifyMidtransSignature } from "./status";
 export {
   DEFAULT_PAYMENT_EXPIRY_MINUTES,
+  midtransSignatureKeyFallsBackInProduction,
   paymentProviderFromEnv,
   paymentRuntimeFromEnv,
   type PaymentEnv,

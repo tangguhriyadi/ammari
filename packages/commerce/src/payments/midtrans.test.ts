@@ -3,7 +3,7 @@ import { createFakePaymentProvider, recordFakeTransaction } from "./fake";
 import { MIDTRANS_ENABLED_PAYMENTS, createMidtransPaymentProvider, midtransStartTime } from "./midtrans";
 import { PaymentProviderError, type CreatePaymentInput } from "./provider";
 import { midtransSignature, parsePaymentStatusBody, parseWholeRupiah, verifyMidtransSignature } from "./status";
-import { fakeMidtransServerKey, fakeMidtransTildeServerKey } from "../../test/fake-keys";
+import { fakeMidtransServerKey, fakeMidtransSignatureKey, fakeMidtransTildeServerKey } from "../../test/fake-keys";
 
 // docs/plans/cart-checkout.md D5 to D8, §6.1, §13: the Midtrans Snap and status client against a
 // stub fetch, the signature, and the status parsing. Fixtures are hand-written from the documented
@@ -377,6 +377,30 @@ describe("signature", () => {
     expect(verifyMidtransSignature({ ...fields, signatureKey: signature }, key)).toBe(true);
     expect(verifyMidtransSignature({ ...fields, signatureKey: signature }, key.replace("~", "-"))).toBe(false);
     expect(verifyMidtransSignature({ ...fields, signatureKey: signature }, key.replace("~", "%7E"))).toBe(false);
+  });
+});
+
+describe("notification signature key", () => {
+  test("a separate signature key verifies notifications only; API calls keep authenticating with the server key", async () => {
+    const serverKey = fakeMidtransTildeServerKey();
+    const signatureKey = fakeMidtransSignatureKey();
+    const fields = { orderId: "ORD-202612-0001-1", statusCode: "200", grossAmount: "573000.00" };
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(200, statusBody()));
+    const provider = createMidtransPaymentProvider({ serverKey, signatureKey, isProduction: true, notificationUrl: null, fetch: fetch as unknown as typeof globalThis.fetch });
+
+    expect(provider.verifyNotificationSignature({ ...fields, signatureKey: midtransSignature(fields, signatureKey) })).toBe(true);
+    expect(provider.verifyNotificationSignature({ ...fields, signatureKey: midtransSignature(fields, serverKey) })).toBe(false);
+
+    await provider.getPaymentStatus("LOCAL-ORD-202612-0001-1");
+    const headers = new Headers(fetch.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("authorization")).toBe(`Basic ${Buffer.from(`${serverKey}:`, "utf8").toString("base64")}`);
+
+    // Without one (null or absent) the server key verifies, as before.
+    for (const unset of [null, undefined]) {
+      const legacy = createMidtransPaymentProvider({ serverKey, signatureKey: unset, isProduction: true, notificationUrl: null, fetch: fetch as unknown as typeof globalThis.fetch });
+      expect(legacy.verifyNotificationSignature({ ...fields, signatureKey: midtransSignature(fields, serverKey) })).toBe(true);
+      expect(legacy.verifyNotificationSignature({ ...fields, signatureKey: midtransSignature(fields, signatureKey) })).toBe(false);
+    }
   });
 });
 

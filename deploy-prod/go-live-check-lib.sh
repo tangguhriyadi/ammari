@@ -84,3 +84,31 @@ security_header_problems() {
     *) echo "unknown indexing policy: $policy (index or noindex)" ;;
   esac
 }
+
+# Reads go-live-check-remote.sh's output on stdin and prints one problem per line (nothing when
+# fine) for MIDTRANS_SIGNATURE_KEY, the newer Midtrans dashboard's separate "Signature Secret Key"
+# that signs HTTP notifications (docs/launch/checkout-prod.md 2.4). Required only when web.env has
+# MIDTRANS_IS_PRODUCTION=true: without it the app verifies with the server key, and the production
+# account's notifications are all refused as bad signatures. Input lines carry states only
+# (set/empty/missing, match/differs/...), never a value. No MIDTRANS_IS_PRODUCTION line at all (a
+# truncated remote run) is a problem too, so missing data never reads as "not required".
+midtrans_signature_key_problems() {
+  local out line state
+  out="$(cat)"
+  if ! grep -q '^CFGKV:web.env:MIDTRANS_IS_PRODUCTION=' <<<"$out"; then
+    echo "no MIDTRANS_IS_PRODUCTION data for web.env from the VPS; MIDTRANS_SIGNATURE_KEY not verified"
+    return 0
+  fi
+  grep -qx 'CFGKV:web.env:MIDTRANS_IS_PRODUCTION=true' <<<"$out" || return 0
+  line="$(grep '^CFG:web.env:MIDTRANS_SIGNATURE_KEY:' <<<"$out" | head -n 1)"
+  state="${line##*:}"
+  [ "$state" = "set" ] || echo "web.env MIDTRANS_SIGNATURE_KEY is ${state:-no data} (MIDTRANS_IS_PRODUCTION=true needs it; set it from ~/ammari-secrets/prod-midtrans-signature-key, checkout-prod.md 2.4)"
+  line="$(grep '^RUNENV:web:MIDTRANS_SIGNATURE_KEY:' <<<"$out" | head -n 1)"
+  state="${line##*:}"
+  case "$state" in
+    match) ;;
+    differs) echo "running web slot's MIDTRANS_SIGNATURE_KEY differs from env/web.env — run ./recreate-active-slot.sh web on the VPS" ;;
+    unset-in-container) echo "running web slot has no MIDTRANS_SIGNATURE_KEY although env/web.env sets it — run ./recreate-active-slot.sh web on the VPS" ;;
+    *) echo "running web slot MIDTRANS_SIGNATURE_KEY: ${state:-no data}" ;;
+  esac
+}

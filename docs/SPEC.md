@@ -601,8 +601,10 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   `provider_ref` (the gateway transaction id). Schema exists (migration 0030, plan §3); nothing
   writes it until the Dec 2026 cart/checkout sessions (§3.4). The same holds for every table and
   `orders` column below that is marked for checkout.
-- `payment_notifications` — raw log of every gateway notification (payload, signature validity,
-  processing result); payloads kept 12 months.
+- `payment_notifications` — raw log of gateway notifications (payload, signature validity,
+  processing result); payloads kept 12 months. A correctly signed notification for an order id
+  that matches none of our payment attempts (a Midtrans Payment Link, another environment) is
+  answered 200 and not stored (one log line only).
 - `stock_reservations` — one row per web order line while its payment is pending
   (`active` / `consumed` / `released`, `expires_at`). Storefront availability becomes physical
   stock minus active, unexpired reservations; the append-only `stock_movements` ledger still

@@ -295,11 +295,30 @@ describe("handlePaymentNotification", () => {
     });
   });
 
-  test("unknown attempt: 200 and logged; provider not configured or status unavailable: 503 (Midtrans retries), logged, nothing changed", async () => {
+  test("a verified notification for an order id we never created (a Payment Link, another environment): 200, one log line, nothing written or fetched", async () => {
     await withRollback(async (tx) => {
-      const unknown = await handlePaymentNotification(tx, provider, notification(statusBody("OTHER-ORD-209901-0001-1", "settlement", 1000)));
-      expect(unknown).toMatchObject({ httpStatus: 200, result: "unknown_order" });
+      const countRows = async (table: typeof paymentNotifications | typeof payments | typeof orders) => (await tx.select({ n: sql<number>`count(*)::int` }).from(table))[0]?.n;
+      const before = { notifications: await countRows(paymentNotifications), payments: await countRows(payments), orders: await countRows(orders) };
+      const calls = statusCalls.length;
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      try {
+        for (const orderId of ["6b63da51-e58a-43db-900a-60fd59ebfb4c-1793684575439", "OTHER-ORD-209901-0001-1"]) {
+          info.mockClear();
+          const unknown = await handlePaymentNotification(tx, provider, notification(statusBody(orderId, "settlement", 150_000)));
+          expect(unknown).toEqual({ httpStatus: 200, result: "unknown_order", orderNo: null, productSlugs: [] });
+          expect(info).toHaveBeenCalledTimes(1);
+          expect(info.mock.calls[0]?.[1]).toEqual({ providerOrderId: orderId });
+        }
+      } finally {
+        info.mockRestore();
+      }
+      expect(statusCalls.length).toBe(calls);
+      expect({ notifications: await countRows(paymentNotifications), payments: await countRows(payments), orders: await countRows(orders) }).toEqual(before);
+    });
+  });
 
+  test("provider not configured or status unavailable: 503 (Midtrans retries), logged, nothing changed", async () => {
+    await withRollback(async (tx) => {
       const fixture = await checkoutOrder(tx);
       const body = notification(statusBody(fixture.providerOrderId, "settlement", fixture.total));
       expect(await handlePaymentNotification(tx, null, body)).toMatchObject({ httpStatus: 503, result: "not_configured" });

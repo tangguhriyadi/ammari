@@ -6,14 +6,16 @@ import { paymentProviderFromEnv, type PaymentProvider } from "@ammari/commerce/p
 // status and expires a still pending one. Same variables and rules as apps/web's notification route
 // (`MIDTRANS_SERVER_KEY`, `MIDTRANS_IS_PRODUCTION`, `DEPLOY_ENV`; `PAYMENT_PROVIDER=fake` only in an
 // e2e run). Fails closed: without a valid configuration this returns null and such a cancel is
-// refused with a clear message; paid orders are cancelled without the gateway.
+// refused with a clear message; paid orders are cancelled without the gateway. Admin never verifies
+// a notification, so `MIDTRANS_SIGNATURE_KEY` is ignored here: a malformed copy in admin's
+// environment must not make the provider "not configured" and refuse staff cancels.
 
 let loggedProblems: string | null = null;
 
 export function getAdminPaymentProvider(env: NodeJS.ProcessEnv = process.env): PaymentProvider | null {
   // The fake's payment page lives on the storefront; nothing in admin opens it.
   const siteOrigin = env.MAIN_SITE_URL?.trim() || "http://localhost:3000";
-  const result = paymentProviderFromEnv(env, { siteOrigin });
+  const result = paymentProviderFromEnv({ ...env, MIDTRANS_SIGNATURE_KEY: undefined }, { siteOrigin });
   if (result.ok) return result.provider;
   const problems = result.problems.join("; ");
   // Variable names only (never values); once per distinct problem set, not per request.

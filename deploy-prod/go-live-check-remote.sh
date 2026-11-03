@@ -148,7 +148,11 @@ done
 cfg_state() {
   local v
   if v="$(env_value "env/$1" "$2")"; then
-    if [ -n "$v" ]; then echo "CFG:$1:$2:set"; else echo "CFG:$1:$2:empty"; fi
+    # Blank inside quotes (KEY=" ") counts as empty: the app trims every key, so it is unset there.
+    case "$v" in
+      *[![:space:]]*) echo "CFG:$1:$2:set" ;;
+      *) echo "CFG:$1:$2:empty" ;;
+    esac
   else
     echo "CFG:$1:$2:missing"
   fi
@@ -157,7 +161,7 @@ cfg_kv() {
   local v
   if v="$(env_value "env/$1" "$2")"; then echo "CFGKV:$1:$2=$v"; else echo "CFGKV:$1:$2=<missing>"; fi
 }
-for key in MIDTRANS_SERVER_KEY BITESHIP_API_KEY BITESHIP_ORIGIN_AREA_ID INTERNAL_CRON_SECRET RESEND_API_KEY EMAIL_FROM CUSTOMER_BETTER_AUTH_SECRET; do
+for key in MIDTRANS_SERVER_KEY MIDTRANS_SIGNATURE_KEY BITESHIP_API_KEY BITESHIP_ORIGIN_AREA_ID INTERNAL_CRON_SECRET RESEND_API_KEY EMAIL_FROM CUSTOMER_BETTER_AUTH_SECRET; do
   cfg_state web.env "$key"
 done
 cfg_state admin.env MIDTRANS_SERVER_KEY
@@ -190,6 +194,10 @@ esac
 a="$(env_value env/web.env MIDTRANS_SERVER_KEY || true)"
 b="$(env_value env/admin.env MIDTRANS_SERVER_KEY || true)"
 if [ -z "$a" ] || [ -z "$b" ]; then echo "SAME:midtrans:missing"; elif [ "$a" = "$b" ]; then echo "SAME:midtrans:match"; else echo "SAME:midtrans:mismatch"; fi
+# The signature key is a different secret from the server key on the newer dashboard; the same
+# value pasted twice passes every presence check but still refuses every notification.
+b="$(env_value env/web.env MIDTRANS_SIGNATURE_KEY || true)"
+if [ -z "$a" ] || [ -z "$b" ]; then echo "SAME:midtrans-signature-vs-server:missing"; elif [ "$a" = "$b" ]; then echo "SAME:midtrans-signature-vs-server:same"; else echo "SAME:midtrans-signature-vs-server:differ"; fi
 a="$(env_value env/web.env INTERNAL_CRON_SECRET || true)"
 b="$(env_value env/cron.env INTERNAL_CRON_SECRET || true)"
 if [ -z "$a" ] || [ -z "$b" ]; then echo "SAME:cron:missing"; elif [ "$a" != "$b" ]; then echo "SAME:cron:mismatch"; elif [ "${#a}" -lt 32 ]; then echo "SAME:cron:short"; else echo "SAME:cron:match"; fi
@@ -202,7 +210,7 @@ unset v a b
 # provider not configured" while the file looks right. Values stay in this shell: only
 # match / differs / unset-in-container / unset-in-both is printed.
 web_cid="$(docker compose ps -q "web-$web_slot" 2>/dev/null </dev/null || true)"
-for key in MIDTRANS_SERVER_KEY MIDTRANS_IS_PRODUCTION MIDTRANS_NOTIFICATION_URL DEPLOY_ENV INTERNAL_CRON_SECRET; do
+for key in MIDTRANS_SERVER_KEY MIDTRANS_SIGNATURE_KEY MIDTRANS_IS_PRODUCTION MIDTRANS_NOTIFICATION_URL DEPLOY_ENV INTERNAL_CRON_SECRET; do
   if [ -z "$web_cid" ]; then
     echo "RUNENV:web:$key:no-container"
     continue

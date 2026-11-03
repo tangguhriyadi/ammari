@@ -310,6 +310,45 @@ with `keyRejected: true` in the web logs while checkout refuses to create paymen
 Keys from the newer Midtrans dashboard (one server key per set of permissions) may contain `~`
 besides letters, digits, `_` and `-` (e.g. 35 characters long): that is a valid key, and
 `set-env-var.sh`, the env files and the app take it as is. Do not edit or quote it.
+
+**Signature Secret Key (web only, required in prod).** The new Midtrans dashboard signs HTTP
+notifications with a separate **Signature Secret Key**, not the server key:
+`signature_key = SHA512(order_id + status_code + gross_amount + Signature Secret Key)`. With only
+`MIDTRANS_SERVER_KEY` set, the app verifies with the server key and refuses **every** production
+notification (`[payments] notification with a bad signature refused` in the web log, 403 to
+Midtrans), so paid orders are only picked up by the finish page and the sweep. Copy it from the
+production dashboard → **Settings → Access Keys → Payment → Signature Secret Key**. **Do not click
+Regenerate** there: a new key invalidates the old one at once, and every notification is refused
+until `MIDTRANS_SIGNATURE_KEY` is updated, uploaded and the web slot recreated. The key stays on
+the Mac at `~/ammari-secrets/prod-midtrans-signature-key` (unlike the server key file above, it is
+kept) and goes into `prod-web.env` as `MIDTRANS_SIGNATURE_KEY`. It is used **only** to verify
+notifications; Snap, the status check, expire and cancel keep using `MIDTRANS_SERVER_KEY`. Admin
+does not need it (it never receives notifications). Same charset and length rule as the server key
+(10 to 200 of `A-Z a-z 0-9 _ - ~`); a malformed value makes the provider "not configured"
+(`MIDTRANS_SIGNATURE_KEY has an unexpected format`), never silently ignored. There is no API call
+that checks it; the first real notification after launch (or a Midtrans dashboard test
+notification) shows it: `notification applied` / `unknown attempt ignored` instead of `bad
+signature`.
+
+```bash
+# Midtrans production dashboard → Settings → Access Keys → Payment → Signature Secret Key → Copy
+# (NOT Regenerate), then:
+(umask 077 && pbpaste > ~/ammari-secrets/prod-midtrans-signature-key) && pbcopy < /dev/null
+S=~/ammari-secrets/prod-midtrans-signature-key
+[ -s "$S" ] && [ "$(cat "$S")" != "$(grep '^MIDTRANS_SERVER_KEY=' ~/ammari-secrets/prod-web.env | cut -d= -f2-)" ] \
+  && deploy/set-env-var.sh ~/ammari-secrets/prod-web.env MIDTRANS_SIGNATURE_KEY < "$S" \
+  && deploy/set-env-var.sh --check ~/ammari-secrets/prod-web.env MIDTRANS_SIGNATURE_KEY \
+  || echo "STOPPED: the clipboard was empty or held the server key; copy the Signature Secret Key again"
+```
+
+Expected: `MIDTRANS_SIGNATURE_KEY: set (N characters)`. `STOPPED` means the file is empty (nothing
+was copied) or equals the server key (the clipboard still held it): copy the Signature Secret Key
+again and rerun the block. Then `deploy-prod/upload-prod-env.sh` and
+`./recreate-active-slot.sh web` on the VPS (a `docker compose restart` keeps the old environment);
+`go-live-check.sh` fails while `MIDTRANS_IS_PRODUCTION=true` and the key is missing or empty in
+`prod-web.env` (as uploaded to `env/web.env`) or in the running web slot, and warns when it equals
+`MIDTRANS_SERVER_KEY`. The web app also logs `[payments] MIDTRANS_SIGNATURE_KEY is not set in
+production mode` once per process while it falls back to the server key.
 **`MIDTRANS_ORDER_ID_PREFIX` stays empty in prod** (plan D7). Never set `PAYMENT_PROVIDER` or `SHIPPING_RATE_PROVIDER`.
 
 **2.5 [Dashboard: Biteship] Grow plan, couriers, live key.**
@@ -398,8 +437,8 @@ configured",...}`:** the web process cannot build the Midtrans provider. What it
 nothing else (no client key, no merchant id, no `NEXT_PUBLIC_*`, not `STOREFRONT_CART_ENABLED`,
 not `MIDTRANS_ORDER_ID_PREFIX`): `MIDTRANS_SERVER_KEY` (10 to 200 of `A-Z a-z 0-9 _ - ~`, no spaces, quotes or `:`, not `SB-`),
 `MIDTRANS_IS_PRODUCTION` exactly `true`, `DEPLOY_ENV` exactly `production`,
-`MIDTRANS_NOTIFICATION_URL` empty or one `https` URL of at most 255 characters, `PAYMENT_PROVIDER`
-unset. (`MIDTRANS_SERVER_KEY has an unexpected format` with a key the 2.4 API check accepted meant,
+`MIDTRANS_NOTIFICATION_URL` empty or one `https` URL of at most 255 characters, `MIDTRANS_SIGNATURE_KEY`
+unset or the same charset as the server key, `PAYMENT_PROVIDER` unset. (`MIDTRANS_SERVER_KEY has an unexpected format` with a key the 2.4 API check accepted meant,
 before this release, a newer-dashboard key with `~`; the app now accepts `~`. If it still shows,
 the key was pasted with a space, quote or line break: copy it again and rerun 2.4.) The answer's
 `problems` list names the failing variables (names only, never values; the same
@@ -446,7 +485,8 @@ and admin (same value, not an old-style `SB-` key; the prefix cannot tell a newe
 API check is what proves the environment), `MIDTRANS_IS_PRODUCTION=true` in both, admin
 `DEPLOY_ENV=production`, the notification URL, a live Biteship key and its base URL, no fake
 provider and no order-id prefix, the cron secret matching in web.env and cron.env, the internal
-`web` alias, that the **running** web slot has the same `MIDTRANS_SERVER_KEY`,
+`web` alias, `MIDTRANS_SIGNATURE_KEY` set in web.env and the same in the running web slot (a FAIL
+in every mode once `MIDTRANS_IS_PRODUCTION=true`), that the **running** web slot has the same `MIDTRANS_SERVER_KEY`,
 `MIDTRANS_IS_PRODUCTION`, `MIDTRANS_NOTIFICATION_URL`, `DEPLOY_ENV` and `INTERNAL_CRON_SECRET` as
 `env/web.env` (match / differs only, never a value), and in the cron log at least one `sweep -> 200` and one `emails/dispatch -> 200` with
 no `ERROR`/`ALERT` in the last 15 minutes. The cart flag must still be `false`.

@@ -661,10 +661,12 @@ order and holds no stock.
 
 ### 6.1 Notification endpoint `POST /api/payments/midtrans/notification` (apps/web)
 
-1. Raw JSON, 32 KB limit, logged to `payment_notifications`.
-2. Verify `signature_key == sha512(order_id + status_code + gross_amount + SERVER_KEY)`,
-   constant-time. Mismatch: 403, no change.
-3. Unknown `provider_order_id`: 200 and log.
+1. Raw JSON, 32 KB limit, logged to `payment_notifications` (except step 3's unknown order ids).
+2. Verify `signature_key == sha512(order_id + status_code + gross_amount + SIGNATURE_KEY)`,
+   constant-time, where SIGNATURE_KEY is `MIDTRANS_SIGNATURE_KEY` (the newer dashboard's separate
+   Signature Secret Key) or `MIDTRANS_SERVER_KEY` when that is unset. Mismatch: 403, no change.
+3. Unknown `provider_order_id` (after a valid signature): 200, one log line, no row written
+   (changed 2026-11-03; before that it was stored as `unknown_order`).
 4. Fetch `GET /v2/{order_id}/status`; apply the state machine to that response. `gross_amount`
    must equal `payments.gross_amount` (IDR), else `needs_attention = 'amount_mismatch'`, never
    paid. A `payment_type` of `credit_card` (should be impossible) adds the `payment_anomaly`

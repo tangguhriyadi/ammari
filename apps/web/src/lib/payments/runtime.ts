@@ -1,5 +1,5 @@
 import "server-only";
-import { paymentProviderFromEnv, paymentRuntimeFromEnv, type PaymentProvider, type PaymentRuntime } from "@ammari/commerce/payments";
+import { midtransSignatureKeyFallsBackInProduction, paymentProviderFromEnv, paymentRuntimeFromEnv, type PaymentProvider, type PaymentRuntime } from "@ammari/commerce/payments";
 import { siteOrigin } from "@/lib/site-origin";
 
 let lastLoggedProblems: string | null = null;
@@ -23,6 +23,15 @@ export function getPaymentRuntime(): PaymentRuntime | null {
 }
 
 let lastLoggedProviderProblems: string | null = null;
+let warnedSignatureKeyFallback = false;
+
+/** Once per process: production Midtrans verifying notifications with the server key (no
+ * MIDTRANS_SIGNATURE_KEY). Names only. */
+function warnSignatureKeyFallback(): void {
+  if (warnedSignatureKeyFallback || !midtransSignatureKeyFallsBackInProduction(process.env)) return;
+  warnedSignatureKeyFallback = true;
+  console.warn("[payments] MIDTRANS_SIGNATURE_KEY is not set in production mode; notifications are verified with MIDTRANS_SERVER_KEY (the newer Midtrans dashboard signs them with a separate Signature Secret Key, so they would all be refused)");
+}
 
 /** Only the payment provider, without logging: the provider, or the variable names (never values)
  * that keep it from being built. For the expiry sweep, which logs and answers the names every run. */
@@ -37,6 +46,7 @@ export function getPaymentProvider(): PaymentProvider | null {
   const result = getPaymentProviderConfig();
   if (result.provider) {
     lastLoggedProviderProblems = null;
+    warnSignatureKeyFallback();
     return result.provider;
   }
   const signature = result.problems.join("|");
