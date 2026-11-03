@@ -19,7 +19,7 @@ export function ProductTile({ tile, imagePriority = false }: { tile: PricedProdu
   const colorLabel = tile.fabricColorId ? tile.colorName : tile.colorCount > 1 ? `${tile.colorName} · ${tile.colorCount} warna` : tile.colorName;
 
   return (
-    <Link href={href} className="group flex flex-col gap-1.5">
+    <Link href={href} className="group flex flex-col gap-1">
       <div className="relative aspect-[2/3] w-full overflow-hidden bg-image-bg">
         {/* tile.image is already the pinned colour's photo, else the product's first photo
             (getStorefrontProductTiles); null only when the product has no photo at all. */}
@@ -42,12 +42,12 @@ export function ProductTile({ tile, imagePriority = false }: { tile: PricedProdu
           )
         )}
       </div>
-      {/* Two lines reserved (min-h = 2 × leading) so colour and price line up across a row; the clamp only clips visually, the full name stays in the DOM for the link text, plus `title` on hover. */}
-      <p title={tile.name} className="line-clamp-2 min-h-[3em] text-[15px] leading-[1.5] text-ink md:text-base">
+      {/* No reserved second line: short names ("Cyra") take one line. The clamp only clips visually, the full name stays in the DOM for the link text, plus `title` on hover. Spacing: 6px image→name, 4px name→colour, 6px colour→price. */}
+      <p title={tile.name} className="mt-0.5 line-clamp-2 text-[15px] leading-[1.5] text-ink md:text-base">
         {tile.name}
       </p>
       {colorLabel && <p className="text-sm text-ink-muted">{colorLabel}</p>}
-      <ProductPrice price={tile.price} className="text-[15px] font-medium md:text-base" />
+      <ProductPrice price={tile.price} className="mt-0.5 text-[15px] font-medium md:text-base" />
     </Link>
   );
 }
