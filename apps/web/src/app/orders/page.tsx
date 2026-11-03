@@ -30,7 +30,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
     <Container className="flex max-w-[800px] flex-col gap-6 py-8 md:py-12">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="font-serif text-[30px] font-normal text-ink">Pesanan saya</h1>
-        <Link href="/account" className="inline-flex min-h-[44px] items-center text-[13px] text-ink-muted underline underline-offset-4">
+        <Link href="/account" className="inline-flex min-h-[44px] items-center text-[15px] text-ink-muted underline underline-offset-4">
           Akun saya
         </Link>
       </div>
@@ -39,8 +39,8 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
 
       {list.rows.length === 0 ? (
         <div className="flex flex-col items-start gap-4 bg-surface p-6">
-          <p className="text-sm text-ink">Belum ada pesanan.</p>
-          <p className="text-sm text-ink-muted">Pesanan yang tertaut ke akunmu akan muncul di sini.</p>
+          <p className="text-[15px] text-ink">Belum ada pesanan.</p>
+          <p className="text-[15px] text-ink-muted">Pesanan yang tertaut ke akunmu akan muncul di sini.</p>
           <PrimaryLink href="/#koleksi" className="w-full md:w-auto">
             Lihat koleksi
           </PrimaryLink>
@@ -50,7 +50,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
       )}
 
       {list.pageCount > 1 && (
-        <nav aria-label="Halaman pesanan" className="flex items-center justify-between gap-4 text-sm">
+        <nav aria-label="Halaman pesanan" className="flex items-center justify-between gap-4 text-[15px]">
           {list.page > 1 ? (
             <Link href={`/orders?page=${list.page - 1}`} className="inline-flex min-h-[44px] items-center text-ink underline underline-offset-4">
               Sebelumnya

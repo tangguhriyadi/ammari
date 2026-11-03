@@ -17,10 +17,10 @@ export function WhyAmmariSection({ section }: { section: WhyAmmariView }) {
           {section.points.map((point, index) => {
             const Icon = WHY_AMMARI_ICONS[point.icon];
             return (
-              <div key={index} className="flex flex-col gap-2">
-                <Icon className="size-5 text-ink" strokeWidth={1.4} aria-hidden="true" />
-                <p className="text-sm font-medium text-ink">{point.title}</p>
-                <p className="text-[13px] text-ink-muted md:text-sm">{point.text}</p>
+              <div key={index} className="flex flex-col gap-3">
+                <Icon className="size-7 text-ink" strokeWidth={1.4} aria-hidden="true" />
+                <p className="text-base font-medium text-ink">{point.title}</p>
+                <p className="text-[15px] text-ink">{point.text}</p>
               </div>
             );
           })}

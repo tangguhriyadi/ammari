@@ -67,7 +67,7 @@ export function ReorderButton({ orderNo, className }: { orderNo: string; classNa
       )}
       <div ref={resultRef} tabIndex={-1} role="status" aria-live="polite" className={filled ? "outline-none" : "mt-3 outline-none empty:mt-0"}>
         {done && summary && (
-          <div className="flex flex-col gap-2 bg-surface px-4 py-3 text-sm text-ink" data-testid="reorder-result">
+          <div className="flex flex-col gap-2 bg-surface px-4 py-3 text-[15px] text-ink" data-testid="reorder-result">
             <p>{summary}</p>
             {done.notes.length > 0 && (
               <ul className="flex flex-col gap-1 text-ink-muted">
@@ -80,7 +80,7 @@ export function ReorderButton({ orderNo, className }: { orderNo: string; classNa
             )}
             {done.mergeTrimmed && <p className="text-ink-muted">Maksimal {CART_MAX_PIECES} barang per pesanan.</p>}
             {done.addedPieces > 0 && (
-              <Link href="/cart" className="inline-flex min-h-[44px] items-center self-start text-[13px] font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
+              <Link href="/cart" className="inline-flex min-h-[44px] items-center self-start text-sm font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
                 Lihat keranjang
               </Link>
             )}
@@ -88,7 +88,7 @@ export function ReorderButton({ orderNo, className }: { orderNo: string; classNa
         )}
       </div>
       {error && (
-        <p ref={errorRef} role="alert" tabIndex={-1} className="mt-3 border border-error-border px-4 py-3 text-sm text-error">
+        <p ref={errorRef} role="alert" tabIndex={-1} className="mt-3 border border-error-border px-4 py-3 text-[15px] text-error">
           {error}
         </p>
       )}

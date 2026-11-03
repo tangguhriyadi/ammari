@@ -15,11 +15,11 @@ export function ClaimForm({ token }: { token: string }) {
     <form action={formAction} className="flex flex-col items-center gap-3">
       <input type="hidden" name="token" value={token} />
       {state.status === "error" && (
-        <p role="alert" className="text-sm text-danger-700">
+        <p role="alert" className="text-[15px] text-danger-700">
           {state.message}
         </p>
       )}
-      <Button type="submit" loading={pending}>
+      <Button className="text-sm" type="submit" loading={pending}>
         Klaim Sekarang
       </Button>
     </form>

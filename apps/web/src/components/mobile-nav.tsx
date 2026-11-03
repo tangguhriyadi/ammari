@@ -70,7 +70,7 @@ export function MobileNav() {
               key={link.href}
               href={link.href}
               onClick={() => setOpen(false)}
-              className="flex min-h-11 items-center text-sm font-medium tracking-[0.04em] text-ink"
+              className="flex min-h-11 items-center text-[15px] font-medium tracking-[0.04em] text-ink"
             >
               {link.label}
             </Link>

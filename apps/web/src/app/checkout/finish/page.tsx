@@ -51,7 +51,7 @@ function CannotShowOrder() {
       <h1 className="font-serif text-[30px] font-normal text-ink" data-testid="finish-heading">
         Lihat pesanan
       </h1>
-      <p className="text-sm text-ink-muted">
+      <p className="text-[15px] text-ink-muted">
         Pesanan ini tidak bisa ditampilkan di perangkat ini. Masuk dengan email yang kamu pakai saat memesan untuk melihat pesananmu.
       </p>
       <PrimaryLink href={LOGIN_FOR_ORDERS_HREF} className="w-full">
@@ -73,27 +73,27 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
   return (
     <Container className="flex max-w-[640px] flex-col gap-8 py-8 md:py-12">
       <div className="flex flex-col gap-2">
-        <p className="text-[13px] text-ink-muted">Pesanan {view.orderNo}</p>
+        <p className="text-[15px] text-ink-muted">Pesanan {view.orderNo}</p>
         <h1 className="font-serif text-[30px] font-normal text-ink" data-testid="finish-heading">
           {HEADINGS[view.state]}
         </h1>
-        {view.state === "paid" && <p className="text-sm text-ink-muted">Terima kasih. Pesananmu sedang kami siapkan.</p>}
+        {view.state === "paid" && <p className="text-[15px] text-ink-muted">Terima kasih. Pesananmu sedang kami siapkan.</p>}
         {view.state === "pending" && view.payBy && (
-          <p className="text-sm text-ink-muted">
+          <p className="text-[15px] text-ink-muted">
             Selesaikan pembayaran sebelum <span className="text-ink">{view.payBy}</span>. Lewat dari itu pesanan dibatalkan otomatis.
           </p>
         )}
         {view.state === "confirming" && (
-          <p className="text-sm text-ink-muted">
+          <p className="text-[15px] text-ink-muted">
             Batas waktu pembayaran sudah lewat. Kalau kamu sudah membayar, konfirmasinya sedang kami tunggu. Muat ulang halaman ini beberapa saat lagi untuk melihat statusnya. Jangan bayar dua kali.
           </p>
         )}
         {view.state === "refund_pending" && (
-          <p className="text-sm text-ink-muted">
+          <p className="text-[15px] text-ink-muted">
             Pesanan ini dibatalkan. Pembayaranmu sudah kami terima dan dananya akan kami kembalikan penuh. Kami akan menghubungimu lewat WhatsApp.
           </p>
         )}
-        {view.state === "failed" && <p className="text-sm text-ink-muted">Waktu pembayaran pesanan ini sudah habis atau pembayarannya tidak berhasil. Kamu bisa pesan lagi kapan saja.</p>}
+        {view.state === "failed" && <p className="text-[15px] text-ink-muted">Waktu pembayaran pesanan ini sudah habis atau pembayarannya tidak berhasil. Kamu bisa pesan lagi kapan saja.</p>}
       </div>
 
       {view.state === "pending" &&
@@ -102,7 +102,7 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
             {/* The payment page's own URL, as stored by the server when the order was placed. */}
             <a
               href={view.paymentUrl}
-              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-[13px] font-medium tracking-[0.2em] text-ink uppercase"
+              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-sm font-medium tracking-[0.2em] text-ink uppercase"
             >
               Lanjutkan pembayaran
             </a>
@@ -114,12 +114,12 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
       {(view.state === "pending" || view.state === "confirming") && <PaymentStatusCheck orderNo={view.orderNo} />}
 
       <section aria-label="Ringkasan pesanan" className="flex flex-col gap-4 bg-surface p-4 md:p-6">
-        <ul className="flex flex-col gap-3 text-sm">
+        <ul className="flex flex-col gap-3 text-[15px]">
           {view.lines.map((line, index) => (
             <li key={`${line.name}-${line.variant}-${index}`} className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-ink">{line.name}</p>
-                <p className="text-[13px] text-ink-muted">
+                <p className="text-[15px] text-ink-muted">
                   {line.variant} · {line.qty}×
                 </p>
               </div>
@@ -127,7 +127,7 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
             </li>
           ))}
         </ul>
-        <dl className="flex flex-col gap-2 border-t border-line pt-4 text-sm text-ink">
+        <dl className="flex flex-col gap-2 border-t border-line pt-4 text-[15px] text-ink">
           <div className="flex justify-between gap-4">
             <dt>Subtotal</dt>
             <dd>{formatPriceIdr(view.subtotal)}</dd>

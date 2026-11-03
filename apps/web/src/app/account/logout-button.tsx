@@ -28,7 +28,7 @@ export function LogoutButton({ email }: { email: string | null }) {
         }
       }}
     >
-      <Button type="submit" variant="secondary">
+      <Button className="text-sm" type="submit" variant="secondary">
         Keluar
       </Button>
     </form>

@@ -63,12 +63,12 @@ export function Footer({ contact }: { contact: FooterContact }) {
       <Container className="flex flex-col gap-8 py-12">
         <div className="flex flex-col gap-2">
           <Wordmark size="footer" />
-          <p className="text-sm text-footer-text/80">Graceful in every thread</p>
+          <p className="text-[15px] text-footer-text/80">Graceful in every thread</p>
         </div>
 
         <nav aria-label="Tautan bantuan" className="flex flex-col gap-3 border-t border-footer-line pt-6">
           {HELP_LINKS.map((link) => (
-            <Link key={link.href} href={link.href} className="w-fit text-sm text-footer-text hover:text-footer-text/80">
+            <Link key={link.href} href={link.href} className="w-fit text-[15px] text-footer-text hover:text-footer-text/80">
               {link.label}
             </Link>
           ))}
@@ -76,8 +76,8 @@ export function Footer({ contact }: { contact: FooterContact }) {
 
         {hasContact && (
           <div className="flex flex-col gap-3 border-t border-footer-line pt-6">
-            <p className="text-xs font-medium tracking-[0.24em] text-footer-text/70 uppercase">Hubungi kami</p>
-            <ul className="flex flex-col gap-2 text-sm text-footer-text">
+            <p className="text-[13px] font-medium tracking-[0.24em] text-footer-text/70 uppercase">Hubungi kami</p>
+            <ul className="flex flex-col gap-2 text-[15px] text-footer-text">
               {contact.whatsappNumber && (
                 <li className="flex items-center gap-2">
                   <MessageCircle className="size-4 shrink-0" strokeWidth={1.4} aria-hidden="true" />
@@ -105,12 +105,12 @@ export function Footer({ contact }: { contact: FooterContact }) {
         )}
 
         <div className="flex flex-col gap-3 border-t border-footer-line pt-6">
-          <p className="text-xs font-medium tracking-[0.24em] text-footer-text/70 uppercase">Pembayaran</p>
+          <p className="text-[13px] font-medium tracking-[0.24em] text-footer-text/70 uppercase">Pembayaran</p>
           <ul className="flex flex-wrap gap-2">
             {PAYMENT_METHODS.map((method) => (
               <li
                 key={method.label}
-                className="flex items-center gap-2 border border-footer-chip-border bg-bg px-3 py-1.5 text-[13px] text-ink"
+                className="flex items-center gap-2 border border-footer-chip-border bg-bg px-3 py-1.5 text-[15px] text-ink"
               >
                 {/* eslint-disable-next-line @next/next/no-img-element -- a static public/ SVG brand mark; next/image's optimizer (disabled app-wide anyway, see next.config.ts) has nothing to add here */}
                 <img src={method.logo} alt="" width={method.width} height={method.height} style={{ height: method.height, width: "auto" }} />
@@ -120,7 +120,7 @@ export function Footer({ contact }: { contact: FooterContact }) {
           </ul>
         </div>
 
-        <p className="border-t border-footer-line pt-6 text-xs text-footer-text/70">© {year} Ammari</p>
+        <p className="border-t border-footer-line pt-6 text-[13px] text-footer-text/70">© {year} Ammari</p>
       </Container>
     </footer>
   );

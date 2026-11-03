@@ -31,7 +31,7 @@ export function ContactOfferCard({ orderNo, orderDate, phone, promo, name, addre
   if (state.done) {
     return (
       <Card data-testid="contact-offer">
-        <p ref={statusRef} tabIndex={-1} role="status" className="text-sm text-neutral-700 focus:outline-none">
+        <p ref={statusRef} tabIndex={-1} role="status" className="text-[15px] text-neutral-700 focus:outline-none">
           {state.done === "saved" ? "Tersimpan di akunmu." : "Baik, data pesanan tidak disimpan ke akun."}
         </p>
       </Card>
@@ -42,20 +42,20 @@ export function ContactOfferCard({ orderNo, orderDate, phone, promo, name, addre
     <Card className="flex flex-col gap-3" data-testid="contact-offer">
       <h2 className="text-base font-semibold text-neutral-900">Pakai data ini untuk belanja berikutnya?</h2>
       {phone ? (
-        <p className="text-sm text-neutral-700">
+        <p className="text-[15px] text-neutral-700">
           Pesanan {orderNo} ({formatDate(orderDate)}) memakai nomor WhatsApp <span className="font-medium text-neutral-900">{phone}</span>. Kalau ini
           nomormu, simpan ke akun supaya kami mudah menghubungimu.
         </p>
       ) : promo ? (
-        <p className="text-sm text-neutral-700">
+        <p className="text-[15px] text-neutral-700">
           Saat memesan {orderNo} ({formatDate(orderDate)}), kamu memilih menerima kabar dari Ammari.
         </p>
       ) : name ? (
-        <p className="text-sm text-neutral-700">
+        <p className="text-[15px] text-neutral-700">
           Pesanan {orderNo} ({formatDate(orderDate)}) memakai nama penerima <span className="font-medium text-neutral-900">{name}</span>.
         </p>
       ) : (
-        <p className="text-sm text-neutral-700">
+        <p className="text-[15px] text-neutral-700">
           Pesanan {orderNo} ({formatDate(orderDate)}) dikirim ke alamat di bawah.
         </p>
       )}
@@ -78,14 +78,14 @@ export function ContactOfferCard({ orderNo, orderDate, phone, promo, name, addre
               id={addressId}
               role="group"
               aria-label="Alamat pengiriman dari pesanan"
-              className="flex flex-col gap-0.5 rounded-lg border border-neutral-200 px-3 py-2 text-sm text-neutral-700"
+              className="flex flex-col gap-0.5 rounded-lg border border-neutral-200 px-3 py-2 text-[15px] text-neutral-700"
               data-testid="contact-offer-address"
             >
               <p className="font-medium text-neutral-900">{address.recipientName}</p>
               <p>{address.phone}</p>
               <p>{address.addressLine}</p>
               <p>{address.areaLabel}</p>
-              {address.notes && <p className="text-[13px] text-neutral-500">Catatan untuk kurir: {address.notes}</p>}
+              {address.notes && <p className="text-[15px] text-ink-muted">Catatan untuk kurir: {address.notes}</p>}
             </div>
             <Checkbox
               name="useAddress"
@@ -105,15 +105,15 @@ export function ContactOfferCard({ orderNo, orderDate, phone, promo, name, addre
           />
         )}
         {state.error && (
-          <p role="alert" className="text-sm text-danger-700">
+          <p role="alert" className="text-[15px] text-danger-700">
             {state.error}
           </p>
         )}
         <div className="flex gap-2">
-          <Button type="submit" name="decision" value="save" loading={pending}>
+          <Button className="text-sm" type="submit" name="decision" value="save" loading={pending}>
             Simpan
           </Button>
-          <Button type="submit" name="decision" value="skip" variant="ghost" disabled={pending}>
+          <Button className="text-sm" type="submit" name="decision" value="skip" variant="ghost" disabled={pending}>
             Lewati
           </Button>
         </div>

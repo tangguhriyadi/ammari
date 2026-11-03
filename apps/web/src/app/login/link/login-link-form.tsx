@@ -30,7 +30,7 @@ export function LoginLinkForm({ action, token }: { action: string; token: string
   return (
     <form method="post" action={action} onSubmit={onSubmit} className="flex w-full flex-col">
       <input type="hidden" name="token" value={token} />
-      <Button type="submit" loading={submitting}>
+      <Button className="text-sm" type="submit" loading={submitting}>
         Masuk
       </Button>
     </form>

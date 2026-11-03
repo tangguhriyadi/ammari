@@ -44,7 +44,7 @@ export default async function LoginLinkPage({ searchParams }: { searchParams: Pr
     return (
       <Shell title="Kamu sudah masuk">
         {/* Neutral on purpose: says nothing about whether the emailed link still works (owner, 2026-10-21). */}
-        <p className="text-sm text-neutral-700">Kamu sudah masuk ke akun ini, jadi tidak perlu memakai link dari email.</p>
+        <p className="text-[15px] text-neutral-700">Kamu sudah masuk ke akun ini, jadi tidak perlu memakai link dari email.</p>
         <Link href={LOGIN_LINK_SUCCESS_PATH} className={linkButton}>
           Lihat pesanan saya
         </Link>
@@ -59,7 +59,7 @@ export default async function LoginLinkPage({ searchParams }: { searchParams: Pr
           Masuk sebagai <span className="font-medium">{state.link.maskedEmail}</span>
         </p>
         <LoginLinkForm action={LOGIN_LINK_CONSUME_ACTION} token={state.token} />
-        <p className="text-sm text-neutral-600">Link ini hanya bisa dipakai sekali dan berlaku 24 jam sejak email dikirim.</p>
+        <p className="text-[15px] text-ink-muted">Link ini hanya bisa dipakai sekali dan berlaku 24 jam sejak email dikirim.</p>
       </Shell>
     );
   }
@@ -73,7 +73,7 @@ export default async function LoginLinkPage({ searchParams }: { searchParams: Pr
 
   return (
     <Shell title={copy.title}>
-      <p className="text-sm text-neutral-700">{copy.text}</p>
+      <p className="text-[15px] text-neutral-700">{copy.text}</p>
       {customer ? (
         <Link href={LOGIN_LINK_SUCCESS_PATH} className={linkButton}>
           Lihat pesanan saya

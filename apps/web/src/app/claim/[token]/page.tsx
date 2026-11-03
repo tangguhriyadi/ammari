@@ -83,9 +83,9 @@ function ClaimLayout({
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-neutral-50 px-4 py-10 text-center">
       <h1 className="font-serif text-2xl font-light text-brand">{title}</h1>
-      <p className="max-w-sm text-sm text-neutral-700">{message}</p>
+      <p className="max-w-sm text-[15px] text-neutral-700">{message}</p>
       {accountLink && (
-        <a href="/account" className="text-sm font-medium text-brand underline">
+        <a href="/account" className="text-[15px] font-medium text-brand underline">
           Lihat akun saya
         </a>
       )}

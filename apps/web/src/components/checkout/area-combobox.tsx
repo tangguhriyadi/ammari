@@ -166,7 +166,7 @@ export function AreaCombobox({ id, value, onChange, error }: AreaComboboxProps) 
   if (value) {
     return (
       <div className="flex flex-col gap-1.5">
-        <span id={`${id}-label`} className="text-[13px] text-ink">
+        <span id={`${id}-label`} className="text-[15px] text-ink">
           Kecamatan atau kode pos
         </span>
         <div className="flex min-h-12 items-center justify-between gap-4 border border-line-strong bg-surface px-3 py-2" aria-labelledby={`${id}-label`} role="group">
@@ -178,7 +178,7 @@ export function AreaCombobox({ id, value, onChange, error }: AreaComboboxProps) 
             type="button"
             onClick={change}
             aria-label={`Ganti kecamatan, sekarang ${value.label}`}
-            className="flex min-h-11 shrink-0 items-center text-[13px] font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4"
+            className="flex min-h-11 shrink-0 items-center text-sm font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4"
           >
             Ganti
           </button>
@@ -201,7 +201,7 @@ export function AreaCombobox({ id, value, onChange, error }: AreaComboboxProps) 
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-[13px] text-ink">
+      <label htmlFor={id} className="text-[15px] text-ink">
         Kecamatan atau kode pos
       </label>
       <input
@@ -237,7 +237,7 @@ export function AreaCombobox({ id, value, onChange, error }: AreaComboboxProps) 
       <p
         id={statusId}
         role="status"
-        className={cn("text-[13px]", search.status === "error" ? "text-error" : "text-ink-muted", (!statusText || listOpen) && "sr-only")}
+        className={cn("text-[15px]", search.status === "error" ? "text-error" : "text-ink-muted", (!statusText || listOpen) && "sr-only")}
       >
         {statusText}
       </p>
@@ -255,7 +255,7 @@ export function AreaCombobox({ id, value, onChange, error }: AreaComboboxProps) 
                 pick(area);
               }}
               onMouseEnter={() => setActiveIndex(index)}
-              className={cn("flex min-h-11 cursor-pointer items-center px-3 py-2 text-sm text-ink", index === activeIndex && "bg-surface")}
+              className={cn("flex min-h-11 cursor-pointer items-center px-3 py-2 text-[15px] text-ink", index === activeIndex && "bg-surface")}
             >
               {area.label}
             </li>

@@ -10,7 +10,7 @@ export function ProductGridSection({ grid }: { grid: ResolvedProductGrid }) {
       <Container>
         <div className="mb-6 flex items-baseline justify-between gap-4">
           <h2 className="font-serif text-2xl font-normal text-ink">{grid.title}</h2>
-          <p className="text-sm text-ink-muted">{grid.tiles.length} produk</p>
+          <p className="text-[15px] text-ink-muted">{grid.tiles.length} produk</p>
         </div>
         <div className="grid grid-cols-2 gap-x-[2px] gap-y-5 md:grid-cols-3 xl:grid-cols-4">
           {grid.tiles.map((tile, index) => (

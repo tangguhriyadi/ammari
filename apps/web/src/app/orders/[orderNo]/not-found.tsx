@@ -11,7 +11,7 @@ export default function OrderNotFound() {
       <h1 className="font-serif text-[30px] font-normal text-ink" data-testid="order-not-found">
         Pesanan tidak bisa ditampilkan
       </h1>
-      <p className="text-sm text-ink-muted">
+      <p className="text-[15px] text-ink-muted">
         Link pesanan ini tidak berlaku lagi, atau pesanan ini tidak bisa dibuka dari akun atau perangkat ini. Masuk dengan email yang kamu pakai saat memesan untuk melihat pesananmu.
       </p>
       <PrimaryLink href={LOGIN_FOR_ORDERS_HREF} className="w-full md:w-auto md:self-start">

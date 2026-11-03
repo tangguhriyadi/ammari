@@ -21,7 +21,7 @@ function describedBy(...ids: (string | false | null | undefined)[]): string | un
 
 export function FieldError({ id, children }: { id: string; children: ReactNode }) {
   return (
-    <p id={id} className="text-[13px] text-error">
+    <p id={id} className="text-[15px] text-error">
       {children}
     </p>
   );
@@ -40,7 +40,7 @@ export function TextField({ id, label, hint, error, optional, className, ...prop
   const errorId = error ? fieldErrorId(id) : null;
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-[13px] text-ink">
+      <label htmlFor={id} className="text-[15px] text-ink">
         {label}
         {optional && <span className="text-ink-muted"> (opsional)</span>}
       </label>
@@ -52,7 +52,7 @@ export function TextField({ id, label, hint, error, optional, className, ...prop
         {...props}
       />
       {hint && (
-        <p id={hintId ?? undefined} className="text-[13px] text-ink-muted">
+        <p id={hintId ?? undefined} className="text-[15px] text-ink-muted">
           {hint}
         </p>
       )}
@@ -74,7 +74,7 @@ export function TextAreaField({ id, label, hint, error, optional, className, ...
   const errorId = error ? fieldErrorId(id) : null;
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-[13px] text-ink">
+      <label htmlFor={id} className="text-[15px] text-ink">
         {label}
         {optional && <span className="text-ink-muted"> (opsional)</span>}
       </label>
@@ -86,7 +86,7 @@ export function TextAreaField({ id, label, hint, error, optional, className, ...
         {...props}
       />
       {hint && (
-        <p id={hintId ?? undefined} className="text-[13px] text-ink-muted">
+        <p id={hintId ?? undefined} className="text-[15px] text-ink-muted">
           {hint}
         </p>
       )}
@@ -98,7 +98,7 @@ export function TextAreaField({ id, label, hint, error, optional, className, ...
 /** "1 · KONTAK" (mockup-checkout.png): the numbered section heading. */
 export function SectionHeading({ id, number, children }: { id: string; number: number; children: string }) {
   return (
-    <h2 id={id} className="text-xs font-medium tracking-[0.24em] text-ink uppercase">
+    <h2 id={id} className="text-[13px] font-medium tracking-[0.24em] text-ink uppercase">
       {number} · {children}
     </h2>
   );

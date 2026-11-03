@@ -11,11 +11,11 @@ export function InfoPageBody({ title, body }: { title: string; body: string | nu
       <h1 className="font-serif text-2xl font-light text-brand">{title}</h1>
       {body ? (
         <div
-          className="flex flex-col gap-3 text-sm text-ink-soft [&_h2]:text-base [&_h2]:font-medium [&_h2]:text-ink [&_li]:ml-5 [&_ol]:list-decimal [&_strong]:font-medium [&_ul]:list-disc"
+          className="flex flex-col gap-3 text-[15px] text-ink-soft [&_h2]:text-base [&_h2]:font-medium [&_h2]:text-ink [&_li]:ml-5 [&_ol]:list-decimal [&_strong]:font-medium [&_ul]:list-disc"
           dangerouslySetInnerHTML={{ __html: sanitizeInfoPageHtml(body) }}
         />
       ) : (
-        <p className="text-sm text-ink-muted">Halaman ini sedang disiapkan. Silakan kembali lagi nanti.</p>
+        <p className="text-[15px] text-ink-muted">Halaman ini sedang disiapkan. Silakan kembali lagi nanti.</p>
       )}
     </div>
   );

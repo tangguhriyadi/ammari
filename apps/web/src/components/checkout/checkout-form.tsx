@@ -368,7 +368,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
         id={ALERT_ID}
         role="alert"
         tabIndex={-1}
-        className="flex flex-col gap-2 border border-error-border px-4 py-3 text-sm text-error outline-none"
+        className="flex flex-col gap-2 border border-error-border px-4 py-3 text-[15px] text-error outline-none"
         data-testid="checkout-alert"
       >
         {alertMessage && <p className="font-medium">{alertMessage}</p>}
@@ -388,11 +388,11 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
   if (placedUrl || (isSubmitting && cart.lines.length === 0)) {
     return (
       <div className="flex flex-col items-start gap-4 py-10">
-        <p role="status" className="text-sm text-ink">
+        <p role="status" className="text-[15px] text-ink">
           Pesanan dibuat. Membuka halaman pembayaran...
         </p>
         {placedUrl && (
-          <a href={placedUrl} className="text-[13px] font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
+          <a href={placedUrl} className="text-sm font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
             Buka halaman pembayaran
           </a>
         )}
@@ -403,7 +403,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
   if (cart.lines.length === 0) {
     return (
       <div className="flex flex-col items-start gap-6 py-10">
-        <p className="text-sm text-ink-muted">Keranjangmu masih kosong.</p>
+        <p className="text-[15px] text-ink-muted">Keranjangmu masih kosong.</p>
         <PrimaryLink href={COLLECTION_HREF} className="w-full md:w-auto">
           Lihat koleksi
         </PrimaryLink>
@@ -415,7 +415,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
     return (
       <div className="flex flex-col items-start gap-6 py-10">
         <div className="w-full">{alertBlock}</div>
-        <p className="text-sm text-ink">Ada barang di keranjang yang perlu dicek dulu sebelum checkout.</p>
+        <p className="text-[15px] text-ink">Ada barang di keranjang yang perlu dicek dulu sebelum checkout.</p>
         <PrimaryLink href={CART_HREF} className="w-full md:w-auto">
           Kembali ke keranjang
         </PrimaryLink>
@@ -435,9 +435,9 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
           </SectionHeading>
           {customer ? (
             <div className="flex flex-col gap-4 bg-surface px-4 py-4">
-              <dl className="flex flex-col gap-3 text-sm">
+              <dl className="flex flex-col gap-3 text-[15px]">
                 <div className="flex flex-col pl-7">
-                  <dt className="text-[13px] text-ink-muted">Email</dt>
+                  <dt className="text-[15px] text-ink-muted">Email</dt>
                   <dd className="relative text-ink" data-testid="locked-email">
                     <Lock aria-hidden="true" className="absolute top-0.5 -left-7 size-4 text-ink-muted" strokeWidth={1.4} />
                     {customer.email}
@@ -445,7 +445,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
                 </div>
                 {phoneLocked && (
                   <div className="flex flex-col pl-7">
-                    <dt className="text-[13px] text-ink-muted">Nomor HP (WhatsApp)</dt>
+                    <dt className="text-[15px] text-ink-muted">Nomor HP (WhatsApp)</dt>
                     <dd className="relative text-ink">
                       <Lock aria-hidden="true" className="absolute top-0.5 -left-7 size-4 text-ink-muted" strokeWidth={1.4} />
                       {customer.phone}
@@ -453,7 +453,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
                   </div>
                 )}
               </dl>
-              <div className="flex items-center justify-between gap-4 text-[13px] text-ink-muted">
+              <div className="flex items-center justify-between gap-4 text-[15px] text-ink-muted">
                 <span>Terhubung dengan akunmu.</span>
                 <button
                   type="button"
@@ -478,7 +478,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
               </div>
             </div>
           ) : (
-            <p className="text-[13px] text-ink-muted">
+            <p className="text-[15px] text-ink-muted">
               Sudah punya akun?{" "}
               <Link href={LOGIN_FOR_CHECKOUT_HREF} className="text-ink underline underline-offset-4">
                 Masuk
@@ -521,7 +521,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
           </SectionHeading>
           {usingSavedAddress && area ? (
             <div className="flex flex-col gap-3 bg-surface px-4 py-4" data-testid="saved-address">
-              <div className="flex flex-col gap-1 text-sm text-ink">
+              <div className="flex flex-col gap-1 text-[15px] text-ink">
                 <p className="font-medium">{recipientName}</p>
                 <p className="text-ink-muted">{phone}</p>
                 <p>{addressLine}</p>
@@ -529,9 +529,9 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
                   {area.label}
                   {!area.hasPostalCode && postalCode ? ` ${postalCode}` : ""}
                 </p>
-                {notes.trim() && <p className="text-[13px] text-ink-muted">Catatan untuk kurir: {notes}</p>}
+                {notes.trim() && <p className="text-[15px] text-ink-muted">Catatan untuk kurir: {notes}</p>}
               </div>
-              <div className="flex items-center justify-between gap-4 text-[13px] text-ink-muted">
+              <div className="flex items-center justify-between gap-4 text-[15px] text-ink-muted">
                 <span>Alamat dari pesanan terakhirmu.</span>
                 <button id="saved-address-change" type="button" onClick={changeSavedAddress} className="min-h-11 text-ink underline underline-offset-4">
                   Ganti alamat
@@ -541,7 +541,7 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
           ) : (
             <>
               {savedAddress?.area && (
-                <button type="button" onClick={restoreSavedAddress} className="min-h-11 self-start text-[13px] text-ink underline underline-offset-4">
+                <button type="button" onClick={restoreSavedAddress} className="min-h-11 self-start text-[15px] text-ink underline underline-offset-4">
                   Pakai alamat tersimpan
                 </button>
               )}
@@ -622,20 +622,20 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
               <div className="relative h-[96px] w-[64px] shrink-0 bg-image-bg">
                 <ProductImage src={line.imageUrl} alt="" placeholderAlt="" placeholderSize={800} sizes="64px" className="object-cover" />
               </div>
-              <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
+              <div className="flex min-w-0 flex-1 flex-col gap-1 text-[15px]">
                 <p className="text-ink">{line.name}</p>
-                <p className="text-[13px] text-ink-muted">
+                <p className="text-[15px] text-ink-muted">
                   {line.variant} · {line.qty}×
                 </p>
               </div>
-              <LinePrice total={line.lineTotal} listTotal={line.listLineTotal} className="shrink-0 flex-col items-end text-sm" />
+              <LinePrice total={line.lineTotal} listTotal={line.listLineTotal} className="shrink-0 flex-col items-end text-[15px]" />
             </li>
           ))}
         </ul>
 
         <VoucherField customer={customer !== null} vouchers={vouchers} voucherId={voucherId} onChange={setVoucherChoice} error={issueFor(issues, "voucherId")} />
 
-        <dl className="flex flex-col gap-2 border-t border-line pt-4 text-sm text-ink">
+        <dl className="flex flex-col gap-2 border-t border-line pt-4 text-[15px] text-ink">
           <div className="flex items-center justify-between gap-4">
             <dt>Subtotal</dt>
             <dd data-testid="summary-subtotal">{formatPriceIdr(cart.subtotal)}</dd>
@@ -687,14 +687,14 @@ export function CheckoutForm({ checkoutAttemptId, cart, customer, vouchers, what
           type="submit"
           aria-disabled={isSubmitting || undefined}
           className={cn(
-            "inline-flex min-h-[54px] w-full items-center justify-center px-6 text-[13px] font-medium tracking-[0.2em] text-ink uppercase transition-colors duration-150",
+            "inline-flex min-h-[54px] w-full items-center justify-center px-6 text-sm font-medium tracking-[0.2em] text-ink uppercase transition-colors duration-150",
             "bg-pay hover:brightness-95",
             isSubmitting && "cursor-progress",
           )}
         >
           {isSubmitting ? "Memproses..." : "Bayar sekarang"}
         </button>
-        <p className="text-center text-[13px] text-ink-muted">Metode pembayaran dipilih di langkah berikutnya: QRIS, virtual account, atau e-wallet.</p>
+        <p className="text-center text-[15px] text-ink-muted">Metode pembayaran dipilih di langkah berikutnya: QRIS, virtual account, atau e-wallet.</p>
       </section>
     </form>
   );
@@ -716,7 +716,7 @@ function ConsentCheckbox({
   const errorId = error ? `${id}-error` : undefined;
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="flex min-h-11 cursor-pointer items-start gap-3 py-2 text-[13px] leading-relaxed text-ink">
+      <label htmlFor={id} className="flex min-h-11 cursor-pointer items-start gap-3 py-2 text-[15px] leading-relaxed text-ink">
         <input
           id={id}
           type="checkbox"
@@ -729,7 +729,7 @@ function ConsentCheckbox({
         <span>{label}</span>
       </label>
       {error && (
-        <p id={errorId} className="text-[13px] text-error">
+        <p id={errorId} className="text-[15px] text-error">
           {error}
         </p>
       )}
@@ -754,18 +754,18 @@ function VoucherField({
     return (
       <Link
         href={LOGIN_FOR_CHECKOUT_HREF}
-        className="flex min-h-11 items-center justify-center border border-ink bg-bg px-4 text-[13px] font-medium tracking-[0.16em] text-ink uppercase"
+        className="flex min-h-11 items-center justify-center border border-ink bg-bg px-4 text-sm font-medium tracking-[0.16em] text-ink uppercase"
       >
         Masuk untuk pakai voucher
       </Link>
     );
   }
-  if (vouchers.length === 0) return <p className="text-[13px] text-ink-muted">Belum ada voucher yang bisa dipakai.</p>;
+  if (vouchers.length === 0) return <p className="text-[15px] text-ink-muted">Belum ada voucher yang bisa dipakai.</p>;
 
   const errorId = error ? "voucherId-error" : undefined;
   return (
     <div className="flex flex-col gap-1.5 bg-bg p-4">
-      <label htmlFor="voucherId" className="text-[13px] font-medium text-ink">
+      <label htmlFor="voucherId" className="text-[15px] font-medium text-ink">
         Voucher
       </label>
       <div className="flex items-stretch gap-2">
@@ -775,7 +775,7 @@ function VoucherField({
           onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
           aria-invalid={error ? true : undefined}
           aria-describedby={errorId}
-          className="min-h-12 min-w-0 flex-1 border border-line-strong bg-bg px-3 text-sm text-ink"
+          className="min-h-12 min-w-0 flex-1 border border-line-strong bg-bg px-3 text-[15px] text-ink"
         >
           <option value="">Tanpa voucher</option>
           {vouchers.map((option) => (
@@ -791,7 +791,7 @@ function VoucherField({
         )}
       </div>
       {error && (
-        <p id={errorId} className="text-[13px] text-error">
+        <p id={errorId} className="text-[15px] text-error">
           {error}
         </p>
       )}

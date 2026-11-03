@@ -33,7 +33,7 @@ export function ProductTile({ tile, imagePriority = false }: { tile: PricedProdu
           className="object-cover transition-transform duration-200 group-hover:scale-[1.02]"
         />
         {tile.soldOut ? (
-          <span className="absolute top-2 left-2 bg-bg px-2 py-1 text-[13px] text-ink-muted">Sold out</span>
+          <span className="absolute top-2 left-2 bg-bg px-2 py-1 text-sm text-ink-muted">Sold out</span>
         ) : (
           tile.price.percentOff !== null && (
             <span className="absolute top-2 left-2 bg-discount px-2 py-1 text-[19px] leading-none font-bold text-white" data-testid="discount-badge">
@@ -42,9 +42,12 @@ export function ProductTile({ tile, imagePriority = false }: { tile: PricedProdu
           )
         )}
       </div>
-      <p className="text-[13px] text-ink md:text-sm">{tile.name}</p>
-      {colorLabel && <p className="text-[13px] text-ink-muted">{colorLabel}</p>}
-      <ProductPrice price={tile.price} className="text-[13px] font-medium md:text-sm" />
+      {/* Two lines reserved (min-h = 2 × leading) so colour and price line up across a row; the clamp only clips visually, the full name stays in the DOM for the link text, plus `title` on hover. */}
+      <p title={tile.name} className="line-clamp-2 min-h-[3em] text-[15px] leading-[1.5] text-ink md:text-base">
+        {tile.name}
+      </p>
+      {colorLabel && <p className="text-sm text-ink-muted">{colorLabel}</p>}
+      <ProductPrice price={tile.price} className="text-[15px] font-medium md:text-base" />
     </Link>
   );
 }

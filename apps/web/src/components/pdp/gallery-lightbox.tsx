@@ -433,7 +433,7 @@ export function GalleryLightbox({ productName, images, initialIndex, storageBase
       <div ref={backdropRef} aria-hidden="true" data-testid="viewer-backdrop" className="absolute inset-0 bg-bg" />
       <div className="relative flex h-full flex-col pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]">
         <div data-viewer-control className="flex h-14 shrink-0 items-center justify-between pr-1 pl-4">
-          <span aria-hidden="true" data-testid="viewer-counter" className="text-sm">
+          <span aria-hidden="true" data-testid="viewer-counter" className="text-[15px]">
             {count > 1 ? `${index + 1} / ${count}` : null}
           </span>
           <button ref={closeRef} type="button" aria-label="Tutup" onClick={close} className="flex size-11 items-center justify-center">

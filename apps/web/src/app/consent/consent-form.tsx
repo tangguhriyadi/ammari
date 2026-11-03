@@ -46,7 +46,7 @@ export function ConsentForm({ next }: { next: string }) {
           </span>
         }
       />
-      <Button type="submit" disabled={!consented}>
+      <Button className="text-sm" type="submit" disabled={!consented}>
         Lanjutkan
       </Button>
     </form>

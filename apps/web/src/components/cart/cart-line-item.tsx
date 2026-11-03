@@ -123,7 +123,7 @@ export function CartLineItem({ line: serverLine, imageUrl, canAddPieces }: CartL
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-start justify-between gap-3">
-          <Link href={`/products/${line.productSlug}`} className={cn("text-sm", buyable ? "text-ink" : "text-ink-muted")}>
+          <Link href={`/products/${line.productSlug}`} className={cn("text-[15px]", buyable ? "text-ink" : "text-ink-muted")}>
             {line.productName}
           </Link>
           {buyable && (
@@ -138,10 +138,10 @@ export function CartLineItem({ line: serverLine, imageUrl, canAddPieces }: CartL
             </button>
           )}
         </div>
-        <p className="mt-2 text-[13px] text-ink-muted">{variantLabel}</p>
-        {buyable && <LinePrice total={line.lineTotal} listTotal={line.listLineTotal} className="mt-1 text-sm font-medium" />}
+        <p className="mt-2 text-[15px] text-ink-muted">{variantLabel}</p>
+        {buyable && <LinePrice total={line.lineTotal} listTotal={line.listLineTotal} className="mt-1 text-[15px] font-medium" />}
         {line.status !== "ok" && (
-          <p className={cn("mt-1 text-[13px]", line.status === "insufficient" ? "text-error" : "text-ink-muted")}>{CART_LINE_STATUS_MESSAGES[line.status]}</p>
+          <p className={cn("mt-1 text-[15px]", line.status === "insufficient" ? "text-error" : "text-ink-muted")}>{CART_LINE_STATUS_MESSAGES[line.status]}</p>
         )}
 
         <div className="mt-auto pt-3">
@@ -156,7 +156,7 @@ export function CartLineItem({ line: serverLine, imageUrl, canAddPieces }: CartL
               >
                 <Minus className="size-4" strokeWidth={1.4} aria-hidden="true" />
               </button>
-              <span className="w-8 text-center text-sm text-ink tabular-nums" data-testid="cart-line-qty">
+              <span className="w-8 text-center text-[15px] text-ink tabular-nums" data-testid="cart-line-qty">
                 <span className="sr-only">Jumlah </span>
                 {line.qty}
               </span>
@@ -176,14 +176,14 @@ export function CartLineItem({ line: serverLine, imageUrl, canAddPieces }: CartL
               onClick={remove}
               aria-disabled={isPending || undefined}
               aria-label={`Hapus ${itemName}`}
-              className="min-h-11 min-w-11 text-left text-[13px] font-medium tracking-[0.12em] text-ink uppercase underline underline-offset-4"
+              className="min-h-11 min-w-11 text-left text-sm font-medium tracking-[0.12em] text-ink uppercase underline underline-offset-4"
             >
               Hapus
             </button>
           )}
         </div>
         {error && (
-          <p role="alert" className="mt-2 text-[13px] text-error">
+          <p role="alert" className="mt-2 text-[15px] text-error">
             {error}
           </p>
         )}

@@ -47,17 +47,17 @@ export function ReopenPaymentButton({ orderNo }: { orderNo: string }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm text-ink-muted">Halaman pembayaran belum terbuka. Buka lagi lewat tombol di bawah ini.</p>
+      <p className="text-[15px] text-ink-muted">Halaman pembayaran belum terbuka. Buka lagi lewat tombol di bawah ini.</p>
       <button
         type="button"
         onClick={open}
         aria-disabled={busy || undefined}
-        className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-[13px] font-medium tracking-[0.2em] text-ink uppercase aria-disabled:cursor-progress aria-disabled:opacity-60"
+        className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-sm font-medium tracking-[0.2em] text-ink uppercase aria-disabled:cursor-progress aria-disabled:opacity-60"
       >
         {busy ? "Membuka..." : "Buka halaman pembayaran"}
       </button>
       {message && (
-        <p ref={alertRef} role="alert" tabIndex={-1} className="border border-error-border px-4 py-3 text-sm text-error">
+        <p ref={alertRef} role="alert" tabIndex={-1} className="border border-error-border px-4 py-3 text-[15px] text-error">
           {message}
         </p>
       )}

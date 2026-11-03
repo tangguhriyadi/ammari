@@ -49,7 +49,7 @@ export default async function CartPage() {
             Keranjang
           </h1>
           {cart.lines.length > 0 && (
-            <p className="text-[13px] text-ink-muted">
+            <p className="text-[15px] text-ink-muted">
               <CartPieceCount fallback={cart.pieceCount} />
             </p>
           )}
@@ -65,7 +65,7 @@ export default async function CartPage() {
 
         {cart.lines.length === 0 ? (
           <div className="flex flex-col items-start gap-6 py-10">
-            <p className="text-sm text-ink-muted">Keranjangmu masih kosong.</p>
+            <p className="text-[15px] text-ink-muted">Keranjangmu masih kosong.</p>
             <PrimaryLink href={COLLECTION_HREF} className="w-full md:w-auto">
               Lihat koleksi
             </PrimaryLink>
@@ -84,7 +84,7 @@ export default async function CartPage() {
             </ul>
 
             <section aria-label="Ringkasan keranjang" className="flex flex-col gap-4 md:sticky md:top-20 md:bg-surface md:p-6">
-              <dl className="flex flex-col gap-3 text-sm text-ink">
+              <dl className="flex flex-col gap-3 text-[15px] text-ink">
                 <div className="flex items-center justify-between gap-4">
                   <dt>Subtotal</dt>
                   <dd className="font-medium" data-testid="cart-subtotal">
@@ -99,12 +99,12 @@ export default async function CartPage() {
               </dl>
 
               {showCapNote && (
-                <p role="status" className="text-[13px] text-ink">
+                <p role="status" className="text-[15px] text-ink">
                   {CART_REFUSAL_MESSAGES.cart_limit}
                 </p>
               )}
               {!cart.canCheckout && (
-                <p id="cart-blocked-note" className="text-[13px] text-error" data-testid="cart-blocked-note">
+                <p id="cart-blocked-note" className="text-[15px] text-error" data-testid="cart-blocked-note">
                   Ubah atau hapus barang yang ditandai untuk lanjut ke checkout.
                 </p>
               )}
@@ -120,7 +120,7 @@ export default async function CartPage() {
               )}
               <Link
                 href={COLLECTION_HREF}
-                className="mx-auto flex min-h-11 items-center text-[13px] font-medium tracking-[0.18em] text-ink uppercase underline underline-offset-4"
+                className="mx-auto flex min-h-11 items-center text-sm font-medium tracking-[0.18em] text-ink uppercase underline underline-offset-4"
               >
                 Lanjut belanja
               </Link>

@@ -51,12 +51,12 @@ export function ProfileBanner() {
 
   return (
     <Card className="flex flex-col gap-3 border-warning-200 bg-warning-50">
-      <p className="text-sm text-neutral-900">Lengkapi profilmu agar lebih mudah dihubungi.</p>
+      <p className="text-[15px] text-neutral-900">Lengkapi profilmu agar lebih mudah dihubungi.</p>
       <div className="flex gap-2">
         <Link href="/account/complete-profile">
-          <Button variant="secondary">Lengkapi profil</Button>
+          <Button className="text-sm" variant="secondary">Lengkapi profil</Button>
         </Link>
-        <Button variant="ghost" onClick={dismiss}>
+        <Button className="text-sm" variant="ghost" onClick={dismiss}>
           Nanti saja
         </Button>
       </div>

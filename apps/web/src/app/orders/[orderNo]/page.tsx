@@ -36,7 +36,7 @@ function Notice({ heading, text }: { heading: string; text: string }) {
   return (
     <Container className="flex max-w-[640px] flex-col gap-4 py-8 md:py-12">
       <h1 className="font-serif text-[30px] font-normal text-ink">{heading}</h1>
-      <p className="text-sm text-ink-muted">{text}</p>
+      <p className="text-[15px] text-ink-muted">{text}</p>
     </Container>
   );
 }
@@ -71,11 +71,11 @@ export default async function OrderPage({
     <Container className="flex max-w-[640px] flex-col gap-8 py-8 md:py-12">
       <div className="flex flex-col gap-2">
         {viaSession && (
-          <Link href="/orders" className="inline-flex min-h-[44px] items-center self-start text-[13px] text-ink-muted underline underline-offset-4">
+          <Link href="/orders" className="inline-flex min-h-[44px] items-center self-start text-[15px] text-ink-muted underline underline-offset-4">
             Pesanan saya
           </Link>
         )}
-        <p className="text-[13px] text-ink-muted" aria-hidden="true">
+        <p className="text-[15px] text-ink-muted" aria-hidden="true">
           Pesanan {order.orderNo} · {order.orderedOn}
         </p>
         <h1 className="font-serif text-[30px] font-normal text-ink">
@@ -84,14 +84,14 @@ export default async function OrderPage({
           </span>
           <span data-testid="order-status">{order.status.label}</span>
         </h1>
-        {order.status.note && <p className="text-sm text-ink-muted">{order.status.note}</p>}
+        {order.status.note && <p className="text-[15px] text-ink-muted">{order.status.note}</p>}
         {order.status.payable && order.payBy && (
-          <p className="text-sm text-ink-muted">
+          <p className="text-[15px] text-ink-muted">
             Selesaikan pembayaran sebelum <span className="text-ink">{order.payBy}</span>. Lewat dari itu pesanan dibatalkan otomatis.
           </p>
         )}
         {order.status.confirming && (
-          <p className="text-sm text-ink-muted">
+          <p className="text-[15px] text-ink-muted">
             Batas waktu pembayaran sudah lewat. Kalau kamu sudah membayar, konfirmasinya sedang kami tunggu. Jangan bayar dua kali.
           </p>
         )}
@@ -103,7 +103,7 @@ export default async function OrderPage({
             {/* The payment page's own URL, as stored by the server when the payment was created. */}
             <a
               href={order.paymentUrl}
-              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-[13px] font-medium tracking-[0.2em] text-ink uppercase"
+              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-sm font-medium tracking-[0.2em] text-ink uppercase"
             >
               Lanjutkan pembayaran
             </a>
@@ -114,17 +114,17 @@ export default async function OrderPage({
           <ReopenPaymentButton orderNo={order.orderNo} />
         ) : (
           // A new payment attempt needs the buyer's session (plan §9.2: the emailed link only views).
-          <p className="text-sm text-ink-muted">Halaman pembayaran belum bisa dibuka dari sini. Masuk dengan email yang kamu pakai saat memesan, atau hubungi kami lewat WhatsApp.</p>
+          <p className="text-[15px] text-ink-muted">Halaman pembayaran belum bisa dibuka dari sini. Masuk dengan email yang kamu pakai saat memesan, atau hubungi kami lewat WhatsApp.</p>
         ))}
       {cartEnabled && (order.status.payable || order.status.confirming) && <PaymentStatusCheck orderNo={order.orderNo} />}
       {cartEnabled && order.status.reorderable && <ReorderButton orderNo={order.orderNo} />}
 
       {order.timeline.length > 0 && (
         <section aria-labelledby="order-timeline" className="flex flex-col gap-3">
-          <h2 id="order-timeline" className="text-xs font-medium tracking-[0.24em] text-ink-muted uppercase">
+          <h2 id="order-timeline" className="text-[13px] font-medium tracking-[0.24em] text-ink-muted uppercase">
             Status pesanan
           </h2>
-          <ol className="flex flex-col gap-2 border-l border-line pl-4 text-sm">
+          <ol className="flex flex-col gap-2 border-l border-line pl-4 text-[15px]">
             {order.timeline.map((entry, index) => (
               <li key={`${entry.label}-${index}`} className="flex flex-wrap justify-between gap-x-4">
                 <span className="text-ink">{entry.label}</span>
@@ -137,11 +137,11 @@ export default async function OrderPage({
 
       {order.status.stage !== "cancelled" && (
         <section aria-labelledby="order-tracking" className="flex flex-col gap-2">
-          <h2 id="order-tracking" className="text-xs font-medium tracking-[0.24em] text-ink-muted uppercase">
+          <h2 id="order-tracking" className="text-[13px] font-medium tracking-[0.24em] text-ink-muted uppercase">
             Lacak pengiriman
           </h2>
           {order.shipment.trackingNumber ? (
-            <dl className="flex flex-col gap-1 text-sm" data-testid="order-tracking">
+            <dl className="flex flex-col gap-1 text-[15px]" data-testid="order-tracking">
               {order.shipment.courier && (
                 <div className="flex justify-between gap-4">
                   <dt className="text-ink-muted">Kurir</dt>
@@ -159,14 +159,14 @@ export default async function OrderPage({
               </div>
             </dl>
           ) : (
-            <p className="text-sm text-ink-muted">
+            <p className="text-[15px] text-ink-muted">
               {order.status.stage === "shipped" || order.status.stage === "completed" || order.status.stage === "returned"
                 ? "Pesanan sudah dikirim. Nomor resinya belum tersedia di sini."
                 : "Nomor resi dikirim lewat email setelah pesanan dikirim."}
             </p>
           )}
           {order.tracking.delay && (
-            <p className="mt-1 bg-surface p-3 text-sm text-ink-soft" data-testid="tracking-delay">
+            <p className="mt-1 bg-surface p-3 text-[15px] text-ink-soft" data-testid="tracking-delay">
               {TRACKING_DELAY_NOTES[order.tracking.delay]}
             </p>
           )}
@@ -178,14 +178,14 @@ export default async function OrderPage({
                     aria-hidden="true"
                     className={`absolute top-[6px] -left-[4px] size-[7px] ${index === 0 ? "bg-brand" : "border border-ink-muted bg-bg"}`}
                   />
-                  <span className={`text-sm ${index === 0 ? "font-medium text-ink" : "text-ink-soft"}`}>
+                  <span className={`text-[15px] ${index === 0 ? "font-medium text-ink" : "text-ink-soft"}`}>
                     {index === 0 && <span className="sr-only">Terbaru: </span>}
                     {entry.label}
                   </span>
-                  <time dateTime={entry.dateTime} className="text-[13px] text-ink-muted">
+                  <time dateTime={entry.dateTime} className="text-[15px] text-ink-muted">
                     {entry.at}
                   </time>
-                  {entry.note && <span className="text-[13px] break-words text-ink-muted">{entry.note}</span>}
+                  {entry.note && <span className="text-[15px] break-words text-ink-muted">{entry.note}</span>}
                 </li>
               ))}
             </ol>
@@ -194,12 +194,12 @@ export default async function OrderPage({
       )}
 
       <section aria-label="Ringkasan pesanan" className="flex flex-col gap-4 bg-surface p-4 md:p-6">
-        <ul className="flex flex-col gap-3 text-sm">
+        <ul className="flex flex-col gap-3 text-[15px]">
           {order.lines.map((line, index) => (
             <li key={`${line.sku}-${index}`} className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-ink">{line.name}</p>
-                <p className="text-[13px] text-ink-muted">
+                <p className="text-[15px] text-ink-muted">
                   {line.variant} · {line.qty}×
                 </p>
               </div>
@@ -208,7 +208,7 @@ export default async function OrderPage({
           ))}
         </ul>
         {order.totals && (
-          <dl className="flex flex-col gap-2 border-t border-line pt-4 text-sm text-ink">
+          <dl className="flex flex-col gap-2 border-t border-line pt-4 text-[15px] text-ink">
             <div className="flex justify-between gap-4">
               <dt>Subtotal</dt>
               <dd>{formatPriceIdr(order.totals.subtotal)}</dd>
@@ -238,10 +238,10 @@ export default async function OrderPage({
 
       {order.address && (
         <section aria-labelledby="order-address" className="flex flex-col gap-2">
-          <h2 id="order-address" className="text-xs font-medium tracking-[0.24em] text-ink-muted uppercase">
+          <h2 id="order-address" className="text-[13px] font-medium tracking-[0.24em] text-ink-muted uppercase">
             Alamat pengiriman
           </h2>
-          <p className="text-sm break-words text-ink">{order.address}</p>
+          <p className="text-[15px] break-words text-ink">{order.address}</p>
         </section>
       )}
     </Container>

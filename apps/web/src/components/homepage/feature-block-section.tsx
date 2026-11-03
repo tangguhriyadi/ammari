@@ -26,10 +26,10 @@ export function FeatureBlockSection({ block }: { block: ResolvedFeatureBlock }) 
       <Container className="flex items-center justify-between gap-4 bg-bg py-5">
         <div className="flex flex-col gap-1">
           <h3 className="font-serif text-[22px] font-normal text-ink">{block.title}</h3>
-          <p className="text-sm text-ink-muted">{block.subtitle}</p>
+          <p className="text-[15px] text-ink-muted">{block.subtitle}</p>
         </div>
         {block.href && (
-          <Link href={block.href} className="shrink-0 text-[13px] font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
+          <Link href={block.href} className="shrink-0 text-sm font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
             {block.ctaLabel}
           </Link>
         )}

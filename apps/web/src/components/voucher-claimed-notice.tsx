@@ -49,7 +49,7 @@ export function VoucherClaimedNotice({ message }: { message: string }) {
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget)) setPaused(false);
           }}
-          className="pointer-events-auto flex w-full max-w-sm items-center gap-3 bg-brand py-1 pr-1 pl-4 text-sm text-white shadow-lg"
+          className="pointer-events-auto flex w-full max-w-sm items-center gap-3 bg-brand py-1 pr-1 pl-4 text-[15px] text-white shadow-lg"
         >
           <p className="flex flex-1 flex-wrap items-center gap-x-2">
             <span>{message}</span>

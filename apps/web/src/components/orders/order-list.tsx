@@ -19,21 +19,21 @@ export function OrderList({ rows, compact = false }: { rows: CustomerOrderRow[];
             className={`flex flex-col gap-2 border border-line p-4 transition-colors duration-150 hover:bg-surface${wide}`}
           >
             <div className="flex min-w-0 flex-col gap-1">
-              <p className="text-sm font-medium text-ink">{order.orderNo}</p>
-              <p className="text-[13px] text-ink-muted">
+              <p className="text-[15px] font-medium text-ink">{order.orderNo}</p>
+              <p className="text-[15px] text-ink-muted">
                 {order.orderedOn}
                 {order.isCheckout ? "" : ` · ${order.channelName}`}
               </p>
-              <p className="text-sm text-ink-soft">
+              <p className="text-[15px] text-ink-soft">
                 {order.items.map((item) => `${item.name} (${item.variant}) ×${item.qty}`).join(", ")}
               </p>
             </div>
             <div className={`flex shrink-0 items-center justify-between gap-4${side}`}>
-              <p className="text-sm text-ink" data-testid="order-row-status">
+              <p className="text-[15px] text-ink" data-testid="order-row-status">
                 {order.status.label}
               </p>
-              {order.total !== null && <p className="text-sm font-medium text-ink">{formatPriceIdr(order.total)}</p>}
-              <span aria-hidden="true" className="text-[13px] tracking-[0.16em] text-ink uppercase underline underline-offset-4">
+              {order.total !== null && <p className="text-[15px] font-medium text-ink">{formatPriceIdr(order.total)}</p>}
+              <span aria-hidden="true" className="text-sm tracking-[0.16em] text-ink uppercase underline underline-offset-4">
                 Lihat
               </span>
             </div>

@@ -38,23 +38,23 @@ export function PromoConsentSection({ consentAt }: { consentAt: Date | null }) {
         Kabar promo
       </h2>
       <Card className="flex flex-col gap-3">
-        <p className="text-sm text-neutral-700" data-testid="account-promo-state">
+        <p className="text-[15px] text-neutral-700" data-testid="account-promo-state">
           {subscribed
             ? `Kamu menerima kabar koleksi baru dan promo dari Ammari lewat email atau WhatsApp sejak ${formatDate(consentAt)}.`
             : "Kamu tidak menerima kabar promo dari Ammari. Info pesanan dan pengiriman tetap dikirim."}
         </p>
         {/* Always mounted, so screen readers announce the text when it arrives. */}
-        <p role="status" aria-live="polite" className="text-sm text-neutral-700 empty:hidden">
+        <p role="status" aria-live="polite" className="text-[15px] text-neutral-700 empty:hidden">
           {status ?? ""}
         </p>
         {error && (
-          <p role="alert" className="text-sm text-danger-700">
+          <p role="alert" className="text-[15px] text-danger-700">
             {error}
           </p>
         )}
-        {!subscribed && <p className="text-sm text-neutral-700">{PROMO_CONSENT_TEXT}</p>}
+        {!subscribed && <p className="text-[15px] text-neutral-700">{PROMO_CONSENT_TEXT}</p>}
         {/* One button whose label changes, so focus stays on it after the page refreshes. */}
-        <Button variant="secondary" className="self-start" loading={pending} onClick={() => change(!subscribed)}>
+        <Button variant="secondary" className="self-start text-sm" loading={pending} onClick={() => change(!subscribed)}>
           {subscribed ? "Berhenti terima promo" : "Terima kabar promo"}
         </Button>
       </Card>

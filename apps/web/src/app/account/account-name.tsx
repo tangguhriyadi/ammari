@@ -45,7 +45,7 @@ export function AccountName({ name, isPlaceholder }: { name: string; isPlacehold
   if (!editing) {
     return (
       <div className="flex items-center justify-between gap-3">
-        <p className={isPlaceholder && !saved ? "text-base text-neutral-600" : "text-base font-medium text-neutral-900"} data-testid="account-name">
+        <p className={isPlaceholder && !saved ? "text-base text-ink-muted" : "text-base font-medium text-neutral-900"} data-testid="account-name">
           {shown}
         </p>
         <button
@@ -55,7 +55,7 @@ export function AccountName({ name, isPlaceholder }: { name: string; isPlacehold
             setShowError(false);
             setEditing(true);
           }}
-          className="inline-flex min-h-[44px] items-center text-sm font-medium text-brand underline underline-offset-4"
+          className="inline-flex min-h-[44px] items-center text-[15px] font-medium text-brand underline underline-offset-4"
         >
           {isPlaceholder && !saved ? "Isi nama" : "Ubah nama"}
         </button>
@@ -66,7 +66,7 @@ export function AccountName({ name, isPlaceholder }: { name: string; isPlacehold
   return (
     <form action={formAction} className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="account-name">Nama</Label>
+        <Label className="text-[15px]" htmlFor="account-name">Nama</Label>
         <Input
           ref={inputRef}
           id="account-name"
@@ -80,10 +80,11 @@ export function AccountName({ name, isPlaceholder }: { name: string; isPlacehold
         />
       </div>
       <div className="flex gap-2">
-        <Button type="submit" loading={pending}>
+        <Button className="text-sm" type="submit" loading={pending}>
           Simpan
         </Button>
         <Button
+          className="text-sm"
           type="button"
           variant="ghost"
           disabled={pending}

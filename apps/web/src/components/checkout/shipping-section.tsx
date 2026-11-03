@@ -24,9 +24,9 @@ interface ShippingSectionProps {
 export function ShippingSection({ state, onRetry, whatsappHref, cartHref }: ShippingSectionProps) {
   return (
     <div data-testid="shipping-row" aria-live="polite" aria-busy={state.status === "loading" || undefined}>
-      {state.status === "idle" && <p className="border border-line px-4 py-4 text-sm text-ink-muted">{SHIPPING_PICK_AREA_MESSAGE}</p>}
+      {state.status === "idle" && <p className="border border-line px-4 py-4 text-[15px] text-ink-muted">{SHIPPING_PICK_AREA_MESSAGE}</p>}
 
-      {state.status === "loading" && <p className="border border-line px-4 py-4 text-sm text-ink-muted">Menghitung ongkir...</p>}
+      {state.status === "loading" && <p className="border border-line px-4 py-4 text-[15px] text-ink-muted">Menghitung ongkir...</p>}
 
       {state.status === "ok" && (
         <div className="flex flex-col gap-3 border border-ink px-4 py-4">
@@ -35,7 +35,7 @@ export function ShippingSection({ state, onRetry, whatsappHref, cartHref }: Ship
           </p>
           {/* The subsidy in plain sight (owner, 2026-10-21): the courier cost struck through, Ammari's
               share highlighted, then what the buyer pays. */}
-          <dl className="flex flex-col gap-2 text-sm text-ink">
+          <dl className="flex flex-col gap-2 text-[15px] text-ink">
             <ShippingCostRows
               buyerAmount={state.quote.buyerAmount}
               costAmount={state.quote.costAmount}
@@ -44,19 +44,19 @@ export function ShippingSection({ state, onRetry, whatsappHref, cartHref }: Ship
               buyerTestId="shipping-buyer-amount"
             />
           </dl>
-          <p className="text-[13px] text-ink-muted">Nomor resi dikirim lewat email setelah pesanan dikirim.</p>
+          <p className="text-[15px] text-ink-muted">Nomor resi dikirim lewat email setelah pesanan dikirim.</p>
         </div>
       )}
 
       {state.status === "error" && (
         <div className="flex flex-col items-start gap-3 border border-error-border px-4 py-4" data-testid="shipping-error">
-          <p className="text-sm text-error">{state.message}</p>
+          <p className="text-[15px] text-error">{state.message}</p>
           {/* Not for rate_limited: an immediate retry would only spend more of the limit. */}
           {state.kind === "retry" && (
             <button
               type="button"
               onClick={onRetry}
-              className="flex min-h-11 items-center border border-ink px-4 text-[13px] font-medium tracking-[0.16em] text-ink uppercase"
+              className="flex min-h-11 items-center border border-ink px-4 text-sm font-medium tracking-[0.16em] text-ink uppercase"
             >
               Coba lagi
             </button>
@@ -66,13 +66,13 @@ export function ShippingSection({ state, onRetry, whatsappHref, cartHref }: Ship
               href={whatsappHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex min-h-11 items-center border border-ink px-4 text-[13px] font-medium tracking-[0.16em] text-ink uppercase"
+              className="flex min-h-11 items-center border border-ink px-4 text-sm font-medium tracking-[0.16em] text-ink uppercase"
             >
               Hubungi via WhatsApp
             </a>
           )}
           {state.kind === "cart" && (
-            <Link href={cartHref} className="flex min-h-11 items-center text-[13px] font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
+            <Link href={cartHref} className="flex min-h-11 items-center text-sm font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
               Kembali ke keranjang
             </Link>
           )}

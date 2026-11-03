@@ -52,7 +52,7 @@ export default async function AccountPage() {
       <h1 className="font-serif text-2xl font-light text-brand">Akun Saya</h1>
       <div className="flex flex-col gap-1">
         <AccountName name={customer.name} isPlaceholder={customer.name === CUSTOMER_PLACEHOLDER_NAME} />
-        {customer.email && <p className="text-sm text-neutral-700">{customer.email}</p>}
+        {customer.email && <p className="text-[15px] text-neutral-700">{customer.email}</p>}
       </div>
 
       {contactOffer ? <ContactOfferCard key={contactOffer.orderNo} {...contactOffer} /> : !customer.phone && <ProfileBanner />}
@@ -66,16 +66,16 @@ export default async function AccountPage() {
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">Voucher saya</h2>
         {myVouchers.length === 0 ? (
-          <p className="text-sm text-neutral-600">Belum ada voucher.</p>
+          <p className="text-[15px] text-ink-muted">Belum ada voucher.</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {myVouchers.map((voucher) => (
               <li key={voucher.id} className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200 p-3">
                 <div>
                   <p className="text-base font-medium text-neutral-900">{formatRupiah(voucher.amount)}</p>
-                  <p className="text-sm text-neutral-600">Berlaku sampai {formatDate(voucher.expiresAt)}</p>
+                  <p className="text-[15px] text-ink-muted">Berlaku sampai {formatDate(voucher.expiresAt)}</p>
                 </div>
-                <Badge variant={voucher.status === "active" ? "success" : "neutral"}>
+                <Badge className="text-sm" variant={voucher.status === "active" ? "success" : "neutral"}>
                   {VOUCHER_STATUS_LABELS[voucher.status] ?? voucher.status}
                 </Badge>
               </li>
@@ -92,7 +92,7 @@ export default async function AccountPage() {
           ) : (
             <>
               <OrderList rows={orderPage.rows} compact />
-              <Link href="/orders" className="inline-flex min-h-[44px] items-center self-start text-sm font-medium text-brand underline underline-offset-4">
+              <Link href="/orders" className="inline-flex min-h-[44px] items-center self-start text-[15px] font-medium text-brand underline underline-offset-4">
                 Lihat semua pesanan
               </Link>
             </>
@@ -105,10 +105,10 @@ export default async function AccountPage() {
               <li key={order.id} className="flex flex-col gap-1 rounded-lg border border-neutral-200 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-base font-medium text-neutral-900">{order.orderNo}</span>
-                  <Badge variant="neutral">{order.channelName}</Badge>
+                  <Badge className="text-sm" variant="neutral">{order.channelName}</Badge>
                 </div>
-                <p className="text-sm text-neutral-600">{formatDate(order.orderDate)}</p>
-                <p className="text-sm text-neutral-700">
+                <p className="text-[15px] text-ink-muted">{formatDate(order.orderDate)}</p>
+                <p className="text-[15px] text-neutral-700">
                   {orderItemsSummary(order.items)}
                 </p>
               </li>

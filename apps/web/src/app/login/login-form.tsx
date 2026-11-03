@@ -295,7 +295,7 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
         // with the verify form's controlled hidden input at the same tree position otherwise).
         <form key={prefill ? "send-prefilled" : "send"} onSubmit={handleSendSubmit} className="flex w-full max-w-sm flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="email">Email</Label>
+            <Label className="text-[15px]" htmlFor="email">Email</Label>
             <Input
               id="email"
               name="email"
@@ -307,22 +307,22 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
             />
           </div>
           {sendError ? (
-            <p role="alert" className="text-sm text-danger-700">
+            <p role="alert" className="text-[15px] text-danger-700">
               {sendError}
             </p>
           ) : (
             isCooldownBlocked && (
-              <p role="alert" className="text-sm text-danger-700">
+              <p role="alert" className="text-[15px] text-danger-700">
                 {`Kamu baru saja meminta kode. Coba lagi dalam ${cooldownSecondsLeft} detik.`}
               </p>
             )
           )}
-          <Button type="submit" loading={sendPending} disabled={sendPending || isCooldownBlocked}>
+          <Button className="text-sm" type="submit" loading={sendPending} disabled={sendPending || isCooldownBlocked}>
             Kirim kode
           </Button>
 
           {isGoogleConfigured && (
-            <Button type="button" variant="secondary" onClick={() => void signInWithGoogle()}>
+            <Button className="text-sm" type="button" variant="secondary" onClick={() => void signInWithGoogle()}>
               <GoogleLogo />
               Masuk dengan Google
             </Button>
@@ -339,7 +339,7 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
                 ? `Kode sebelumnya masih berlaku, cek email kamu di ${email}. Berlaku 5 menit.`
                 : `Kode telah dikirim ke ${email}. Berlaku 5 menit.`}
           </p>
-          <p className="text-sm text-neutral-700" aria-hidden="true">
+          <p className="text-[15px] text-neutral-700" aria-hidden="true">
             {skippedResend ? (
               <>
                 Kode sebelumnya masih berlaku, cek email kamu di <span className="font-medium">{email}</span>.
@@ -350,12 +350,12 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
               </>
             )}
           </p>
-          <p className="text-sm text-neutral-700" aria-hidden="true">
+          <p className="text-[15px] text-neutral-700" aria-hidden="true">
             {isExpired ? "Kode sudah kedaluwarsa" : `Kode berlaku ${formatCountdown(remainingExpiryMs)}`}
           </p>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="otp">Kode (6 digit)</Label>
+            <Label className="text-[15px]" htmlFor="otp">Kode (6 digit)</Label>
             {/* key={sentAt}: a resend keeps this SAME form mounted, but the OTP input must still
                 clear back to empty — remounting it on every new `sentAt` is what makes that
                 happen (same remount trick as the step-level `key` above). */}
@@ -374,22 +374,22 @@ export function LoginForm({ isGoogleConfigured, next }: { isGoogleConfigured: bo
             />
           </div>
           {verifyError && (
-            <p role="alert" className="text-sm text-danger-700">
+            <p role="alert" className="text-[15px] text-danger-700">
               {verifyError}
             </p>
           )}
-          <Button type="submit" loading={verifyPending} disabled={isExpired}>
+          <Button className="text-sm" type="submit" loading={verifyPending} disabled={isExpired}>
             Masuk
           </Button>
 
           <div className="flex gap-3">
-            <Button type="button" variant="secondary" className="flex-1" onClick={handleChangeEmail}>
+            <Button type="button" variant="secondary" className="flex-1 text-sm" onClick={handleChangeEmail}>
               Ganti email
             </Button>
             <Button
               type="button"
               variant="secondary"
-              className="flex-1"
+              className="flex-1 text-sm"
               disabled={!canResend || sendPending}
               onClick={handleResend}
             >

@@ -62,15 +62,15 @@ export function ChangePaymentMethodButton({ orderNo }: { orderNo: string }) {
         onClick={change}
         aria-disabled={busy || undefined}
         aria-describedby={noteId}
-        className="inline-flex min-h-[52px] w-full items-center justify-center border border-ink px-6 text-[13px] font-medium tracking-[0.2em] text-ink uppercase aria-disabled:cursor-progress aria-disabled:opacity-60"
+        className="inline-flex min-h-[52px] w-full items-center justify-center border border-ink px-6 text-sm font-medium tracking-[0.2em] text-ink uppercase aria-disabled:cursor-progress aria-disabled:opacity-60"
       >
         {busy ? "Membuka..." : "Ganti metode pembayaran"}
       </button>
-      <p id={noteId} className="text-[13px] text-ink-muted">
+      <p id={noteId} className="text-[15px] text-ink-muted">
         Pembayaran yang belum selesai dengan metode sebelumnya dibatalkan, lalu kamu bisa memilih metode lain.
       </p>
       {message && (
-        <p ref={alertRef} role="alert" tabIndex={-1} className="border border-error-border px-4 py-3 text-sm text-error">
+        <p ref={alertRef} role="alert" tabIndex={-1} className="border border-error-border px-4 py-3 text-[15px] text-error">
           {message}
         </p>
       )}

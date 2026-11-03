@@ -60,24 +60,24 @@ export function SavedAddressSection({ address, showWhenEmpty }: { address: Saved
         Alamat tersimpan
       </h2>
       {deleted && (
-        <p ref={statusRef} tabIndex={-1} role="status" className="text-sm text-neutral-700 focus:outline-none">
+        <p ref={statusRef} tabIndex={-1} role="status" className="text-[15px] text-neutral-700 focus:outline-none">
           Alamat tersimpan sudah dihapus.
         </p>
       )}
       {shown ? (
         <Card className="flex flex-col gap-3">
-          <div className="flex flex-col gap-0.5 text-sm text-neutral-700" data-testid="account-saved-address-card">
+          <div className="flex flex-col gap-0.5 text-[15px] text-neutral-700" data-testid="account-saved-address-card">
             <p className="font-medium text-neutral-900">{shown.recipientName}</p>
             <p>{shown.phone}</p>
             <p>{shown.addressLine}</p>
             <p>{shown.areaLabel}</p>
-            {shown.notes && <p className="text-[13px] text-neutral-500">Catatan untuk kurir: {shown.notes}</p>}
+            {shown.notes && <p className="text-[15px] text-ink-muted">Catatan untuk kurir: {shown.notes}</p>}
           </div>
-          <p className="text-[13px] text-neutral-500">Dipakai untuk mengisi alamat saat checkout. Alamat diperbarui setiap kali kamu memesan sambil masuk ke akun.</p>
+          <p className="text-[15px] text-ink-muted">Dipakai untuk mengisi alamat saat checkout. Alamat diperbarui setiap kali kamu memesan sambil masuk ke akun.</p>
           <Button
             ref={deleteButtonRef}
             variant="secondary"
-            className="self-start"
+            className="self-start text-sm"
             onClick={() => {
               setError(null);
               setOpen(true);
@@ -88,7 +88,7 @@ export function SavedAddressSection({ address, showWhenEmpty }: { address: Saved
         </Card>
       ) : (
         // Flag off there is no checkout to save one, so no note after a deletion either.
-        showWhenEmpty && <p className="text-sm text-neutral-600">{EMPTY_NOTE}</p>
+        showWhenEmpty && <p className="text-[15px] text-ink-muted">{EMPTY_NOTE}</p>
       )}
       <Dialog
         open={open}
@@ -108,7 +108,7 @@ export function SavedAddressSection({ address, showWhenEmpty }: { address: Saved
         loading={pending}
       >
         {error && (
-          <p role="alert" className="text-sm text-danger-700">
+          <p role="alert" className="text-[15px] text-danger-700">
             {error}
           </p>
         )}

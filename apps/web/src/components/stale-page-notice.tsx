@@ -17,7 +17,7 @@ export function StalePageNotice() {
 
   return (
     <div className="mx-auto flex max-w-md flex-col items-start gap-6 px-4 py-10">
-      <p role="alert" className="text-sm text-ink" data-testid="stale-page-notice">
+      <p role="alert" className="text-[15px] text-ink" data-testid="stale-page-notice">
         {STALE_PAGE_MESSAGE}
       </p>
       <PrimaryButton onClick={() => window.location.reload()} className="w-full md:w-auto">

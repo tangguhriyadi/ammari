@@ -18,7 +18,7 @@ export default function GlobalError({ error, retry }: { error: Error & { digest?
         ) : (
           <div className="mx-auto flex max-w-md flex-col items-start gap-6 px-4 py-10">
             <h1 className="font-serif text-[30px] font-normal text-ink">Terjadi kesalahan</h1>
-            <p className="text-sm text-ink-muted">Halaman ini tidak bisa dimuat sekarang. Coba lagi sebentar lagi.</p>
+            <p className="text-[15px] text-ink-muted">Halaman ini tidak bisa dimuat sekarang. Coba lagi sebentar lagi.</p>
             <PrimaryButton onClick={() => retry()} className="w-full md:w-auto">
               Coba lagi
             </PrimaryButton>

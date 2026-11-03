@@ -17,7 +17,7 @@ export function TrustRow() {
       {TRUST_ITEMS.map(({ icon: Icon, label }) => (
         <li key={label} className="flex flex-col items-center gap-2 text-center">
           <Icon className="size-5 text-ink" strokeWidth={1.4} aria-hidden="true" />
-          <span className="text-[13px] text-ink-muted">{label}</span>
+          <span className="text-[15px] text-ink-muted">{label}</span>
         </li>
       ))}
     </ul>

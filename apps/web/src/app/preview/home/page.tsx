@@ -36,7 +36,7 @@ export default async function PreviewHomePage({
 
   return (
     <div className="flex flex-col">
-      <p className="bg-warning-50 px-4 py-2 text-center text-sm text-warning-700" data-testid="preview-draft-banner">
+      <p className="bg-warning-50 px-4 py-2 text-center text-[15px] text-warning-700" data-testid="preview-draft-banner">
         Ini pratinjau draft, belum tayang di toko online. Tautan ini kedaluwarsa dalam beberapa
         menit.
       </p>

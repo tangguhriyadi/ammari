@@ -99,7 +99,7 @@ export function Accordions({ items }: { items: AccordionItemDef[] }) {
               aria-expanded={isOpen}
               aria-controls={panelId}
               onClick={() => toggle(item.id)}
-              className="flex min-h-11 w-full items-center justify-between gap-4 py-4 text-left text-[13px] font-medium tracking-[0.1em] text-ink uppercase"
+              className="flex min-h-11 w-full items-center justify-between gap-4 py-4 text-left text-[15px] font-medium tracking-[0.1em] text-ink uppercase"
             >
               {item.title}
               {isOpen ? <Minus className="size-4 shrink-0" strokeWidth={1.4} aria-hidden="true" /> : <Plus className="size-4 shrink-0" strokeWidth={1.4} aria-hidden="true" />}
@@ -109,7 +109,7 @@ export function Accordions({ items }: { items: AccordionItemDef[] }) {
               id={panelId}
               role="region"
               aria-labelledby={triggerId}
-              contentClassName="pb-5 text-sm text-ink-soft"
+              contentClassName="pb-5 text-[15px] text-ink-soft"
               onOpened={() => handleOpened(item.id)}
             >
               {item.content}

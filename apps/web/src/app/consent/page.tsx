@@ -29,7 +29,7 @@ export default async function ConsentPage({
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-neutral-50 px-4 py-10">
       <h1 className="font-serif text-2xl font-light text-brand">Sebelum lanjut</h1>
-      <p className="max-w-sm text-center text-sm text-neutral-700">
+      <p className="max-w-sm text-center text-[15px] text-neutral-700">
         Kami butuh persetujuanmu untuk memproses data pribadimu, sesuai UU Pelindungan Data
         Pribadi.
       </p>

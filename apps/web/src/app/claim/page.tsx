@@ -15,12 +15,12 @@ export default async function ClaimEntryPage({ searchParams }: { searchParams: P
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-neutral-50 px-4 py-10">
       <h1 className="font-serif text-2xl font-light text-brand">Masukkan kode voucher</h1>
-      <p className="max-w-sm text-center text-sm text-neutral-700">
+      <p className="max-w-sm text-center text-[15px] text-neutral-700">
         Ketik kode yang tertulis di kartu terima kasihmu.
       </p>
       <form action={enterClaimCodeAction} className="flex w-full max-w-sm flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="code">Kode voucher</Label>
+          <Label className="text-[15px]" htmlFor="code">Kode voucher</Label>
           <Input
             id="code"
             name="code"
@@ -32,11 +32,11 @@ export default async function ClaimEntryPage({ searchParams }: { searchParams: P
           />
         </div>
         {error && (
-          <p role="alert" className="text-sm text-danger-700">
+          <p role="alert" className="text-[15px] text-danger-700">
             Masukkan kode voucher terlebih dahulu.
           </p>
         )}
-        <Button type="submit">Lanjutkan</Button>
+        <Button className="text-sm" type="submit">Lanjutkan</Button>
       </form>
     </div>
   );
