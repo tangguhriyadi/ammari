@@ -3,7 +3,7 @@ import { paymentProviderFromEnv, paymentRuntimeFromEnv } from "./config";
 import { createFakePaymentProvider } from "./fake";
 import { buildPaymentLines, providerOrderId } from "./lines";
 import { PaymentProviderError } from "./provider";
-import { fakeMidtransServerKey } from "../../test/fake-keys";
+import { fakeMidtransServerKey, fakeMidtransTildeServerKey } from "../../test/fake-keys";
 
 // docs/plans/cart-checkout.md D7, §4.5.6, §12: the pure payment helpers, the fake provider and
 // the env runtime. Nothing here reaches a gateway.
@@ -164,6 +164,44 @@ describe("paymentRuntimeFromEnv", () => {
     expect(problems({ MIDTRANS_SERVER_KEY: PRODUCTION_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production", NODE_ENV: "production" })).toEqual([]);
     // Names only, never the key.
     expect(problems({ MIDTRANS_SERVER_KEY: LEGACY_SANDBOX_KEY, MIDTRANS_IS_PRODUCTION: "true", DEPLOY_ENV: "production" }).join(" ")).not.toContain(LEGACY_SANDBOX_KEY);
+  });
+
+  test("the documented prod web.env (checkout-prod.md 2.4-2.7) is enough: no prefix, flag off, nothing else needed", () => {
+    // Exactly what deploy-prod/env/web.env.example and the runbook set, as the prod image runs it
+    // (NODE_ENV=production from the Dockerfile). Unrelated variables (the cart flag, Biteship) must
+    // not matter; MIDTRANS_ORDER_ID_PREFIX and the checkout timings may be missing.
+    const prodWebEnv = {
+      NODE_ENV: "production",
+      DEPLOY_ENV: "production",
+      MIDTRANS_SERVER_KEY: PRODUCTION_KEY,
+      MIDTRANS_IS_PRODUCTION: "true",
+      MIDTRANS_NOTIFICATION_URL: "https://ammari.id/api/payments/midtrans/notification",
+      STOREFRONT_CART_ENABLED: "false",
+    };
+    const provider = paymentProviderFromEnv(prodWebEnv, { siteOrigin: "https://ammari.id" });
+    expect(provider.ok ? provider.provider.name : provider.problems).toBe("midtrans");
+    const runtime = paymentRuntimeFromEnv(prodWebEnv, { siteOrigin: "https://ammari.id" });
+    expect(runtime.ok ? runtime.runtime.orderIdPrefix : runtime.problems).toBe("");
+  });
+
+  test("a newer-dashboard key with '~' is accepted; whitespace, ':' and quotes are still refused, and SB- in production", () => {
+    const prod = { NODE_ENV: "production", DEPLOY_ENV: "production", MIDTRANS_IS_PRODUCTION: "true", MIDTRANS_NOTIFICATION_URL: "https://ammari.id/api/payments/midtrans/notification" };
+    const tildeKey = fakeMidtransTildeServerKey();
+    expect(tildeKey).toHaveLength(35);
+    expect(tildeKey).toContain("~");
+    const provider = paymentProviderFromEnv({ ...prod, MIDTRANS_SERVER_KEY: tildeKey }, origin);
+    expect(provider.ok ? provider.provider.name : provider.problems).toBe("midtrans");
+    expect(paymentRuntimeFromEnv({ ...prod, MIDTRANS_SERVER_KEY: tildeKey }, origin).ok).toBe(true);
+    const problems = (key: string) => {
+      const result = paymentProviderFromEnv({ ...prod, MIDTRANS_SERVER_KEY: key }, origin);
+      return result.ok ? [] : result.problems;
+    };
+    for (const bad of [`${tildeKey.slice(0, 20)}:${tildeKey.slice(20)}`, `${tildeKey.slice(0, 20)} ${tildeKey.slice(20)}`, `${tildeKey.slice(0, 20)}\t${tildeKey.slice(20)}`, `${tildeKey.slice(0, 20)}\n${tildeKey.slice(20)}`, `${tildeKey}"`, `${tildeKey}'`, "~~~~~~~~~", `${tildeKey}${"0".repeat(200)}`]) {
+      expect(problems(bad)).toEqual(["MIDTRANS_SERVER_KEY has an unexpected format"]);
+    }
+    expect(problems(`SB-${tildeKey}`)).toEqual(["MIDTRANS_SERVER_KEY is a sandbox key but MIDTRANS_IS_PRODUCTION is true"]);
+    // Names only, never the key.
+    expect(problems(`${tildeKey} x`).join(" ")).not.toContain(tildeKey);
   });
 
   test("an unknown DEPLOY_ENV fails closed; the notification route's provider ignores checkout timing problems", () => {

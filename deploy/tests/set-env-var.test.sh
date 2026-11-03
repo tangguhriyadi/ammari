@@ -41,6 +41,17 @@ new="$WORK/cron.env"
 printf 'abc\n' | bash "$SCRIPT" "$new" INTERNAL_CRON_SECRET >/dev/null 2>&1
 check "creates a missing file with mode 600" '[ "$(cat "$new")" = "INTERNAL_CRON_SECRET=abc" ] && [ "$(mode_of "$new")" = "600" ]'
 
+# Newer Midtrans dashboard keys contain '~' (35 characters): written byte for byte, never expanded
+# as a home directory, counted and compared like any other value.
+t="$WORK/tilde-web.env"
+t2="$WORK/tilde-admin.env"
+TILDE_KEY="Mid-server-FAKE~PROD$(printf '%015d' 0)"
+printf '%s\n' "$TILDE_KEY" | bash "$SCRIPT" "$t" MIDTRANS_SERVER_KEY >/dev/null 2>&1
+check "a key with '~' is accepted and written literally" '[ $? -eq 0 ] && [ "$(cat "$t")" = "MIDTRANS_SERVER_KEY=$TILDE_KEY" ]'
+check "--check counts all 35 characters of a '~' key" '[ "$(bash "$SCRIPT" --check "$t" MIDTRANS_SERVER_KEY)" = "MIDTRANS_SERVER_KEY: set (35 characters)" ]'
+printf '%s\n' "$TILDE_KEY" | bash "$SCRIPT" "$t2" MIDTRANS_SERVER_KEY >/dev/null 2>&1
+check "--same MATCH for a '~' key" '[ "$(bash "$SCRIPT" --same "$t" "$t2" MIDTRANS_SERVER_KEY 2>&1)" = "MIDTRANS_SERVER_KEY: MATCH" ]'
+
 before="$(cat "$f")"
 printf '\n' | bash "$SCRIPT" "$f" EMPTY_ONE >/dev/null 2>&1
 check "empty value refused" '[ $? -ne 0 ]'

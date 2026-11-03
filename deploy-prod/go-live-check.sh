@@ -250,31 +250,27 @@ check_revalidate_404() {
 }
 check_revalidate_404
 
-# --- 8. Security headers present, and NO X-Robots-Tag noindex on the real page (that header is
-#     only meant on /preview/home, per apps/web/next.config.ts's own headers()) ---
+# --- 8. Security headers present, and the right X-Robots-Tag per host: NO noindex on the
+#     storefront's real page (that header is only meant on /preview/home and /login/link, per
+#     apps/web/next.config.ts's own headers()), and noindex REQUIRED on the admin (apps/admin sends
+#     it on every path, dev and prod; SEO session). The rules live in go-live-check-lib.sh's
+#     security_header_problems (tested in deploy-prod/tests/go-live-check-lib.test.sh). ---
 check_security_headers() {
-  local host="$1"
+  local host="$1" policy="$2" problems
   fetch "https://${host}/" -L >/dev/null
-  local hdrs missing=()
-  hdrs="$(cat "$HEADERS_FILE")"
-  grep -qi '^strict-transport-security:' <<<"$hdrs" || missing+=("Strict-Transport-Security")
-  grep -qi '^x-content-type-options:[[:space:]]*nosniff' <<<"$hdrs" || missing+=("X-Content-Type-Options")
-  grep -qi '^referrer-policy:' <<<"$hdrs" || missing+=("Referrer-Policy")
-  grep -qiE '^x-frame-options:|^content-security-policy:.*frame-ancestors' <<<"$hdrs" || missing+=("frame protection (X-Frame-Options or CSP frame-ancestors)")
-  if grep -qi '^x-robots-tag:.*noindex' <<<"$hdrs"; then
-    missing+=("X-Robots-Tag: noindex is present on / — should only be on /preview/home")
-  fi
-  if [ "${#missing[@]}" -eq 0 ]; then
-    pass "https://${host}/ has HSTS/X-Content-Type-Options/Referrer-Policy/frame-protection, no stray noindex"
+  problems="$(security_header_problems "$policy" <"$HEADERS_FILE")"
+  if [ -z "$problems" ]; then
+    if [ "$policy" = "noindex" ]; then
+      pass "https://${host}/ has HSTS/X-Content-Type-Options/Referrer-Policy/frame-protection and X-Robots-Tag noindex (admin is never indexed)"
+    else
+      pass "https://${host}/ has HSTS/X-Content-Type-Options/Referrer-Policy/frame-protection, no stray noindex"
+    fi
   else
-    fail "https://${host}/ security header check failed: $(
-      IFS='; '
-      echo "${missing[*]}"
-    )"
+    fail "https://${host}/ security header check failed: $(tr '\n' ';' <<<"$problems" | sed -e 's/;$//' -e 's/;/; /g')"
   fi
 }
-check_security_headers "$WEB_HOST"
-check_security_headers "$ADMIN_HOST"
+check_security_headers "$WEB_HOST" index
+check_security_headers "$ADMIN_HOST" noindex
 
 # --- 9. The prod backups bucket must stay private under R2's whole-bucket-public model (no
 #     bucket policies on R2, see docs/plans/storage-r2.md's "Decisions already made"). An
@@ -469,6 +465,21 @@ check_checkout_config() {
   else
     report "$(is_eq "$state" "match")" "checkout: INTERNAL_CRON_SECRET in web.env and cron.env: ${state:-unknown}"
   fi
+
+  # The running web slot sees what env/web.env says (go-live-check-remote.sh RUNENV): a slot not
+  # recreated after upload-prod-env.sh keeps its old environment, and the payment sweep then answers
+  # 503 "payment provider not configured" although every file check above passes.
+  local key
+  for key in MIDTRANS_SERVER_KEY MIDTRANS_IS_PRODUCTION MIDTRANS_NOTIFICATION_URL DEPLOY_ENV INTERNAL_CRON_SECRET; do
+    line="$(grep "^RUNENV:web:${key}:" <<<"$output" | head -n 1)"
+    state="${line##*:}"
+    case "$state" in
+      match) report 0 "checkout: running web slot has the same $key as env/web.env" ;;
+      differs) report 1 "checkout: running web slot's $key differs from env/web.env — run ./recreate-active-slot.sh web on the VPS (docker compose restart keeps the old environment)" ;;
+      unset-in-container) report 1 "checkout: running web slot has no $key although env/web.env sets it — run ./recreate-active-slot.sh web on the VPS (docker compose restart keeps the old environment)" ;;
+      *) report 1 "checkout: running web slot $key: ${state:-no data}" ;;
+    esac
+  done
 
   # Needed in every mode: admin's storefront revalidation goes through this alias.
   if grep -q '^WEBALIAS:ok$' <<<"$output"; then

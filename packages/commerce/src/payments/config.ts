@@ -97,12 +97,15 @@ export function paymentRuntimeFromEnv(env: PaymentEnv, options: { siteOrigin: st
 }
 
 const NOTIFICATION_URL_MAX = 255;
+const MIDTRANS_SERVER_KEY_PATTERN = /^[A-Za-z0-9_~-]{10,200}$/;
 
 function midtransFromEnv(env: PaymentEnv, problems: string[]): PaymentProvider | null {
   const before = problems.length;
   const serverKey = env.MIDTRANS_SERVER_KEY?.trim() ?? "";
   if (serverKey === "") problems.push("MIDTRANS_SERVER_KEY is not set");
-  else if (!/^[A-Za-z0-9_-]{10,200}$/.test(serverKey)) problems.push("MIDTRANS_SERVER_KEY has an unexpected format");
+  // `~` too: keys from the newer Midtrans dashboard (one key per set of permissions) carry it. Still
+  // no whitespace, quotes, `:` (it would end the Basic auth user) or anything compose would change.
+  else if (!MIDTRANS_SERVER_KEY_PATTERN.test(serverKey)) problems.push("MIDTRANS_SERVER_KEY has an unexpected format");
 
   const mode = env.MIDTRANS_IS_PRODUCTION?.trim();
   if (mode !== "true" && mode !== "false") problems.push("MIDTRANS_IS_PRODUCTION must be true or false");

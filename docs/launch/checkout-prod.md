@@ -307,6 +307,9 @@ the Sandbox dashboard, and rerun the block. Anything else (`none`, `5xx`): netwo
 trouble, retry later; do not set the key by hand. The app itself only refuses an old-style `SB-`
 key in production; a wrong-environment key would surface as `rejected MIDTRANS_SERVER_KEY (401)`
 with `keyRejected: true` in the web logs while checkout refuses to create payment pages.
+Keys from the newer Midtrans dashboard (one server key per set of permissions) may contain `~`
+besides letters, digits, `_` and `-` (e.g. 35 characters long): that is a valid key, and
+`set-env-var.sh`, the env files and the app take it as is. Do not edit or quote it.
 **`MIDTRANS_ORDER_ID_PREFIX` stays empty in prod** (plan D7). Never set `PAYMENT_PROVIDER` or `SHIPPING_RATE_PROVIDER`.
 
 **2.5 [Dashboard: Biteship] Grow plan, couriers, live key.**
@@ -387,6 +390,30 @@ prodssh 'cd /opt/ammari-prod && ./recreate-active-slot.sh admin && ./recreate-ac
 Expected: both end with `==> done: ...`; the web run also prints `internal alias http://web:3000
 answers` and recreates cron. A failed health check prints the slot's last log lines; most likely a
 variable the app refuses (the log names it). Fix the file on the Mac, upload, run the script again.
+Always restart with `recreate-active-slot.sh`: `docker compose restart` keeps the container's old
+environment, so the slot goes on running without the values you just uploaded (2.10 catches it).
+
+**If the cron log shows `ERROR /api/internal/payments/sweep -> 503 {"error":"payment provider not
+configured",...}`:** the web process cannot build the Midtrans provider. What it needs, and
+nothing else (no client key, no merchant id, no `NEXT_PUBLIC_*`, not `STOREFRONT_CART_ENABLED`,
+not `MIDTRANS_ORDER_ID_PREFIX`): `MIDTRANS_SERVER_KEY` (10 to 200 of `A-Z a-z 0-9 _ - ~`, no spaces, quotes or `:`, not `SB-`),
+`MIDTRANS_IS_PRODUCTION` exactly `true`, `DEPLOY_ENV` exactly `production`,
+`MIDTRANS_NOTIFICATION_URL` empty or one `https` URL of at most 255 characters, `PAYMENT_PROVIDER`
+unset. (`MIDTRANS_SERVER_KEY has an unexpected format` with a key the 2.4 API check accepted meant,
+before this release, a newer-dashboard key with `~`; the app now accepts `~`. If it still shows,
+the key was pasted with a space, quote or line break: copy it again and rerun 2.4.) The answer's
+`problems` list names the failing variables (names only, never values; the same
+line is in web's log as `[payments] sweep refused: payment provider not configured`). Read them:
+
+```bash
+prodssh 'cd /opt/ammari-prod && docker compose logs --no-log-prefix --since 15m cron | grep "payments/sweep" | tail -n 3'
+prodssh 'cd /opt/ammari-prod && docker compose logs --no-log-prefix --since 1h "web-$(cat active-slot-web)" 2>&1 | grep -iA3 "payment provider not configured" | tail -n 8'
+```
+
+(Grep case-insensitively and with `2>&1`: the problem names are upper case (`MIDTRANS_...`), the
+line itself does not contain the word "error", and an image older than this fix logs it only once
+per container start.) If every file check in 2.10 passes but the sweep still answers 503, the
+running slot is on an old environment: `prodssh 'cd /opt/ammari-prod && ./recreate-active-slot.sh web'`.
 
 **[Mac] Backup of the secrets directory** (it changed): `docs/deploy-prod.md` §4.1.
 
@@ -419,7 +446,9 @@ and admin (same value, not an old-style `SB-` key; the prefix cannot tell a newe
 API check is what proves the environment), `MIDTRANS_IS_PRODUCTION=true` in both, admin
 `DEPLOY_ENV=production`, the notification URL, a live Biteship key and its base URL, no fake
 provider and no order-id prefix, the cron secret matching in web.env and cron.env, the internal
-`web` alias, and in the cron log at least one `sweep -> 200` and one `emails/dispatch -> 200` with
+`web` alias, that the **running** web slot has the same `MIDTRANS_SERVER_KEY`,
+`MIDTRANS_IS_PRODUCTION`, `MIDTRANS_NOTIFICATION_URL`, `DEPLOY_ENV` and `INTERNAL_CRON_SECRET` as
+`env/web.env` (match / differs only, never a value), and in the cron log at least one `sweep -> 200` and one `emails/dispatch -> 200` with
 no `ERROR`/`ALERT` in the last 15 minutes. The cart flag must still be `false`.
 
 **2.11 [Dashboard: Midtrans production] One real low-value payment, refunded** (plan §14). Checkout

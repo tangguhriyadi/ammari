@@ -24,11 +24,18 @@ export function getPaymentRuntime(): PaymentRuntime | null {
 
 let lastLoggedProviderProblems: string | null = null;
 
+/** Only the payment provider, without logging: the provider, or the variable names (never values)
+ * that keep it from being built. For the expiry sweep, which logs and answers the names every run. */
+export function getPaymentProviderConfig(): { provider: PaymentProvider; problems: [] } | { provider: null; problems: string[] } {
+  const result = paymentProviderFromEnv(process.env, { siteOrigin: siteOrigin() });
+  return result.ok ? { provider: result.provider, problems: [] } : { provider: null, problems: result.problems };
+}
+
 /** Only the payment provider, for the notification route: a bad checkout timing or prefix variable
  * never stops a paid notification from being verified and applied. */
 export function getPaymentProvider(): PaymentProvider | null {
-  const result = paymentProviderFromEnv(process.env, { siteOrigin: siteOrigin() });
-  if (result.ok) {
+  const result = getPaymentProviderConfig();
+  if (result.provider) {
     lastLoggedProviderProblems = null;
     return result.provider;
   }

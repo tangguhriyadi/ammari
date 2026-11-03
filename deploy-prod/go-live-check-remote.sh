@@ -195,6 +195,27 @@ b="$(env_value env/cron.env INTERNAL_CRON_SECRET || true)"
 if [ -z "$a" ] || [ -z "$b" ]; then echo "SAME:cron:missing"; elif [ "$a" != "$b" ]; then echo "SAME:cron:mismatch"; elif [ "${#a}" -lt 32 ]; then echo "SAME:cron:short"; else echo "SAME:cron:match"; fi
 unset v a b
 
+# The RUNNING active web slot against env/web.env, for what the payment provider and the cron routes
+# read: every check above reads the FILE, but a slot that was not recreated with
+# ./recreate-active-slot.sh after an upload (or was restarted with `docker compose restart`, which
+# keeps the old environment) still runs on the old values, and the sweep answers 503 "payment
+# provider not configured" while the file looks right. Values stay in this shell: only
+# match / differs / unset-in-container / unset-in-both is printed.
+web_cid="$(docker compose ps -q "web-$web_slot" 2>/dev/null </dev/null || true)"
+for key in MIDTRANS_SERVER_KEY MIDTRANS_IS_PRODUCTION MIDTRANS_NOTIFICATION_URL DEPLOY_ENV INTERNAL_CRON_SECRET; do
+  if [ -z "$web_cid" ]; then
+    echo "RUNENV:web:$key:no-container"
+    continue
+  fi
+  a="$(env_value env/web.env "$key" || true)"
+  if b="$(docker exec "$web_cid" printenv "$key" 2>/dev/null </dev/null)"; then :; else b=""; fi
+  if [ -z "$a" ] && [ -z "$b" ]; then echo "RUNENV:web:$key:unset-in-both"
+  elif [ -z "$b" ]; then echo "RUNENV:web:$key:unset-in-container"
+  elif [ "$a" = "$b" ]; then echo "RUNENV:web:$key:match"
+  else echo "RUNENV:web:$key:differs"; fi
+done
+unset a b web_cid
+
 # --- Private proof storage (docs/plans/purchase-payments.md §5, A7). Presence only (set/empty/
 # missing via cfg_state), plus two derived booleans; no value is ever printed.
 for key in PRIVATE_S3_BUCKET PRIVATE_S3_ACCESS_KEY_ID PRIVATE_S3_SECRET_ACCESS_KEY; do

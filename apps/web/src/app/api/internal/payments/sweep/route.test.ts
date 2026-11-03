@@ -151,11 +151,14 @@ describe("POST /api/internal/payments/sweep", () => {
       vi.spyOn(console, "error").mockImplementation(() => undefined);
       const { createFakePaymentProvider, PaymentProviderError } = await import("@ammari/commerce/payments");
       const runtime = await import("@/lib/payments/runtime");
-      vi.spyOn(runtime, "getPaymentProvider").mockReturnValue({
-        ...createFakePaymentProvider({ baseUrl: "http://localhost:3100" }),
-        getPaymentStatus: async () => {
-          throw new PaymentProviderError("unavailable", "down");
+      vi.spyOn(runtime, "getPaymentProviderConfig").mockReturnValue({
+        provider: {
+          ...createFakePaymentProvider({ baseUrl: "http://localhost:3100" }),
+          getPaymentStatus: async () => {
+            throw new PaymentProviderError("unavailable", "down");
+          },
         },
+        problems: [],
       });
       const response = await call(sweep, "/api/internal/payments/sweep");
       expect(response.status).toBe(502);
@@ -164,13 +167,25 @@ describe("POST /api/internal/payments/sweep", () => {
     });
   });
 
-  test("without a payment provider it answers 503 and touches nothing", async () => {
+  test("without a payment provider it answers 503 with the variable names, logs them every run and touches nothing", async () => {
     await inRollback(async (tx) => {
       const fixture = await expiredCheckoutOrder(tx);
       delete process.env.PAYMENT_PROVIDER;
-      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
       vi.stubEnv("MIDTRANS_SERVER_KEY", "");
-      expect((await call(sweep, "/api/internal/payments/sweep")).status).toBe(503);
+      vi.stubEnv("MIDTRANS_IS_PRODUCTION", "");
+      for (let run = 0; run < 2; run++) {
+        const response = await call(sweep, "/api/internal/payments/sweep");
+        expect(response.status).toBe(503);
+        expect(await response.json()).toEqual({
+          error: "payment provider not configured",
+          problems: expect.arrayContaining(["MIDTRANS_SERVER_KEY is not set", "MIDTRANS_IS_PRODUCTION must be true or false"]),
+        });
+      }
+      // Not deduplicated like the checkout runtime's log: one line per cron run, names only.
+      const refusals = errors.mock.calls.filter(([message]) => message === "[payments] sweep refused: payment provider not configured");
+      expect(refusals).toHaveLength(2);
+      expect(refusals[0]?.[1]).toEqual({ problems: expect.arrayContaining(["MIDTRANS_SERVER_KEY is not set"]) });
       expect(await orderStatus(tx, fixture.orderId)).toMatchObject({ status: "awaiting_payment", paymentStatus: "pending" });
       vi.unstubAllEnvs();
     });

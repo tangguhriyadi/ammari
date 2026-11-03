@@ -3,7 +3,7 @@ import { createFakePaymentProvider, recordFakeTransaction } from "./fake";
 import { MIDTRANS_ENABLED_PAYMENTS, createMidtransPaymentProvider, midtransStartTime } from "./midtrans";
 import { PaymentProviderError, type CreatePaymentInput } from "./provider";
 import { midtransSignature, parsePaymentStatusBody, parseWholeRupiah, verifyMidtransSignature } from "./status";
-import { fakeMidtransServerKey } from "../../test/fake-keys";
+import { fakeMidtransServerKey, fakeMidtransTildeServerKey } from "../../test/fake-keys";
 
 // docs/plans/cart-checkout.md D5 to D8, §6.1, §13: the Midtrans Snap and status client against a
 // stub fetch, the signature, and the status parsing. Fixtures are hand-written from the documented
@@ -93,6 +93,16 @@ describe("createPayment (Snap)", () => {
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://app.midtrans.com/snap/v1/transactions");
     expect((init.headers as Record<string, string>)["x-override-notification"]).toBeUndefined();
+  });
+
+  test("a key with '~' goes into Basic auth byte for byte (user = the key, empty password)", async () => {
+    const key = fakeMidtransTildeServerKey();
+    const fetch = vi.fn(async () => jsonResponse(201, { token: "t", redirect_url: "https://app.midtrans.com/snap/v4/redirection/t" }));
+    const provider = createMidtransPaymentProvider({ serverKey: key, isProduction: true, notificationUrl: null, fetch });
+    await provider.createPayment(input);
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    const authorization = (init.headers as Record<string, string>).authorization ?? "";
+    expect(Buffer.from(authorization.replace(/^Basic /, ""), "base64").toString("utf8")).toBe(`${key}:`);
   });
 
   test("refuses a redirect URL that is not Snap's https host for the mode", async () => {
@@ -356,6 +366,17 @@ describe("signature", () => {
     expect(verifyMidtransSignature({ ...fields, signatureKey: signature.slice(0, 64) }, SERVER_KEY)).toBe(false);
     expect(verifyMidtransSignature({ ...fields, signatureKey: "z".repeat(128) }, SERVER_KEY)).toBe(false);
     expect(verifyMidtransSignature({ ...fields, signatureKey: signature }, "")).toBe(false);
+  });
+
+  test("a key with '~' signs over its exact bytes (nothing escaped or dropped)", async () => {
+    const key = fakeMidtransTildeServerKey();
+    const fields = { orderId: "ORD-202612-0001-1", statusCode: "200", grossAmount: "573000.00" };
+    const signature = midtransSignature(fields, key);
+    const { createHash } = await import("node:crypto");
+    expect(signature).toBe(createHash("sha512").update(`${fields.orderId}${fields.statusCode}${fields.grossAmount}${key}`).digest("hex"));
+    expect(verifyMidtransSignature({ ...fields, signatureKey: signature }, key)).toBe(true);
+    expect(verifyMidtransSignature({ ...fields, signatureKey: signature }, key.replace("~", "-"))).toBe(false);
+    expect(verifyMidtransSignature({ ...fields, signatureKey: signature }, key.replace("~", "%7E"))).toBe(false);
   });
 });
 

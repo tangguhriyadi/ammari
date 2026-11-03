@@ -60,3 +60,27 @@ pubport_violations() {
     done
   done
 }
+
+# Reads a response's headers on stdin and prints one missing/wrong item per line (nothing when the
+# headers are right). $1 is the host's indexing policy: `index` (the storefront: X-Robots-Tag
+# noindex must NOT be on its real page, only on /preview/home and /login/link) or `noindex` (the
+# admin: apps/admin sends `X-Robots-Tag: noindex, nofollow` on every path, dev and prod alike).
+security_header_problems() {
+  local policy="$1" hdrs
+  hdrs="$(cat)"
+  grep -qi '^strict-transport-security:' <<<"$hdrs" || echo "Strict-Transport-Security"
+  grep -qi '^x-content-type-options:[[:space:]]*nosniff' <<<"$hdrs" || echo "X-Content-Type-Options"
+  grep -qi '^referrer-policy:' <<<"$hdrs" || echo "Referrer-Policy"
+  grep -qiE '^x-frame-options:|^content-security-policy:.*frame-ancestors' <<<"$hdrs" || echo "frame protection (X-Frame-Options or CSP frame-ancestors)"
+  case "$policy" in
+    index)
+      if grep -qi '^x-robots-tag:.*noindex' <<<"$hdrs"; then
+        echo "X-Robots-Tag: noindex is present on / — should only be on /preview/home and /login/link"
+      fi
+      ;;
+    noindex)
+      grep -qi '^x-robots-tag:.*noindex' <<<"$hdrs" || echo "X-Robots-Tag: noindex is missing (the admin must never be indexed)"
+      ;;
+    *) echo "unknown indexing policy: $policy (index or noindex)" ;;
+  esac
+}
