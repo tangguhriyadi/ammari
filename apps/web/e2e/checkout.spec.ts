@@ -21,7 +21,7 @@ import { E2E_WHATSAPP_NUMBER } from "./storefront-fixtures";
 // and the finish page, at 390px and 1280px. The fake shipping provider (fictional "Kecamatan E2E ..."
 // areas) and the fake payment provider come from playwright.config.ts; nothing reaches a real
 // provider. Each test seeds its own product, so its stock holds never change another spec.
-// Murah: courier Rp12.000, buyer Rp0. Jauh: Rp95.000, buyer Rp75.000 (POS Kilat Khusus).
+// Murah: courier Rp12.000, buyer Rp0. Jauh: Rp95.000, buyer Rp75.000 (POS Reguler).
 
 const VIEWPORTS = [
   { name: "390px", width: 390, height: 844 },
@@ -117,7 +117,7 @@ test.describe("checkout, flag on", () => {
 
       await fillGuestForm(page, email);
       await pickArea(page, "e2e jauh", /Kecamatan E2E Jauh, Kabupaten E2E, Provinsi E2E Timur 99111/);
-      await expect(page.getByTestId("shipping-row")).toContainText("POS Kilat Khusus");
+      await expect(page.getByTestId("shipping-row")).toContainText("POS Reguler");
       await expect(page.getByTestId("shipping-buyer-amount")).toHaveText("Rp75.000");
       // The subsidy in plain sight: courier cost struck through, "Subsidi ongkir Ammari" highlighted.
       await expect(page.getByTestId("shipping-courier-cost")).toHaveText("Rp95.000");

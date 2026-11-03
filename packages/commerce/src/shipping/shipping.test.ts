@@ -428,7 +428,7 @@ describe("quoteShipping", () => {
       });
       expect(await quoteShipping(tx, fakeDeps, { areaId: jauh!.id, lines })).toMatchObject({
         ok: true,
-        quote: { label: "POS Kilat Khusus", costAmount: 95_000, subsidyAmount: 20_000, buyerAmount: 75_000 },
+        quote: { label: "POS Reguler", costAmount: 95_000, subsidyAmount: 20_000, buyerAmount: 75_000 },
       });
       expect(await quoteShipping(tx, fakeDeps, { areaId: noService!.id, lines })).toEqual({ ok: false, reason: "no_service" });
       expect(await quoteShipping(tx, fakeDeps, { areaId: down!.id, lines })).toEqual({ ok: false, reason: "unavailable" });

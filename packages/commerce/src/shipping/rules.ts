@@ -20,10 +20,11 @@ export interface AllowlistedService {
 /** Regular, non-COD, non-instant, non-cargo services only (decision 18). The order is the
  * tie-break: equal prices pick the earlier entry, so the same inputs always give the same service.
  *
- * Codes as Biteship's courier list documents them (https://biteship.com/id/docs/api/couriers/
- * overview, checked 2026-10-21; the shipping provider since plan D18). POS has no "reguler" code
- * there: `kilat_khusus` (Pos Kilat Khusus) is its regular parcel service, kept because POS covers
- * remote destinations. A code that differs from what Biteship really returns simply never matches,
+ * Codes as Biteship returns them (live `GET /v1/couriers` and `POST /v1/rates/couriers`, checked
+ * 2026-11-03; the shipping provider since plan D18). POS's regular parcel service is `reg` ("Pos
+ * Reguler"; the older `kilat_khusus` code is gone), kept because POS covers remote destinations,
+ * though from origin 40552 POS returned no rates on 2026-11-03 (docs/launch/checkout-prod.md 2.5).
+ * A code that differs from what Biteship really returns simply never matches,
  * so it can only make the pick narrower, never wrong; the opt-in contract test prints the codes a
  * real key returns. Six couriers fit the Grow plan's 10 active couriers; on Starter (3 active)
  * only the activated ones answer. Changing this list changes the cache key (./cache.ts), so old
@@ -34,7 +35,7 @@ export const SHIPPING_SERVICE_ALLOWLIST: readonly AllowlistedService[] = [
   { courierCode: "sicepat", serviceCode: "reg", label: "SiCepat Reguler" },
   { courierCode: "idexpress", serviceCode: "reg", label: "ID Express Reguler" },
   { courierCode: "anteraja", serviceCode: "reg", label: "AnterAja Reguler" },
-  { courierCode: "pos", serviceCode: "kilat_khusus", label: "POS Kilat Khusus" },
+  { courierCode: "pos", serviceCode: "reg", label: "POS Reguler" },
 ];
 
 /** The courier codes for one Rates call (`couriers: "jne,jnt,..."`), in allowlist order,

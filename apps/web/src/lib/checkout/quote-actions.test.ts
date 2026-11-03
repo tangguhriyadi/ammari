@@ -134,7 +134,7 @@ describe("quoteShippingAction", () => {
     await guestCartWith([await sellableSku(), await sellableSku()]);
     const result = await quoteShippingAction({ shippingAreaId: areaIds.jauh });
     if (!result.ok) throw new Error(result.message);
-    expect(result.quote).toEqual({ label: "POS Kilat Khusus", costAmount: 95_000, subsidyAmount: 20_000, buyerAmount: 75_000 });
+    expect(result.quote).toEqual({ label: "POS Reguler", costAmount: 95_000, subsidyAmount: 20_000, buyerAmount: 75_000 });
     expect(result.subtotal).toBe(2 * 259_000);
   });
 

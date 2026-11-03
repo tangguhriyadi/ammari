@@ -357,7 +357,15 @@ production mode` once per process while it falls back to the server key.
    Confirm with Biteship the open items in plan §15 "What to confirm" (six couriers active at
    once, their service codes, billing).
 2. Courier settings: activate the six allowlisted couriers: JNE (`reg`), J&T (`ez`), SiCepat
-   (`reg`), ID Express (`reg`), AnterAja (`reg`), POS (`kilat_khusus`).
+   (`reg`), ID Express (`reg`), AnterAja (`reg`), POS (`reg`, "Pos Reguler").
+
+   **POS note (3 Nov 2026):** checked against the live API (`GET /v1/couriers`, `POST
+   /v1/rates/couriers`, Grow, origin postal 40552). The allowlisted codes are the ones Biteship
+   returns: `jne/reg`, `jnt/ez`, `sicepat/reg`, `idexpress/reg`, `anteraja/reg`, `pos/reg` (POS no
+   longer has `kilat_khusus`; its codes are `reg`, `nextday`, `sameday`, `cargo`). **POS currently
+   returns no rates from origin 40552** (an account or route issue on Biteship's side, not our
+   code). Checkout simply never picks POS while that holds. Re-check it with Biteship support
+   before relying on POS (e.g. for remote destinations other couriers do not serve).
 3. Turn **Testing Mode off**, Settings → API: create a production key (starts with
    `biteship_live.`).
 4. Balance: Maps and Rates inside Grow's quota cost nothing extra; a top-up is needed only once

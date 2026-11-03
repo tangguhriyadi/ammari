@@ -24,7 +24,7 @@ const ATTEMPT_ID = "6f1c2b9e-3d4a-4f5b-8c7d-1e2f3a4b5c6d";
 const JAUH = { id: "11111111-1111-4111-8111-111111111111", label: "Kecamatan E2E Jauh, Kabupaten E2E, Provinsi E2E Timur 99111", hasPostalCode: true };
 const JAUH_QUOTE = {
   ok: true,
-  quote: { label: "POS Kilat Khusus", costAmount: 95_000, subsidyAmount: 20_000, buyerAmount: 75_000 },
+  quote: { label: "POS Reguler", costAmount: 95_000, subsidyAmount: 20_000, buyerAmount: 75_000 },
   subtotal: 250_000,
   cartKey: "SKU-1:1|250000",
 };

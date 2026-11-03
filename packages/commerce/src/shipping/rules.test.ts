@@ -119,7 +119,7 @@ describe("pickCheapestService", () => {
   test("takes the lowest price", () => {
     const pick = pickCheapestService([
       { courierCode: "jne", serviceCode: "reg", cost: 18_000 },
-      { courierCode: "pos", serviceCode: "kilat_khusus", cost: 16_000 },
+      { courierCode: "pos", serviceCode: "reg", cost: 16_000 },
       { courierCode: "jnt", serviceCode: "ez", cost: 17_000 },
     ]);
     expect(pick?.courierCode).toBe("pos");
@@ -128,7 +128,7 @@ describe("pickCheapestService", () => {
 
   test("ties are broken by allowlist order, whatever order the provider returns", () => {
     const services = [
-      { courierCode: "pos", serviceCode: "kilat_khusus", cost: 12_000 },
+      { courierCode: "pos", serviceCode: "reg", cost: 12_000 },
       { courierCode: "sicepat", serviceCode: "reg", cost: 12_000 },
       { courierCode: "jnt", serviceCode: "ez", cost: 12_000 },
     ];
@@ -137,8 +137,8 @@ describe("pickCheapestService", () => {
   });
 
   test("matches codes case- and space-insensitively but returns the canonical codes", () => {
-    const pick = pickCheapestService([{ courierCode: " POS ", serviceCode: "KILAT_KHUSUS ", cost: 10_000 }]);
-    expect(pick).toEqual({ courierCode: "pos", serviceCode: "kilat_khusus", label: "POS Kilat Khusus", cost: 10_000 });
+    const pick = pickCheapestService([{ courierCode: " POS ", serviceCode: "REG ", cost: 10_000 }]);
+    expect(pick).toEqual({ courierCode: "pos", serviceCode: "reg", label: "POS Reguler", cost: 10_000 });
   });
 
   test("a zero, negative or fractional price is never picked", () => {
@@ -168,13 +168,13 @@ describe("pickCheapestService", () => {
   test("allowlistedServices keeps only pickable services, canonical codes, provider order", () => {
     expect(
       allowlistedServices([
-        { courierCode: "POS", serviceCode: "Kilat_Khusus", cost: 20_000 },
+        { courierCode: "POS", serviceCode: "Reg", cost: 20_000 },
         { courierCode: "jne", serviceCode: "ctc", cost: 9_000 },
         { courierCode: "jne", serviceCode: "reg", cost: 0 },
         { courierCode: "jnt", serviceCode: "ez", cost: 18_000 },
       ]),
     ).toEqual([
-      { courierCode: "pos", serviceCode: "kilat_khusus", cost: 20_000 },
+      { courierCode: "pos", serviceCode: "reg", cost: 20_000 },
       { courierCode: "jnt", serviceCode: "ez", cost: 18_000 },
     ]);
   });

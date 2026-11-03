@@ -37,7 +37,7 @@ export const FAKE_SHIPPING_AREAS: readonly FakeArea[] = [
     postalCode: "99111",
     // Rp95.000: buyer pays Rp75.000.
     rates: [
-      { courierCode: "pos", serviceCode: "kilat_khusus", cost: 95_000 },
+      { courierCode: "pos", serviceCode: "reg", cost: 95_000 },
       { courierCode: "sicepat", serviceCode: "reg", cost: 98_000 },
     ],
   },

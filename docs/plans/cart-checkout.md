@@ -493,11 +493,12 @@ see several "Rp0" rows); **cheapest among an allowlist (chosen)**.
 
 - `SHIPPING_SERVICE_ALLOWLIST` (code constant, `@ammari/commerce/shipping-rules`): regular,
   non-COD, non-instant, non-cargo services only, as Biteship's `courier_code` /
-  `courier_service_code` (from its courier list docs, checked 2026-10-21): `jne`/`reg` "JNE
+  `courier_service_code` (from its courier list docs, checked 2026-10-21; re-checked against the live
+  API 2026-11-03, when POS's code changed to `reg`): `jne`/`reg` "JNE
   Reguler", `jnt`/`ez` "J&T Reguler", `sicepat`/`reg` "SiCepat Reguler", `idexpress`/`reg` "ID
-  Express Reguler", `anteraja`/`reg` "AnterAja Reguler", `pos`/`kilat_khusus` "POS Kilat Khusus"
-  (POS's regular service; Biteship lists no "reguler" code for POS; POS keeps remote destinations
-  covered). Six couriers fit Grow's 10 active couriers; on Starter (3 active couriers) only the
+  Express Reguler", `anteraja`/`reg` "AnterAja Reguler", `pos`/`reg` "POS Reguler"
+  (POS's regular service, formerly `kilat_khusus`; POS keeps remote destinations covered, but
+  returned no rates from origin 40552 on 2026-11-03, see `docs/launch/checkout-prod.md` 2.5). Six couriers fit Grow's 10 active couriers; on Starter (3 active couriers) only the
   ones activated in the dashboard answer, which is fine for development.
 - One Rates call per quote (`couriers` = the allowlist's courier codes) returns every service of
   those couriers; the server filters to the allowlist and takes the **lowest `price`, ties broken
@@ -1515,7 +1516,7 @@ Notes from session 8 for later sessions:
 - **17 (launch):** `DEPLOY_ENV=production` must be set in the prod web env (the test-key guard and robots use
   it); confirm the origin only accepts Cloudflare traffic (per-IP limits trust `CF-Connecting-IP`); run the
   contract test once with the test key and adjust the allowlist to the codes it prints (JNE `reg`, POS
-  `kilat_khusus` and AnterAja are the ones to watch); set `BITESHIP_ORIGIN_AREA_ID` from a Maps search for the
+  `reg` (formerly `kilat_khusus`) and AnterAja are the ones to watch); set `BITESHIP_ORIGIN_AREA_ID` from a Maps search for the
   shop's own kecamatan and kode pos; activate the six couriers in the Biteship dashboard (Grow allows 10).
 - **K1/K2:** the label API question and the webhook header secret (§15 "What to confirm with Biteship").
 

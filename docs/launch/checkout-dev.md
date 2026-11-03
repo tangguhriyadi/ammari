@@ -272,7 +272,7 @@ MIDTRANS_CONTRACT_TEST=1 MIDTRANS_SERVER_KEY="$(cat ~/ammari-secrets/dev-midtran
 Expected: both pass. The Biteship one prints `[contract] services returned` and
 `allowlist entries with no match`: compare the printed `courier_code`/`courier_service_code`
 pairs with the allowlist (`jne/reg`, `jnt/ez`, `sicepat/reg`, `idexpress/reg`, `anteraja/reg`,
-`pos/kilat_khusus`). On Starter only your three active couriers answer, so "no match" for the
+`pos/reg`). On Starter only your three active couriers answer, so "no match" for the
 other three is expected; a different code for an active one (e.g. JNE answering `reg19`) means the
 allowlist in `packages/commerce/src/shipping/rules.ts` must change before launch (a code change,
 tell the next session).
