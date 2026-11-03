@@ -71,11 +71,11 @@ export default async function OrderPage({
     <Container className="flex max-w-[640px] flex-col gap-8 py-8 md:py-12">
       <div className="flex flex-col gap-2">
         {viaSession && (
-          <Link href="/orders" className="inline-flex min-h-[44px] items-center self-start text-xs text-ink-muted underline underline-offset-4">
+          <Link href="/orders" className="inline-flex min-h-[44px] items-center self-start text-[13px] text-ink-muted underline underline-offset-4">
             Pesanan saya
           </Link>
         )}
-        <p className="text-xs text-ink-muted" aria-hidden="true">
+        <p className="text-[13px] text-ink-muted" aria-hidden="true">
           Pesanan {order.orderNo} · {order.orderedOn}
         </p>
         <h1 className="font-serif text-[30px] font-normal text-ink">
@@ -103,7 +103,7 @@ export default async function OrderPage({
             {/* The payment page's own URL, as stored by the server when the payment was created. */}
             <a
               href={order.paymentUrl}
-              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-xs font-medium tracking-[0.2em] text-ink uppercase"
+              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-[13px] font-medium tracking-[0.2em] text-ink uppercase"
             >
               Lanjutkan pembayaran
             </a>
@@ -121,7 +121,7 @@ export default async function OrderPage({
 
       {order.timeline.length > 0 && (
         <section aria-labelledby="order-timeline" className="flex flex-col gap-3">
-          <h2 id="order-timeline" className="text-[11px] font-medium tracking-[0.24em] text-ink-muted uppercase">
+          <h2 id="order-timeline" className="text-xs font-medium tracking-[0.24em] text-ink-muted uppercase">
             Status pesanan
           </h2>
           <ol className="flex flex-col gap-2 border-l border-line pl-4 text-sm">
@@ -137,7 +137,7 @@ export default async function OrderPage({
 
       {order.status.stage !== "cancelled" && (
         <section aria-labelledby="order-tracking" className="flex flex-col gap-2">
-          <h2 id="order-tracking" className="text-[11px] font-medium tracking-[0.24em] text-ink-muted uppercase">
+          <h2 id="order-tracking" className="text-xs font-medium tracking-[0.24em] text-ink-muted uppercase">
             Lacak pengiriman
           </h2>
           {order.shipment.trackingNumber ? (
@@ -182,10 +182,10 @@ export default async function OrderPage({
                     {index === 0 && <span className="sr-only">Terbaru: </span>}
                     {entry.label}
                   </span>
-                  <time dateTime={entry.dateTime} className="text-xs text-ink-muted">
+                  <time dateTime={entry.dateTime} className="text-[13px] text-ink-muted">
                     {entry.at}
                   </time>
-                  {entry.note && <span className="text-xs break-words text-ink-muted">{entry.note}</span>}
+                  {entry.note && <span className="text-[13px] break-words text-ink-muted">{entry.note}</span>}
                 </li>
               ))}
             </ol>
@@ -199,7 +199,7 @@ export default async function OrderPage({
             <li key={`${line.sku}-${index}`} className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-ink">{line.name}</p>
-                <p className="text-xs text-ink-muted">
+                <p className="text-[13px] text-ink-muted">
                   {line.variant} · {line.qty}×
                 </p>
               </div>
@@ -238,7 +238,7 @@ export default async function OrderPage({
 
       {order.address && (
         <section aria-labelledby="order-address" className="flex flex-col gap-2">
-          <h2 id="order-address" className="text-[11px] font-medium tracking-[0.24em] text-ink-muted uppercase">
+          <h2 id="order-address" className="text-xs font-medium tracking-[0.24em] text-ink-muted uppercase">
             Alamat pengiriman
           </h2>
           <p className="text-sm break-words text-ink">{order.address}</p>

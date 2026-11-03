@@ -20,7 +20,7 @@ export function WhyAmmariSection({ section }: { section: WhyAmmariView }) {
               <div key={index} className="flex flex-col gap-2">
                 <Icon className="size-5 text-ink" strokeWidth={1.4} aria-hidden="true" />
                 <p className="text-sm font-medium text-ink">{point.title}</p>
-                <p className="text-xs text-ink-muted">{point.text}</p>
+                <p className="text-[13px] text-ink-muted md:text-sm">{point.text}</p>
               </div>
             );
           })}

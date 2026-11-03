@@ -71,9 +71,9 @@ export function SavedAddressSection({ address, showWhenEmpty }: { address: Saved
             <p>{shown.phone}</p>
             <p>{shown.addressLine}</p>
             <p>{shown.areaLabel}</p>
-            {shown.notes && <p className="text-xs text-neutral-500">Catatan untuk kurir: {shown.notes}</p>}
+            {shown.notes && <p className="text-[13px] text-neutral-500">Catatan untuk kurir: {shown.notes}</p>}
           </div>
-          <p className="text-xs text-neutral-500">Dipakai untuk mengisi alamat saat checkout. Alamat diperbarui setiap kali kamu memesan sambil masuk ke akun.</p>
+          <p className="text-[13px] text-neutral-500">Dipakai untuk mengisi alamat saat checkout. Alamat diperbarui setiap kali kamu memesan sambil masuk ke akun.</p>
           <Button
             ref={deleteButtonRef}
             variant="secondary"

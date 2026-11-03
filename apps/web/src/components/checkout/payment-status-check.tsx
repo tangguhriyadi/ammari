@@ -32,7 +32,7 @@ export function PaymentStatusCheck({ orderNo }: { orderNo: string }) {
   }, [orderNo, router]);
 
   return (
-    <p role="status" aria-live="polite" className="text-xs text-ink-muted">
+    <p role="status" aria-live="polite" className="text-[13px] text-ink-muted">
       {checking ? "Memeriksa status pembayaran..." : ""}
     </p>
   );

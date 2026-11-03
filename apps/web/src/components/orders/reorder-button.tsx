@@ -80,7 +80,7 @@ export function ReorderButton({ orderNo, className }: { orderNo: string; classNa
             )}
             {done.mergeTrimmed && <p className="text-ink-muted">Maksimal {CART_MAX_PIECES} barang per pesanan.</p>}
             {done.addedPieces > 0 && (
-              <Link href="/cart" className="inline-flex min-h-[44px] items-center self-start text-xs font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
+              <Link href="/cart" className="inline-flex min-h-[44px] items-center self-start text-[13px] font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
                 Lihat keranjang
               </Link>
             )}

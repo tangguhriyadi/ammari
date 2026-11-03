@@ -85,7 +85,7 @@ export function ContactOfferCard({ orderNo, orderDate, phone, promo, name, addre
               <p>{address.phone}</p>
               <p>{address.addressLine}</p>
               <p>{address.areaLabel}</p>
-              {address.notes && <p className="text-xs text-neutral-500">Catatan untuk kurir: {address.notes}</p>}
+              {address.notes && <p className="text-[13px] text-neutral-500">Catatan untuk kurir: {address.notes}</p>}
             </div>
             <Checkbox
               name="useAddress"

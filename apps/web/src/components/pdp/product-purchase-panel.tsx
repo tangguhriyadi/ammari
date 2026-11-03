@@ -207,7 +207,7 @@ export function ProductPurchasePanel({ view, initialColorId, initialGalleryIndex
 
         {view.colors.length > 0 && (
           <div className="flex flex-col gap-3">
-            <p className="text-xs text-ink">Warna{selectedColor ? `: ${selectedColor.name}` : ""}</p>
+            <p className="text-sm text-ink">Warna{selectedColor ? `: ${selectedColor.name}` : ""}</p>
             <div className="flex flex-wrap gap-3">
               {view.colors.map((color) => (
                 <button
@@ -231,7 +231,7 @@ export function ProductPurchasePanel({ view, initialColorId, initialGalleryIndex
         {view.sizeMode === "sized" && sizeOptions.length > 0 && (
           <div id="ukuran-picker" className="flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <p className="text-xs text-ink">Ukuran{size ? `: ${size}` : ""}</p>
+              <p className="text-sm text-ink">Ukuran{size ? `: ${size}` : ""}</p>
               {/* Only when there is a chart to land on (the heading lives in SizeChartTable). */}
               {view.sizeChart && view.sizeChart.length > 0 && (
                 <a
@@ -244,7 +244,7 @@ export function ProductPurchasePanel({ view, initialColorId, initialGalleryIndex
                       new CustomEvent<OpenAccordionDetail>(OPEN_ACCORDION_EVENT, { detail: { accordionId: SIZE_GUIDE_ACCORDION_ID, targetId: SIZE_CHART_HEADING_ID } }),
                     );
                   }}
-                  className="text-xs text-ink underline underline-offset-4"
+                  className="text-[13px] text-ink underline underline-offset-4"
                 >
                   Panduan ukuran
                 </a>
@@ -264,7 +264,7 @@ export function ProductPurchasePanel({ view, initialColorId, initialGalleryIndex
                   aria-label={option.available ? option.size : `Ukuran ${option.size} habis`}
                   aria-pressed={option.size === size}
                   className={cn(
-                    "flex h-[46px] items-center justify-center border text-xs",
+                    "flex h-[46px] items-center justify-center border text-[13px]",
                     option.available
                       ? option.size === size
                         ? "border-ink bg-ink text-white"
@@ -304,7 +304,7 @@ export function ProductPurchasePanel({ view, initialColorId, initialGalleryIndex
               >
                 {isAdding ? "Menambahkan" : "Tambah ke keranjang"}
               </OutlineButton>
-              <Curtain open={showAdded} contentClassName="flex items-center bg-surface pl-4 text-xs text-ink">
+              <Curtain open={showAdded} contentClassName="flex items-center bg-surface pl-4 text-[13px] text-ink">
                 <p>
                   Masuk keranjang: {addedLabel} ·{" "}
                   <Link href="/cart" className="inline-flex min-h-11 items-center px-1 underline underline-offset-4">
@@ -317,11 +317,11 @@ export function ProductPurchasePanel({ view, initialColorId, initialGalleryIndex
               </p>
               {cartMessage &&
                 (cartMessage.isError ? (
-                  <p role="alert" className="text-xs text-error">
+                  <p role="alert" className="text-[13px] text-error">
                     {cartMessage.text}
                   </p>
                 ) : (
-                  <p className="text-xs text-ink">{cartMessage.text}</p>
+                  <p className="text-[13px] text-ink">{cartMessage.text}</p>
                 ))}
             </>
           )}
@@ -333,7 +333,7 @@ export function ProductPurchasePanel({ view, initialColorId, initialGalleryIndex
                 href={whatsappHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mx-auto inline-flex min-h-11 items-center gap-2 text-xs text-ink underline underline-offset-4"
+                className="mx-auto inline-flex min-h-11 items-center gap-2 text-[13px] text-ink underline underline-offset-4"
               >
                 <MessageCircle className="size-4" strokeWidth={1.4} aria-hidden="true" />
                 Tanya via WhatsApp

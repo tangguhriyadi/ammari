@@ -19,7 +19,7 @@ export function SizeChartTable({ rows }: { rows: StorefrontSizeChartRow[] }) {
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {/* Landing target of the PDP's "Panduan ukuran" link (accordions.tsx scrolls and focuses here). */}
-      <h3 id={SIZE_CHART_HEADING_ID} tabIndex={-1} className="scroll-mt-20 text-xs font-medium text-ink outline-none">
+      <h3 id={SIZE_CHART_HEADING_ID} tabIndex={-1} className="scroll-mt-20 text-[13px] font-medium text-ink outline-none">
         Panduan ukuran
       </h3>
       {/* Focusable so keyboard users can scroll it too (a scrollable region with no focusable
@@ -28,7 +28,7 @@ export function SizeChartTable({ rows }: { rows: StorefrontSizeChartRow[] }) {
         <SizeChartTableBody rows={rows} />
       </div>
       {/* The table's min width only overflows below `sm`; from there every column fits. */}
-      <p className="text-xs text-ink-muted sm:hidden" aria-hidden="true">
+      <p className="text-[13px] text-ink-muted sm:hidden" aria-hidden="true">
         Geser tabel ke samping untuk melihat semua kolom.
       </p>
     </div>
@@ -37,7 +37,7 @@ export function SizeChartTable({ rows }: { rows: StorefrontSizeChartRow[] }) {
 
 function SizeChartTableBody({ rows }: { rows: StorefrontSizeChartRow[] }) {
   return (
-    <table className="w-full min-w-[480px] border-collapse text-left text-xs">
+    <table className="w-full min-w-[480px] border-collapse text-left text-[13px]">
       <thead>
         <tr className="border-b border-line-strong text-ink-muted">
           <th scope="col" className={`${STICKY_CELL} font-medium`}>

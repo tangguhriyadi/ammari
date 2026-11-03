@@ -178,7 +178,7 @@ export function AreaCombobox({ id, value, onChange, error }: AreaComboboxProps) 
             type="button"
             onClick={change}
             aria-label={`Ganti kecamatan, sekarang ${value.label}`}
-            className="flex min-h-11 shrink-0 items-center text-xs font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4"
+            className="flex min-h-11 shrink-0 items-center text-[13px] font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4"
           >
             Ganti
           </button>
@@ -237,7 +237,7 @@ export function AreaCombobox({ id, value, onChange, error }: AreaComboboxProps) 
       <p
         id={statusId}
         role="status"
-        className={cn("text-xs", search.status === "error" ? "text-error" : "text-ink-muted", (!statusText || listOpen) && "sr-only")}
+        className={cn("text-[13px]", search.status === "error" ? "text-error" : "text-ink-muted", (!statusText || listOpen) && "sr-only")}
       >
         {statusText}
       </p>

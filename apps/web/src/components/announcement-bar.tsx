@@ -15,7 +15,7 @@ export function AnnouncementBar({ text }: { text: string }) {
       data-testid="announcement-bar"
       className="flex h-9 items-center justify-center bg-brand px-4 text-white lg:h-10 lg:px-10"
     >
-      <p className="truncate text-[11px] font-medium tracking-[0.12em] uppercase lg:text-xs lg:tracking-[0.16em]">{text}</p>
+      <p className="truncate text-xs font-medium tracking-[0.12em] uppercase lg:tracking-[0.16em]">{text}</p>
     </div>
   );
 }

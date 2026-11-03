@@ -138,10 +138,10 @@ export function CartLineItem({ line: serverLine, imageUrl, canAddPieces }: CartL
             </button>
           )}
         </div>
-        <p className="mt-2 text-xs text-ink-muted">{variantLabel}</p>
+        <p className="mt-2 text-[13px] text-ink-muted">{variantLabel}</p>
         {buyable && <LinePrice total={line.lineTotal} listTotal={line.listLineTotal} className="mt-1 text-sm font-medium" />}
         {line.status !== "ok" && (
-          <p className={cn("mt-1 text-xs", line.status === "insufficient" ? "text-error" : "text-ink-muted")}>{CART_LINE_STATUS_MESSAGES[line.status]}</p>
+          <p className={cn("mt-1 text-[13px]", line.status === "insufficient" ? "text-error" : "text-ink-muted")}>{CART_LINE_STATUS_MESSAGES[line.status]}</p>
         )}
 
         <div className="mt-auto pt-3">
@@ -176,14 +176,14 @@ export function CartLineItem({ line: serverLine, imageUrl, canAddPieces }: CartL
               onClick={remove}
               aria-disabled={isPending || undefined}
               aria-label={`Hapus ${itemName}`}
-              className="min-h-11 min-w-11 text-left text-xs font-medium tracking-[0.12em] text-ink uppercase underline underline-offset-4"
+              className="min-h-11 min-w-11 text-left text-[13px] font-medium tracking-[0.12em] text-ink uppercase underline underline-offset-4"
             >
               Hapus
             </button>
           )}
         </div>
         {error && (
-          <p role="alert" className="mt-2 text-xs text-error">
+          <p role="alert" className="mt-2 text-[13px] text-error">
             {error}
           </p>
         )}

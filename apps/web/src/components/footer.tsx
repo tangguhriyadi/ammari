@@ -76,7 +76,7 @@ export function Footer({ contact }: { contact: FooterContact }) {
 
         {hasContact && (
           <div className="flex flex-col gap-3 border-t border-footer-line pt-6">
-            <p className="text-[11px] font-medium tracking-[0.24em] text-footer-text/70 uppercase">Hubungi kami</p>
+            <p className="text-xs font-medium tracking-[0.24em] text-footer-text/70 uppercase">Hubungi kami</p>
             <ul className="flex flex-col gap-2 text-sm text-footer-text">
               {contact.whatsappNumber && (
                 <li className="flex items-center gap-2">
@@ -105,12 +105,12 @@ export function Footer({ contact }: { contact: FooterContact }) {
         )}
 
         <div className="flex flex-col gap-3 border-t border-footer-line pt-6">
-          <p className="text-[11px] font-medium tracking-[0.24em] text-footer-text/70 uppercase">Pembayaran</p>
+          <p className="text-xs font-medium tracking-[0.24em] text-footer-text/70 uppercase">Pembayaran</p>
           <ul className="flex flex-wrap gap-2">
             {PAYMENT_METHODS.map((method) => (
               <li
                 key={method.label}
-                className="flex items-center gap-2 border border-footer-chip-border bg-bg px-3 py-1.5 text-xs text-ink"
+                className="flex items-center gap-2 border border-footer-chip-border bg-bg px-3 py-1.5 text-[13px] text-ink"
               >
                 {/* eslint-disable-next-line @next/next/no-img-element -- a static public/ SVG brand mark; next/image's optimizer (disabled app-wide anyway, see next.config.ts) has nothing to add here */}
                 <img src={method.logo} alt="" width={method.width} height={method.height} style={{ height: method.height, width: "auto" }} />

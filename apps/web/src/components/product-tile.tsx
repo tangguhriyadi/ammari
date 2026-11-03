@@ -33,7 +33,7 @@ export function ProductTile({ tile, imagePriority = false }: { tile: PricedProdu
           className="object-cover transition-transform duration-200 group-hover:scale-[1.02]"
         />
         {tile.soldOut ? (
-          <span className="absolute top-2 left-2 bg-bg px-2 py-1 text-[11px] text-ink-muted">Sold out</span>
+          <span className="absolute top-2 left-2 bg-bg px-2 py-1 text-[13px] text-ink-muted">Sold out</span>
         ) : (
           tile.price.percentOff !== null && (
             <span className="absolute top-2 left-2 bg-discount px-2 py-1 text-[19px] leading-none font-bold text-white" data-testid="discount-badge">
@@ -42,9 +42,9 @@ export function ProductTile({ tile, imagePriority = false }: { tile: PricedProdu
           )
         )}
       </div>
-      <p className="text-xs text-ink">{tile.name}</p>
-      {colorLabel && <p className="text-xs text-ink-muted">{colorLabel}</p>}
-      <ProductPrice price={tile.price} className="text-[13px] font-medium" />
+      <p className="text-[13px] text-ink md:text-sm">{tile.name}</p>
+      {colorLabel && <p className="text-[13px] text-ink-muted">{colorLabel}</p>}
+      <ProductPrice price={tile.price} className="text-[13px] font-medium md:text-sm" />
     </Link>
   );
 }

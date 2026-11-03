@@ -30,7 +30,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
     <Container className="flex max-w-[800px] flex-col gap-6 py-8 md:py-12">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="font-serif text-[30px] font-normal text-ink">Pesanan saya</h1>
-        <Link href="/account" className="inline-flex min-h-[44px] items-center text-xs text-ink-muted underline underline-offset-4">
+        <Link href="/account" className="inline-flex min-h-[44px] items-center text-[13px] text-ink-muted underline underline-offset-4">
           Akun saya
         </Link>
       </div>

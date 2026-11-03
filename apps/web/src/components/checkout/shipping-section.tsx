@@ -44,7 +44,7 @@ export function ShippingSection({ state, onRetry, whatsappHref, cartHref }: Ship
               buyerTestId="shipping-buyer-amount"
             />
           </dl>
-          <p className="text-xs text-ink-muted">Nomor resi dikirim lewat email setelah pesanan dikirim.</p>
+          <p className="text-[13px] text-ink-muted">Nomor resi dikirim lewat email setelah pesanan dikirim.</p>
         </div>
       )}
 
@@ -56,7 +56,7 @@ export function ShippingSection({ state, onRetry, whatsappHref, cartHref }: Ship
             <button
               type="button"
               onClick={onRetry}
-              className="flex min-h-11 items-center border border-ink px-4 text-xs font-medium tracking-[0.16em] text-ink uppercase"
+              className="flex min-h-11 items-center border border-ink px-4 text-[13px] font-medium tracking-[0.16em] text-ink uppercase"
             >
               Coba lagi
             </button>
@@ -66,13 +66,13 @@ export function ShippingSection({ state, onRetry, whatsappHref, cartHref }: Ship
               href={whatsappHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex min-h-11 items-center border border-ink px-4 text-xs font-medium tracking-[0.16em] text-ink uppercase"
+              className="flex min-h-11 items-center border border-ink px-4 text-[13px] font-medium tracking-[0.16em] text-ink uppercase"
             >
               Hubungi via WhatsApp
             </a>
           )}
           {state.kind === "cart" && (
-            <Link href={cartHref} className="flex min-h-11 items-center text-xs font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
+            <Link href={cartHref} className="flex min-h-11 items-center text-[13px] font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
               Kembali ke keranjang
             </Link>
           )}

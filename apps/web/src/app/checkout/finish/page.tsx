@@ -73,7 +73,7 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
   return (
     <Container className="flex max-w-[640px] flex-col gap-8 py-8 md:py-12">
       <div className="flex flex-col gap-2">
-        <p className="text-xs text-ink-muted">Pesanan {view.orderNo}</p>
+        <p className="text-[13px] text-ink-muted">Pesanan {view.orderNo}</p>
         <h1 className="font-serif text-[30px] font-normal text-ink" data-testid="finish-heading">
           {HEADINGS[view.state]}
         </h1>
@@ -102,7 +102,7 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
             {/* The payment page's own URL, as stored by the server when the order was placed. */}
             <a
               href={view.paymentUrl}
-              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-xs font-medium tracking-[0.2em] text-ink uppercase"
+              className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-[13px] font-medium tracking-[0.2em] text-ink uppercase"
             >
               Lanjutkan pembayaran
             </a>
@@ -119,7 +119,7 @@ export default async function CheckoutFinishPage({ searchParams }: { searchParam
             <li key={`${line.name}-${line.variant}-${index}`} className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-ink">{line.name}</p>
-                <p className="text-xs text-ink-muted">
+                <p className="text-[13px] text-ink-muted">
                   {line.variant} · {line.qty}×
                 </p>
               </div>

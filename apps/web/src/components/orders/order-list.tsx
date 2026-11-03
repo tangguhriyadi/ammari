@@ -20,7 +20,7 @@ export function OrderList({ rows, compact = false }: { rows: CustomerOrderRow[];
           >
             <div className="flex min-w-0 flex-col gap-1">
               <p className="text-sm font-medium text-ink">{order.orderNo}</p>
-              <p className="text-xs text-ink-muted">
+              <p className="text-[13px] text-ink-muted">
                 {order.orderedOn}
                 {order.isCheckout ? "" : ` · ${order.channelName}`}
               </p>
@@ -33,7 +33,7 @@ export function OrderList({ rows, compact = false }: { rows: CustomerOrderRow[];
                 {order.status.label}
               </p>
               {order.total !== null && <p className="text-sm font-medium text-ink">{formatPriceIdr(order.total)}</p>}
-              <span aria-hidden="true" className="text-xs tracking-[0.16em] text-ink uppercase underline underline-offset-4">
+              <span aria-hidden="true" className="text-[13px] tracking-[0.16em] text-ink uppercase underline underline-offset-4">
                 Lihat
               </span>
             </div>

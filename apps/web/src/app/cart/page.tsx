@@ -49,7 +49,7 @@ export default async function CartPage() {
             Keranjang
           </h1>
           {cart.lines.length > 0 && (
-            <p className="text-xs text-ink-muted">
+            <p className="text-[13px] text-ink-muted">
               <CartPieceCount fallback={cart.pieceCount} />
             </p>
           )}
@@ -99,12 +99,12 @@ export default async function CartPage() {
               </dl>
 
               {showCapNote && (
-                <p role="status" className="text-xs text-ink">
+                <p role="status" className="text-[13px] text-ink">
                   {CART_REFUSAL_MESSAGES.cart_limit}
                 </p>
               )}
               {!cart.canCheckout && (
-                <p id="cart-blocked-note" className="text-xs text-error" data-testid="cart-blocked-note">
+                <p id="cart-blocked-note" className="text-[13px] text-error" data-testid="cart-blocked-note">
                   Ubah atau hapus barang yang ditandai untuk lanjut ke checkout.
                 </p>
               )}
@@ -120,7 +120,7 @@ export default async function CartPage() {
               )}
               <Link
                 href={COLLECTION_HREF}
-                className="mx-auto flex min-h-11 items-center text-xs font-medium tracking-[0.18em] text-ink uppercase underline underline-offset-4"
+                className="mx-auto flex min-h-11 items-center text-[13px] font-medium tracking-[0.18em] text-ink uppercase underline underline-offset-4"
               >
                 Lanjut belanja
               </Link>

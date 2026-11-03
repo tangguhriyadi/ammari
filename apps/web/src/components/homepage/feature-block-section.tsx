@@ -29,7 +29,7 @@ export function FeatureBlockSection({ block }: { block: ResolvedFeatureBlock }) 
           <p className="text-sm text-ink-muted">{block.subtitle}</p>
         </div>
         {block.href && (
-          <Link href={block.href} className="shrink-0 text-xs font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
+          <Link href={block.href} className="shrink-0 text-[13px] font-medium tracking-[0.16em] text-ink uppercase underline underline-offset-4">
             {block.ctaLabel}
           </Link>
         )}

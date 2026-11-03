@@ -37,7 +37,7 @@ export function CopyTextButton({ text, label, testId }: { text: string; label: s
         type="button"
         onClick={copy}
         data-testid={testId}
-        className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-xs text-ink underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+        className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-[13px] text-ink underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
       >
         {state === "copied" ? "Tersalin" : "Salin"}
         <span className="sr-only"> {label}</span>
@@ -46,7 +46,7 @@ export function CopyTextButton({ text, label, testId }: { text: string; label: s
         {state === "copied" ? "Nomor resi tersalin." : state === "failed" ? "Gagal menyalin. Salin manual." : ""}
       </span>
       {state === "failed" && (
-        <span aria-hidden="true" className="basis-full text-right text-xs text-error">
+        <span aria-hidden="true" className="basis-full text-right text-[13px] text-error">
           Gagal menyalin. Salin manual.
         </span>
       )}

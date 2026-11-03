@@ -18,7 +18,7 @@ export function PendingOrderBanner({ orderNo, payBy, paymentUrl }: PendingOrderB
         <h2 id="pending-order-heading" className="text-sm font-medium text-ink">
           Kamu punya pesanan {orderNo} yang menunggu pembayaran
         </h2>
-        <p className="text-xs text-ink-muted">
+        <p className="text-[13px] text-ink-muted">
           Selesaikan pembayaran sebelum <span className="text-ink">{payBy}</span>. Barang di pesanan ini kami simpan untukmu sampai batas waktu
           itu.
         </p>
@@ -28,7 +28,7 @@ export function PendingOrderBanner({ orderNo, payBy, paymentUrl }: PendingOrderB
           // The payment page's own URL, as stored by the server when the order was placed.
           <a
             href={paymentUrl}
-            className="inline-flex min-h-[52px] w-full items-center justify-center bg-brand px-6 text-xs font-medium tracking-[0.2em] text-white uppercase hover:bg-ink"
+            className="inline-flex min-h-[52px] w-full items-center justify-center bg-brand px-6 text-[13px] font-medium tracking-[0.2em] text-white uppercase hover:bg-ink"
           >
             Lanjutkan pembayaran
           </a>
@@ -38,7 +38,7 @@ export function PendingOrderBanner({ orderNo, payBy, paymentUrl }: PendingOrderB
         <ChangePaymentMethodButton orderNo={orderNo} />
         <Link
           href={`/checkout/finish?order=${encodeURIComponent(orderNo)}`}
-          className="mx-auto flex min-h-11 items-center text-xs text-ink underline underline-offset-4"
+          className="mx-auto flex min-h-11 items-center text-[13px] text-ink underline underline-offset-4"
         >
           Lihat detail pesanan
         </Link>

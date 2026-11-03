@@ -338,7 +338,7 @@ export function ProductGallery({ productName, gallery, initialIndex, storageBase
             <ZoomIn className="size-4" strokeWidth={1.4} />
           </span>
           {count > 1 && (
-            <span aria-hidden="true" data-testid="gallery-counter" className="absolute right-3 bottom-3 bg-bg px-2 py-1 text-xs text-ink">
+            <span aria-hidden="true" data-testid="gallery-counter" className="absolute right-3 bottom-3 bg-bg px-2 py-1 text-[13px] text-ink">
               {index + 1} / {count}
             </span>
           )}

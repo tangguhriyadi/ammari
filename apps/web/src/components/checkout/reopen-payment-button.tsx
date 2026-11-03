@@ -52,7 +52,7 @@ export function ReopenPaymentButton({ orderNo }: { orderNo: string }) {
         type="button"
         onClick={open}
         aria-disabled={busy || undefined}
-        className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-xs font-medium tracking-[0.2em] text-ink uppercase aria-disabled:cursor-progress aria-disabled:opacity-60"
+        className="inline-flex min-h-[54px] w-full items-center justify-center bg-pay px-6 text-[13px] font-medium tracking-[0.2em] text-ink uppercase aria-disabled:cursor-progress aria-disabled:opacity-60"
       >
         {busy ? "Membuka..." : "Buka halaman pembayaran"}
       </button>
