@@ -1,8 +1,8 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { testDb, withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
-import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
-import { auditLog, fabricColors, fabrics, orderItems, orders, products, productVariants, stockMovements, thankYouCards } from "@ammari/db/schema";
+import { checkoutOrderValues, insertCustomer, insertOrder, insertProductVariant, insertStaffUser, insertThankYouCard } from "@ammari/db/test-fixtures";
+import { auditLog, fabricColors, fabrics, orderItems, orders, products, productVariants, stockMovements, thankYouCards, vouchers } from "@ammari/db/schema";
 import { createOrder, transitionOrderStatus, updateOrderItems, updateShipmentDetails } from "./lifecycle";
 import { generateOrderNumber } from "./order-number";
 
@@ -606,6 +606,98 @@ describe("transitionOrderStatus", () => {
 
       const [unchangedCard] = await tx.select().from(thankYouCards).where(eq(thankYouCards.id, card.id));
       expect(unchangedCard?.status).toBe("claimed");
+    });
+  });
+
+  describe("a voucher claimed from the order's card (SPEC §8)", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    /** A shipped staff-entered order whose card was claimed into a voucher. */
+    async function claimedSource(tx: TestDatabase) {
+      const { variant } = await insertProductVariant(tx);
+      const staff = await insertStaffUser(tx);
+      await seedStock(tx, variant.sku, 5, 50_000);
+      const order = await createOrder(
+        { channelId: "offline", orderDate: "2026-10-09", items: [{ sku: variant.sku, qty: 1, unitPrice: 259_000 }], discountAmount: 0, shippingAmount: 0, status: "to_ship" },
+        staff.id,
+        tx,
+      );
+      await transitionOrderStatus(order.id, "shipped", staff.id, tx);
+      const customer = await insertCustomer(tx);
+      const card = await insertThankYouCard(tx, order.id, { status: "claimed", claimedByCustomerId: customer.id, claimedAt: new Date() });
+      return { staff, order, customer, card };
+    }
+
+    test("returning the order voids the unused voucher, audited; the card stays claimed", async () => {
+      await withRollback(async (tx) => {
+        const { staff, order, customer, card } = await claimedSource(tx);
+        const [voucher] = await tx.insert(vouchers).values({ cardId: card.id, customerId: customer.id, expiresAt: new Date(Date.now() + 90 * DAY) }).returning();
+
+        await transitionOrderStatus(order.id, "returned", staff.id, tx);
+
+        const [after] = await tx.select().from(vouchers).where(eq(vouchers.id, voucher!.id));
+        expect(after?.status).toBe("void");
+        const [cardAfter] = await tx.select().from(thankYouCards).where(eq(thankYouCards.id, card.id));
+        expect(cardAfter?.status).toBe("claimed");
+        const audit = await tx.select().from(auditLog).where(and(eq(auditLog.entityType, "voucher"), eq(auditLog.entityId, voucher!.id)));
+        expect(audit).toHaveLength(1);
+        expect(audit[0]).toMatchObject({ action: "void_source_order_ended", actorStaffUserId: staff.id });
+        expect(audit[0]?.after).toMatchObject({ sourceOrderId: order.id, sourceOrderStatus: "returned" });
+      });
+    });
+
+    test("cancelling the order voids an unused voucher, also one already past its expiry", async () => {
+      await withRollback(async (tx) => {
+        const { variant } = await insertProductVariant(tx);
+        const staff = await insertStaffUser(tx);
+        await seedStock(tx, variant.sku, 5, 50_000);
+        const order = await createOrder(
+          { channelId: "offline", orderDate: "2026-10-09", items: [{ sku: variant.sku, qty: 1, unitPrice: 259_000 }], discountAmount: 0, shippingAmount: 0, status: "to_ship" },
+          staff.id,
+          tx,
+        );
+        const customer = await insertCustomer(tx);
+        const card = await insertThankYouCard(tx, order.id, { status: "claimed", claimedByCustomerId: customer.id, claimedAt: new Date() });
+        const [voucher] = await tx
+          .insert(vouchers)
+          .values({ cardId: card.id, customerId: customer.id, status: "expired", issuedAt: new Date(Date.now() - 100 * DAY), expiresAt: new Date(Date.now() - DAY) })
+          .returning();
+
+        await transitionOrderStatus(order.id, "cancelled", staff.id, tx);
+
+        const [after] = await tx.select().from(vouchers).where(eq(vouchers.id, voucher!.id));
+        expect(after?.status).toBe("void");
+      });
+    });
+
+    test("a voucher already used on another order is left alone", async () => {
+      await withRollback(async (tx) => {
+        const { staff, order, customer, card } = await claimedSource(tx);
+        const usedOn = await insertOrder(tx, { channelId: "whatsapp", status: "to_ship" });
+        const [voucher] = await tx
+          .insert(vouchers)
+          .values({ cardId: card.id, customerId: customer.id, expiresAt: new Date(Date.now() + 90 * DAY), status: "used", usedOrderId: usedOn.id, usedAt: new Date() })
+          .returning();
+
+        await transitionOrderStatus(order.id, "returned", staff.id, tx);
+
+        const [after] = await tx.select().from(vouchers).where(eq(vouchers.id, voucher!.id));
+        expect(after).toMatchObject({ status: "used", usedOrderId: usedOn.id });
+        const audit = await tx.select().from(auditLog).where(and(eq(auditLog.entityType, "voucher"), eq(auditLog.entityId, voucher!.id)));
+        expect(audit).toHaveLength(0);
+      });
+    });
+
+    test("shipping or completing the order never touches the voucher", async () => {
+      await withRollback(async (tx) => {
+        const { staff, order, customer, card } = await claimedSource(tx);
+        const [voucher] = await tx.insert(vouchers).values({ cardId: card.id, customerId: customer.id, expiresAt: new Date(Date.now() + 90 * DAY) }).returning();
+
+        await transitionOrderStatus(order.id, "completed", staff.id, tx);
+
+        const [after] = await tx.select().from(vouchers).where(eq(vouchers.id, voucher!.id));
+        expect(after?.status).toBe("active");
+      });
     });
   });
 

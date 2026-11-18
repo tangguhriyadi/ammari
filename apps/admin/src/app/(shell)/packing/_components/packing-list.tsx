@@ -28,9 +28,10 @@ export interface PackingListProps {
 type ReprintWarning = { orderIds: string[]; orderNos: string[]; mode: "card" | "sticker" } | null;
 type NoCardWarning = { orderIds: string[]; orderNos: string[] } | null;
 
-function CardStatusBadge({ printedAt, claimedAt, isCheckout }: { printedAt: Date | null; claimedAt: Date | null; isCheckout: boolean }) {
-  // Web checkout orders never get a thank-you card (SPEC §4.1, docs/plans/cart-checkout.md §7).
-  if (isCheckout) {
+function CardStatusBadge({ printedAt, claimedAt, takesCard }: { printedAt: Date | null; claimedAt: Date | null; takesCard: boolean }) {
+  // A web checkout order takes a card only as a guest's first website purchase (SPEC §4.1,
+  // lib/packing/card-eligibility.ts); every other web order shows this.
+  if (!takesCard) {
     return (
       <Badge variant="neutral" className="whitespace-nowrap">
         Tanpa kartu
@@ -115,16 +116,19 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
     const visibleIds = new Set(rows.map((row) => row.id));
     return [...selectedIds].filter((id) => visibleIds.has(id));
   }, [selectedIds, rows]);
-  // Cards and stickers are printed only for the selected orders that take a card (web checkout
-  // orders never do; the server refuses them too). Shipping uses the whole selection.
+  // Cards and stickers are printed only for the selected orders that take a card (a web checkout
+  // order only as a guest's first website purchase; the server refuses the rest too).
   const printableSelectedIds = useMemo(() => {
-    const checkoutIds = new Set(rows.filter((row) => row.isCheckout).map((row) => row.id));
-    return visibleSelectedIds.filter((id) => !checkoutIds.has(id));
+    const cardIds = new Set(rows.filter((row) => row.takesCard).map((row) => row.id));
+    return visibleSelectedIds.filter((id) => cardIds.has(id));
   }, [visibleSelectedIds, rows]);
   // Bulk "Tandai dikirim" has no resi field, so it ships only the selected manual and marketplace
   // orders: a web checkout order needs its own courier and resi (2026-10-21 sandbox run; the
-  // server refuses it in bulk too). Same split as printing.
-  const bulkShippableIds = printableSelectedIds;
+  // server refuses it in bulk too), card or not.
+  const bulkShippableIds = useMemo(() => {
+    const checkoutIds = new Set(rows.filter((row) => row.isCheckout).map((row) => row.id));
+    return visibleSelectedIds.filter((id) => !checkoutIds.has(id));
+  }, [visibleSelectedIds, rows]);
 
   function toggleSelected(orderId: string) {
     setSelectedIds((prev) => {
@@ -287,10 +291,12 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
           </Button>
         )}
       </div>
-      {printableSelectedIds.length < visibleSelectedIds.length && (
+      {(printableSelectedIds.length < visibleSelectedIds.length || bulkShippableIds.length < visibleSelectedIds.length) && (
         <p className="text-sm text-neutral-600">
-          Pesanan website tidak memakai kartu terima kasih, jadi tidak ikut dicetak. Pesanan website juga perlu nomor resi: tandai dikirim satu per
-          satu lewat tombol di barisnya.
+          {printableSelectedIds.length < visibleSelectedIds.length &&
+            "Pesanan website hanya mendapat kartu terima kasih untuk pembelian pertama pembeli tanpa akun; pesanan bertanda Tanpa kartu tidak ikut dicetak. "}
+          {bulkShippableIds.length < visibleSelectedIds.length &&
+            "Pesanan website perlu nomor resi: tandai dikirim satu per satu lewat tombol di barisnya."}
         </p>
       )}
       {error && (
@@ -309,7 +315,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                   checked={selectedIds.has(row.id)}
                   onChange={() => toggleSelected(row.id)}
                 />
-                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} isCheckout={row.isCheckout} />
+                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} takesCard={row.takesCard} />
               </div>
               <p className="text-sm text-neutral-600">
                 {formatDate(new Date(row.orderDate))} · {row.customerName ?? row.buyerUsername ?? "-"}
@@ -399,7 +405,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 <PickList items={items[row.id] ?? []} />
               </Td>
               <Td>
-                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} isCheckout={row.isCheckout} />
+                <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} takesCard={row.takesCard} />
               </Td>
               {canShip && (
                 <Td className="whitespace-nowrap">
@@ -421,7 +427,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
           key={`${shippingOrder.id}:${shippingWaybill ?? ""}`}
           orderId={shippingOrder.id}
           orderNo={shippingOrder.orderNo}
-          hasActiveCard={shippingOrder.isCheckout || shippingOrder.cardPrintedAt !== null}
+          hasActiveCard={!shippingOrder.takesCard || shippingOrder.cardPrintedAt !== null}
           isCheckout={shippingOrder.isCheckout}
           defaultCourier={shippingOrder.shippingServiceLabel}
           bookedWaybill={shippingWaybill}

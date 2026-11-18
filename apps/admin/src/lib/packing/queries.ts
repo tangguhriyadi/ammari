@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, eq, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNotNull, not, notInArray } from "drizzle-orm";
 import {
   channels,
   customers,
@@ -20,6 +20,7 @@ import { ActionError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { channelDisplayNameSql } from "@/lib/orders/channel-label";
 import { generateClaimToken, hashClaimToken } from "./token";
+import { takesThankYouCardSql } from "./card-eligibility";
 import { resolveCardBuyerName } from "./card-copy";
 import { assignStickerCodes, type StickerCodeFixed, type StickerCodeOrderInput } from "./sticker-code";
 
@@ -85,9 +86,12 @@ export interface PackingQueueRow {
    * queue could shift collision handling) until the order is actually printed, at which point
    * the exact code gets persisted on its card and `stickerCodeIsPreview` becomes `false`. */
   stickerCodeIsPreview: boolean;
-  /** A web checkout order (`payment_status` set, docs/plans/cart-checkout.md §7): no thank-you
-   * card (SPEC §4.1, marketplace orders only), and staff book `shippingServiceLabel`. */
+  /** A web checkout order (`payment_status` set, docs/plans/cart-checkout.md §7): staff book
+   * `shippingServiceLabel` and ship it with a resi, one by one. */
   isCheckout: boolean;
+  /** Whether this order takes a thank-you card (card-eligibility.ts): every manual/marketplace
+   * order, and a web checkout order only as a guest's first website purchase (SPEC §4.1). */
+  takesCard: boolean;
   /** The quoted courier service locked on a checkout order (e.g. "JNE Reguler"); null otherwise. */
   shippingServiceLabel: string | null;
   /** The order's live courier booking (Phase K2: "Pesan kurir"), if any. */
@@ -176,6 +180,7 @@ export async function listPackingQueue(
       cardClaimedAt: claimedCard.claimedAt,
       persistedStickerCode: activeCard.stickerCode,
       paymentStatus: orders.paymentStatus,
+      takesCard: takesThankYouCardSql(),
       shippingServiceLabel: orders.shippingCourierLabel,
       shipmentStatus: liveShipment.status,
       shipmentAwb: liveShipment.awb,
@@ -200,11 +205,15 @@ export async function listPackingQueue(
   const rowsWithStickerCodes: PackingQueueRow[] = rows.map(({ persistedStickerCode, paymentStatus, shipmentStatus, shipmentAwb, shipmentProviderStatus, ...row }) => {
     const isPrinted = row.cardPrintedAt !== null;
     const isCheckout = paymentStatus !== null;
+    // An order whose card is already printed or claimed keeps showing it even if the rule would no
+    // longer pick it today (e.g. an earlier paid order of the same email was reopened).
+    const takesCard = row.takesCard || isPrinted || row.cardClaimedAt !== null;
     return {
       ...row,
-      // A checkout order never gets a card, so it has no sticker code either.
-      stickerCode: isCheckout ? null : isPrinted ? persistedStickerCode : (previewMap.get(row.id) ?? null),
-      stickerCodeIsPreview: !isCheckout && !isPrinted,
+      takesCard,
+      // An order that takes no card has no sticker code either.
+      stickerCode: !takesCard ? null : isPrinted ? persistedStickerCode : (previewMap.get(row.id) ?? null),
+      stickerCodeIsPreview: takesCard && !isPrinted,
       isCheckout,
       shipment: shipmentStatus ? { status: shipmentStatus, awb: shipmentAwb, providerStatus: shipmentProviderStatus } : null,
     };
@@ -215,13 +224,13 @@ export async function listPackingQueue(
 
 /** Every `to_ship` order with NO active thank-you card — the "pending" set for the sticker-code
  * preview (docs/plans/thermal-stickers.md): these are the orders whose code could still change
- * before they're actually printed. Web checkout orders never get a card, so they are not in it. */
+ * before they're actually printed. Orders that take no card (card-eligibility.ts) are not in it. */
 async function getUnprintedToShipOrderIds(db: Database): Promise<string[]> {
   const activeCardOrderIds = db.select({ orderId: thankYouCards.orderId }).from(thankYouCards).where(eq(thankYouCards.status, "active"));
   const rows = await db
     .select({ id: orders.id })
     .from(orders)
-    .where(and(eq(orders.status, "to_ship"), isNull(orders.paymentStatus), notInArray(orders.id, activeCardOrderIds)));
+    .where(and(eq(orders.status, "to_ship"), takesThankYouCardSql(), notInArray(orders.id, activeCardOrderIds)));
   return rows.map((r) => r.id);
 }
 
@@ -315,15 +324,15 @@ export async function getCardPrintStatus(orderIds: string[], db: Database = defa
 }
 
 /** The orders among `orderIds` that should carry a thank-you card but have no active one, for the
- * "Tandai dikirim" warning. Web checkout orders never need one (SPEC §4.1). */
+ * "Tandai dikirim" warning. Orders that take no card (card-eligibility.ts) never need one. */
 export async function getOrdersMissingCard(orderIds: string[], db: Database = defaultDb): Promise<string[]> {
   if (orderIds.length === 0) return [];
-  const [status, checkoutRows] = await Promise.all([
+  const [status, noCardRows] = await Promise.all([
     getCardPrintStatus(orderIds, db),
-    db.select({ id: orders.id }).from(orders).where(and(inArray(orders.id, orderIds), isNotNull(orders.paymentStatus))),
+    db.select({ id: orders.id }).from(orders).where(and(inArray(orders.id, orderIds), not(takesThankYouCardSql()))),
   ]);
-  const checkout = new Set(checkoutRows.map((row) => row.id));
-  return orderIds.filter((id) => !checkout.has(id) && status.get(id) === false);
+  const noCard = new Set(noCardRows.map((row) => row.id));
+  return orderIds.filter((id) => !noCard.has(id) && status.get(id) === false);
 }
 
 /** The order numbers of the web checkout orders among `orderIds` (bulk "Tandai dikirim" refuses
@@ -390,11 +399,15 @@ export async function mintThankYouCard(orderId: string, actorStaffUserId: string
     if (order.status === "cancelled" || order.status === "returned") {
       throw new ActionError("Pesanan ini sudah dibatalkan/diretur, tidak bisa mencetak kartu.");
     }
-    // Thank-you cards are for marketplace buyers (SPEC §4.1); a web checkout order is already on the
-    // main site (docs/plans/cart-checkout.md §7, enforced here, not only by the packing UI). Manual
-    // orders keep printing as before.
-    if (order.paymentStatus !== null) {
-      throw new ActionError(`${order.orderNo} adalah pesanan dari website dan tidak memakai kartu terima kasih.`);
+    // Thank-you cards are for marketplace and manual orders, and for a guest's first website
+    // purchase only (SPEC §4.1, card-eligibility.ts: the same rule the packing list shows, enforced
+    // here, not only by the packing UI). The row lock above covers only this order; two orders of
+    // one email minting at once still agree, since the earliest-paid tie-break is deterministic.
+    const [eligibility] = await tx.select({ takesCard: takesThankYouCardSql() }).from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!eligibility?.takesCard) {
+      throw new ActionError(
+        `${order.orderNo} adalah pesanan website yang tidak mendapat kartu terima kasih (kartu hanya untuk pembelian pertama pembeli tanpa akun).`,
+      );
     }
 
     const [existingActive] = await tx

@@ -22,7 +22,7 @@ export interface MarkShippedDialogProps {
  * owner's own requirement) and required for a web checkout order, whose buyer gets them by email.
  * An order without an active thank-you card needs an explicit confirmation
  * (docs/plans/packing-cards.md's "nothing ships without a card" rule) rather than silently letting
- * it through; web checkout orders never carry a card. */
+ * it through; an order that takes no card (lib/packing/card-eligibility.ts) passes `hasActiveCard`. */
 export function MarkShippedDialog({ orderId, orderNo, hasActiveCard, isCheckout, defaultCourier, bookedWaybill, open, onOpenChange, onShipped }: MarkShippedDialogProps) {
   return (
     <ShipmentDetailsDialog

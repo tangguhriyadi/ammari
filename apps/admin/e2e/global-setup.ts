@@ -206,8 +206,10 @@ export const E2E_CHECKOUT_LAYOUTS = ["390", "1280"] as const;
  * paid and flagged as an anomaly, paid for the resi flow (`ship`), shipped without a resi
  * (`noresi`, as the 2026-10-21 sandbox run left one), and two paid orders for courier booking
  * (Phase K2, courier-booking.spec.ts) with the fake provider: `book` at a normal fake area, `lost` at
- * the area whose booking answer is lost once. */
-export function e2eCheckoutOrderNo(kind: "pending" | "paid" | "short" | "flagged" | "ship" | "noresi" | "book" | "lost", layout: (typeof E2E_CHECKOUT_LAYOUTS)[number]): string {
+ * the area whose booking answer is lost once. These are placed while logged in, so none takes a
+ * thank-you card. `first` and `repeat` are guest orders for one email per viewport: `first` is that
+ * email's first website purchase (takes a card, SPEC §4.1), `repeat` the next one (no card). */
+export function e2eCheckoutOrderNo(kind: "pending" | "paid" | "short" | "flagged" | "ship" | "noresi" | "book" | "lost" | "first" | "repeat", layout: (typeof E2E_CHECKOUT_LAYOUTS)[number]): string {
   return `ORD-E2E-WEB-${kind.toUpperCase()}-${layout}`;
 }
 
@@ -1072,7 +1074,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       checkoutAttemptId: crypto.randomUUID(),
       termsAcceptedAt: new Date(now),
       promoOptIn: true,
-      placedWithSession: false,
+      // Logged in: these never take a thank-you card, whatever their order (card-eligibility.ts).
+      placedWithSession: true,
       orderDate: new Date(now),
       subtotalAmount: 259_000,
       discountAmount: 0,
@@ -1117,6 +1120,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         { kind: "noresi" as const, status: "shipped" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[] },
         { kind: "book" as const, status: "to_ship" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[], destination: E2E_BOOKING_AREA },
         { kind: "lost" as const, status: "to_ship" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[], destination: E2E_LOST_ANSWER_AREA },
+        // A guest's first website purchase and their next one (paid an hour later).
+        { kind: "first" as const, status: "to_ship" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[], guest: { paidAgoMs: 2 * 60 * 60_000 } },
+        { kind: "repeat" as const, status: "to_ship" as const, paid: true, sold: true, flags: [] as ("stock_short_at_payment" | "payment_anomaly")[], guest: { paidAgoMs: 60 * 60_000 } },
       ];
       for (const seed of seeds) {
         const orderNo = e2eCheckoutOrderNo(seed.kind, layout);
@@ -1128,6 +1134,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
             paymentStatus: seed.paid ? "paid" : "pending",
             paidAt: seed.paid ? new Date(now) : null,
             needsAttention: seed.flags,
+            ...("guest" in seed && seed.guest ? { placedWithSession: false, contactEmail: `pertama-${layout}@e2e.ammari.test`, paidAt: new Date(now - seed.guest.paidAgoMs) } : {}),
             ...("destination" in seed ? { shippingDestinationId: seed.destination } : {}),
             ...(seed.status === "shipped" ? { shippedAt: new Date(now), courier: "J&T Reguler", trackingNumber: null } : {}),
           })

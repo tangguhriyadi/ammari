@@ -122,7 +122,7 @@ export async function markShippedAction(input: z.input<typeof markShippedSchema>
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     if (!parsed.data.confirmNoCard) {
-      // Web checkout orders never carry a card, so they never need the confirmation.
+      // Orders that take no card (lib/packing/card-eligibility.ts) never need the confirmation.
       const missing = await getOrdersMissingCard([parsed.data.orderId]);
       if (missing.length > 0) {
         throw new ActionError("Pesanan ini belum punya kartu terima kasih. Konfirmasi untuk tetap mengirim.");

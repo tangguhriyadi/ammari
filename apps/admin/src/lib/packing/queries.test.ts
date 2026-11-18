@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { withRollback } from "@ammari/db/test-utils";
 import { checkoutOrderValues, insertOrder, insertProductVariant, insertStaffUser, insertThankYouCard, shippingQuoteValues } from "@ammari/db/test-fixtures";
-import { orderItems, productImages, products, thankYouCards } from "@ammari/db/schema";
+import { orderItems, orders, productImages, products, thankYouCards } from "@ammari/db/schema";
 import {
   claimDeadlineFromOrderDate,
   getCardPrintStatus,
@@ -352,36 +352,149 @@ describe("mintThankYouCardsForOrders", () => {
   });
 });
 
-describe("web checkout orders on /packing (docs/plans/cart-checkout.md §7, session 16)", () => {
-  async function paidCheckoutOrder(tx: Parameters<Parameters<typeof withRollback>[0]>[0]) {
+describe("web checkout orders on /packing (docs/plans/cart-checkout.md §7; first guest purchase, owner 2026-11-18)", () => {
+  type Tx = Parameters<Parameters<typeof withRollback>[0]>[0];
+  const HOUR = 60 * 60 * 1000;
+
+  /** A paid web checkout order in the packing queue. `paidHoursAgo` orders the purchases: the
+   * earliest paid order of an email is its first. */
+  async function webOrder(
+    tx: Tx,
+    params: { email: string; paidHoursAgo: number; session?: boolean; status?: "to_ship" | "shipped" | "completed" | "cancelled" | "returned"; paymentStatus?: "paid" | "refunded" | "expired" },
+  ) {
     const quote = shippingQuoteValues(35_000);
-    return insertOrder(tx, { ...checkoutOrderValues(), ...quote, status: "to_ship", paymentStatus: "paid", paidAt: new Date() });
+    const paid = params.paymentStatus !== "expired";
+    return insertOrder(tx, {
+      ...checkoutOrderValues(),
+      ...quote,
+      contactEmail: params.email,
+      placedWithSession: params.session ?? false,
+      status: params.status ?? "to_ship",
+      paymentStatus: params.paymentStatus ?? "paid",
+      paidAt: paid ? new Date(Date.now() - params.paidHoursAgo * HOUR) : null,
+    });
   }
 
-  test("the queue shows the quoted service and no sticker code for a checkout order; manual orders unchanged", async () => {
-    await withRollback(async (tx) => {
-      const { variant } = await insertProductVariant(tx);
-      const web = await paidCheckoutOrder(tx);
-      const manual = await insertOrder(tx, { channelId: "whatsapp", status: "to_ship" });
-      for (const order of [web, manual]) await tx.insert(orderItems).values({ orderId: order.id, sku: variant.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+  async function queueRow(tx: Tx, orderId: string) {
+    const { rows } = await listPackingQueue({}, undefined, "100", tx);
+    const row = rows.find((r) => r.id === orderId);
+    if (!row) throw new Error(`order ${orderId} not in the packing queue`);
+    return row;
+  }
 
-      const { rows } = await listPackingQueue({}, undefined, "100", tx);
-      expect(rows.find((row) => row.id === web.id)).toMatchObject({ isCheckout: true, shippingServiceLabel: web.shippingCourierLabel, stickerCode: null, stickerCodeIsPreview: false });
-      const manualRow = rows.find((row) => row.id === manual.id);
-      expect(manualRow).toMatchObject({ isCheckout: false, shippingServiceLabel: null, stickerCodeIsPreview: true });
-      expect(manualRow?.stickerCode).not.toBeNull();
+  async function addLine(tx: Tx, orderIds: string[]) {
+    const { variant } = await insertProductVariant(tx);
+    for (const orderId of orderIds) await tx.insert(orderItems).values({ orderId, sku: variant.sku, qty: 1, unitPrice: 259_000, unitCost: 0 });
+  }
+
+  test("a guest's first website purchase takes a card: sticker preview, missing-card warning, mint", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const first = await webOrder(tx, { email: "pertama@example.test", paidHoursAgo: 1 });
+      await addLine(tx, [first.id]);
+
+      const row = await queueRow(tx, first.id);
+      expect(row).toMatchObject({ isCheckout: true, takesCard: true, stickerCodeIsPreview: true, shippingServiceLabel: first.shippingCourierLabel });
+      expect(row.stickerCode).toMatch(/^WEB-/);
+      expect(await getOrdersMissingCard([first.id], tx)).toEqual([first.id]);
+
+      await mintThankYouCard(first.id, staff.id, tx);
+      expect(await getOrdersMissingCard([first.id], tx)).toEqual([]);
+      expect((await queueRow(tx, first.id)).cardPrintedAt).not.toBeNull();
     });
   });
 
-  test("a card is never minted for a checkout order (server-side), and it never counts as missing a card", async () => {
+  test("a second guest order for the same email takes no card, even after the first one shipped", async () => {
     await withRollback(async (tx) => {
       const staff = await insertStaffUser(tx);
-      const web = await paidCheckoutOrder(tx);
+      await webOrder(tx, { email: "ulang@example.test", paidHoursAgo: 48, status: "completed" });
+      const second = await webOrder(tx, { email: "ulang@example.test", paidHoursAgo: 1 });
+      await addLine(tx, [second.id]);
+
+      expect(await queueRow(tx, second.id)).toMatchObject({ isCheckout: true, takesCard: false, stickerCode: null, stickerCodeIsPreview: false });
+      expect(await getOrdersMissingCard([second.id], tx)).toEqual([]);
+      await expect(mintThankYouCard(second.id, staff.id, tx)).rejects.toThrow("tidak mendapat kartu terima kasih");
+    });
+  });
+
+  test("two first guest orders at once: only the earliest paid one takes a card", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const earlier = await webOrder(tx, { email: "dobel@example.test", paidHoursAgo: 2 });
+      const later = await webOrder(tx, { email: "dobel@example.test", paidHoursAgo: 1 });
+      await addLine(tx, [earlier.id, later.id]);
+
+      expect((await queueRow(tx, earlier.id)).takesCard).toBe(true);
+      expect((await queueRow(tx, later.id)).takesCard).toBe(false);
+      await mintThankYouCard(earlier.id, staff.id, tx);
+      await expect(mintThankYouCard(later.id, staff.id, tx)).rejects.toThrow("tidak mendapat kartu terima kasih");
+    });
+  });
+
+  test("an order placed while logged in takes no card, and it counts as the email's earlier purchase", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const loggedIn = await webOrder(tx, { email: "akun@example.test", paidHoursAgo: 5, session: true });
+      const guestLater = await webOrder(tx, { email: "akun@example.test", paidHoursAgo: 1 });
+      await addLine(tx, [loggedIn.id, guestLater.id]);
+
+      expect((await queueRow(tx, loggedIn.id)).takesCard).toBe(false);
+      expect((await queueRow(tx, guestLater.id)).takesCard).toBe(false);
+      await expect(mintThankYouCard(loggedIn.id, staff.id, tx)).rejects.toThrow("tidak mendapat kartu terima kasih");
+      expect(await getOrdersMissingCard([loggedIn.id, guestLater.id], tx)).toEqual([]);
+    });
+  });
+
+  test("a first guest order cancelled before shipping hands the card to the email's next paid guest order", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const first = await webOrder(tx, { email: "batal@example.test", paidHoursAgo: 3 });
+      const next = await webOrder(tx, { email: "batal@example.test", paidHoursAgo: 1 });
+      await addLine(tx, [first.id, next.id]);
+      await mintThankYouCard(first.id, staff.id, tx);
+      expect((await queueRow(tx, next.id)).takesCard).toBe(false);
+
+      // Written directly: only the eligibility rule is under test here (voiding the card on cancel is
+      // transitionOrderStatus's, covered in packages/commerce lifecycle.test.ts).
+      await tx.update(orders).set({ status: "cancelled", paymentStatus: "refunded" }).where(eq(orders.id, first.id));
+
+      expect((await queueRow(tx, next.id)).takesCard).toBe(true);
+      await mintThankYouCard(next.id, staff.id, tx);
+      await expect(mintThankYouCard(first.id, staff.id, tx)).rejects.toThrow("sudah dibatalkan");
+    });
+  });
+
+  test("returned orders and unpaid (expired) orders never count as an earlier purchase", async () => {
+    await withRollback(async (tx) => {
+      await webOrder(tx, { email: "retur@example.test", paidHoursAgo: 72, status: "returned" });
+      await webOrder(tx, { email: "retur@example.test", paidHoursAgo: 48, status: "cancelled", paymentStatus: "expired" });
+      const order = await webOrder(tx, { email: "retur@example.test", paidHoursAgo: 1 });
+      await addLine(tx, [order.id]);
+      expect((await queueRow(tx, order.id)).takesCard).toBe(true);
+    });
+  });
+
+  test("the contact email is matched case- and whitespace-insensitively", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      await webOrder(tx, { email: "  Pembeli.Sama@Example.TEST ", paidHoursAgo: 24, status: "shipped" });
+      const second = await webOrder(tx, { email: "pembeli.sama@example.test", paidHoursAgo: 1 });
+      const other = await webOrder(tx, { email: "pembeli.lain@example.test", paidHoursAgo: 1 });
+      await addLine(tx, [second.id, other.id]);
+
+      expect((await queueRow(tx, second.id)).takesCard).toBe(false);
+      await expect(mintThankYouCard(second.id, staff.id, tx)).rejects.toThrow("tidak mendapat kartu terima kasih");
+      expect((await queueRow(tx, other.id)).takesCard).toBe(true);
+    });
+  });
+
+  test("manual and marketplace orders are unchanged: they always take a card", async () => {
+    await withRollback(async (tx) => {
       const manual = await insertOrder(tx, { channelId: "whatsapp", status: "to_ship" });
-      await expect(mintThankYouCard(web.id, staff.id, tx)).rejects.toThrow("tidak memakai kartu terima kasih");
-      expect(await getOrdersMissingCard([web.id, manual.id], tx)).toEqual([manual.id]);
-      await mintThankYouCard(manual.id, staff.id, tx);
-      expect(await getOrdersMissingCard([web.id, manual.id], tx)).toEqual([]);
+      await addLine(tx, [manual.id]);
+      const row = await queueRow(tx, manual.id);
+      expect(row).toMatchObject({ isCheckout: false, takesCard: true, shippingServiceLabel: null, stickerCodeIsPreview: true });
+      expect(row.stickerCode).not.toBeNull();
     });
   });
 });

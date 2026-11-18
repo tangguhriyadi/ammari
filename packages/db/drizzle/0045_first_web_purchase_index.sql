@@ -1,0 +1,1 @@
+CREATE INDEX "orders_checkout_contact_email_norm_paid_idx" ON "orders" USING btree (lower(btrim("contact_email"::text)),"paid_at") WHERE "orders"."payment_status" is not null;

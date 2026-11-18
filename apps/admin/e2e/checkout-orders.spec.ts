@@ -57,23 +57,54 @@ for (const layout of E2E_CHECKOUT_LAYOUTS) {
       await expect(pendingRow.getByText("Perlu dicek", { exact: true })).toHaveCount(0);
     });
 
-    test("packing shows the quoted service, no card for web orders, and prefills the courier", async ({ page }) => {
+    test("packing shows the quoted service, no card for a logged-in web order, and prefills the courier", async ({ page }) => {
       await page.goto("/packing?channel=web&perPage=100");
       const row = page.locator(viewport.rowTag).filter({ hasText: orderNo("paid") });
       await expect(row).toBeVisible();
       await expect(row.getByText("Kirim: JNE Reguler")).toBeVisible();
       await expect(row.getByText("Tanpa kartu", { exact: true })).toBeVisible();
 
-      // Selecting only web orders leaves nothing to print (they never get a card).
+      // Selecting only orders without a card leaves nothing to print.
       await row.getByRole("checkbox").check();
       await expect(page.getByRole("button", { name: /^Cetak kartu/ })).toBeDisabled();
       await expect(page.getByRole("button", { name: /^Cetak stiker/ })).toBeDisabled();
+      await expect(page.getByText("hanya mendapat kartu terima kasih untuk pembelian pertama pembeli tanpa akun")).toBeVisible();
       await row.getByRole("checkbox").uncheck();
 
       await row.getByRole("button", { name: "Tandai dikirim" }).click();
       const dialog = page.getByRole("dialog", { name: `Tandai dikirim: ${orderNo("paid")}` });
       await expect(dialog.getByLabel("Kurir")).toHaveValue("JNE Reguler");
       await expect(dialog.getByText("belum punya kartu terima kasih")).toHaveCount(0);
+      await dialog.getByRole("button", { name: "Batal" }).click();
+      await expect(dialog).toBeHidden();
+    });
+
+    test("a guest's first website purchase takes a card like a marketplace order; their next one does not", async ({ page }) => {
+      await page.goto("/packing?channel=web&perPage=100");
+      const first = page.locator(viewport.rowTag).filter({ hasText: orderNo("first") });
+      const repeat = page.locator(viewport.rowTag).filter({ hasText: orderNo("repeat") });
+      await expect(first).toBeVisible();
+      await expect(first.getByText("Belum", { exact: true })).toBeVisible();
+      await expect(first.getByText(/^(Kode stiker: )?WEB-/)).toBeVisible();
+      await expect(first.getByText("Tanpa kartu", { exact: true })).toHaveCount(0);
+      await expect(repeat.getByText("Tanpa kartu", { exact: true })).toBeVisible();
+
+      // The first order is printable; with the repeat order also selected, only it is counted.
+      await first.getByRole("checkbox").check();
+      await expect(page.getByRole("button", { name: "Cetak stiker (1)" })).toBeEnabled();
+      await expect(page.getByRole("button", { name: "Cetak kartu (1)" })).toBeEnabled();
+      await repeat.getByRole("checkbox").check();
+      await expect(page.getByRole("button", { name: "Cetak kartu (1)" })).toBeEnabled();
+      await expect(page.getByText("hanya mendapat kartu terima kasih untuk pembelian pertama pembeli tanpa akun")).toBeVisible();
+      // Still a web order: bulk "Tandai dikirim" skips both (resi needed).
+      await expect(page.getByRole("button", { name: /^Tandai dikirim/ }).first()).toBeDisabled();
+      await first.getByRole("checkbox").uncheck();
+      await repeat.getByRole("checkbox").uncheck();
+
+      // Without a printed card, its own "Tandai dikirim" asks for the no-card confirmation.
+      await first.getByRole("button", { name: "Tandai dikirim" }).click();
+      const dialog = page.getByRole("dialog", { name: `Tandai dikirim: ${orderNo("first")}` });
+      await expect(dialog.getByText("belum punya kartu terima kasih")).toBeVisible();
       await dialog.getByRole("button", { name: "Batal" }).click();
       await expect(dialog).toBeHidden();
     });
@@ -85,7 +116,7 @@ for (const layout of E2E_CHECKOUT_LAYOUTS) {
       // Selected alone, bulk "Tandai dikirim" has nothing it may ship (it has no resi field).
       await row.getByRole("checkbox").check();
       await expect(page.getByRole("button", { name: /^Tandai dikirim/ }).first()).toBeDisabled();
-      await expect(page.getByText("Pesanan website juga perlu nomor resi")).toBeVisible();
+      await expect(page.getByText("Pesanan website perlu nomor resi")).toBeVisible();
       await row.getByRole("checkbox").uncheck();
 
       await row.getByRole("button", { name: "Tandai dikirim" }).click();

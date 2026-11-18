@@ -109,6 +109,7 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
     actions: {
       void: { label: "Voucher dibatalkan" },
       extend: { label: "Voucher diperpanjang" },
+      void_source_order_ended: { label: "Voucher dibatalkan otomatis (pesanan asalnya batal/retur)" },
     },
   },
   product: {

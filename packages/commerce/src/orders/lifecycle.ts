@@ -17,7 +17,7 @@ import { canTransitionOrderStatus, ORDER_STATUS_TIMESTAMP_COLUMN, STOCK_NOT_YET_
 // One-directional (thank-you-cards.ts never imports anything from here) — a cancelled/returned
 // order voiding its own active card is this function's job; the rest of the card lifecycle
 // (minting, printing) stays in apps/admin's lib/packing per docs/plans/packing-cards.md.
-import { voidActiveCardForOrder } from "../thank-you-cards";
+import { voidActiveCardForOrder, voidUnusedVoucherForEndedOrder } from "../thank-you-cards";
 
 // ---------- Create (manual entry) ----------
 
@@ -462,9 +462,9 @@ async function settleDeliveredEmailForStaffCompletion(tx: Tx, orderId: string, a
  * stock hold; whole-item restore on any cancellation/return of an order whose stock had already
  * left, or releasing the hold of an unpaid one), all in one transaction. A
  * cancelled/returned transition ALSO voids the order's active thank-you card in this same
- * transaction (docs/plans/packing-cards.md) — an already-`claimed` card/voucher is never
- * touched; that policy is the owner's to decide later. A cancel also restores the voucher the
- * order redeemed at checkout (restoreVoucherForCancelledOrder).
+ * transaction (docs/plans/packing-cards.md); an already-`claimed` card stays claimed, but the
+ * voucher it issued is voided while still unused (voidUnusedVoucherForEndedOrder, SPEC §8). A
+ * cancel also restores the voucher the order redeemed at checkout (restoreVoucherForCancelledOrder).
  *
  * `actorStaffUserId` is null only for the system callers of a checkout order: the payment
  * notification and the expiry sweep (docs/plans/cart-checkout.md §6). The audit row and stock
@@ -515,6 +515,8 @@ export async function transitionOrderStatus(
       // Same transaction as the status change itself — an active card must never outlive the
       // order it was printed for (docs/plans/packing-cards.md). No-op if there isn't one.
       await voidActiveCardForOrder(tx, orderId, actorStaffUserId);
+      // ...and neither may an unused voucher already claimed from that card (SPEC §8).
+      await voidUnusedVoucherForEndedOrder(tx, orderId, toStatus, actorStaffUserId);
       if (toStatus === "cancelled") await restoreVoucherForCancelledOrder(tx, orderId);
     }
 

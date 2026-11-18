@@ -249,6 +249,11 @@ export const orders = pgTable(
     index("orders_checkout_contact_email_idx")
       .on(table.contactEmail, table.createdAt)
       .where(sql`${table.paymentStatus} is not null`),
+    // "Is this the email's first website purchase?" (apps/admin card-eligibility.ts, migration
+    // 0045): earlier paid checkout orders for one normalized contact email.
+    index("orders_checkout_contact_email_norm_paid_idx")
+      .on(sql`lower(btrim(${table.contactEmail}::text))`, table.paidAt)
+      .where(sql`${table.paymentStatus} is not null`),
     // The admin "Perlu perhatian" filter.
     index("orders_needs_attention_idx")
       .on(table.createdAt)

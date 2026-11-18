@@ -773,7 +773,12 @@ used_order_id = NULL, used_at = NULL WHERE used_order_id = $order AND status = '
   address, actions per §6.5, item edit blocked for web orders, and a "Pengiriman" section with the
   locked quote (§4.5.6); Phase K adds the booking and tracking to it (§15).
 - **`/packing`:** paid web orders enter the `to_ship` queue showing the quoted service ("JNE
-  Reguler"). Thank-you cards stay marketplace only (verify and enforce server-side). Before Phase
+  Reguler"). Thank-you cards stay marketplace (and staff-entered) only, **except a guest's first
+  website purchase** (owner decision 2026-11-18, SPEC §4.1: guest, paid, not cancelled/returned, no
+  earlier paid web order for the same normalized contact email; earliest paid wins), which prints
+  and gets a sticker code like a marketplace order. Enforced server-side from one rule
+  (`apps/admin/src/lib/packing/card-eligibility.ts`, index `orders_checkout_contact_email_norm_paid_idx`,
+  migration 0045). Before Phase
   K: staff book that service by hand, then manual "Tandai dikirim" (courier prefilled from the
   order) with the resi sends the "Pesanan dikirim" email. Since round 2 the courier and resi are
   required for a web order (server-side), bulk "Tandai dikirim" skips web orders, and the order page

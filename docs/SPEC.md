@@ -300,10 +300,22 @@ and `/checkout/*` return not-found and the WhatsApp CTA stays primary).
 
 ### 4.1 Purpose and scope
 
-A thank-you card with a unique QR code is printed **per order** during packing, **only** for
-Shopee/TikTok Shop orders. The card must never invite the buyer to leave the marketplace (no
+A thank-you card with a unique QR code is printed **per order** during packing, for
+Shopee/TikTok Shop orders (and staff-entered orders), and for a guest's first website order only
+(see below). The card must never invite the buyer to leave the marketplace (no
 "follow us" / "order direct next time" language) — it exists to drive account creation and repeat
 purchases on the main site without violating marketplace policy.
+
+**Website orders (owner decision 2026-11-18).** A web checkout order takes a card **only** when it
+is a guest's first website purchase: placed without a session (`placed_with_session = false`), paid
+(`paid` / `partially_refunded`), not cancelled or returned, and no other web checkout order (guest
+or logged in) with the same contact email (compared as `lower(btrim())`) is such a purchase paid
+earlier. Of two first guest orders, the earliest paid (then the lower id) wins; when a first order
+is cancelled or returned, the email's next paid guest order takes over. Logged-in checkout orders
+and repeat guest orders show "Tanpa kartu". Staff-entered orders (any channel, no payment status)
+keep their card as before. One server-side rule (`apps/admin/src/lib/packing/card-eligibility.ts`)
+drives the packing list, sticker codes, the "no card" warning and the mint itself; eligible orders
+print and get sticker codes exactly like marketplace orders.
 
 ### 4.2 Token
 
@@ -752,7 +764,10 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   already-discounted goods subtotal (`discount_amount = min(voucher, subtotal)`, never ongkir).
   Vouchers still cannot be combined with any other promo.
 - A voucher is **voided** if its source order is cancelled or returned before the voucher is
-  used.
+  used. Built (2026-11-18): `transitionOrderStatus` voids, in the same transaction as the cancel
+  or return, every voucher claimed from that order's card that is not attached to an order (stored
+  `active` or `expired`), audited as `void_source_order_ended` on the voucher; a `used` voucher is
+  left alone and the card stays `claimed`. (A refund only follows a cancel, so it is covered.)
 - A voucher is **restored** if the main-site order that used it is cancelled or its payment
   expires, provided the voucher has not since expired (an expired one stays expired). It is
   **not** restored when the order is later returned.
