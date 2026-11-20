@@ -31,7 +31,7 @@ export function CopyValue({ value, label, testId }: { value: string; label: stri
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-2 sm:justify-end">
+    <span className="flex min-w-0 items-center gap-2">
       <span className="font-mono text-sm break-all text-neutral-900" data-testid={testId}>
         {value}
       </span>

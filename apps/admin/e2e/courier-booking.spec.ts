@@ -87,6 +87,8 @@ for (const layout of E2E_CHECKOUT_LAYOUTS) {
       // K4: the flag in context (both resis), the Biteship order id to copy, the courier history.
       await expect(section.getByTestId("shipping-flag-tracking_number_mismatch")).toContainText(`Resi di pesanan: JNE1234567. Resi dari pesanan kurir: ${newWaybill}.`);
       await expect(section.getByTestId("buyer-timeline-hidden")).toBeVisible();
+      // The ids sit in the collapsed "Detail teknis" area.
+      await section.getByText("Detail teknis").first().click();
       const providerOrderId = section.getByTestId("provider-order-id-2");
       await expect(providerOrderId).toHaveText(/^[0-9a-f]{24}$/);
       await expect(section.getByTestId("provider-order-id-1")).toHaveText(/^[0-9a-f]{24}$/);
@@ -100,7 +102,7 @@ for (const layout of E2E_CHECKOUT_LAYOUTS) {
       await panel.getByRole("button", { name: `Pakai resi pesanan kurir (${newWaybill})` }).click();
       await expect(page.getByText(`Resi pesanan diganti ke ${newWaybill}.`, { exact: false })).toBeVisible();
       await expect(page.getByRole("region", { name: "Perlu dicek" })).toHaveCount(0);
-      await expect(page.getByRole("region", { name: "Resi" }).getByText(newWaybill, { exact: true })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Pengiriman" }).getByText(newWaybill, { exact: true })).toBeVisible();
 
       // "Tandai selesai" while the courier has not reported the delivery asks first.
       await page.getByRole("button", { name: "Tandai selesai" }).click();

@@ -3,6 +3,10 @@ import { formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import type { CheckoutOrderDetail, CheckoutShipment } from "@/lib/orders/queries";
 import { CourierBooking } from "@/components/orders/courier-booking";
 import { CopyValue } from "@/components/orders/copy-value";
+import type { ShipmentStatus } from "@ammari/db/schema";
+import { DetailList, DetailRow, Note, SectionCard, SubSection, TechnicalDetails } from "./section-card";
+import { Timeline, type TimelineItem } from "./timeline";
+import { ShipmentDetailsBlock } from "./shipment-details-block";
 import {
   SHIPMENT_EVENT_SOURCE_LABELS,
   SHIPMENT_STATUS_BADGE_VARIANT,
@@ -50,68 +54,52 @@ function emailStatus(email: { sentAt: Date | null; error: string | null }): stri
   return "Sedang dikirim";
 }
 
-export function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-      <span className="text-sm text-neutral-600">{label}</span>
-      <span className="text-base text-neutral-900 break-words sm:text-right">{value}</span>
-    </div>
-  );
-}
-
-function Section({ title, id, children }: { title: string; id?: string; children: React.ReactNode }) {
-  return (
-    <section className="flex scroll-mt-20 flex-col gap-3" aria-label={title} id={id}>
-      <h2 className="text-lg font-semibold text-neutral-900">{title}</h2>
-      <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">{children}</div>
-    </section>
-  );
-}
-
-export function PaymentSection({ checkout }: { checkout: CheckoutOrderDetail }) {
+export function PaymentSection({ checkout, className }: { checkout: CheckoutOrderDetail; className?: string }) {
   const paidAttempt = checkout.attempts.find((attempt) => attempt.paidAt !== null);
   const method = paidAttempt ? paymentMethodLabel(paidAttempt.paymentType, paidAttempt.bank) : null;
   return (
-    <Section title="Pembayaran">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-neutral-600">Status</span>
-        <Badge variant={ORDER_PAYMENT_STATUS_BADGE_VARIANT[checkout.paymentStatus]}>{ORDER_PAYMENT_STATUS_LABELS[checkout.paymentStatus]}</Badge>
-      </div>
-      {method && <DetailRow label="Metode" value={method} />}
-      {checkout.paidAt && <DetailRow label="Dibayar" value={formatDateTime(checkout.paidAt)} />}
-      {checkout.paymentStatus === "pending" && checkout.paymentExpiresAt && <DetailRow label="Batas bayar" value={formatDateTime(checkout.paymentExpiresAt)} />}
-      {checkout.cancelReason && <DetailRow label="Alasan batal" value={CANCEL_REASON_LABELS[checkout.cancelReason] ?? checkout.cancelReason} />}
+    <SectionCard title="Pembayaran" className={className}>
+      <DetailList>
+        <DetailRow label="Status" value={<Badge variant={ORDER_PAYMENT_STATUS_BADGE_VARIANT[checkout.paymentStatus]}>{ORDER_PAYMENT_STATUS_LABELS[checkout.paymentStatus]}</Badge>} />
+        {method && <DetailRow label="Metode" value={method} />}
+        {checkout.paidAt && <DetailRow label="Dibayar" value={formatDateTime(checkout.paidAt)} />}
+        {checkout.paymentStatus === "pending" && checkout.paymentExpiresAt && <DetailRow label="Batas bayar" value={formatDateTime(checkout.paymentExpiresAt)} />}
+        {checkout.cancelReason && <DetailRow label="Alasan batal" value={CANCEL_REASON_LABELS[checkout.cancelReason] ?? checkout.cancelReason} />}
+      </DetailList>
 
-      <h3 className="mt-2 text-base font-semibold text-neutral-900">Percobaan pembayaran</h3>
-      {checkout.attempts.length === 0 ? (
-        <p className="text-base text-neutral-600">Belum ada.</p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {checkout.attempts.map((attempt) => {
-            const attemptMethod = paymentMethodLabel(attempt.paymentType, attempt.bank);
-            return (
-              <li key={attempt.id} className="flex flex-col gap-1 rounded-md bg-neutral-50 p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-base font-medium text-neutral-900">Percobaan {attempt.attempt}</span>
-                  <Badge variant={attempt.status === "paid" ? "success" : "neutral"}>{PAYMENT_ATTEMPT_STATUS_LABELS[attempt.status]}</Badge>
-                </div>
-                <p className="text-sm text-neutral-600 break-all">
-                  {attempt.providerOrderId}
-                  {attempt.providerRef ? ` · ID transaksi ${attempt.providerRef}` : ""}
-                </p>
-                <p className="text-sm text-neutral-600">
-                  {formatRupiah(attempt.grossAmount)}
-                  {attemptMethod ? ` · ${attemptMethod}` : ""}
-                  {attempt.gatewayStatus ? ` · Midtrans: ${attempt.gatewayStatus}` : ""}
-                  {` · dibuat ${formatDateTime(attempt.createdAt)}`}
-                </p>
-                {attempt.refundedAmount > 0 && <p className="text-sm text-neutral-700">Dikembalikan {formatRupiah(attempt.refundedAmount)}</p>}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </Section>
+      <SubSection title="Percobaan pembayaran">
+        {checkout.attempts.length === 0 ? (
+          <p className="text-base text-neutral-600">Belum ada.</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {checkout.attempts.map((attempt) => {
+              const attemptMethod = paymentMethodLabel(attempt.paymentType, attempt.bank);
+              return (
+                <li key={attempt.id} className="flex flex-col gap-1.5 rounded-md bg-neutral-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-base font-medium text-neutral-900">Percobaan {attempt.attempt}</span>
+                    <Badge variant={attempt.status === "paid" ? "success" : "neutral"}>{PAYMENT_ATTEMPT_STATUS_LABELS[attempt.status]}</Badge>
+                  </div>
+                  <p className="text-sm text-neutral-600">
+                    {formatRupiah(attempt.grossAmount)}
+                    {attemptMethod ? ` · ${attemptMethod}` : ""}
+                    {` · dibuat ${formatDateTime(attempt.createdAt)}`}
+                  </p>
+                  {attempt.refundedAmount > 0 && <p className="text-sm text-neutral-700">Dikembalikan {formatRupiah(attempt.refundedAmount)}</p>}
+                  <TechnicalDetails>
+                    <DetailList>
+                      <DetailRow label="ID pesanan Midtrans" value={<CopyValue value={attempt.providerOrderId} label={`ID pesanan Midtrans (ke-${attempt.attempt})`} />} />
+                      {attempt.providerRef && <DetailRow label="ID transaksi" value={<CopyValue value={attempt.providerRef} label={`ID transaksi Midtrans (ke-${attempt.attempt})`} />} />}
+                      {attempt.gatewayStatus && <DetailRow label="Status Midtrans" value={attempt.gatewayStatus} />}
+                    </DetailList>
+                  </TechnicalDetails>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </SubSection>
+    </SectionCard>
   );
 }
 
@@ -123,6 +111,10 @@ export interface ShippingSectionProps {
   canBook: boolean;
   orderStatus: string;
   canManage: boolean;
+  /** Courier and resi on the order itself (shown with "Ubah resi" once it has shipped). */
+  courier: string | null;
+  trackingNumber: string | null;
+  className?: string;
 }
 
 /** Why a booking attempt did not settle, in words (shipments.last_error is a reason and a code). */
@@ -143,17 +135,6 @@ function trackingErrorText(lastError: string | null): string | null {
   if (reason === "budget_exhausted") return "Pelacakan otomatis tertunda: batas harian pemakaian Biteship tercapai. Dicek lagi besok, atau tekan Cek ulang pemesanan.";
   if (reason === "unavailable") return "Pelacakan otomatis tertunda: Biteship belum bisa dihubungi. Dicek lagi otomatis.";
   return "Pelacakan otomatis gagal membaca pengiriman ini. Cek di dashboard Biteship.";
-}
-
-/** The Biteship order id with a copy button (the activation form and support ask for it, K4). */
-function ProviderOrderIdRow({ shipment }: { shipment: CheckoutShipment }) {
-  if (!shipment.providerOrderId) return null;
-  return (
-    <div className="flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-      <span className="text-sm text-neutral-600">ID pesanan Biteship</span>
-      <CopyValue value={shipment.providerOrderId} label={`ID pesanan Biteship percobaan ${shipment.attempt}`} testId={`provider-order-id-${shipment.attempt}`} />
-    </div>
-  );
 }
 
 /** The shipping flags on the order, next to the facts staff check them against (K4). */
@@ -196,38 +177,57 @@ function ShippingFlagContext({ flags, live, trackingNumber }: { flags: readonly 
   );
 }
 
-/** Every attempt's courier history, newest first, with where each entry came from (K4). */
-function TrackingHistory({ events, attempts }: { events: CheckoutOrderDetail["trackingEvents"]; attempts: number }) {
-  return (
-    <>
-      <h3 className="mt-2 text-base font-semibold text-neutral-900">Riwayat pelacakan</h3>
-      {events.length === 0 ? (
+/** The booked waybill and the order's resi are the same parcel when they only differ in spacing or case. */
+function sameResi(a: string, b: string): boolean {
+  return a.replace(/\s+/g, "").toUpperCase() === b.replace(/\s+/g, "").toUpperCase();
+}
+
+/** Milestones of a parcel on its way, in order; the ones after the live status are "waiting". */
+const TRACKING_FLOW: readonly ShipmentStatus[] = ["pickup_requested", "picked_up", "in_transit", "delivered"];
+
+/** The history's wording of a status ("Terkirim" for a delivered parcel). */
+function trackingTitle(status: ShipmentStatus | null): string {
+  return status === "delivered" ? "Terkirim" : shipmentEventLabel(status);
+}
+
+/** Every attempt's courier history, newest first, as a timeline: the latest event is the current
+ * step, milestones not reached yet wait above it (K4). */
+function TrackingHistory({ events, attempts, liveStatus }: { events: CheckoutOrderDetail["trackingEvents"]; attempts: number; liveStatus: ShipmentStatus | null }) {
+  if (events.length === 0) {
+    return (
+      <SubSection title="Riwayat pelacakan">
         <p className="text-base text-neutral-600">Belum ada kabar dari kurir.</p>
-      ) : (
-        <ol className="flex flex-col gap-2" data-testid="admin-tracking-history">
-          {events.map((event) => (
-            <li key={event.id} className="flex flex-col gap-1 rounded-md bg-neutral-50 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-base font-medium text-neutral-900">{shipmentEventLabel(event.normalizedStatus)}</span>
-                <Badge variant={event.normalizedStatus === null ? "warning" : "neutral"}>{SHIPMENT_EVENT_SOURCE_LABELS[event.source] ?? event.source}</Badge>
-              </div>
-              <p className="text-sm text-neutral-600 break-words">
-                <time dateTime={event.occurredAt.toISOString()}>{formatDateTime(event.occurredAt)}</time>
-                {` · ${event.providerStatus}`}
-                {attempts > 1 ? ` · percobaan ${event.attempt}` : ""}
-              </p>
-              {(event.description || event.location) && (
-                <p className="text-sm text-neutral-700 break-words">{[event.description, event.location].filter(Boolean).join(" · ")}</p>
-              )}
-            </li>
-          ))}
-        </ol>
-      )}
-    </>
+      </SubSection>
+    );
+  }
+  const sorted = [...events].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+  const seen = new Set(sorted.map((event) => event.normalizedStatus));
+  const liveRank = liveStatus ? TRACKING_FLOW.indexOf(liveStatus) : -1;
+  const waiting: TimelineItem[] = TRACKING_FLOW.slice(liveRank + 1)
+    .filter((status) => liveRank >= 0 && !seen.has(status))
+    .reverse()
+    .map((status) => ({ key: `waiting-${status}`, title: trackingTitle(status), state: "waiting" as const }));
+  const done: TimelineItem[] = sorted.map((event, index) => {
+    const older = sorted[index + 1];
+    const meta = [SHIPMENT_EVENT_SOURCE_LABELS[event.source] ?? event.source, event.providerStatus, attempts > 1 ? `percobaan ${event.attempt}` : null].filter(Boolean).join(" · ");
+    return {
+      key: event.id,
+      title: trackingTitle(event.normalizedStatus),
+      state: index === 0 ? "current" : "done",
+      time: event.occurredAt,
+      meta,
+      description: [event.description, event.location].filter(Boolean).join(" · ") || undefined,
+      repeatedTitle: older !== undefined && older.normalizedStatus === event.normalizedStatus,
+    };
+  });
+  return (
+    <SubSection title="Riwayat pelacakan">
+      <Timeline items={[...waiting, ...done]} testId="admin-tracking-history" />
+    </SubSection>
   );
 }
 
-export function ShippingSection({ checkout, orderId, orderNo, canBook, canManage, orderStatus }: ShippingSectionProps) {
+export function ShippingSection({ checkout, orderId, orderNo, canBook, canManage, orderStatus, courier, trackingNumber, className }: ShippingSectionProps) {
   const quote = checkout.quote;
   const live = checkout.shipments.find((shipment) => isLiveShipmentStatus(shipment.status)) ?? null;
   const ended = checkout.shipments.filter((shipment) => !isLiveShipmentStatus(shipment.status));
@@ -236,152 +236,197 @@ export function ShippingSection({ checkout, orderId, orderNo, canBook, canManage
   const cutoff = quote && (!live || live.status === "booking" || live.status === "pickup_requested") ? pickupCutoffHint(quote.courierCode) : null;
   // The quote's cost is stripped for viewers without finance.view_profit, the booked cost too.
   const showsCost = quote?.costAmount !== null && quote?.costAmount !== undefined;
+  // Courier and resi of a shipped order ("Tambah resi" / "Ubah resi"), one place for web and manual orders.
+  const showResi = orderStatus === "shipped" || orderStatus === "completed";
+  // The booking's own waybill row repeats the order's resi when both are the same.
+  const waybillIsOrderResi = showResi && live?.awb != null && trackingNumber !== null && sameResi(live.awb, trackingNumber);
+  const courierRepeatsQuote = courier !== null && quote !== null && courier.trim().toLowerCase() === quote.courierLabel.trim().toLowerCase();
+  const resiBlock = showResi && (
+    <ShipmentDetailsBlock
+      orderId={orderId}
+      orderNo={orderNo}
+      courier={courier}
+      trackingNumber={trackingNumber}
+      isCheckout
+      bookedWaybill={checkout.shipments.find((shipment) => shipment.status !== "cancelled" && shipment.status !== "failed" && shipment.status !== "booking")?.awb ?? null}
+      canManage={canManage}
+      hideCourier={courierRepeatsQuote}
+    />
+  );
   return (
-    <Section title="Pengiriman" id="pengiriman">
+    <SectionCard title="Pengiriman" id="pengiriman" className={className}>
       <ShippingFlagContext flags={checkout.needsAttention} live={live} trackingNumber={checkout.trackingNumber} />
       {quote ? (
         <>
-          <DetailRow label="Layanan" value={quote.courierLabel} />
-          <DetailRow label="Berat" value={formatWeight(quote.weightGrams)} />
-          {quote.destinationLabel && <DetailRow label="Tujuan" value={quote.destinationLabel} />}
-          {quote.costAmount !== null && <DetailRow label="Ongkir kurir (checkout)" value={formatRupiah(quote.costAmount)} />}
-          {quote.subsidyAmount !== null && <DetailRow label="Subsidi Ammari" value={formatRupiah(quote.subsidyAmount)} />}
-          <DetailRow label="Dibayar pembeli" value={formatRupiah(quote.buyerAmount)} />
-          <DetailRow label="Ongkir dihitung" value={formatDateTime(quote.quotedAt)} />
-          <p className="text-sm text-neutral-600">Ongkir sudah terkunci di pesanan dan tidak bisa diubah. Kalau kurir dipesan manual, pakai layanan ini.</p>
+          <DetailList>
+            <DetailRow label="Layanan" value={quote.courierLabel} />
+            <DetailRow label="Berat" value={formatWeight(quote.weightGrams)} />
+            {quote.destinationLabel && <DetailRow label="Tujuan" value={quote.destinationLabel} />}
+            {quote.costAmount !== null && <DetailRow label="Ongkir kurir (checkout)" value={formatRupiah(quote.costAmount)} />}
+            {quote.subsidyAmount !== null && <DetailRow label="Subsidi Ammari" value={formatRupiah(quote.subsidyAmount)} />}
+            <DetailRow label="Dibayar pembeli" value={formatRupiah(quote.buyerAmount)} />
+            <DetailRow label="Ongkir dihitung" value={formatDateTime(quote.quotedAt)} />
+          </DetailList>
+          <Note>Ongkir sudah terkunci di pesanan dan tidak bisa diubah. Kalau kurir dipesan manual, pakai layanan ini.</Note>
         </>
       ) : (
         <p className="text-base text-neutral-600">Tidak ada data ongkir.</p>
       )}
 
-      <h3 className="mt-2 text-base font-semibold text-neutral-900">Pemesanan kurir</h3>
-      {live ? (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm text-neutral-600">Status</span>
-            <Badge variant={SHIPMENT_STATUS_BADGE_VARIANT[live.status]}>{SHIPMENT_STATUS_LABELS[live.status]}</Badge>
-          </div>
-          <DetailRow label="Referensi" value={live.referenceId} />
-          <ProviderOrderIdRow shipment={live} />
-          <DetailRow label="No. resi kurir" value={live.awb ?? "-"} />
-          {pickup && <DetailRow label="Penjemputan" value={pickup} />}
-          {live.routingCode && <DetailRow label="Kode rute" value={live.routingCode} />}
-          {(live.driverName || live.driverPhone || live.driverPlateNumber) && (
-            <DetailRow label="Kurir" value={[live.driverName, live.driverPhone, live.driverPlateNumber].filter(Boolean).join(" · ")} />
-          )}
-          {showsCost && (
-            <DetailRow
-              label="Biaya kurir sebenarnya"
-              value={live.costAmount !== null ? `${formatRupiah(live.costAmount)} (checkout ${formatRupiah(quote!.costAmount!)})` : "Biaya belum diketahui"}
-            />
-          )}
-          {live.bookedAt && <DetailRow label="Dipesan" value={formatDateTime(live.bookedAt)} />}
-          {live.status !== "booking" && (
-            <DetailRow label="Kabar terakhir dari kurir" value={live.lastEventAt ? formatDateTime(live.lastEventAt) : "Belum ada"} />
-          )}
-          {live.lastPolledAt && <DetailRow label="Dicek otomatis terakhir" value={formatDateTime(live.lastPolledAt)} />}
-          {live.status === "booking" && (
-            <p role="status" className="text-sm text-danger-700">
-              Pemesanan belum pasti: kurir mungkin sudah dipesan. Tekan Cek ulang pemesanan. {bookingErrorText(live.lastError) ?? ""}
-            </p>
-          )}
-          {orderStatus === "completed" && live.status !== "delivered" && live.status !== "booking" && live.status !== "returned" && (
-            <p role="status" className="text-sm text-neutral-600" data-testid="poll-stopped">
-              Pengecekan otomatis berkala berhenti karena pesanan ditandai selesai oleh staf. Kabar dari webhook kurir tetap dicatat; tekan Cek ulang pemesanan untuk membaca sekarang.
-            </p>
-          )}
-          {live.awb && checkout.trackingNumber && live.awb.replace(/\s+/g, "").toUpperCase() !== checkout.trackingNumber.replace(/\s+/g, "").toUpperCase() && (
-            <p role="status" className="text-sm text-danger-700" data-testid="buyer-timeline-hidden">
-              Pembeli tidak melihat riwayat kurir: resi di pesanan ({checkout.trackingNumber}) berbeda dengan resi pesanan kurir.
-            </p>
-          )}
-          {trackingError && (
-            <p role="status" className="text-sm text-neutral-600">
-              {trackingError}
-            </p>
-          )}
-          {live.cancelRequestedAt && (
-            <p role="status" className="text-sm text-danger-700">
-              Pembatalan sudah diminta tapi belum pasti. Tekan Cek ulang pemesanan.
-            </p>
-          )}
-        </div>
-      ) : (
-        <p className="text-base text-neutral-600">{canBook ? "Kurir belum dipesan." : "Tidak ada pemesanan kurir yang aktif."}</p>
-      )}
-      {cutoff && <p className="text-sm text-neutral-600">{cutoff}</p>}
-      {canManage && (live !== null || canBook) && (
-        <CourierBooking orderId={orderId} orderNo={orderNo} shipment={live ? { status: live.status, awb: live.awb } : null} variant="section" />
-      )}
-
-      {ended.length > 0 && (
-        <ul className="flex flex-col gap-2">
-          {ended.map((shipment) => (
-            <li key={shipment.id} className="flex flex-col gap-1">
-              <p className="text-sm text-neutral-600 break-words">
-                Percobaan {shipment.attempt}: {SHIPMENT_STATUS_LABELS[shipment.status]}
-                {shipment.awb ? ` · resi ${shipment.awb}` : ""}
-                {shipment.status === "failed" && bookingErrorText(shipment.lastError) ? ` · ${bookingErrorText(shipment.lastError)}` : ""}
-                {` · ${formatDateTime(shipment.cancelledAt ?? shipment.failedAt ?? shipment.createdAt)}`}
+      <SubSection title="Pemesanan kurir">
+        {live ? (
+          <div className="flex flex-col gap-3">
+            <DetailList>
+              <DetailRow label="Status" value={<Badge variant={SHIPMENT_STATUS_BADGE_VARIANT[live.status]}>{SHIPMENT_STATUS_LABELS[live.status]}</Badge>} />
+              {!waybillIsOrderResi && (
+                <DetailRow label="No. resi kurir" value={live.awb ? <CopyValue value={live.awb} label="nomor resi kurir" /> : "-"} />
+              )}
+            </DetailList>
+            {resiBlock}
+            <DetailList>
+              {pickup && <DetailRow label="Penjemputan" value={pickup} />}
+              {(live.driverName || live.driverPhone || live.driverPlateNumber) && (
+                <DetailRow label="Kurir" value={[live.driverName, live.driverPhone, live.driverPlateNumber].filter(Boolean).join(" · ")} />
+              )}
+              {showsCost && (
+                <DetailRow
+                  label="Biaya kurir sebenarnya"
+                  value={live.costAmount !== null ? `${formatRupiah(live.costAmount)} (checkout ${formatRupiah(quote!.costAmount!)})` : "Biaya belum diketahui"}
+                />
+              )}
+              {live.bookedAt && <DetailRow label="Dipesan" value={formatDateTime(live.bookedAt)} />}
+              {live.status !== "booking" && (
+                <DetailRow label="Kabar terakhir dari kurir" value={live.lastEventAt ? formatDateTime(live.lastEventAt) : "Belum ada"} />
+              )}
+            </DetailList>
+            {live.status === "booking" && (
+              <p role="status" className="text-sm text-danger-700">
+                Pemesanan belum pasti: kurir mungkin sudah dipesan. Tekan Cek ulang pemesanan. {bookingErrorText(live.lastError) ?? ""}
               </p>
-              <ProviderOrderIdRow shipment={shipment} />
-            </li>
-          ))}
-        </ul>
-      )}
-      {checkout.shipments.length > 0 && <TrackingHistory events={checkout.trackingEvents} attempts={checkout.shipments.length} />}
-      {/* Courier and resi: the "Resi" section, with "Tambah resi" / "Ubah resi". */}
-    </Section>
+            )}
+            {orderStatus === "completed" && live.status !== "delivered" && live.status !== "booking" && live.status !== "returned" && (
+              <Note role="status" testId="poll-stopped">
+                Pengecekan otomatis berkala berhenti karena pesanan ditandai selesai oleh staf. Kabar dari webhook kurir tetap dicatat; tekan Cek ulang pemesanan untuk membaca sekarang.
+              </Note>
+            )}
+            {live.awb && checkout.trackingNumber && !sameResi(live.awb, checkout.trackingNumber) && (
+              <p role="status" className="text-sm text-danger-700" data-testid="buyer-timeline-hidden">
+                Pembeli tidak melihat riwayat kurir: resi di pesanan ({checkout.trackingNumber}) berbeda dengan resi pesanan kurir.
+              </p>
+            )}
+            {trackingError && <Note role="status">{trackingError}</Note>}
+            {live.cancelRequestedAt && (
+              <p role="status" className="text-sm text-danger-700">
+                Pembatalan sudah diminta tapi belum pasti. Tekan Cek ulang pemesanan.
+              </p>
+            )}
+          </div>
+        ) : (
+          <>
+            <p className="text-base text-neutral-600">{canBook ? "Kurir belum dipesan." : "Tidak ada pemesanan kurir yang aktif."}</p>
+            {resiBlock}
+          </>
+        )}
+        {cutoff && <Note>{cutoff}</Note>}
+        {canManage && (live !== null || canBook) && (
+          <CourierBooking orderId={orderId} orderNo={orderNo} shipment={live ? { status: live.status, awb: live.awb } : null} variant="section" />
+        )}
+
+        {live && (
+          <TechnicalDetails>
+            <DetailList>
+              <DetailRow label="Referensi" value={live.referenceId} />
+              {live.providerOrderId && (
+                <DetailRow
+                  label="ID pesanan Biteship"
+                  value={<CopyValue value={live.providerOrderId} label={`ID pesanan Biteship percobaan ${live.attempt}`} testId={`provider-order-id-${live.attempt}`} />}
+                />
+              )}
+              {live.providerStatus && <DetailRow label="Status Biteship" value={live.providerStatus} />}
+              {live.routingCode && <DetailRow label="Kode rute" value={live.routingCode} />}
+              {live.lastPolledAt && <DetailRow label="Dicek otomatis terakhir" value={formatDateTime(live.lastPolledAt)} />}
+            </DetailList>
+          </TechnicalDetails>
+        )}
+
+        {ended.length > 0 && (
+          <ul className="flex flex-col gap-2">
+            {ended.map((shipment) => (
+              <li key={shipment.id} className="flex flex-col gap-1">
+                <p className="text-sm text-neutral-600 break-words">
+                  Percobaan {shipment.attempt}: {SHIPMENT_STATUS_LABELS[shipment.status]}
+                  {shipment.awb ? ` · resi ${shipment.awb}` : ""}
+                  {shipment.status === "failed" && bookingErrorText(shipment.lastError) ? ` · ${bookingErrorText(shipment.lastError)}` : ""}
+                  {` · ${formatDateTime(shipment.cancelledAt ?? shipment.failedAt ?? shipment.createdAt)}`}
+                </p>
+                {shipment.providerOrderId && (
+                  <TechnicalDetails>
+                    <DetailList>
+                      <DetailRow
+                        label="ID pesanan Biteship"
+                        value={<CopyValue value={shipment.providerOrderId} label={`ID pesanan Biteship percobaan ${shipment.attempt}`} testId={`provider-order-id-${shipment.attempt}`} />}
+                      />
+                    </DetailList>
+                  </TechnicalDetails>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </SubSection>
+
+      {checkout.shipments.length > 0 && <TrackingHistory events={checkout.trackingEvents} attempts={checkout.shipments.length} liveStatus={live?.status ?? null} />}
+    </SectionCard>
   );
 }
 
-export function ContactSection({ checkout, fallbackAddress }: { checkout: CheckoutOrderDetail; fallbackAddress: string | null }) {
+export function ContactSection({ checkout, fallbackAddress, className }: { checkout: CheckoutOrderDetail; fallbackAddress: string | null; className?: string }) {
   const address = checkout.address;
   return (
-    <Section title="Kontak dan alamat">
-      {checkout.contactEmail && <DetailRow label="Email" value={checkout.contactEmail} />}
-      {checkout.contactPhone && <DetailRow label="WhatsApp" value={checkout.contactPhone} />}
-      <DetailRow label="Masuk saat checkout" value={checkout.placedWithSession ? "Ya" : "Tidak (tamu)"} />
-      <DetailRow label="Setuju promo" value={checkout.promoOptIn ? "Ya" : "Tidak"} />
-      {address ? (
-        <>
-          <DetailRow label="Penerima" value={address.recipientName} />
-          <DetailRow label="No. HP penerima" value={address.phone} />
-          <DetailRow label="Alamat" value={address.addressLine} />
-          <DetailRow label="Kecamatan" value={address.district} />
-          <DetailRow label="Kota" value={address.city} />
-          <DetailRow label="Provinsi" value={`${address.province} ${address.postalCode}`} />
-          {address.notes && <DetailRow label="Catatan untuk kurir" value={address.notes} />}
-        </>
-      ) : (
-        fallbackAddress && <DetailRow label="Alamat pengiriman" value={fallbackAddress} />
-      )}
-    </Section>
+    <SectionCard title="Kontak dan alamat" className={className}>
+      <DetailList>
+        {checkout.contactEmail && <DetailRow label="Email" value={checkout.contactEmail} />}
+        {checkout.contactPhone && <DetailRow label="WhatsApp" value={checkout.contactPhone} />}
+        <DetailRow label="Masuk saat checkout" value={checkout.placedWithSession ? "Ya" : "Tidak (tamu)"} />
+        <DetailRow label="Setuju promo" value={checkout.promoOptIn ? "Ya" : "Tidak"} />
+        {address ? (
+          <>
+            <DetailRow label="Penerima" value={address.recipientName} />
+            <DetailRow label="No. HP penerima" value={address.phone} />
+            <DetailRow label="Alamat" value={address.addressLine} />
+            <DetailRow label="Kecamatan" value={address.district} />
+            <DetailRow label="Kota" value={address.city} />
+            <DetailRow label="Provinsi" value={`${address.province} ${address.postalCode}`} />
+            {address.notes && <DetailRow label="Catatan untuk kurir" value={address.notes} />}
+          </>
+        ) : (
+          fallbackAddress && <DetailRow label="Alamat pengiriman" value={fallbackAddress} />
+        )}
+      </DetailList>
+    </SectionCard>
   );
 }
 
-export function VoucherAndEmailSection({ checkout, discountAmount }: { checkout: CheckoutOrderDetail; discountAmount: number }) {
+export function VoucherAndEmailSection({ checkout, discountAmount, className }: { checkout: CheckoutOrderDetail; discountAmount: number; className?: string }) {
   return (
-    <Section title="Voucher dan email">
-      <DetailRow
-        label="Voucher"
-        value={
-          discountAmount > 0
-            ? `${formatRupiah(discountAmount)}${checkout.voucher ? "" : " (sudah kembali ke pembeli)"}`
-            : "Tidak pakai voucher"
-        }
-      />
-      {checkout.emails.length === 0 ? (
-        <DetailRow label="Email" value="Belum ada" />
-      ) : (
-        checkout.emails.map((email) => (
-          <DetailRow
-            key={email.kind}
-            label={`Email: ${EMAIL_KIND_LABELS[email.kind] ?? email.kind}`}
-            value={emailStatus(email)}
-          />
-        ))
-      )}
-    </Section>
+    <SectionCard title="Voucher dan email" className={className}>
+      <DetailList>
+        <DetailRow
+          label="Voucher"
+          value={
+            discountAmount > 0
+              ? `${formatRupiah(discountAmount)}${checkout.voucher ? "" : " (sudah kembali ke pembeli)"}`
+              : "Tidak pakai voucher"
+          }
+        />
+        {checkout.emails.length === 0 ? (
+          <DetailRow label="Email" value="Belum ada" />
+        ) : (
+          checkout.emails.map((email) => (
+            <DetailRow key={email.kind} label={`Email: ${EMAIL_KIND_LABELS[email.kind] ?? email.kind}`} value={emailStatus(email)} />
+          ))
+        )}
+      </DetailList>
+    </SectionCard>
   );
 }

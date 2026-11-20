@@ -63,7 +63,7 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
 
   // 4. The order detail shows "Siap Kirim" and the snapshotted HPP (Rp 200.000/pcs, from the
   // batch posted above) — this session has finance.view_profit, so cost isn't stripped.
-  await expect(page.getByText("Siap Kirim")).toBeVisible();
+  await expect(page.getByText("Siap Kirim", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("HPP Rp 200.000/pcs")).toBeVisible();
 
   // 5. Finished-goods stock decreased by exactly the ordered qty (5 - 2 = 3).

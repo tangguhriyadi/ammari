@@ -2,26 +2,20 @@ import Link from "next/link";
 import { formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import type { MarketplaceOrderDetail } from "@/lib/orders/queries";
 import { FEE_COMPONENT_LABELS } from "@/lib/marketplace-import/preview-view";
+import { DetailList, DetailRow, SectionCard, SubSection } from "./section-card";
 
 // The "Marketplace" block of an imported (or import-matched) order (docs/plans/marketplace-import.md
 // §11): the raw marketplace status, when an import last confirmed it, and (finance only) the platform
 // fees from the export.
 
-export function MarketplaceSection({ marketplace, canViewProfit, canViewImports }: { marketplace: MarketplaceOrderDetail; canViewProfit: boolean; canViewImports: boolean }) {
+export function MarketplaceSection({ marketplace, canViewProfit, canViewImports, className }: { marketplace: MarketplaceOrderDetail; canViewProfit: boolean; canViewImports: boolean; className?: string }) {
   const fees = canViewProfit ? marketplace.fees : null;
   return (
-    <section aria-labelledby="marketplace-heading" className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4" data-testid="marketplace-section">
-      <h2 id="marketplace-heading" className="text-lg font-semibold text-neutral-900">
-        Marketplace
-      </h2>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-neutral-600">Status di marketplace</span>
-        <span className="text-base text-neutral-900">{marketplace.channelStatus ?? "-"}</span>
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-neutral-600">Terakhir diperbarui dari impor</span>
-        <span className="text-base text-neutral-900">{marketplace.syncedAt ? formatDateTime(marketplace.syncedAt) : "-"}</span>
-      </div>
+    <SectionCard title="Marketplace" testId="marketplace-section" className={className}>
+      <DetailList>
+        <DetailRow label="Status di marketplace" value={marketplace.channelStatus ?? "-"} />
+        <DetailRow label="Terakhir diperbarui dari impor" value={marketplace.syncedAt ? formatDateTime(marketplace.syncedAt) : "-"} />
+      </DetailList>
       {/* The batch page needs orders.import. */}
       {marketplace.importBatchId && canViewImports && (
         <Link href={`/import/${marketplace.importBatchId}`} className="inline-flex min-h-11 items-center self-start text-sm text-neutral-900 underline underline-offset-4">
@@ -29,20 +23,18 @@ export function MarketplaceSection({ marketplace, canViewProfit, canViewImports 
         </Link>
       )}
       {fees && (
-        <div className="flex flex-col gap-1 border-t border-neutral-200 pt-2">
-          <span className="text-sm font-medium text-neutral-900">Biaya platform</span>
+        <SubSection title="Biaya platform">
           {fees.length === 0 ? (
             <span className="text-sm text-neutral-600">Belum ada data biaya dari file impor.</span>
           ) : (
-            fees.map((fee) => (
-              <div key={fee.component} className="flex items-center justify-between gap-3">
-                <span className="text-sm text-neutral-600">{FEE_COMPONENT_LABELS[fee.component]}</span>
-                <span className="text-base tabular-nums text-neutral-900">{formatRupiah(fee.amount)}</span>
-              </div>
-            ))
+            <DetailList>
+              {fees.map((fee) => (
+                <DetailRow key={fee.component} label={FEE_COMPONENT_LABELS[fee.component]} value={<span className="tabular-nums">{formatRupiah(fee.amount)}</span>} />
+              ))}
+            </DetailList>
           )}
-        </div>
+        </SubSection>
       )}
-    </section>
+    </SectionCard>
   );
 }

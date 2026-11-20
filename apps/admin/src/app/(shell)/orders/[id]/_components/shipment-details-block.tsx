@@ -4,9 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, useToast } from "@ammari/ui";
 import { ShipmentDetailsDialog } from "@/components/orders/shipment-details-dialog";
+import { CopyValue } from "@/components/orders/copy-value";
+import { DetailList, DetailRow } from "./section-card";
 import { updateShipmentDetailsAction } from "../../actions";
 
-export interface ShipmentDetailsSectionProps {
+export interface ShipmentDetailsBlockProps {
   orderId: string;
   orderNo: string;
   courier: string | null;
@@ -16,11 +18,14 @@ export interface ShipmentDetailsSectionProps {
   /** The courier booking's waybill (Phase K2): a different resi is warned about and flagged. */
   bookedWaybill?: string | null;
   canManage: boolean;
+  /** Hide the "Kurir" row when it only repeats the quoted service shown just above. */
+  hideCourier?: boolean;
 }
 
 /** Courier and resi of a shipped order, with "Tambah resi" / "Ubah resi" (2026-10-21 sandbox run: a
- * web order had shipped without a resi and its buyer could not track it). */
-export function ShipmentDetailsSection({ orderId, orderNo, courier, trackingNumber, isCheckout, bookedWaybill, canManage }: ShipmentDetailsSectionProps) {
+ * web order had shipped without a resi and its buyer could not track it). Lives inside the
+ * "Pengiriman" card, for web and for manual or marketplace orders alike. */
+export function ShipmentDetailsBlock({ orderId, orderNo, courier, trackingNumber, isCheckout, bookedWaybill, canManage, hideCourier = false }: ShipmentDetailsBlockProps) {
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -28,16 +33,14 @@ export function ShipmentDetailsSection({ orderId, orderNo, courier, trackingNumb
   const [dialogKey, setDialogKey] = useState(0);
 
   return (
-    <section aria-label="Resi" className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-4">
-      <h2 className="text-lg font-semibold text-neutral-900">Resi</h2>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-neutral-600">Kurir</span>
-        <span className="text-base text-neutral-900">{courier ?? "-"}</span>
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-neutral-600">No. resi</span>
-        <span className="text-base text-neutral-900">{trackingNumber ?? "-"}</span>
-      </div>
+    <div className="flex flex-col gap-3">
+      <DetailList>
+        {!hideCourier && <DetailRow label="Kurir" value={courier ?? "-"} />}
+        <DetailRow
+          label="No. resi"
+          value={trackingNumber ? <CopyValue value={trackingNumber} label="nomor resi pesanan" testId="order-tracking-number" /> : "-"}
+        />
+      </DetailList>
       {isCheckout && !trackingNumber && (
         <p role="status" className="text-sm text-danger-700">
           Belum ada nomor resi. Pembeli baru mendapat email &quot;sudah dikirim&quot; setelah nomor resi diisi.
@@ -75,6 +78,6 @@ export function ShipmentDetailsSection({ orderId, orderNo, courier, trackingNumb
           }}
         />
       )}
-    </section>
+    </div>
   );
 }

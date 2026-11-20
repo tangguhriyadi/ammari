@@ -130,7 +130,7 @@ for (const layout of E2E_CHECKOUT_LAYOUTS) {
       await expect(page.locator(viewport.rowTag).filter({ hasText: orderNo("ship") })).toHaveCount(0);
 
       await openOrder(page, orderNo("ship"));
-      const resi = page.getByRole("region", { name: "Resi" });
+      const resi = page.getByRole("region", { name: "Pengiriman" });
       await expect(resi.getByText("JNE Reguler")).toBeVisible();
       await expect(resi.getByText("CGK0123456789")).toBeVisible();
       await expect(resi.getByRole("button", { name: "Ubah resi" })).toBeVisible();
@@ -138,7 +138,7 @@ for (const layout of E2E_CHECKOUT_LAYOUTS) {
 
     test("an order shipped without a resi says so, and staff can add it (the audit row is covered by lifecycle.test.ts)", async ({ page }) => {
       await openOrder(page, orderNo("noresi"));
-      const resi = page.getByRole("region", { name: "Resi" });
+      const resi = page.getByRole("region", { name: "Pengiriman" });
       await expect(resi.getByText("Belum ada nomor resi.", { exact: false })).toBeVisible();
       await resi.getByRole("button", { name: "Tambah resi" }).click();
       const dialog = page.getByRole("dialog", { name: `Tambah resi: ${orderNo("noresi")}` });
