@@ -196,6 +196,9 @@ export async function voidFabricPurchaseAction(input: z.input<typeof voidFabricP
 
 const recordFabricAdjustmentSchema = z.object({
   fabricId: z.string().uuid(),
+  // The colour bucket being corrected; null = "Tanpa warna". Required (never defaulted): which
+  // buckets are allowed is decided under the fabric lock by recordFabricAdjustment.
+  fabricColorId: z.string().uuid("Pilih warna.").nullable(),
   // NOT decimalQuantityString — that parser is unsigned-only (built for a quantity that's
   // always positive, like fabric_yards on a batch), but an adjustment's delta must allow a
   // negative value (damaged/lost yards). Same coerce-number shape stock/actions.ts's own
@@ -203,7 +206,8 @@ const recordFabricAdjustmentSchema = z.object({
   deltaQty: z.coerce
     .number()
     .refine((value) => Number.isFinite(value) && value !== 0, "Jumlah tidak boleh 0.")
-    .refine((value) => Number(value.toFixed(2)) === value, "Maksimal 2 desimal."),
+    .refine((value) => Number(value.toFixed(2)) === value, "Maksimal 2 desimal.")
+    .refine((value) => Math.abs(value) < fabricStockQueries.MAX_ADJUSTMENT_YARDS, "Jumlah terlalu besar."),
   reason: z.enum(STOCK_ADJUSTMENT_REASONS),
   note: z.string().trim().optional(),
 });
@@ -216,7 +220,13 @@ export async function recordFabricAdjustmentAction(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const movement = await fabricStockQueries.recordFabricAdjustment(
-      { fabricId: parsed.data.fabricId, deltaQty: parsed.data.deltaQty, reason: parsed.data.reason, note: parsed.data.note || null },
+      {
+        fabricId: parsed.data.fabricId,
+        fabricColorId: parsed.data.fabricColorId,
+        deltaQty: parsed.data.deltaQty,
+        reason: parsed.data.reason,
+        note: parsed.data.note || null,
+      },
       session.staffUser.id,
     );
     revalidateAdmin(...FABRIC_SECTIONS);

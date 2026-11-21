@@ -138,31 +138,56 @@ export interface FabricColorBalanceRow extends RawMaterialBalance {
  * Colours by name, "Tanpa warna" last. `valueAmount` is cost data — the caller strips it for a
  * session without finance.view_profit, same discipline as listFabricsWithBalance. */
 export async function listFabricColorBalances(fabricId: string, db: Database = defaultDb): Promise<FabricColorBalanceRow[]> {
+  return (await listFabricColorBalancesByFabric([fabricId], db)).get(fabricId) ?? [];
+}
+
+/** listFabricColorBalances for many fabrics at once (the /stock/fabrics page): two queries total,
+ * whatever the number of fabrics, never one per fabric. Every requested id is a key (possibly an
+ * empty list). */
+export async function listFabricColorBalancesByFabric(
+  fabricIds: string[],
+  db: Database = defaultDb,
+): Promise<Map<string, FabricColorBalanceRow[]>> {
+  const result = new Map<string, FabricColorBalanceRow[]>(fabricIds.map((id) => [id, []]));
+  if (fabricIds.length === 0) return result;
+
   const [colors, buckets] = await Promise.all([
     db
-      .select({ id: fabricColors.id, name: fabricColors.name, hex: fabricColors.hex, isActive: fabricColors.isActive })
+      .select({
+        id: fabricColors.id,
+        fabricId: fabricColors.fabricId,
+        name: fabricColors.name,
+        hex: fabricColors.hex,
+        isActive: fabricColors.isActive,
+      })
       .from(fabricColors)
-      .where(eq(fabricColors.fabricId, fabricId))
+      .where(inArray(fabricColors.fabricId, fabricIds))
       .orderBy(fabricColors.name, fabricColors.id),
     db
       .select({
+        fabricId: fabricStockMovements.fabricId,
         fabricColorId: fabricStockMovements.fabricColorId,
         qty: sql<string>`sum(${fabricStockMovements.qty})`,
         valueAmount: sql<string>`sum(${fabricStockMovements.valueAmount})::bigint`,
       })
       .from(fabricStockMovements)
-      .where(eq(fabricStockMovements.fabricId, fabricId))
-      .groupBy(fabricStockMovements.fabricColorId),
+      .where(inArray(fabricStockMovements.fabricId, fabricIds))
+      .groupBy(fabricStockMovements.fabricId, fabricStockMovements.fabricColorId),
   ]);
 
-  const balanceByBucket = new Map<FabricColorBucket, RawMaterialBalance>(
-    buckets.map((bucket) => [bucket.fabricColorId, { qty: Number(bucket.qty), valueAmount: Number(bucket.valueAmount) }]),
+  // Keyed "<fabricId>:<colorId|none>": a colour id is unique on its own, but the Tanpa warna
+  // bucket (NULL) exists once per fabric.
+  const bucketKey = (fabricId: string, fabricColorId: FabricColorBucket) => `${fabricId}:${fabricColorId ?? "none"}`;
+  const balanceByBucket = new Map<string, RawMaterialBalance>(
+    buckets.map((bucket) => [
+      bucketKey(bucket.fabricId, bucket.fabricColorId),
+      { qty: Number(bucket.qty), valueAmount: Number(bucket.valueAmount) },
+    ]),
   );
-  const rows: FabricColorBalanceRow[] = [];
   for (const color of colors) {
-    const balance = balanceByBucket.get(color.id);
+    const balance = balanceByBucket.get(bucketKey(color.fabricId, color.id));
     if (!color.isActive && !balance) continue;
-    rows.push({
+    result.get(color.fabricId)?.push({
       fabricColorId: color.id,
       name: color.name,
       hex: color.hex,
@@ -172,11 +197,25 @@ export async function listFabricColorBalances(fabricId: string, db: Database = d
       valueAmount: balance?.valueAmount ?? 0,
     });
   }
-  const colorless = balanceByBucket.get(null);
-  if (colorless) {
-    rows.push({ fabricColorId: null, name: null, hex: null, isActive: true, hasMovements: true, ...colorless });
+  for (const fabricId of fabricIds) {
+    const colorless = balanceByBucket.get(bucketKey(fabricId, null));
+    if (colorless) {
+      result.get(fabricId)?.push({ fabricColorId: null, name: null, hex: null, isActive: true, hasMovements: true, ...colorless });
+    }
   }
-  return rows;
+  return result;
+}
+
+/** Whether an adjustment may target this bucket (the "Sesuaikan stok" colour picker and
+ * recordFabricAdjustment share this rule, docs/plans/fabric-colour-stock.md S4):
+ *   - an ACTIVE colour: always;
+ *   - an inactive colour: only while its bucket is non-zero (it still holds stock to correct);
+ *   - "Tanpa warna": when the fabric has no active colour at all, or while that bucket is non-zero
+ *     (old stock to count down, or a negative bucket left by a rollback to repair).
+ * A colour from another fabric never reaches here (the caller validates ownership first). */
+export function isAdjustableBucket(bucket: Pick<FabricColorBalanceRow, "fabricColorId" | "isActive" | "qty">, fabricHasActiveColors: boolean): boolean {
+  if (bucket.fabricColorId === null) return !fabricHasActiveColors || bucket.qty !== 0;
+  return bucket.isActive || bucket.qty !== 0;
 }
 
 export interface FabricStockLedgerRow {
@@ -193,20 +232,42 @@ export interface FabricStockLedgerRow {
   note: string | null;
   createdAt: Date;
   createdByName: string | null;
+  /** The movement's bucket; `null` = "Tanpa warna". */
+  fabricColorId: FabricColorBucket;
+  colorName: string | null;
+  colorHex: string | null;
+  /** Meaningless (true) for "Tanpa warna". */
+  colorIsActive: boolean;
+  /** Running balance of whatever the ledger is filtered to: the fabric total when unfiltered,
+   * that one bucket when filtered by colour. */
   runningQty: number;
   runningValueAmount: number;
 }
 
+/** The ledger "Warna" filter as it travels in the URL (`?warna=<colour id>|tanpa`). Anything
+ * else (missing, malformed) means "every colour", never an error: it is only a view filter. */
+export function parseFabricColorFilter(raw: string | undefined): FabricColorBucket | undefined {
+  if (raw === "tanpa") return null;
+  if (raw && UUID_PATTERN.test(raw)) return raw.toLowerCase();
+  return undefined;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `filter.color`: undefined = every bucket (running balance = fabric total), a colour id or
+ * `null` (Tanpa warna) = that bucket only (running balance = that bucket). */
 export async function listFabricStockLedger(
   fabricId: string,
   rawPage: string | undefined,
   rawPerPage: string | undefined,
   db: Database = defaultDb,
+  filter: { color?: FabricColorBucket } = {},
 ): Promise<{ rows: FabricStockLedgerRow[]; pagination: Pagination }> {
+  const where = filter.color === undefined ? eq(fabricStockMovements.fabricId, fabricId) : bucketCondition(fabricId, filter.color);
   const [totalCountRow] = await db
     .select({ totalCount: count() })
     .from(fabricStockMovements)
-    .where(eq(fabricStockMovements.fabricId, fabricId));
+    .where(where);
   const pagination = resolvePagination({ rawPage, rawPerPage, totalCount: totalCountRow?.totalCount ?? 0 });
 
   const windowed = db
@@ -224,6 +285,7 @@ export async function listFabricStockLedger(
       note: fabricStockMovements.note,
       createdAt: fabricStockMovements.createdAt,
       createdByStaffUserId: fabricStockMovements.createdByStaffUserId,
+      fabricColorId: fabricStockMovements.fabricColorId,
       // qty is numeric(10,2), not int4 — SUM(numeric) stays numeric, which (like bigint) comes
       // back from postgres.js as a STRING, not a number; typed `string` here and converted in
       // the final .map() below, same reasoning as every value_amount field in this file.
@@ -237,7 +299,7 @@ export async function listFabricStockLedger(
       totalValue: sql<string>`(sum(${fabricStockMovements.valueAmount}) over ())::bigint`.as("total_value"),
     })
     .from(fabricStockMovements)
-    .where(eq(fabricStockMovements.fabricId, fabricId))
+    .where(where)
     .as("windowed");
 
   const rows = await db
@@ -255,11 +317,16 @@ export async function listFabricStockLedger(
       note: windowed.note,
       createdAt: windowed.createdAt,
       createdByName: staffUsers.name,
+      fabricColorId: windowed.fabricColorId,
+      colorName: fabricColors.name,
+      colorHex: fabricColors.hex,
+      colorIsActive: sql<boolean>`coalesce(${fabricColors.isActive}, true)`,
       runningQty: sql<string>`${windowed.totalQty} - ${windowed.cumQtyFromNewest} + ${windowed.qty}`,
       runningValueAmount: sql<string>`${windowed.totalValue} - ${windowed.cumValueFromNewest} + ${windowed.valueAmount}`,
     })
     .from(windowed)
     .leftJoin(staffUsers, eq(staffUsers.id, windowed.createdByStaffUserId))
+    .leftJoin(fabricColors, eq(fabricColors.id, windowed.fabricColorId))
     .orderBy(desc(windowed.createdAt), desc(windowed.id))
     .limit(pagination.limit)
     .offset(pagination.offset);
@@ -408,30 +475,81 @@ export async function voidFabricPurchase(movementId: string, actorStaffUserId: s
 
 export interface RecordFabricAdjustmentInput {
   fabricId: string;
+  /** The bucket being corrected; `null` = "Tanpa warna". Must pass isAdjustableBucket. */
+  fabricColorId: FabricColorBucket;
   deltaQty: number;
   reason: StockAdjustmentReason;
   note?: string | null;
 }
 
+/** numeric(10,2): at most 2 decimals and |qty| < 10^8. Enforced here too (not only by the action's
+ * zod schema) so a direct caller can neither write a value Postgres silently rounds (-0.004 →
+ * -0.00, passing the negative check on the unrounded number) nor hit a numeric overflow. */
+function assertAdjustmentDelta(deltaQty: number) {
+  if (!Number.isFinite(deltaQty) || deltaQty === 0) throw new FieldError("deltaQty", "Jumlah tidak boleh 0.");
+  if (Math.round(deltaQty * 100) / 100 !== deltaQty) throw new FieldError("deltaQty", "Maksimal 2 desimal.");
+  if (Math.abs(deltaQty) >= MAX_ADJUSTMENT_YARDS) throw new FieldError("deltaQty", "Jumlah terlalu besar.");
+}
+
+/** numeric(10,2)'s bound (exclusive). */
+export const MAX_ADJUSTMENT_YARDS = 100_000_000;
+
+/** A manual stock correction of ONE colour bucket (docs/plans/fabric-colour-stock.md S4, A1):
+ * checked against and valued at that bucket's own balance/moving average (zero-residual rule
+ * included), never the fabric total's. No adjustment may leave its bucket below zero, even when
+ * the fabric total would stay positive (another colour's stock is not this colour's). */
 export async function recordFabricAdjustment(
   input: RecordFabricAdjustmentInput,
   actorStaffUserId: string | null,
   db: Database = defaultDb,
 ) {
+  assertAdjustmentDelta(input.deltaQty);
   return db.transaction(async (tx) => {
     const fabric = await lockFabricForUpdate(tx, input.fabricId);
     if (!fabric) throw new ActionError("Bahan tidak ditemukan.");
 
-    const balance = await getFabricBalance(input.fabricId, tx);
-    const newQty = balance.qty + input.deltaQty;
-    if (newQty < 0) throw new FieldError("deltaQty", "Stok tidak boleh menjadi negatif.");
+    // FOR SHARE on the colour rows (the fabric lock above does not cover them: setFabricColorActive
+    // never takes it): a concurrent (de)activation of one of this fabric's colours waits for this
+    // decision instead of changing which buckets are adjustable underneath it.
+    const colors = await tx
+      .select({ id: fabricColors.id, name: fabricColors.name, isActive: fabricColors.isActive })
+      .from(fabricColors)
+      .where(eq(fabricColors.fabricId, input.fabricId))
+      .for("share");
+    const color = input.fabricColorId === null ? null : colors.find((candidate) => candidate.id === input.fabricColorId);
+    if (color === undefined) throw new FieldError("fabricColorId", "Warna tidak ditemukan untuk bahan ini.");
+    const colorLabel = color?.name ?? "Tanpa warna";
 
-    const valueAmount = valueDeltaForConsumption(balance, input.deltaQty);
+    const balance = await getFabricColorBalance(input.fabricId, input.fabricColorId, tx);
+    const fabricHasActiveColors = colors.some((candidate) => candidate.isActive);
+    const adjustable = isAdjustableBucket(
+      { fabricColorId: input.fabricColorId, isActive: color?.isActive ?? true, qty: balance.qty },
+      fabricHasActiveColors,
+    );
+    if (!adjustable) {
+      throw new FieldError(
+        "fabricColorId",
+        color === null ? `Pilih warna untuk ${fabric.name}.` : `Warna ${colorLabel} sudah nonaktif dan tidak punya stok.`,
+      );
+    }
+
+    // numeric(10,2) arithmetic in floats: round to cents before comparing (0.1 + 0.2 style).
+    const newQty = Math.round((balance.qty + input.deltaQty) * 100) / 100;
+    if (newQty < 0) {
+      throw new FieldError(
+        "deltaQty",
+        `Stok ${colorLabel} tidak boleh menjadi negatif (stok sekarang ${balance.qty.toFixed(2)} yard).`,
+      );
+    }
+
+    // Exactly -balance.qty when the bucket empties, so the zero-residual rule fires on an exact 0.
+    const valueAmount = valueDeltaForConsumption(balance, newQty === 0 ? -balance.qty : input.deltaQty);
 
     const [movement] = await tx
       .insert(fabricStockMovements)
       .values({
         fabricId: input.fabricId,
+        fabricColorId: input.fabricColorId,
         qty: input.deltaQty,
         valueAmount,
         type: "adjustment",
@@ -443,7 +561,13 @@ export async function recordFabricAdjustment(
       .returning();
     if (!movement) throw new Error("failed to insert fabric stock movement");
 
-    await writeAuditLog(tx, { actorStaffUserId, action: "adjust", entityType: "fabric_stock_movement", entityId: movement.id, after: movement });
+    await writeAuditLog(tx, {
+      actorStaffUserId,
+      action: "adjust",
+      entityType: "fabric_stock_movement",
+      entityId: movement.id,
+      after: { ...movement, colorName: colorLabel },
+    });
     return movement;
   });
 }

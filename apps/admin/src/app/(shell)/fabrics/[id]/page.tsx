@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader, Breadcrumb } from "@ammari/ui";
-import { formatRupiah } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import {
   getFabricById,
@@ -9,10 +8,11 @@ import {
   getFabricUsageCount,
   listFabricColors,
 } from "@/lib/products/fabric-queries";
-import { getFabricBalance } from "@/lib/inventory/fabric-stock";
+import { getFabricBalance, listFabricColorBalances } from "@/lib/inventory/fabric-stock";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { FabricForm } from "../_components/fabric-form";
 import { FabricColorsSection } from "../_components/fabric-colors-section";
+import { FabricColorBalances, toFabricColorStock } from "../../stock/_components/fabric-color-stock";
 
 export default async function BahanEditPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission("products.manage");
@@ -28,25 +28,33 @@ export default async function BahanEditPage({ params }: { params: Promise<{ id: 
 
   // Independent reads in parallel; the per-color usage counts are one grouped query
   // (docs/plans/admin-performance.md).
-  const [productCount, [colors, usageCounts], balance] = await Promise.all([
+  const [productCount, [colors, usageCounts], balance, colorBalances] = await Promise.all([
     getFabricUsageCount(id),
     listFabricColors(id).then(async (colors) => [colors, await getFabricColorUsageCounts(colors.map((color) => color.id))] as const),
     canViewStock ? getFabricBalance(id) : Promise.resolve(null),
+    canViewStock ? listFabricColorBalances(id) : Promise.resolve(null),
   ]);
-  const avgCost = balance && canViewProfit && balance.qty > 0 ? Math.round(balance.valueAmount / balance.qty) : null;
 
   return (
     <>
       <Breadcrumb items={[...rootCrumbs("/fabrics"), { label: fabric.name }]} />
       <PageHeader title={fabric.name} />
-      {balance && (
-        <div className="mb-6 flex flex-wrap items-center gap-3">
-          <span className="text-2xl font-semibold tabular-nums text-neutral-900">{balance.qty.toFixed(2)} yard</span>
-          {avgCost !== null && <span className="text-base text-neutral-600 tabular-nums">≈ {formatRupiah(avgCost)}/yard</span>}
-          <Link href={`/stock/fabrics/${id}`} className="text-base font-medium text-brand hover:underline">
-            Lihat riwayat stok →
-          </Link>
-        </div>
+      {balance && colorBalances && (
+        <>
+          <h2 className="mb-3 text-lg font-semibold text-neutral-900">Stok</h2>
+          <FabricColorBalances
+            rows={toFabricColorStock(colorBalances, canViewProfit)}
+            total={{ qty: balance.qty, valueAmount: canViewProfit ? balance.valueAmount : null }}
+            footer={
+              <Link
+                href={`/stock/fabrics/${id}`}
+                className="inline-flex min-h-11 items-center self-start text-base font-medium text-brand hover:underline"
+              >
+                Lihat riwayat stok →
+              </Link>
+            }
+          />
+        </>
       )}
       <FabricForm
         fabricId={fabric.id}

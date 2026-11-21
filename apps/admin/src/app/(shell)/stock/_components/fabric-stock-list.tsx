@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Card, EmptyState, TableContainer, TableHead, Th, Tr, Td, CardList } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
+import { FabricColorChips, type FabricColorStock } from "./fabric-color-stock";
 
 export interface FabricStockListRow {
   id: string;
@@ -11,6 +12,8 @@ export interface FabricStockListRow {
   defectQty: number;
   /** `null` for a session without finance.view_profit — stripped server-side by the page. */
   valueAmount: number | null;
+  /** Per-colour buckets (listFabricColorBalancesByFabric), cost already stripped like valueAmount. */
+  colors: FabricColorStock[];
 }
 
 function averageCostOf(row: FabricStockListRow): number | null {
@@ -30,7 +33,7 @@ export function FabricStockList({ rows }: { rows: FabricStockListRow[] }) {
           return (
             <li key={row.id}>
               <Link href={`/stock/fabrics/${row.id}`}>
-                <Card className="flex flex-col gap-1">
+                <Card className="flex flex-col gap-1" data-testid="fabric-stock-card">
                   <p className="text-base text-neutral-900">{row.name}</p>
                   <p className="text-sm text-neutral-600">
                     {row.supplier ? `${row.supplier} · ` : ""}
@@ -38,6 +41,7 @@ export function FabricStockList({ rows }: { rows: FabricStockListRow[] }) {
                     {averageCost !== null && <> · ≈{formatRupiah(averageCost)}/yard</>}
                     {row.defectQty !== 0 && <> · Cacat {row.defectQty.toFixed(2)} yard</>}
                   </p>
+                  <FabricColorChips rows={row.colors} />
                 </Card>
               </Link>
             </li>
@@ -50,6 +54,7 @@ export function FabricStockList({ rows }: { rows: FabricStockListRow[] }) {
           <Th>Nama</Th>
           <Th>Supplier</Th>
           <Th>Stok</Th>
+          <Th>Per warna</Th>
           <Th>Cacat</Th>
           <Th>Harga rata-rata</Th>
         </TableHead>
@@ -57,14 +62,15 @@ export function FabricStockList({ rows }: { rows: FabricStockListRow[] }) {
           {rows.map((row) => {
             const averageCost = averageCostOf(row);
             return (
-              <Tr key={row.id}>
+              <Tr key={row.id} data-testid="fabric-stock-row">
                 <Td>
                   <Link href={`/stock/fabrics/${row.id}`} className="font-medium text-brand hover:underline">
                     {row.name}
                   </Link>
                 </Td>
                 <Td className="text-neutral-700">{row.supplier ?? "-"}</Td>
-                <Td className="text-neutral-700 tabular-nums">{row.qty.toFixed(2)} yard</Td>
+                <Td className="text-neutral-700 tabular-nums" data-testid="fabric-stock-total">{row.qty.toFixed(2)} yard</Td>
+                <Td>{row.colors.length > 0 ? <FabricColorChips rows={row.colors} /> : "-"}</Td>
                 <Td className="text-neutral-700 tabular-nums" data-testid="fabric-defect-qty">{row.defectQty !== 0 ? `${row.defectQty.toFixed(2)} yard` : "-"}</Td>
                 <Td className="text-neutral-700 tabular-nums">{averageCost !== null ? `${formatRupiah(averageCost)}/yard` : "-"}</Td>
               </Tr>

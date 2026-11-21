@@ -50,7 +50,7 @@ describe("getPurchaseById", () => {
     await withRollback(async (tx) => {
       const fabric = await insertFabric(tx);
       await recordFabricPurchase({ fabricId: fabric.id, qty: 10, totalAmountPaid: 100_000, purchasedAt: "2026-01-01" }, null, tx);
-      const adjustment = await recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -1, reason: "damaged" }, null, tx);
+      const adjustment = await recordFabricAdjustment({ fabricId: fabric.id, fabricColorId: null, deltaQty: -1, reason: "damaged" }, null, tx);
 
       expect(await getPurchaseById(adjustment.id, tx)).toBeNull();
     });

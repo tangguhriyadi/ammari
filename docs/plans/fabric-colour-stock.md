@@ -11,7 +11,14 @@ negative backstop are per bucket; defect colour is joined from the purchase line
 (`getFabricDefectQtyByColor`, `listDefectStockMaterials().colors`); audit entries carry
 `lines[]`/`line` with `fabricColorId` + `colorName`. Until S4/S5, adjustments and production still
 write "Tanpa warna", so the e2e proves the same-colour undo block with a same-colour receipt
-reversal; unit tests cover production/adjustment rows.
+reversal; unit tests cover production/adjustment rows. S3 committed. S4 (stock pages + adjustment
+per colour) implemented, awaiting commit: `recordFabricAdjustment` takes `fabricColorId` and checks
+and values the bucket (`isAdjustableBucket`: active colour always; inactive colour or Tanpa warna
+only while that bucket is non-zero, Tanpa warna also when the fabric has no active colour; no
+bucket may go below zero); `listFabricColorBalancesByFabric` feeds the `/stock/fabrics` chips;
+`listFabricStockLedger` has colour per row and a `?warna=<id>|tanpa` filter (running balance of
+the filtered bucket); the cards/total on `/fabrics/[id]` and `/stock/fabrics/[id]` replace the old
+single headline. The e2e drives the same-colour adjustment blocking undo through the UI.
 
 The owner buys fabric per colour, with a different yardage (and sometimes a different price per
 yard) for each colour. Example: PO-202611-001 at JMS Textile, Marbella Anti UV in 6 colours, 838

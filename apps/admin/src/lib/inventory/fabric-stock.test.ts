@@ -52,8 +52,8 @@ describe("fabric stock — numeric (yards) qty, not integer", () => {
     await withRollback(async (tx) => {
       const fabric = await insertFabric(tx);
       await recordFabricPurchase({ fabricId: fabric.id, qty: 3, totalAmountPaid: 10, purchasedAt: "2026-01-01" }, null, tx);
-      await recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -1.5, reason: "other" }, null, tx);
-      await recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -1.5, reason: "other" }, null, tx);
+      await recordFabricAdjustment({ fabricId: fabric.id, fabricColorId: null, deltaQty: -1.5, reason: "other" }, null, tx);
+      await recordFabricAdjustment({ fabricId: fabric.id, fabricColorId: null, deltaQty: -1.5, reason: "other" }, null, tx);
       const balance = await getFabricBalance(fabric.id, tx);
       expect(balance.qty).toBe(0);
       expect(balance.valueAmount).toBe(0);
@@ -65,7 +65,7 @@ describe("fabric stock — numeric (yards) qty, not integer", () => {
       const fabric = await insertFabric(tx);
       await recordFabricPurchase({ fabricId: fabric.id, qty: 5, totalAmountPaid: 100_000, purchasedAt: "2026-01-01" }, null, tx);
       await expect(
-        recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -10, reason: "damaged" }, null, tx),
+        recordFabricAdjustment({ fabricId: fabric.id, fabricColorId: null, deltaQty: -10, reason: "damaged" }, null, tx),
       ).rejects.toThrow(/negatif/);
     });
   });
@@ -97,7 +97,7 @@ describe("voidFabricPurchase (correction #2)", () => {
         staff.id,
         tx,
       );
-      await recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -5, reason: "other" }, staff.id, tx);
+      await recordFabricAdjustment({ fabricId: fabric.id, fabricColorId: null, deltaQty: -5, reason: "other" }, staff.id, tx);
       await expect(voidFabricPurchase(purchase.id, staff.id, tx)).rejects.toThrow(/Sesuaikan stok/);
     });
   });
@@ -110,7 +110,7 @@ describe("voidFabricPurchase (correction #2)", () => {
       const fabric = await insertFabric(tx);
       const staff = await insertStaffUser(tx);
       await recordFabricPurchase({ fabricId: fabric.id, qty: 20, totalAmountPaid: 1_000_000, purchasedAt: "2026-01-01" }, staff.id, tx);
-      const adjustment = await recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -1, reason: "damaged" }, staff.id, tx);
+      const adjustment = await recordFabricAdjustment({ fabricId: fabric.id, fabricColorId: null, deltaQty: -1, reason: "damaged" }, staff.id, tx);
 
       await expect(voidFabricPurchase(adjustment.id, staff.id, tx)).rejects.toThrow(/Hanya transaksi pembelian/);
     });
@@ -125,7 +125,7 @@ describe("fabric stock ledger", () => {
     const fabric = await insertFabric(testDb);
     try {
       await recordFabricPurchase({ fabricId: fabric.id, qty: 10, totalAmountPaid: 500_000, purchasedAt: "2026-01-01" }, null, testDb);
-      await recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -2.5, reason: "damaged" }, null, testDb);
+      await recordFabricAdjustment({ fabricId: fabric.id, fabricColorId: null, deltaQty: -2.5, reason: "damaged" }, null, testDb);
 
       const { rows } = await listFabricStockLedger(fabric.id, undefined, undefined, testDb);
       expect(rows).toHaveLength(2);
@@ -210,7 +210,7 @@ describe("fabric stock per colour bucket (migration 0046, docs/plans/fabric-colo
     await withRollback(async (tx) => {
       const fabric = await insertFabric(tx);
       await recordFabricPurchase({ fabricId: fabric.id, qty: 12.25, totalAmountPaid: 245_000, purchasedAt: "2026-10-01" }, null, tx);
-      await recordFabricAdjustment({ fabricId: fabric.id, deltaQty: -2.25, reason: "damaged" }, null, tx);
+      await recordFabricAdjustment({ fabricId: fabric.id, fabricColorId: null, deltaQty: -2.25, reason: "damaged" }, null, tx);
       const totalBefore = await getFabricBalance(fabric.id, tx);
 
       // Adding colours to the master changes nothing about existing stock.

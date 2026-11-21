@@ -68,6 +68,6 @@ describe("fabric stock actions require inventory.manage (not products.manage)", 
 
   test("recordFabricAdjustmentAction rejects a session without inventory.manage", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions([]));
-    await expect(recordFabricAdjustmentAction({ fabricId: NIL_ID, deltaQty: -1.5, reason: "damaged" })).rejects.toThrow();
+    await expect(recordFabricAdjustmentAction({ fabricId: NIL_ID, fabricColorId: null, deltaQty: -1.5, reason: "damaged" })).rejects.toThrow();
   });
 });

@@ -3,6 +3,7 @@ import { Card, EmptyState, Pagination, TableContainer, TableHead, Th, Tr, Td, Ca
 import { formatDateTime, formatRupiah, type Pagination as PaginationData } from "@ammari/ui/lib";
 import type { StockAdjustmentReason } from "@ammari/db/schema";
 import type { FabricStockLedgerRow } from "@/lib/inventory/fabric-stock";
+import { FabricColorStockLabel } from "./fabric-color-stock";
 
 const TYPE_LABELS: Record<string, string> = {
   purchase: "Pembelian",
@@ -17,6 +18,10 @@ const REASON_LABELS: Record<StockAdjustmentReason, string> = {
   lost: "Hilang",
   other: "Lainnya",
 };
+
+function colorLabel(row: FabricStockLedgerRow) {
+  return <FabricColorStockLabel row={{ name: row.colorName, hex: row.colorHex, isActive: row.colorIsActive }} testId="fabric-ledger-color" />;
+}
 
 function typeLabel(row: FabricStockLedgerRow) {
   // A receipt reversal's purchase_void row (ref_type 'goods_receipt') links too: /purchases/<id>
@@ -38,15 +43,23 @@ export function FabricLedger({
   basePath,
   searchParams = {},
   canViewProfit,
+  filtered = false,
 }: {
   rows: FabricStockLedgerRow[];
   pagination: PaginationData;
   basePath: string;
   searchParams?: Record<string, string | undefined>;
   canViewProfit: boolean;
+  /** The ledger is filtered to one colour: the running balance is that colour's. */
+  filtered?: boolean;
 }) {
   if (rows.length === 0) {
-    return <EmptyState title="Belum ada pergerakan" description="Belum ada pergerakan stok untuk bahan ini." />;
+    return (
+      <EmptyState
+        title="Belum ada pergerakan"
+        description={filtered ? "Belum ada pergerakan stok untuk warna ini." : "Belum ada pergerakan stok untuk bahan ini."}
+      />
+    );
   }
 
   return (
@@ -54,8 +67,9 @@ export function FabricLedger({
       <CardList>
         {rows.map((row) => (
           <li key={row.id}>
-            <Card className="flex items-center justify-between gap-3">
-              <div>
+            <Card className="flex items-center justify-between gap-3" data-testid="fabric-ledger-card">
+              <div className="flex flex-col gap-0.5">
+                {colorLabel(row)}
                 <p className="text-base text-neutral-900">
                   {typeLabel(row)}
                   {row.reason ? ` · ${REASON_LABELS[row.reason]}` : ""}
@@ -84,6 +98,7 @@ export function FabricLedger({
       <TableContainer>
         <TableHead>
           <Th>Tanggal</Th>
+          <Th>Warna</Th>
           <Th>Jenis</Th>
           <Th>Catatan</Th>
           <Th>Qty</Th>
@@ -92,11 +107,12 @@ export function FabricLedger({
         </TableHead>
         <tbody>
           {rows.map((row) => (
-            <Tr key={row.id}>
+            <Tr key={row.id} data-testid="fabric-ledger-row">
               <Td className="text-neutral-700">
                 {formatDateTime(row.createdAt)}
                 {row.createdByName ? ` · ${row.createdByName}` : ""}
               </Td>
+              <Td>{colorLabel(row)}</Td>
               <Td>
                 {typeLabel(row)}
                 {row.reason ? ` · ${REASON_LABELS[row.reason]}` : ""}

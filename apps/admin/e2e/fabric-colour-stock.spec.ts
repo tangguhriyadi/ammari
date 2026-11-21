@@ -1,12 +1,12 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import sharp from "sharp";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
 import { createPurchase, createSupplier } from "./helpers/purchase";
 import { E2E_FABRIC_COLOUR_EMAIL } from "./global-setup";
 
-// docs/plans/fabric-colour-stock.md sessions S2 (purchase lines per colour) and S3 (receiving, undo,
-// defects and exchange per colour). Every flow runs at 390px
+// docs/plans/fabric-colour-stock.md sessions S2 (purchase lines per colour), S3 (receiving, undo,
+// defects and exchange per colour) and S4 (stock pages and adjustments per colour). Every flow runs at 390px
 // AND 1280px (CLAUDE.md's rule): the purchase detail's Barang list renders two independent layouts
 // (CardList for phones, TableContainer for desktop), so each pass asserts its own layout's rows
 // and that the other layout's rows are hidden.
@@ -243,13 +243,13 @@ async function createColourPurchase(page: Page, layout: Layout, prefix: string, 
   const supplierName = `E2E Pemasok ${prefix} ${marker}`;
   const fabricName = `E2E Marbella ${prefix} ${marker}`;
   await createSupplier(page, supplierName);
-  await createFabric(page, fabricName, [...COLOURS]);
+  const fabricUrl = await createFabric(page, fabricName, [...COLOURS]);
   await createPurchase(
     page,
     supplierName,
     lines.map((line) => ({ type: "Kain" as const, itemName: fabricName, color: line.color, qty: line.qty, amount: line.amount })),
   );
-  return { fabricName, purchaseUrl: page.url() };
+  return { fabricName, fabricUrl, fabricId: new URL(fabricUrl).pathname.split("/").at(-1)!, purchaseUrl: page.url() };
 }
 
 /** Receive a 3-colour PO with a defect on Mocca and Tosca only partly; receive the rest of Tosca;
@@ -309,9 +309,18 @@ async function runReceiveColours(page: Page, layout: Layout): Promise<void> {
   await expect(page.getByTestId("receipt-row").first().getByTestId("receipt-item-color")).toHaveText(["Mocca"]);
 }
 
-/** Undo is blocked only by a later movement of the SAME colour. Before S4/S5 the UI has no way to
- * consume a specific colour, so the later movement here is another receipt's reversal (a
- * 'purchase_void', which blocks like a consumption); the unit tests cover production/adjustment. */
+/** "Batalkan penerimaan" on one receipt-history row, confirmed; returns the (possibly still open)
+ * dialog so a refusal can be asserted. */
+async function undoReceipt(page: Page, row: Locator): Promise<Locator> {
+  await row.getByRole("button", { name: /Batalkan penerimaan/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "Batalkan penerimaan" }).click();
+  return dialog;
+}
+
+/** Undo is blocked only by a later movement of the SAME colour; here the later movement is another
+ * receipt's reversal (a 'purchase_void', which blocks like a consumption). The same rule for a
+ * colour adjustment is driven through the UI in runStockPerColour (S4). */
 async function runUndoPerColour(page: Page, layout: Layout): Promise<void> {
   const { fabricName } = await createColourPurchase(page, layout, "Batal", [
     { color: "Sage", qty: "10", amount: "195.000" },
@@ -323,12 +332,7 @@ async function runUndoPerColour(page: Page, layout: Layout): Promise<void> {
   const rows = page.getByTestId("receipt-row");
   await expect(rows).toHaveCount(3);
 
-  const undo = async (row: ReturnType<Page["getByTestId"]>) => {
-    await row.getByRole("button", { name: /Batalkan penerimaan/ }).click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", { name: "Batalkan penerimaan" }).click();
-    return dialog;
-  };
+  const undo = (row: Locator) => undoReceipt(page, row);
 
   // R3 (newest, Sage): nothing after it.
   await undo(rows.first());
@@ -344,6 +348,134 @@ async function runUndoPerColour(page: Page, layout: Layout): Promise<void> {
   await expect(rows).toHaveCount(5);
   await expectColourLine(page, layout, "Sage", { diterima: "5.00 yard", cacat: "0.00 yard", sisa: "5.00 yard" });
 }
+
+// ---------- S4: stock pages and adjustments per colour ----------
+
+const STOCK_LIST_ROW = { [MOBILE.label]: '[data-testid="fabric-stock-card"]', [DESKTOP.label]: '[data-testid="fabric-stock-row"]' };
+const LEDGER_ROW = { [MOBILE.label]: '[data-testid="fabric-ledger-card"]', [DESKTOP.label]: '[data-testid="fabric-ledger-row"]' };
+const otherLayout = (layout: Layout) => (layout === MOBILE ? DESKTOP : MOBILE);
+
+/** The per-colour cards (/stock/fabrics/[id], /fabrics/[id]): exactly `expected` [label, qty] in
+ * order, plus the total. One responsive grid, so no hidden twin to check. */
+async function expectColourCards(page: Page, expected: [string, string][], total: string): Promise<void> {
+  const cards = page.getByTestId("fabric-color-balance");
+  await expect(cards).toHaveCount(expected.length);
+  for (const [index, [label, qty]] of expected.entries()) {
+    await expect(cards.nth(index)).toContainText(label);
+    await expect(cards.nth(index).getByTestId("fabric-color-balance-qty")).toHaveText(qty);
+  }
+  await expect(page.getByTestId("fabric-total-balance-qty")).toHaveText(total);
+}
+
+/** Ledger rows in this layout (the other layout's twin hidden): each row's colour, newest first. */
+async function expectLedgerColours(page: Page, layout: Layout, colours: string[]): Promise<void> {
+  const rows = page.locator(LEDGER_ROW[layout.label]!);
+  await expect(rows).toHaveCount(colours.length);
+  await expect(rows.getByTestId("fabric-ledger-color")).toHaveText(colours);
+  await expect(page.locator(LEDGER_ROW[otherLayout(layout).label]!).first()).toBeHidden();
+}
+
+/** Receive Sage 10 (R1) then Mocca 8 (R2); the stock pages show each colour; a Sage adjustment
+ * (dialog, colour required, bucket can't go negative) blocks undoing R1 but not R2. */
+async function runStockPerColour(page: Page, layout: Layout): Promise<void> {
+  const { fabricName, fabricUrl, fabricId, purchaseUrl } = await createColourPurchase(page, layout, "Stok", [
+    { color: "Sage", qty: "10", amount: "195.000" },
+    { color: "Mocca", qty: "8", amount: "240.000" },
+  ]);
+  await receiveColours(page, fabricName, { Sage: { good: "10" }, Mocca: { good: "0" } }); // R1: Sage 10
+  await receiveColours(page, fabricName, { Mocca: { good: "8" } }); // R2: Mocca 8
+
+  // /stock/fabrics/[id]: one card per active colour (Tosca has nothing yet), no Tanpa warna (no
+  // colourless history), the total; value and average per colour (owner sees finance).
+  const stockUrl = `/stock/fabrics/${fabricId}`;
+  await page.goto(stockUrl);
+  await expectColourCards(page, [["Mocca", "8.00 yard"], ["Sage", "10.00 yard"], ["Tosca", "0.00 yard"]], "18.00 yard");
+  await expect(page.getByTestId("fabric-color-balance").filter({ hasText: "Sage" }).getByTestId("fabric-color-balance-value")).toHaveText(
+    "Nilai Rp 195.000 · ≈ Rp 19.500/yard",
+  );
+  await expect(page.getByTestId("fabric-color-balance").filter({ hasText: "Mocca" }).getByTestId("fabric-color-balance-value")).toHaveText(
+    "Nilai Rp 240.000 · ≈ Rp 30.000/yard",
+  );
+  await expectLedgerColours(page, layout, ["Mocca", "Sage"]);
+
+  // Ledger filter by colour (a link, so it survives a reload).
+  const filter = page.getByRole("navigation", { name: "Filter warna" });
+  await filter.getByRole("link", { name: "Sage" }).click();
+  await expect(page).toHaveURL(/\?warna=[0-9a-f-]+$/);
+  await expect(filter.getByRole("link", { name: "Sage" })).toHaveAttribute("aria-current", "page");
+  await expectLedgerColours(page, layout, ["Sage"]);
+
+  // "Sesuaikan stok": colour is required, and the chosen colour can't go below zero even though the
+  // fabric total (18) could absorb it.
+  await page.getByRole("button", { name: "Sesuaikan stok" }).click();
+  const dialog = page.getByRole("dialog", { name: "Sesuaikan stok" });
+  const colourSelect = dialog.getByRole("combobox", { name: "Warna", exact: true });
+  await expect(colourSelect.locator("option:checked")).toHaveText("Pilih warna");
+  await expect(colourSelect.locator("option:not([disabled])")).toHaveText([
+    "Mocca (stok 8.00 yard)",
+    "Sage (stok 10.00 yard)",
+    "Tosca (stok 0.00 yard)",
+  ]);
+  await dialog.getByRole("spinbutton", { name: "Jumlah yard (+/-)" }).fill("-1");
+  await dialog.getByRole("button", { name: "Simpan" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Pilih warna.");
+  await colourSelect.selectOption({ label: "Sage (stok 10.00 yard)" });
+  await dialog.getByRole("spinbutton", { name: "Jumlah yard (+/-)" }).fill("-11");
+  await dialog.getByRole("button", { name: "Simpan" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Stok Sage tidak boleh menjadi negatif (stok sekarang 10.00 yard).");
+  await dialog.getByRole("spinbutton", { name: "Jumlah yard (+/-)" }).fill("-1");
+  await dialog.getByRole("combobox", { name: "Alasan" }).selectOption({ label: "Rusak/cacat" });
+  await dialog.getByRole("button", { name: "Simpan" }).click();
+  await expect(dialog).toBeHidden({ timeout: 15_000 });
+  await expectColourCards(page, [["Mocca", "8.00 yard"], ["Sage", "9.00 yard"], ["Tosca", "0.00 yard"]], "17.00 yard");
+  // Still filtered to Sage: the adjustment on top, its running balance is Sage's own.
+  await expectLedgerColours(page, layout, ["Sage", "Sage"]);
+  const newest = page.locator(LEDGER_ROW[layout.label]!).first();
+  await expect(newest).toContainText("Penyesuaian · Rusak/cacat");
+  await expect(newest).toContainText("9.00 yard");
+  await filter.getByRole("link", { name: "Semua warna" }).click();
+  await expect(page).toHaveURL(new RegExp(`${stockUrl}$`));
+  await expectLedgerColours(page, layout, ["Sage", "Mocca", "Sage"]);
+
+  // /stock/fabrics: per-colour chips in this layout's row.
+  await page.goto(`/stock/fabrics?q=${encodeURIComponent(fabricName)}`);
+  const listRow = page.locator(STOCK_LIST_ROW[layout.label]!).filter({ hasText: fabricName });
+  await expect(listRow.getByTestId("fabric-color-chip-label")).toHaveText(["Mocca", "Sage", "Tosca"]);
+  await expect(listRow.getByTestId("fabric-color-chip-qty")).toHaveText(["8.00 yard", "9.00 yard", "0.00 yard"]);
+  await expect(page.locator(STOCK_LIST_ROW[otherLayout(layout).label]!).filter({ hasText: fabricName })).toBeHidden();
+
+  // Undo: R2 (Mocca) is allowed, the Sage adjustment is another colour; R1 (Sage) is refused.
+  await page.goto(purchaseUrl);
+  const rows = page.getByTestId("receipt-row");
+  await expect(rows).toHaveCount(2);
+  await undoReceipt(page, rows.filter({ has: page.getByTestId("receipt-item-color").getByText("Mocca", { exact: true }) }));
+  await expect(rows).toHaveCount(3, { timeout: 15_000 });
+  await expectColourLine(page, layout, "Mocca", { diterima: "0.00 yard", cacat: "0.00 yard", sisa: "8.00 yard" });
+  const refused = await undoReceipt(page, rows.last());
+  await expect(refused).toContainText("tidak bisa dibatalkan karena bahannya sudah dipakai atau disesuaikan sesudahnya");
+  await refused.getByRole("button", { name: "Batal", exact: true }).click();
+  await expectColourLine(page, layout, "Sage", { diterima: "10.00 yard", cacat: "0.00 yard", sisa: "0.00 yard" });
+
+  // /fabrics/[id]: the same per-colour stock; a deactivated colour with history stays, marked.
+  await page.goto(fabricUrl);
+  await page.locator("li").filter({ has: page.locator('input[value="Mocca"]') }).getByRole("switch", { name: "Aktif" }).click();
+  await expectColourCards(page, [["Mocca", "0.00 yard"], ["Sage", "9.00 yard"], ["Tosca", "0.00 yard"]], "9.00 yard");
+  await expect(page.getByTestId("fabric-color-balance").first()).toContainText("(nonaktif)");
+  // Tosca (no history) deactivated: gone from the stock cards.
+  await page.locator("li").filter({ has: page.locator('input[value="Tosca"]') }).getByRole("switch", { name: "Aktif" }).click();
+  await expectColourCards(page, [["Mocca", "0.00 yard"], ["Sage", "9.00 yard"]], "9.00 yard");
+}
+
+test.describe("Stok kain per warna", () => {
+  for (const layout of [MOBILE, DESKTOP]) {
+    test(`stock pages per colour, adjustment per colour, and its effect on undo, at ${layout.label}`, async ({ page }) => {
+      test.setTimeout(240_000);
+      await page.setViewportSize({ width: layout.width, height: layout.height });
+      await loginAs(page, E2E_FABRIC_COLOUR_EMAIL);
+      await runStockPerColour(page, layout);
+    });
+  }
+});
 
 test.describe("Penerimaan kain per warna", () => {
   for (const layout of [MOBILE, DESKTOP]) {
