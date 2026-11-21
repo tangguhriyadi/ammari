@@ -441,6 +441,9 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
         .insert(fabricStockMovements)
         .values({
           fabricId: row.fabricId,
+          // The exact negation lands in the SAME colour bucket as the original (migration 0046):
+          // a void into "Tanpa warna" would leave the colour +qty and Tanpa warna −qty.
+          fabricColorId: row.fabricColorId,
           qty: -row.qty,
           valueAmount: -row.valueAmount,
           type: "purchase_void",

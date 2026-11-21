@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
-import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
-import { insertAccessory, insertStaffUser } from "@ammari/db/test-fixtures";
+import { withRollback, withTriggerDisabled, type TestDatabase } from "@ammari/db/test-utils";
+import { insertAccessory, insertFabricColor, insertStaffUser } from "@ammari/db/test-fixtures";
 import { accessories, accessoryMovements, auditLog, fabrics, fabricStockMovements, purchaseItems, purchases, suppliers } from "@ammari/db/schema";
 import { ActionError, FieldError } from "@/lib/errors";
 import { getAccessoryBalance, recordAccessoryAdjustment, voidAccessoryPurchase } from "@/lib/inventory/accessories";
@@ -351,6 +351,29 @@ describe("reverseGoodsReceipt", () => {
       const { reversal } = await reverseGoodsReceipt(receipt.id, staff.id, tx);
       await expect(reverseGoodsReceipt(receipt.id, staff.id, tx)).rejects.toThrow("sudah dibatalkan");
       await expect(reverseGoodsReceipt(reversal.id, staff.id, tx)).rejects.toBeInstanceOf(ActionError);
+    });
+  });
+
+  test("a reversal's purchase_void lands in the SAME colour bucket as the receipt row (migration 0046)", async () => {
+    await withRollback(async (tx) => {
+      const { staff, fabric, purchase, fabricLine } = await twoLinePurchase(tx);
+      const sage = await insertFabricColor(tx, fabric.id, { name: "Sage" });
+      const { receipt } = await receive(tx, purchase.id, staff.id, [{ purchaseItemId: fabricLine.id, qtyAccepted: 4 }]);
+      // Stand-in for a receipt row a later, colour-aware release wrote (S3): this release must
+      // still reverse it into the right bucket, so a rollback onto it can't skew the buckets.
+      await withTriggerDisabled(tx, "fabric_stock_movements", "prevent_fabric_stock_movement_mutation", () =>
+        tx
+          .update(fabricStockMovements)
+          .set({ fabricColorId: sage.id })
+          .where(and(eq(fabricStockMovements.fabricId, fabric.id), eq(fabricStockMovements.type, "purchase"))),
+      );
+
+      await reverseGoodsReceipt(receipt.id, staff.id, tx);
+      const [voidRow] = await tx
+        .select()
+        .from(fabricStockMovements)
+        .where(and(eq(fabricStockMovements.fabricId, fabric.id), eq(fabricStockMovements.type, "purchase_void")));
+      expect(voidRow?.fabricColorId).toBe(sage.id);
     });
   });
 

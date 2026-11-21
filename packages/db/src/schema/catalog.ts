@@ -712,6 +712,51 @@ export const productionBatchCosts = pgTable(
   ],
 );
 
+// How many yards a batch takes from each colour bucket of its fabric — migration 0046,
+// docs/plans/fabric-colour-stock.md D6/A4. One row per SOURCE bucket: a colour of the batch's
+// fabric, or NULL for "Tanpa warna" (stock from before colours were tracked). Draft-editable
+// (replaced as a set, like production_batch_items, so no updated_at); posting writes one
+// fabric_stock_movements 'production' row per usage row and production_batches.fabric_yards stays
+// the sum of these rows. Batches posted before 0046 have no rows here — their single colourless
+// consumption stays as it was. Frozen once the batch is posted by
+// prevent_posted_batch_fabric_usage_mutation (hand-authored in 0046, a copy of 0007's
+// prevent_posted_batch_items_mutation).
+export const productionBatchFabricUsages = pgTable(
+  "production_batch_fabric_usages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // No single-column FKs: superseded by the two composite FKs below, which together guarantee
+    // the source colour belongs to the batch's own fabric (same technique production_batch_items
+    // uses for its SKU).
+    productionBatchId: uuid("production_batch_id").notNull(),
+    fabricId: uuid("fabric_id").notNull(),
+    fabricColorId: uuid("fabric_color_id"),
+    yards: numeric("yards", { precision: 10, scale: 2, mode: "number" }).notNull(),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    // One row per source bucket per batch, "Tanpa warna" included (NULLS NOT DISTINCT, PG15+).
+    // Its index leads with production_batch_id, so it also backs the batch FK's cascade.
+    unique("production_batch_fabric_usages_batch_color_key").on(table.productionBatchId, table.fabricColorId).nullsNotDistinct(),
+    index("production_batch_fabric_usages_fabric_color_id_idx").on(table.fabricColorId),
+    check("production_batch_fabric_usages_yards_check", sql`${table.yards} > 0`),
+    foreignKey({
+      columns: [table.productionBatchId, table.fabricId],
+      foreignColumns: [productionBatches.id, productionBatches.fabricId],
+      name: "production_batch_fabric_usages_batch_fabric_fk",
+    })
+      .onDelete("cascade")
+      .onUpdate("restrict"),
+    foreignKey({
+      columns: [table.fabricColorId, table.fabricId],
+      foreignColumns: [fabricColors.id, fabricColors.fabricId],
+      name: "production_batch_fabric_usages_fabric_color_fabric_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+  ],
+);
+
 // The "stock never goes negative" invariant (CLAUDE.md's atomicity rule) is enforced only by
 // convention, not by a CHECK on this table — the running balance is a cross-row SUM, which
 // Postgres can't express as a row-level constraint. Every writer that can DECREASE a SKU's
@@ -1042,10 +1087,29 @@ export const fabricStockMovements = pgTable(
     note: text("note"),
     // Migration 0024 — see accessory_movements.supplierId.
     supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }),
+    // Migration 0046 (docs/plans/fabric-colour-stock.md D1/D2). The colour bucket this movement
+    // belongs to; NULL = "Tanpa warna" (every row from before 0046 and every row the previous
+    // release writes). Stock AND the moving average are per (fabric_id, fabric_color_id) bucket
+    // since 0046 — lib/inventory/fabric-stock.ts — while SUM over fabric_id alone stays the
+    // fabric's total. The lock is still the fabrics row (D3). Immutable like every other column:
+    // prevent_fabric_stock_movement_mutation compares the whole row as jsonb. No single-column FK:
+    // superseded by fabric_stock_movements_fabric_color_fabric_fk below.
+    fabricColorId: uuid("fabric_color_id"),
     ...createdAtOnly(),
   },
   (table) => [
     index("fabric_stock_movements_fabric_id_created_at_idx").on(table.fabricId, table.createdAt),
+    // The per-bucket balance and the per-bucket "later movement" check (migration 0046).
+    index("fabric_stock_movements_fabric_id_color_created_at_idx").on(table.fabricId, table.fabricColorId, table.createdAt),
+    // Leftmost index for the composite RESTRICT FK's check on fabric_colors deletes.
+    index("fabric_stock_movements_fabric_color_id_idx").on(table.fabricColorId),
+    foreignKey({
+      columns: [table.fabricColorId, table.fabricId],
+      foreignColumns: [fabricColors.id, fabricColors.fabricId],
+      name: "fabric_stock_movements_fabric_color_fabric_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
     index("fabric_stock_movements_ref_idx").on(table.refType, table.refId),
     index("fabric_stock_movements_supplier_id_idx").on(table.supplierId),
     // See accessory_movements_goods_receipt_ref_unique_idx.
@@ -1234,6 +1298,13 @@ export const purchaseItems = pgTable(
     itemType: text("item_type").$type<PurchaseItemType>().notNull(),
     fabricId: uuid("fabric_id").references(() => fabrics.id, { onDelete: "restrict" }),
     accessoryId: uuid("accessory_id").references(() => accessories.id, { onDelete: "restrict" }),
+    // Migration 0046 (docs/plans/fabric-colour-stock.md D4). The fabric colour this line buys —
+    // one line per colour. NULL = "Tanpa warna": every line from before 0046, every line the
+    // previous release writes, and lines for a fabric that has no colours. No single-column FK:
+    // superseded by purchase_items_fabric_color_fabric_fk below, which also guarantees the colour
+    // belongs to this line's own fabric. Frozen once received (prevent_received_purchase_item_change
+    // names it in its WHEN list since 0046).
+    fabricColorId: uuid("fabric_color_id"),
     // Yards (2 decimals, matching fabric_stock_movements.qty) or whole pcs (CHECK below).
     qtyOrdered: numeric("qty_ordered", { precision: 10, scale: 2, mode: "number" }).notNull(),
     totalAmount: bigint("total_amount", { mode: "number" }).notNull(),
@@ -1243,22 +1314,42 @@ export const purchaseItems = pgTable(
     index("purchase_items_purchase_id_idx").on(table.purchaseId),
     index("purchase_items_fabric_id_idx").on(table.fabricId),
     index("purchase_items_accessory_id_idx").on(table.accessoryId),
+    // ON DELETE RESTRICT FK (the composite below) — indexed, this codebase's standing rule.
+    index("purchase_items_fabric_color_id_idx").on(table.fabricColorId),
     check("purchase_items_item_type_check", checkIn(table.itemType, PURCHASE_ITEM_TYPES)),
     // Exactly one target, agreeing with item_type — same idiom as product_accessory_recipes.
     check(
       "purchase_items_exactly_one_target_check",
       sql`(${table.fabricId} is null) <> (${table.accessoryId} is null) and (${table.itemType} = 'fabric') = (${table.fabricId} is not null)`,
     ),
+    // Only a fabric line has a colour. Needed on top of the composite FK: under MATCH SIMPLE an
+    // accessory line (fabric_id NULL) would skip the FK check entirely.
+    check("purchase_items_fabric_color_fabric_only_check", sql`${table.fabricColorId} is null or ${table.itemType} = 'fabric'`),
+    foreignKey({
+      columns: [table.fabricColorId, table.fabricId],
+      foreignColumns: [fabricColors.id, fabricColors.fabricId],
+      name: "purchase_items_fabric_color_fabric_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
     check("purchase_items_qty_ordered_check", sql`${table.qtyOrdered} > 0`),
     check(
       "purchase_items_accessory_whole_qty_check",
       sql`${table.itemType} <> 'accessory' or ${table.qtyOrdered} = round(${table.qtyOrdered})`,
     ),
     check("purchase_items_total_amount_check", sql`${table.totalAmount} >= 0`),
-    // The same item cannot appear twice in one purchase.
-    uniqueIndex("purchase_items_purchase_id_fabric_id_key")
+    // The same item cannot appear twice in one purchase. For fabric (migration 0046) "the same
+    // item" is (fabric, colour): a colour at most once per purchase, and at most one colourless
+    // ("Tanpa warna") line per fabric. Replaces 0024's purchase_items_purchase_id_fabric_id_key,
+    // which allowed only one line per fabric. Two partial indexes rather than one NULLS NOT
+    // DISTINCT index: accessory lines (fabric_id and fabric_color_id both NULL) must never collide.
+    uniqueIndex("purchase_items_purchase_id_fabric_id_no_color_key")
       .on(table.purchaseId, table.fabricId)
-      .where(sql`${table.fabricId} is not null`),
+      .where(sql`${table.fabricId} is not null and ${table.fabricColorId} is null`),
+    // A colour id already implies its fabric (fabric_colors.id is the PK).
+    uniqueIndex("purchase_items_purchase_id_fabric_color_id_key")
+      .on(table.purchaseId, table.fabricColorId)
+      .where(sql`${table.fabricColorId} is not null`),
     uniqueIndex("purchase_items_purchase_id_accessory_id_key")
       .on(table.purchaseId, table.accessoryId)
       .where(sql`${table.accessoryId} is not null`),

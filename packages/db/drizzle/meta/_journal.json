@@ -323,6 +323,13 @@
       "when": 1794997436160,
       "tag": "0045_first_web_purchase_index",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1795239588340,
+      "tag": "0046_fabric_colour_stock",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import "server-only";
-import { and, count, desc, eq, gt, ilike, inArray, or, sql } from "drizzle-orm";
-import { fabrics, fabricStockMovements, staffUsers } from "@ammari/db/schema";
+import { and, count, desc, eq, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm";
+import { fabricColors, fabrics, fabricStockMovements, staffUsers } from "@ammari/db/schema";
 import type { RawMaterialMovementRefType, RawMaterialMovementType, StockAdjustmentReason } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError } from "@/lib/errors";
@@ -82,6 +82,101 @@ export async function getFabricBalance(fabricId: string, db: Database = defaultD
     .from(fabricStockMovements)
     .where(eq(fabricStockMovements.fabricId, fabricId));
   return { qty: Number(row?.qty ?? 0), valueAmount: Number(row?.valueAmount ?? 0) };
+}
+
+// ---------- Per-colour buckets (docs/plans/fabric-colour-stock.md D1/D2, migration 0046) ----------
+// Stock AND the moving average live per (fabric_id, fabric_color_id) bucket; a NULL colour is the
+// "Tanpa warna" bucket (every row from before colours were tracked). getFabricBalance above stays
+// the fabric's TOTAL (the sum of every bucket). A write that decides on a bucket balance must hold
+// the fabric row lock first (lockFabricForUpdate, D3), exactly like the total.
+
+/** `null` = the "Tanpa warna" bucket. */
+export type FabricColorBucket = string | null;
+
+function bucketCondition(fabricId: string, fabricColorId: FabricColorBucket) {
+  return and(
+    eq(fabricStockMovements.fabricId, fabricId),
+    fabricColorId === null ? isNull(fabricStockMovements.fabricColorId) : eq(fabricStockMovements.fabricColorId, fabricColorId),
+  );
+}
+
+/** One bucket's balance: qty in yards and total value; the bucket's moving-average cost per yard is
+ * valueAmount / qty (never stored), the pool every consumption from this bucket is valued at (A1).
+ * At qty <= 0 there is no average — never divide; value a consumption only through
+ * valueDeltaForConsumption (its zero-residual rule). Does NOT check that the colour belongs to the
+ * fabric (a foreign colour simply reads 0): a write path must validate ownership first, or its
+ * "stok tidak cukup" message would be misleading (the composite FKs still refuse the write). */
+export async function getFabricColorBalance(
+  fabricId: string,
+  fabricColorId: FabricColorBucket,
+  db: Database = defaultDb,
+): Promise<RawMaterialBalance> {
+  const [row] = await db
+    .select({
+      qty: sql<string>`coalesce(sum(${fabricStockMovements.qty}), 0)`,
+      valueAmount: sql<string>`coalesce(sum(${fabricStockMovements.valueAmount}), 0)::bigint`,
+    })
+    .from(fabricStockMovements)
+    .where(bucketCondition(fabricId, fabricColorId));
+  return { qty: Number(row?.qty ?? 0), valueAmount: Number(row?.valueAmount ?? 0) };
+}
+
+export interface FabricColorBalanceRow extends RawMaterialBalance {
+  /** `null` = "Tanpa warna". */
+  fabricColorId: FabricColorBucket;
+  /** `null` only for the "Tanpa warna" bucket. */
+  name: string | null;
+  hex: string | null;
+  /** Always true for "Tanpa warna" (it is not a master row and cannot be deactivated). */
+  isActive: boolean;
+  /** Whether any ledger row exists for this bucket (a colour can sit at 0 after movements). */
+  hasMovements: boolean;
+}
+
+/** Every bucket of one fabric worth showing: each ACTIVE colour (even with no movement yet), each
+ * inactive colour that has ledger history, and "Tanpa warna" only when it has ledger history.
+ * Colours by name, "Tanpa warna" last. `valueAmount` is cost data — the caller strips it for a
+ * session without finance.view_profit, same discipline as listFabricsWithBalance. */
+export async function listFabricColorBalances(fabricId: string, db: Database = defaultDb): Promise<FabricColorBalanceRow[]> {
+  const [colors, buckets] = await Promise.all([
+    db
+      .select({ id: fabricColors.id, name: fabricColors.name, hex: fabricColors.hex, isActive: fabricColors.isActive })
+      .from(fabricColors)
+      .where(eq(fabricColors.fabricId, fabricId))
+      .orderBy(fabricColors.name, fabricColors.id),
+    db
+      .select({
+        fabricColorId: fabricStockMovements.fabricColorId,
+        qty: sql<string>`sum(${fabricStockMovements.qty})`,
+        valueAmount: sql<string>`sum(${fabricStockMovements.valueAmount})::bigint`,
+      })
+      .from(fabricStockMovements)
+      .where(eq(fabricStockMovements.fabricId, fabricId))
+      .groupBy(fabricStockMovements.fabricColorId),
+  ]);
+
+  const balanceByBucket = new Map<FabricColorBucket, RawMaterialBalance>(
+    buckets.map((bucket) => [bucket.fabricColorId, { qty: Number(bucket.qty), valueAmount: Number(bucket.valueAmount) }]),
+  );
+  const rows: FabricColorBalanceRow[] = [];
+  for (const color of colors) {
+    const balance = balanceByBucket.get(color.id);
+    if (!color.isActive && !balance) continue;
+    rows.push({
+      fabricColorId: color.id,
+      name: color.name,
+      hex: color.hex,
+      isActive: color.isActive,
+      hasMovements: balance !== undefined,
+      qty: balance?.qty ?? 0,
+      valueAmount: balance?.valueAmount ?? 0,
+    });
+  }
+  const colorless = balanceByBucket.get(null);
+  if (colorless) {
+    rows.push({ fabricColorId: null, name: null, hex: null, isActive: true, hasMovements: true, ...colorless });
+  }
+  return rows;
 }
 
 export interface FabricStockLedgerRow {
@@ -280,6 +375,8 @@ export async function voidFabricPurchase(movementId: string, actorStaffUserId: s
       .insert(fabricStockMovements)
       .values({
         fabricId: original.fabricId,
+        // Same colour bucket as the original (migration 0046) — see reverseGoodsReceipt.
+        fabricColorId: original.fabricColorId,
         qty: -original.qty,
         valueAmount: -original.valueAmount,
         type: "purchase_void",
