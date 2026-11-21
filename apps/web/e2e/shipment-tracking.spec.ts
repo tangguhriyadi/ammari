@@ -9,7 +9,7 @@ import { orderState, seedBookedShipment, seedCheckoutOrder, setOrderTrackingNumb
 // the courier's webhook. The gated /api/test/shipments/advance moves the fake courier along and posts
 // through the real webhook route, which re-fetches from the fake and applies only that answer. A
 // forged webhook changes nothing. Works with the cart flag off and on (orders already placed keep
-// being tracked). K4: the courier timeline in "Lacak pengiriman" (latest on top, our words, WIB), the
+// being tracked). K4: the courier timeline in "Lacak pengiriman" (latest on top, our words, WIB times), the
 // resi copy button, the gentle delay note, and no timeline for a resi that is not the booking's. At
 // 390 px and 1280 px.
 
@@ -78,9 +78,10 @@ for (const viewport of [
 
       // K4: the courier timeline, latest on top, in our words and WIB.
       const timeline = page.getByTestId("tracking-timeline");
-      const entries = timeline.getByRole("listitem");
+      // The latest event is the current step; the grey "Terkirim" milestone above it is not an event yet.
+      const entries = timeline.locator('li[aria-current="step"]');
       await expect(entries.first()).toContainText("Paket dijemput kurir");
-      await expect(entries.first()).toContainText(/\d{1,2} \w+ 20\d{2}, \d{2}\.\d{2} WIB/);
+      await expect(entries.first()).toContainText(/\d{1,2} \w+ 20\d{2}, \d{2}\.\d{2}/);
       await expect(entries.first()).toContainText("E2E: Paket sudah dijemput kurir.");
       await expect(timeline).not.toContainText("picked");
       // The resi copies with one tap.
@@ -98,6 +99,7 @@ for (const viewport of [
       await expectStatus(page, order.orderNo, "Selesai");
       expect(await orderState(order.id)).toMatchObject({ status: "completed", needsAttention: [], trackingNumber: shipment.awb });
       await expect(page.getByTestId("tracking-timeline").getByRole("listitem").first()).toContainText("Paket sudah sampai");
+      await expect(page.getByTestId("tracking-waiting")).toHaveCount(0);
       await expect(page.getByTestId("tracking-delay")).toHaveCount(0);
       await expect(page.locator("body")).not.toContainText(/biteship/i);
 

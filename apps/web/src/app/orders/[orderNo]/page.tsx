@@ -13,6 +13,7 @@ import { ReopenPaymentButton } from "@/components/checkout/reopen-payment-button
 import { ReorderButton } from "@/components/orders/reorder-button";
 import { ShippingCostRows } from "@/components/shipping-cost-rows";
 import { CopyTextButton } from "@/components/orders/copy-text-button";
+import { TrackingTimeline } from "@/components/orders/tracking-timeline";
 import { TRACKING_DELAY_NOTES } from "@/lib/orders/tracking";
 
 // One order (docs/plans/cart-checkout.md §9.1, §9.2; docs/design/storefront.md §7): lines, totals,
@@ -171,24 +172,10 @@ export default async function OrderPage({
             </p>
           )}
           {order.tracking.events.length > 0 && (
-            <ol role="list" className="mt-2 flex flex-col" aria-label="Riwayat pengiriman" data-testid="tracking-timeline">
-              {order.tracking.events.map((entry, index) => (
-                <li key={`${entry.dateTime}-${index}`} className="relative flex flex-col gap-0.5 border-l border-line pb-4 pl-5 last:border-transparent last:pb-0">
-                  <span
-                    aria-hidden="true"
-                    className={`absolute top-[6px] -left-[4px] size-[7px] ${index === 0 ? "bg-brand" : "border border-ink-muted bg-bg"}`}
-                  />
-                  <span className={`text-[15px] ${index === 0 ? "font-medium text-ink" : "text-ink-soft"}`}>
-                    {index === 0 && <span className="sr-only">Terbaru: </span>}
-                    {entry.label}
-                  </span>
-                  <time dateTime={entry.dateTime} className="text-[15px] text-ink-muted">
-                    {entry.at}
-                  </time>
-                  {entry.note && <span className="text-[15px] break-words text-ink-muted">{entry.note}</span>}
-                </li>
-              ))}
-            </ol>
+            <TrackingTimeline
+              events={order.tracking.events}
+              awaitingDelivery={order.status.stage === "shipped" && order.tracking.events[0]?.label !== "Paket sudah sampai"}
+            />
           )}
         </section>
       )}
