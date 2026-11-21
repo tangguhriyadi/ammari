@@ -9,6 +9,7 @@ import { parseDecimalQuantity } from "@/lib/production/decimal-quantity";
 import { receivePurchaseAction } from "../actions";
 import { receiveBatchAction } from "../../production/actions";
 import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
+import { FabricColorLabel } from "@/components/fabric-color-label";
 
 /** One shared receipt form for both sources (docs/plans/suppliers-goods-receipt.md §7): purchase
  * lines (fabric in yards, accessories in pcs) and production batch lines (whole pcs per variant).
@@ -26,9 +27,18 @@ export interface ReceiveLine {
   received?: number;
   /** Already rejected into defect stock (shown when non-zero). */
   rejected?: number;
+  /** Purchase fabric lines only (docs/plans/fabric-colour-stock.md §4.2): the line's colour, where
+   * its accepted yards land; name null = "Tanpa warna", `legacy` = a colourless line of a fabric
+   * that has colours today ("Tanpa warna (data lama)"). Absent on accessory and batch lines. */
+  color?: { name: string | null; hex: string | null; legacy: boolean };
 }
 
 export type ReceiveSource = { type: "purchase"; purchaseId: string } | { type: "production_batch"; batchId: string };
+
+/** The colour as words, for the input's accessible name (same text FabricColorLabel shows). */
+function colorText(color: NonNullable<ReceiveLine["color"]>): string {
+  return color.name ?? (color.legacy ? "Tanpa warna (data lama)" : "Tanpa warna");
+}
 
 function formatQty(line: Pick<ReceiveLine, "wholeOnly">, qty: number): string {
   return line.wholeOnly ? String(qty) : qty.toFixed(2);
@@ -170,8 +180,11 @@ export function ReceiveForm({ source, receiverName, lines }: { source: ReceiveSo
           return (
             <div key={line.id} data-testid="receive-line" className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-3">
               <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
-                <Label htmlFor={inputId} id={labelId}>
-                  {line.itemName}
+                <Label htmlFor={inputId} id={labelId} className="flex flex-col gap-0.5">
+                  <span>{line.itemName}</span>
+                  {line.color && (
+                    <FabricColorLabel name={line.color.name} hex={line.color.hex} legacy={line.color.legacy} testId="receive-line-color" />
+                  )}
                 </Label>
                 <span id={hintId} className="text-sm text-neutral-600 tabular-nums">
                   {line.planned !== undefined && line.received !== undefined
@@ -184,6 +197,10 @@ export function ReceiveForm({ source, receiverName, lines }: { source: ReceiveSo
               <Input
                 id={inputId}
                 inputMode={line.wholeOnly ? "numeric" : "decimal"}
+                // Each colour line's "diterima" input needs its own name ("Marbella, Sage") although
+                // every line names the same fabric. Set explicitly: a name computed from the
+                // two-line label comes out as "Marbella , Sage" in Chrome.
+                aria-label={line.color ? `${line.itemName}, ${colorText(line.color)}` : undefined}
                 value={quantities[line.id] ?? ""}
                 onChange={(event) => setQuantities((current) => ({ ...current, [line.id]: event.target.value }))}
                 aria-invalid={rowErr?.accepted === true}

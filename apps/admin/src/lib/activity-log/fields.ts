@@ -82,6 +82,12 @@ export const FIELD_LABELS: Record<string, string> = {
   height: "Tinggi",
   fabricId: "Kain (ID)",
   fabricColorId: "Warna kain (ID)",
+  // docs/plans/fabric-colour-stock.md D10: receipts and defect dispositions name the line's colour.
+  colorName: "Warna",
+  line: "Baris",
+  purchaseItemId: "Baris pembelian (ID)",
+  qtyAccepted: "Diterima",
+  qtyRejected: "Ditolak (cacat)",
   hex: "Warna (hex)",
   supplierColorCode: "Kode warna supplier",
   priceAmount: "Harga",

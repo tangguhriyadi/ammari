@@ -2,7 +2,8 @@ import Link from "next/link";
 import { Badge, Card } from "@ammari/ui";
 import { formatDate, formatRupiah } from "@ammari/ui/lib";
 import type { DefectItemKind } from "@ammari/db/schema";
-import { ITEM_DEFECT_LEDGER_LIMIT, type ItemDefectMovementRow } from "@/lib/defects/queries";
+import { ITEM_DEFECT_LEDGER_LIMIT, type DefectColorQty, type ItemDefectMovementRow } from "@/lib/defects/queries";
+import { FabricColorLabel } from "@/components/fabric-color-label";
 import { DEFECT_DISPOSAL_TYPE_LABELS, DEFECT_MOVEMENT_TYPE_LABELS } from "@/lib/defects/labels";
 
 function formatQty(kind: DefectItemKind, qty: number): string {
@@ -21,12 +22,15 @@ export function ItemDefectSection({
   rows,
   canOpenPurchase,
   canOpenBatch,
+  colors,
 }: {
   kind: DefectItemKind;
   balance: { qty: number; valueAmount: number | null };
   rows: ItemDefectMovementRow[];
   canOpenPurchase: boolean;
   canOpenBatch: boolean;
+  /** Fabrics: the defect stock per colour (fabric-colour-stock §4.2), quantity only. */
+  colors?: DefectColorQty[];
 }) {
   return (
     <section aria-labelledby="item-defect-heading" className="mt-8 flex flex-col gap-3" data-testid="item-defect-section">
@@ -39,6 +43,7 @@ export function ItemDefectSection({
           {balance.valueAmount !== null && <span className="text-sm text-neutral-600"> · {formatRupiah(balance.valueAmount)}</span>}
         </p>
       </div>
+      {colors && colors.length > 0 && <DefectColorChips kind={kind} colors={colors} />}
       <p className="text-sm text-neutral-600">Tidak bisa dijual atau dipakai, dan tidak termasuk stok yang bisa dijual atau dipakai.</p>
       {rows.length === 0 ? (
         <p className="text-base text-neutral-600">Belum pernah ada barang cacat.</p>
@@ -67,6 +72,7 @@ export function ItemDefectSection({
                       {row.reversedAt !== null && <Badge variant="neutral">Dibatalkan</Badge>}
                     </div>
                   </div>
+                  {kind === "fabric" && <FabricColorLabel name={row.colorName} hex={row.colorHex} testId="item-defect-row-color" />}
                   <p className="text-sm text-neutral-600">
                     {formatDate(new Date(row.occurredAt))}
                     {" · "}
@@ -89,5 +95,23 @@ export function ItemDefectSection({
         <p className="text-sm text-neutral-600">Menampilkan {ITEM_DEFECT_LEDGER_LIMIT} catatan terbaru.</p>
       )}
     </section>
+  );
+}
+
+/** "Sage 2.00 yard · Tanpa warna 0.50 yard": one chip per colour still holding defect stock. */
+export function DefectColorChips({ kind, colors }: { kind: DefectItemKind; colors: DefectColorQty[] }) {
+  return (
+    <ul className="flex flex-wrap gap-2" aria-label="Stok cacat per warna" data-testid="defect-color-chips">
+      {colors.map((color) => (
+        <li
+          key={color.fabricColorId ?? "none"}
+          data-testid="defect-color-chip"
+          className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-2.5 py-1 text-sm text-neutral-800"
+        >
+          <FabricColorLabel name={color.name} hex={color.hex} className="text-neutral-800" testId="defect-color-chip-label" />
+          <span className="tabular-nums">{formatQty(kind, color.qty)}</span>
+        </li>
+      ))}
+    </ul>
   );
 }

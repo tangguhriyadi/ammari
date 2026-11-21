@@ -1,9 +1,10 @@
 import "server-only";
-import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import {
   accessories,
   accessoryMovements,
+  fabricColors,
   fabrics,
   fabricStockMovements,
   goodsReceiptItems,
@@ -20,7 +21,8 @@ import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { nextDocumentNumber } from "@/lib/documents/document-number";
 import { lockAccessoryForUpdate, lockFabricForUpdate } from "@/lib/inventory/db";
 import { getAccessoryBalance } from "@/lib/inventory/accessories";
-import { getFabricBalance } from "@/lib/inventory/fabric-stock";
+import { getFabricColorBalance } from "@/lib/inventory/fabric-stock";
+import { purchaseLineLabel } from "@/lib/purchases/line-label";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { getDefectSettledByPurchaseLine, insertRejectMovements, reverseRejectsInTx } from "@/lib/defects/queries";
 import { formatPurchaseQty, getLineProgress, getLineQuantities, hasAtMostTwoDecimals, isUuid, lockPurchaseForUpdate } from "@/lib/purchases/queries";
@@ -52,7 +54,12 @@ interface LockedLine {
   id: string;
   itemType: PurchaseItemType;
   itemId: string;
+  /** For messages: "Marbella, Sage" on a coloured fabric line (purchaseLineLabel). */
   itemName: string;
+  /** The line's colour (docs/plans/fabric-colour-stock.md D5): its accepted yards land in this
+   * bucket; null = "Tanpa warna" (and always null on an accessory line). */
+  fabricColorId: string | null;
+  colorName: string | null;
   qtyOrdered: number;
   totalAmount: number;
 }
@@ -145,12 +152,15 @@ export async function postGoodsReceiptForPurchase(input: PostPurchaseReceiptInpu
         accessoryId: purchaseItems.accessoryId,
         fabricName: fabrics.name,
         accessoryName: accessories.name,
+        fabricColorId: purchaseItems.fabricColorId,
+        colorName: fabricColors.name,
         qtyOrdered: purchaseItems.qtyOrdered,
         totalAmount: purchaseItems.totalAmount,
       })
       .from(purchaseItems)
       .leftJoin(fabrics, eq(fabrics.id, purchaseItems.fabricId))
       .leftJoin(accessories, eq(accessories.id, purchaseItems.accessoryId))
+      .leftJoin(fabricColors, eq(fabricColors.id, purchaseItems.fabricColorId))
       .where(eq(purchaseItems.purchaseId, purchase.id));
     const linesById = new Map<string, LockedLine>(
       lineRows.map((row) => [
@@ -159,7 +169,9 @@ export async function postGoodsReceiptForPurchase(input: PostPurchaseReceiptInpu
           id: row.id,
           itemType: row.itemType,
           itemId: (row.fabricId ?? row.accessoryId)!,
-          itemName: (row.fabricName ?? row.accessoryName)!,
+          itemName: purchaseLineLabel((row.fabricName ?? row.accessoryName)!, row.colorName),
+          fabricColorId: row.fabricColorId,
+          colorName: row.colorName,
           qtyOrdered: row.qtyOrdered,
           totalAmount: row.totalAmount,
         },
@@ -265,7 +277,8 @@ export async function postGoodsReceiptForPurchase(input: PostPurchaseReceiptInpu
       };
       const [movement] =
         plan.line.itemType === "fabric"
-          ? await tx.insert(fabricStockMovements).values({ ...common, fabricId: plan.line.itemId }).returning()
+          ? // The line's colour bucket (D5); a colourless (legacy) line lands in "Tanpa warna".
+            await tx.insert(fabricStockMovements).values({ ...common, fabricId: plan.line.itemId, fabricColorId: plan.line.fabricColorId }).returning()
           : await tx.insert(accessoryMovements).values({ ...common, accessoryId: plan.line.itemId }).returning();
       if (!movement) throw new Error("failed to insert receipt ledger movement");
       movements.push(movement);
@@ -280,7 +293,23 @@ export async function postGoodsReceiptForPurchase(input: PostPurchaseReceiptInpu
       action: "receive",
       entityType: "goods_receipt",
       entityId: receipt.id,
-      after: { receipt, items, movements, defects, purchaseStatus: { before: purchase.status, after: status } },
+      after: {
+        receipt,
+        items,
+        // Per line, with its colour (D10), so the activity log can say which colour arrived.
+        lines: planned.map((plan) => ({
+          purchaseItemId: plan.line.id,
+          itemType: plan.line.itemType,
+          itemId: plan.line.itemId,
+          fabricColorId: plan.line.fabricColorId,
+          colorName: plan.line.colorName,
+          qtyAccepted: plan.qtyAccepted,
+          qtyRejected: plan.qtyRejected,
+        })),
+        movements,
+        defects,
+        purchaseStatus: { before: purchase.status, after: status },
+      },
     });
     return { receipt, status };
   });
@@ -294,7 +323,7 @@ const BLOCKING_VOID_TYPES = ["production", "adjustment", "purchase_void"] as con
 async function hasLaterBlockingMovement(
   tx: Tx,
   ledger: typeof fabricStockMovements | typeof accessoryMovements,
-  itemCondition: ReturnType<typeof eq>,
+  itemCondition: SQL,
   original: { id: string; createdAt: Date },
 ): Promise<boolean> {
   const [row] = await tx
@@ -346,9 +375,12 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
         itemType: purchaseItems.itemType,
         fabricId: purchaseItems.fabricId,
         accessoryId: purchaseItems.accessoryId,
+        fabricColorId: purchaseItems.fabricColorId,
+        colorName: fabricColors.name,
       })
       .from(goodsReceiptItems)
       .innerJoin(purchaseItems, eq(purchaseItems.id, goodsReceiptItems.purchaseItemId))
+      .leftJoin(fabricColors, eq(fabricColors.id, purchaseItems.fabricColorId))
       .where(eq(goodsReceiptItems.goodsReceiptId, receipt.id));
     await lockItemsInOrder(
       tx,
@@ -373,13 +405,22 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
 
     for (const row of fabricRows) {
       if (row.voidedAt !== null) throw new Error("a receipt ledger row was voided outside its receipt");
-      if (await hasLaterBlockingMovement(tx, fabricStockMovements, eq(fabricStockMovements.fabricId, row.fabricId), row)) {
+      // Per colour bucket (docs/plans/fabric-colour-stock.md §4.2): cutting Sage after this receipt
+      // blocks reversing its Sage row, never its Mocca row; a "Tanpa warna" row is blocked by later
+      // "Tanpa warna" movements only. isNull/eq rather than IS NOT DISTINCT FROM so the
+      // (fabric_id, fabric_color_id, created_at) index serves the whole condition.
+      const sameBucket = and(
+        eq(fabricStockMovements.fabricId, row.fabricId),
+        row.fabricColorId === null ? isNull(fabricStockMovements.fabricColorId) : eq(fabricStockMovements.fabricColorId, row.fabricColorId),
+      )!;
+      if (await hasLaterBlockingMovement(tx, fabricStockMovements, sameBucket, row)) {
         throw new ActionError(
           'Penerimaan ini tidak bisa dibatalkan karena bahannya sudah dipakai atau disesuaikan sesudahnya. Gunakan "Sesuaikan stok" untuk mengoreksi jumlahnya.',
         );
       }
-      // Defensive backstop, same reasoning as voidAccessoryPurchase's.
-      const balance = await getFabricBalance(row.fabricId, tx);
+      // Defensive backstop, same reasoning as voidAccessoryPurchase's, on the row's own bucket: the
+      // void lands there, so that bucket (not just the fabric total) must not go negative.
+      const balance = await getFabricColorBalance(row.fabricId, row.fabricColorId, tx);
       if (toCentiQty(balance.qty) < toCentiQty(row.qty)) throw new ActionError("Pembatalan ini akan membuat stok menjadi negatif.");
     }
     for (const row of accessoryRows) {
@@ -497,7 +538,22 @@ export async function reverseGoodsReceipt(receiptId: string, actorStaffUserId: s
       entityType: "goods_receipt",
       entityId: receipt.id,
       before: receipt,
-      after: { reversal, items: reversalItems, voids, defectReversals, purchaseStatus: { before: purchase.status, after: status } },
+      after: {
+        reversal,
+        items: reversalItems,
+        lines: items.map((item) => ({
+          purchaseItemId: item.purchaseItemId,
+          itemType: item.itemType,
+          itemId: (item.fabricId ?? item.accessoryId)!,
+          fabricColorId: item.fabricColorId,
+          colorName: item.colorName,
+          qtyAccepted: -item.qtyAccepted,
+          qtyRejected: -item.qtyRejected,
+        })),
+        voids,
+        defectReversals,
+        purchaseStatus: { before: purchase.status, after: status },
+      },
     });
     return { reversal, status };
   });
@@ -509,6 +565,10 @@ export interface ReceiptListItem {
   purchaseItemId: string;
   itemType: PurchaseItemType;
   itemName: string;
+  /** Fabric lines' colour; all null = "Tanpa warna" (always null on an accessory line). */
+  fabricColorId: string | null;
+  colorName: string | null;
+  colorHex: string | null;
   qtyAccepted: number;
   qtyRejected: number;
 }
@@ -559,13 +619,24 @@ export async function listReceiptsForPurchase(purchaseId: string, db: Database =
       itemType: purchaseItems.itemType,
       fabricName: fabrics.name,
       accessoryName: accessories.name,
+      fabricColorId: purchaseItems.fabricColorId,
+      colorName: fabricColors.name,
+      colorHex: fabricColors.hex,
     })
     .from(goodsReceiptItems)
     .innerJoin(purchaseItems, eq(purchaseItems.id, goodsReceiptItems.purchaseItemId))
     .leftJoin(fabrics, eq(fabrics.id, purchaseItems.fabricId))
     .leftJoin(accessories, eq(accessories.id, purchaseItems.accessoryId))
+    .leftJoin(fabricColors, eq(fabricColors.id, purchaseItems.fabricColorId))
     .where(inArray(goodsReceiptItems.goodsReceiptId, headers.map((header) => header.id)))
-    .orderBy(asc(goodsReceiptItems.createdAt), asc(goodsReceiptItems.id));
+    // Same order as the document's lines (getPurchaseDocument): a fabric's colours together, by
+    // name, "Tanpa warna" first.
+    .orderBy(
+      asc(purchaseItems.createdAt),
+      asc(sql`coalesce(${fabrics.name}, ${accessories.name})`),
+      sql`${fabricColors.name} asc nulls first`,
+      asc(purchaseItems.id),
+    );
 
   const itemsByReceipt = new Map<string, ReceiptListItem[]>();
   for (const row of itemRows) {
@@ -574,6 +645,9 @@ export async function listReceiptsForPurchase(purchaseId: string, db: Database =
       purchaseItemId: row.purchaseItemId!,
       itemType: row.itemType,
       itemName: (row.fabricName ?? row.accessoryName)!,
+      fabricColorId: row.fabricColorId,
+      colorName: row.colorName,
+      colorHex: row.colorHex,
       qtyAccepted: row.qtyAccepted,
       qtyRejected: row.qtyRejected,
     });

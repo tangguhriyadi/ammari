@@ -4,6 +4,8 @@ import type { DefectItemKind } from "@ammari/db/schema";
 import type { DocumentDefectMovementRow } from "@/lib/defects/queries";
 import { DEFECT_DISPOSAL_TYPE_LABELS, DEFECT_MOVEMENT_TYPE_LABELS } from "@/lib/defects/labels";
 import { ReverseDefectButton } from "./defect-actions";
+import { FabricColorLabel } from "@/components/fabric-color-label";
+import { purchaseLineLabel } from "@/lib/purchases/line-label";
 
 export function formatDefectQty(itemKind: DefectItemKind, qty: number): string {
   return itemKind === "fabric" ? `${qty.toFixed(2)} yard` : `${qty} pcs`;
@@ -28,7 +30,11 @@ export function DefectHistory({ rows, emptyText, canReverse = false }: { rows: D
         <li key={row.id} data-testid="defect-row">
           <Card className={`flex flex-col gap-2${row.reversedAt !== null ? " opacity-60" : ""}`}>
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-base font-medium text-neutral-900">{row.itemName}</p>
+              <div className="flex flex-col gap-0.5">
+                <p className="text-base font-medium text-neutral-900">{row.itemName}</p>
+                {/* A fabric row's colour comes from its purchase line (fabric-colour-stock D5). */}
+                {row.itemKind === "fabric" && <FabricColorLabel name={row.colorName} hex={row.colorHex} testId="defect-row-color" />}
+              </div>
               <div className="flex flex-wrap gap-2">
                 <Badge variant="neutral">
                   {DEFECT_MOVEMENT_TYPE_LABELS[row.type]}
@@ -56,7 +62,7 @@ export function DefectHistory({ rows, emptyText, canReverse = false }: { rows: D
                 <ReverseDefectButton
                   movementId={row.id}
                   description={REVERSE_DESCRIPTIONS[row.type]}
-                  label={`Batalkan ${row.type === "dispose" ? "pelepasan" : "pengembalian"} ${row.itemName} ${formatDefectQty(row.itemKind, -row.qty)}, ${formatDate(new Date(row.occurredAt))}`}
+                  label={`Batalkan ${row.type === "dispose" ? "pelepasan" : "pengembalian"} ${purchaseLineLabel(row.itemName, row.colorName)} ${formatDefectQty(row.itemKind, -row.qty)}, ${formatDate(new Date(row.occurredAt))}`}
                 />
               </div>
             )}

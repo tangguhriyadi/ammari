@@ -32,6 +32,8 @@ import { PaymentStatusBadge } from "@/components/supplier-payments/payment-statu
 import { PurchaseInvoiceSection, PurchasePaymentSection } from "../_components/purchase-payment-section";
 import { PurchaseStatusBadge } from "../_components/purchase-status-badge";
 import { ReverseReceiptButton } from "../_components/reverse-receipt-button";
+import { FabricColorLabel } from "@/components/fabric-color-label";
+import { purchaseLineLabel } from "@/lib/purchases/line-label";
 import { VoidPurchaseButton } from "../_components/void-purchase-button";
 
 /** One route, three kinds of id: a purchase DOCUMENT (the normal case); a LEGACY single-row
@@ -187,7 +189,7 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
                     <ReturnDefectsButton
                       sourceType="purchase"
                       lineId={line.id}
-                      itemLabel={line.itemName}
+                      itemLabel={purchaseLineLabel(line.itemName, line.colorName)}
                       maxQty={line.defectHeld}
                       isFabric={line.itemType === "fabric"}
                       documentClosed={isTerminal}
@@ -195,7 +197,7 @@ async function PurchaseDocumentView({ document: documentRaw, session }: { docume
                     <DisposeDefectsButton
                       sourceType="purchase"
                       lineId={line.id}
-                      itemLabel={line.itemName}
+                      itemLabel={purchaseLineLabel(line.itemName, line.colorName)}
                       maxQty={line.defectHeld}
                       isFabric={line.itemType === "fabric"}
                       lineTotals={lineTotals.get(line.id) ?? null}
@@ -315,7 +317,7 @@ function LineColor({ line }: { line: PurchaseLine }) {
           {line.colorIsActive === false && <span className="text-neutral-600">(nonaktif)</span>}
         </>
       ) : (
-        <span className="text-neutral-600">Tanpa warna</span>
+        <span className="text-neutral-600">{line.fabricHasActiveColors ? "Tanpa warna (data lama)" : "Tanpa warna"}</span>
       )}
     </span>
   );
@@ -352,8 +354,17 @@ function ReceiptHistory({ receipts, canReverse }: { receipts: PurchaseReceiptRow
             </p>
             <ul className="text-sm text-neutral-800">
               {receipt.items.map((item) => (
-                <li key={item.purchaseItemId}>
-                  {item.itemName}: {formatPurchaseQty(item.itemType, item.qtyAccepted)}
+                <li key={item.purchaseItemId} data-testid="receipt-item">
+                  {/* Inline flow (no flex gap), so ": qty" stays attached to the name/colour and wraps
+                      as text at 390px. */}
+                  {item.itemName}
+                  {item.itemType === "fabric" && (
+                    <>
+                      {" · "}
+                      <FabricColorLabel name={item.colorName} hex={item.colorHex} className="align-middle text-neutral-800" testId="receipt-item-color" />
+                    </>
+                  )}
+                  : {formatPurchaseQty(item.itemType, item.qtyAccepted)}
                   {item.qtyRejected !== 0 && <> · ditolak (cacat) {formatPurchaseQty(item.itemType, item.qtyRejected)}</>}
                 </li>
               ))}

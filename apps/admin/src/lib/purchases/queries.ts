@@ -16,6 +16,7 @@ import {
   type PurchaseStatus,
 } from "@ammari/db/schema";
 import { formatRupiah, resolvePagination, type Pagination } from "@ammari/ui/lib";
+import { qualifiedColumn } from "@ammari/db/sql-helpers";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
 import { nextDocumentNumber } from "@/lib/documents/document-number";
@@ -492,6 +493,9 @@ export interface PurchaseDocumentLine {
   colorName: string | null;
   colorHex: string | null;
   colorIsActive: boolean | null;
+  /** Fabric lines: whether the fabric has ≥1 active colour today, so a colourless line on it reads
+   * "Tanpa warna (data lama)" (ordered before its colours existed). null on an accessory line. */
+  fabricHasActiveColors: boolean | null;
   qtyOrdered: number;
   accepted: number;
   /** Net rejected into defect stock at receipt (everything that ever arrived defective). */
@@ -581,6 +585,8 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
         colorName: fabricColors.name,
         colorHex: fabricColors.hex,
         colorIsActive: fabricColors.isActive,
+        // fabric_colors_fabric_id index; runs once per line of one document.
+        fabricHasActiveColors: sql<boolean>`exists (select 1 from ${fabricColors} fc where fc.fabric_id = ${qualifiedColumn(purchaseItems, purchaseItems.fabricId)} and fc.is_active)`,
         qtyOrdered: purchaseItems.qtyOrdered,
         totalAmount: purchaseItems.totalAmount,
       })
@@ -616,6 +622,7 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
         colorName: line.colorName,
         colorHex: line.colorHex,
         colorIsActive: line.colorIsActive,
+        fabricHasActiveColors: line.itemType === "fabric" ? line.fabricHasActiveColors : null,
         qtyOrdered: line.qtyOrdered,
         accepted,
         rejected,

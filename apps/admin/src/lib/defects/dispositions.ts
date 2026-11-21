@@ -22,6 +22,7 @@ import { lockAccessoryForUpdate, lockFabricForUpdate } from "@/lib/inventory/db"
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { lockProductionBatchForUpdate } from "@/lib/production/db";
 import { batchStatusAfterReceiptChange } from "@/lib/production/receipt-status";
+import { purchaseLineLabel } from "@/lib/purchases/line-label";
 import { formatPurchaseQty, getLineProgress, getLineQuantities, hasAtMostTwoDecimals, lockPurchaseForUpdate } from "@/lib/purchases/queries";
 import { statusAfterReceiptChange, TERMINAL_PURCHASE_STATUSES } from "@/lib/purchases/status";
 import { getBatchLineProgress, getBatchQuantitiesByLine } from "@/lib/receipts/production";
@@ -58,6 +59,10 @@ interface LockedLine {
   source: DefectSourceLine;
   item: DefectItemRef;
   label: string;
+  /** For the audit entry (fabric-colour-stock D10): the source line and, on a purchase line, its
+   * colour (null = "Tanpa warna"). A batch line has no colour keys at all: its SKU's colour is not
+   * a fabric bucket, and "Warna: Tanpa warna" in the activity log would mislead. */
+  auditLine: { purchaseItemId: string; fabricColorId: string | null; colorName: string | null } | { productionBatchItemId: string };
   /** qty_ordered (purchase) or planned pcs (batch). */
   lineQty: number;
   formatQty: (qty: number) => string;
@@ -80,11 +85,14 @@ async function lockSourceLine(tx: Tx, source: DefectSourceLine): Promise<LockedL
         accessoryId: purchaseItems.accessoryId,
         fabricName: fabrics.name,
         accessoryName: accessories.name,
+        fabricColorId: purchaseItems.fabricColorId,
+        colorName: fabricColors.name,
         qtyOrdered: purchaseItems.qtyOrdered,
       })
       .from(purchaseItems)
       .leftJoin(fabrics, eq(fabrics.id, purchaseItems.fabricId))
       .leftJoin(accessories, eq(accessories.id, purchaseItems.accessoryId))
+      .leftJoin(fabricColors, eq(fabricColors.id, purchaseItems.fabricColorId))
       .where(eq(purchaseItems.id, source.purchaseItemId));
     if (!line) throw new ActionError("Barang ini tidak ditemukan di pesanan.");
     const purchase = await lockPurchaseForUpdate(tx, line.purchaseId);
@@ -97,7 +105,8 @@ async function lockSourceLine(tx: Tx, source: DefectSourceLine): Promise<LockedL
     return {
       source,
       item: line.fabricId ? { kind: "fabric", fabricId: line.fabricId } : { kind: "accessory", accessoryId: line.accessoryId! },
-      label: (line.fabricName ?? line.accessoryName)!,
+      label: purchaseLineLabel((line.fabricName ?? line.accessoryName)!, line.colorName),
+      auditLine: { purchaseItemId: source.purchaseItemId, fabricColorId: line.fabricColorId, colorName: line.colorName },
       lineQty: line.qtyOrdered,
       formatQty: (qty) => formatPurchaseQty(line.itemType, qty),
       document: { kind: "purchase", row: purchase },
@@ -126,6 +135,7 @@ async function lockSourceLine(tx: Tx, source: DefectSourceLine): Promise<LockedL
     source,
     item: { kind: "sku", sku: line.sku },
     label: `${line.productName} · ${line.colorName} · ${sizeLabel(line.size)}`,
+    auditLine: { productionBatchItemId: source.productionBatchItemId },
     lineQty: line.qty,
     formatQty: (qty) => `${qty} pcs`,
     document: { kind: "batch", row: batch },
@@ -284,7 +294,7 @@ export async function returnDefectsToSupplier(input: ReturnDefectsInput, actorSt
       action: "return_to_supplier",
       entityType: "defect_movement",
       entityId: movement.id,
-      after: { movement, documentStatus: { before, after }, reopened },
+      after: { movement, line: line.auditLine, documentStatus: { before, after }, reopened },
     });
     return { movement, status: after, reopened };
   });
@@ -336,7 +346,7 @@ export async function disposeDefects(input: DisposeDefectsInput, actorStaffUserI
       action: "dispose",
       entityType: "defect_movement",
       entityId: movement.id,
-      after: { movement, disposalType: movement.disposalType, proceedsAmount: movement.proceedsAmount },
+      after: { movement, line: line.auditLine, disposalType: movement.disposalType, proceedsAmount: movement.proceedsAmount },
     });
     return { movement };
   });
@@ -422,7 +432,7 @@ export async function reverseDefectMovement(movementId: string, actorStaffUserId
       entityType: "defect_movement",
       entityId: original.id,
       before: original,
-      after: { reversal, documentStatus },
+      after: { reversal, line: line.auditLine, documentStatus },
     });
     return { reversal };
   });

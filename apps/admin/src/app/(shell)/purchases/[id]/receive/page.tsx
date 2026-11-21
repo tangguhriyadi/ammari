@@ -37,6 +37,10 @@ export default async function ReceivePurchasePage({ params }: { params: Promise<
           wholeOnly: line.itemType === "accessory",
           outstanding: line.outstanding,
           rejected: line.rejected,
+          color:
+            line.itemType === "fabric"
+              ? { name: line.colorName, hex: line.colorHex, legacy: line.colorName === null && line.fabricHasActiveColors === true }
+              : undefined,
         }))}
       />
     </>

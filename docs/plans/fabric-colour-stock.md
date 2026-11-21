@@ -4,7 +4,14 @@ Status (2026-11-21): **Approved** (owner decisions in §10). S1 (schema) impleme
 (database-reviewer, typescript-reviewer), awaiting commit. S1 notes: migration 0046; per-bucket
 reads `getFabricColorBalance` / `listFabricColorBalances` in `lib/inventory/fabric-stock.ts`; both
 void paths (`reverseGoodsReceipt`, `voidFabricPurchase`) already copy `fabric_color_id` so S1 is a
-safe rollback target for S3+ (§3); nothing writes a colour yet.
+safe rollback target for S3+ (§3); nothing writes a colour yet. S2 (purchase lines per colour)
+committed. S3 (receipts, undo, defects, exchange, release per colour) implemented, awaiting review
+and commit: receipts write the line's colour; `reverseGoodsReceipt`'s later-movement block and
+negative backstop are per bucket; defect colour is joined from the purchase line
+(`getFabricDefectQtyByColor`, `listDefectStockMaterials().colors`); audit entries carry
+`lines[]`/`line` with `fabricColorId` + `colorName`. Until S4/S5, adjustments and production still
+write "Tanpa warna", so the e2e proves the same-colour undo block with a same-colour receipt
+reversal; unit tests cover production/adjustment rows.
 
 The owner buys fabric per colour, with a different yardage (and sometimes a different price per
 yard) for each colour. Example: PO-202611-001 at JMS Textile, Marbella Anti UV in 6 colours, 838
@@ -219,7 +226,7 @@ Further rollback hazards (database review of S1), and how S1 closes the first on
   when the fabric has ≥1 active colour (read `fabric_colors` FOR SHARE in the same tx). Field
   errors in Indonesian ("Pilih warna untuk Marbella Anti UV.", "Warna Sage muncul dua kali.").
   `MAX_LINES` 50 stays (6 colours is fine).
-- Detail page `/purchases/[id]`: line label "Marbella Anti UV — Sage" with swatch; lines grouped
+- Detail page `/purchases/[id]`: line label "Marbella Anti UV, Sage" with swatch (UI text never uses an em dash); lines grouped
   by fabric with a per-fabric subtotal row.
 
 ### 4.2 Receiving, defects, exchange, release

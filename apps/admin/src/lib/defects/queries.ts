@@ -363,6 +363,10 @@ export interface ItemDefectMovementRow {
   note: string | null;
   createdAt: Date;
   reversedAt: Date | null;
+  /** A fabric row's colour, from its purchase line (docs/plans/fabric-colour-stock.md D5); all
+   * null = "Tanpa warna", and always null for an accessory or SKU row. */
+  colorName: string | null;
+  colorHex: string | null;
   /** The source document, for the link back: a purchase (fabric/accessory) or a batch (SKU). */
   source: { kind: "purchase"; id: string; number: string } | { kind: "batch"; id: string; number: string };
 }
@@ -374,6 +378,7 @@ export const ITEM_DEFECT_LEDGER_LIMIT = 100;
  * ITEM_DEFECT_LEDGER_LIMIT rows; the balance itself always comes from getDefectBalance. */
 export async function listItemDefectMovements(item: DefectItemRef, db: Database = defaultDb): Promise<ItemDefectMovementRow[]> {
   const reversed = alias(defectMovements, "reversed");
+  const lineColor = alias(fabricColors, "line_color");
   const rows = await db
     .select({
       id: defectMovements.id,
@@ -387,6 +392,8 @@ export async function listItemDefectMovements(item: DefectItemRef, db: Database 
       note: defectMovements.note,
       createdAt: defectMovements.createdAt,
       reversedAt: defectMovements.reversedAt,
+      colorName: lineColor.name,
+      colorHex: lineColor.hex,
       purchaseId: purchases.id,
       purchaseNo: purchases.purchaseNo,
       batchId: productionBatches.id,
@@ -396,6 +403,7 @@ export async function listItemDefectMovements(item: DefectItemRef, db: Database 
     .leftJoin(reversed, eq(reversed.id, defectMovements.reversesMovementId))
     .leftJoin(purchaseItems, eq(purchaseItems.id, defectMovements.purchaseItemId))
     .leftJoin(purchases, eq(purchases.id, purchaseItems.purchaseId))
+    .leftJoin(lineColor, eq(lineColor.id, purchaseItems.fabricColorId))
     .leftJoin(productionBatchItems, eq(productionBatchItems.id, defectMovements.productionBatchItemId))
     .leftJoin(productionBatches, eq(productionBatches.id, productionBatchItems.productionBatchId))
     .where(itemCondition(item))
@@ -423,12 +431,61 @@ export interface DefectStockSkuRow {
   valueAmount: number | null;
 }
 
+/** One colour's share of a fabric's defect stock. `fabricColorId` null = "Tanpa warna". Quantity
+ * only: the defect pool is valued per fabric (D23 / fabric-colour-stock D5), never per colour. */
+export interface DefectColorQty {
+  fabricColorId: string | null;
+  name: string | null;
+  hex: string | null;
+  qty: number;
+}
+
 export interface DefectStockMaterialRow {
   kind: "fabric" | "accessory";
   id: string;
   name: string;
   qty: number;
   valueAmount: number | null;
+  /** Fabrics: the non-zero colours, by name, "Tanpa warna" last. Always [] for an accessory. */
+  colors: DefectColorQty[];
+}
+
+/** Fabric defect quantity per (fabric, colour), the colour taken from each row's purchase line by
+ * join (fabric-colour-stock D5: no colour column on defect_movements). A fabric defect always names
+ * its purchase line, so the colour is always known; colourless lines are "Tanpa warna". Only
+ * non-zero colours; by name, "Tanpa warna" last. */
+async function fabricDefectQtyByColor(fabricIds: readonly string[], db: Database): Promise<Map<string, DefectColorQty[]>> {
+  if (fabricIds.length === 0) return new Map();
+  const rows = await db
+    .select({
+      fabricId: defectMovements.fabricId,
+      fabricColorId: purchaseItems.fabricColorId,
+      name: fabricColors.name,
+      hex: fabricColors.hex,
+      qty: sql<string>`sum(${defectMovements.qty})`,
+    })
+    .from(defectMovements)
+    // leftJoin, defensively: CHECKs (0026) already make every fabric defect name its purchase line,
+    // but a row without one would then still count, under "Tanpa warna", so the chips always add
+    // up to the fabric's defect total.
+    .leftJoin(purchaseItems, eq(purchaseItems.id, defectMovements.purchaseItemId))
+    .leftJoin(fabricColors, eq(fabricColors.id, purchaseItems.fabricColorId))
+    .where(inArray(defectMovements.fabricId, [...fabricIds]))
+    .groupBy(defectMovements.fabricId, purchaseItems.fabricColorId, fabricColors.name, fabricColors.hex)
+    .having(sql`sum(${defectMovements.qty}) <> 0`)
+    .orderBy(sql`${fabricColors.name} asc nulls last`);
+  const byFabric = new Map<string, DefectColorQty[]>();
+  for (const row of rows) {
+    const list = byFabric.get(row.fabricId!) ?? [];
+    list.push({ fabricColorId: row.fabricColorId, name: row.name, hex: row.hex, qty: Number(row.qty) });
+    byFabric.set(row.fabricId!, list);
+  }
+  return byFabric;
+}
+
+/** One fabric's defect stock per colour (the "Barang cacat" section of /stock/fabrics/[id]). */
+export async function getFabricDefectQtyByColor(fabricId: string, db: Database = defaultDb): Promise<DefectColorQty[]> {
+  return (await fabricDefectQtyByColor([fabricId], db)).get(fabricId) ?? [];
 }
 
 /** "/stock/defects": every SKU with a non-zero defect balance. One grouped query. */
@@ -482,9 +539,16 @@ export async function listDefectStockMaterials(db: Database = defaultDb): Promis
       .having(sql`sum(${defectMovements.qty}) <> 0`)
       .orderBy(accessories.name),
   ]);
+  const colorsByFabric = await fabricDefectQtyByColor(fabricRows.map((row) => row.id), db);
   return [
-    ...fabricRows.map((row) => ({ kind: "fabric" as const, ...row, qty: Number(row.qty), valueAmount: Number(row.valueAmount) })),
-    ...accessoryRows.map((row) => ({ kind: "accessory" as const, ...row, qty: Number(row.qty), valueAmount: Number(row.valueAmount) })),
+    ...fabricRows.map((row) => ({
+      kind: "fabric" as const,
+      ...row,
+      qty: Number(row.qty),
+      valueAmount: Number(row.valueAmount),
+      colors: colorsByFabric.get(row.id) ?? [],
+    })),
+    ...accessoryRows.map((row) => ({ kind: "accessory" as const, ...row, qty: Number(row.qty), valueAmount: Number(row.valueAmount), colors: [] })),
   ];
 }
 
@@ -493,6 +557,10 @@ export interface DocumentDefectMovementRow {
   type: DefectMovementType;
   itemKind: DefectItemKind;
   itemName: string;
+  /** A fabric row's colour from its purchase line (fabric-colour-stock D5); all null = "Tanpa
+   * warna", and always null for an accessory or SKU row (a SKU's colour is in itemName). */
+  colorName: string | null;
+  colorHex: string | null;
   qty: number;
   /** Cost data: stripped (null) by the caller for a viewer without finance.view_profit. */
   valueAmount: number | null;
@@ -522,6 +590,7 @@ async function listDefectMovementsForLines(
 ): Promise<DocumentDefectMovementRow[]> {
   if (lineIds.length === 0) return [];
   const reversed = alias(defectMovements, "reversed");
+  const lineColor = alias(fabricColors, "line_color");
   const rows = await db
     .select({
       id: defectMovements.id,
@@ -532,6 +601,8 @@ async function listDefectMovementsForLines(
       productName: products.name,
       colorName: fabricColors.name,
       size: productVariants.size,
+      lineColorName: lineColor.name,
+      lineColorHex: lineColor.hex,
       qty: defectMovements.qty,
       valueAmount: defectMovements.valueAmount,
       disposalType: defectMovements.disposalType,
@@ -550,14 +621,18 @@ async function listDefectMovementsForLines(
     .leftJoin(productVariants, eq(productVariants.sku, defectMovements.sku))
     .leftJoin(products, eq(products.id, productVariants.productId))
     .leftJoin(fabricColors, eq(fabricColors.id, productVariants.fabricColorId))
+    .leftJoin(purchaseItems, eq(purchaseItems.id, defectMovements.purchaseItemId))
+    .leftJoin(lineColor, eq(lineColor.id, purchaseItems.fabricColorId))
     .leftJoin(goodsReceiptItems, eq(goodsReceiptItems.id, defectMovements.goodsReceiptItemId))
     .leftJoin(goodsReceipts, eq(goodsReceipts.id, goodsReceiptItems.goodsReceiptId))
     .leftJoin(staffUsers, eq(staffUsers.id, defectMovements.createdByStaffUserId))
     .leftJoin(reversed, eq(reversed.id, defectMovements.reversesMovementId))
     .where(inArray(column, [...lineIds]))
     .orderBy(desc(defectMovements.createdAt), desc(defectMovements.id));
-  return rows.map(({ fabricName, accessoryName, productName, colorName, size, ...row }) => ({
+  return rows.map(({ fabricName, accessoryName, productName, colorName, size, lineColorName, lineColorHex, ...row }) => ({
     ...row,
+    colorName: row.itemKind === "fabric" ? lineColorName : null,
+    colorHex: row.itemKind === "fabric" ? lineColorHex : null,
     itemName:
       row.itemKind === "sku" ? `${productName} · ${colorName} · ${sizeLabel(size ?? "")}` : ((fabricName ?? accessoryName) as string),
   }));

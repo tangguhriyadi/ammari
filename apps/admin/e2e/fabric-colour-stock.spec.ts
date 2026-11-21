@@ -5,7 +5,8 @@ import { openCreated } from "./helpers/open-created";
 import { createPurchase, createSupplier } from "./helpers/purchase";
 import { E2E_FABRIC_COLOUR_EMAIL } from "./global-setup";
 
-// docs/plans/fabric-colour-stock.md session S2: purchase lines per colour. Every flow runs at 390px
+// docs/plans/fabric-colour-stock.md sessions S2 (purchase lines per colour) and S3 (receiving, undo,
+// defects and exchange per colour). Every flow runs at 390px
 // AND 1280px (CLAUDE.md's rule): the purchase detail's Barang list renders two independent layouts
 // (CardList for phones, TableContainer for desktop), so each pass asserts its own layout's rows
 // and that the other layout's rows are hidden.
@@ -191,6 +192,176 @@ async function runLegacyLineEdit(page: Page, layout: Layout): Promise<void> {
   await page.goto(purchaseUrl);
   await expectLines(page, layout, fabricName, ["Mocca", "Sage"]);
 }
+
+// ---------- S3: receiving, undo, defects and exchange per colour ----------
+
+const COLOURS = ["Mocca", "Sage", "Tosca"] as const;
+
+/** One "Terima barang" row, found by its colour (every row names the same fabric). */
+function receiveLine(page: Page, color: string) {
+  return page.getByTestId("receive-line").filter({ has: page.getByTestId("receive-line-color").getByText(color, { exact: true }) });
+}
+
+/** On a purchase detail page: "Terima barang", fill each listed colour (others left as prefilled
+ * unless given), save, land back on the document. */
+async function receiveColours(page: Page, fabricName: string, quantities: Record<string, { good: string; defect?: string }>): Promise<void> {
+  const documentUrl = page.url();
+  await page.getByRole("link", { name: "Terima barang" }).click();
+  await expect(page).toHaveURL(/\/receive$/);
+  for (const [color, { good, defect }] of Object.entries(quantities)) {
+    const line = receiveLine(page, color);
+    // The "diterima" input is named after the fabric AND the colour.
+    await line.getByRole("textbox", { name: `${fabricName}, ${color}` }).fill(good);
+    if (defect !== undefined) await line.getByLabel("Ditolak (cacat)").fill(defect);
+  }
+  await page.getByRole("button", { name: "Simpan penerimaan" }).click();
+  await expect(page).toHaveURL(documentUrl, { timeout: 15_000 });
+}
+
+/** The colour line's quantities in this viewport's layout (the other layout hidden). */
+async function expectColourLine(page: Page, layout: Layout, color: string, expected: { diterima: string; cacat: string; ditukar?: string; sisa: string }) {
+  const byColor = (selector: string) => page.locator(selector).filter({ has: page.getByTestId("purchase-line-color").getByText(color, { exact: true }) });
+  const visible = byColor(layout.lineRow);
+  await expect(visible).toHaveCount(1);
+  await expect(byColor(layout.hiddenLineRow)).toBeHidden();
+  if (layout === MOBILE) {
+    await expect(visible).toContainText(`Diterima${expected.diterima}`);
+    await expect(visible).toContainText(`Cacat${expected.cacat}`);
+    if (expected.ditukar) await expect(visible).toContainText(`Ditukar${expected.ditukar}`);
+    await expect(visible).toContainText(`Sisa${expected.sisa}`);
+  } else {
+    const cells = visible.getByRole("cell");
+    await expect(cells.nth(2)).toHaveText(expected.diterima);
+    await expect(cells.nth(3)).toHaveText(expected.cacat);
+    if (expected.ditukar) await expect(cells.nth(4)).toHaveText(expected.ditukar);
+    await expect(cells.nth(6)).toHaveText(expected.sisa);
+  }
+}
+
+async function createColourPurchase(page: Page, layout: Layout, prefix: string, lines: { color: string; qty: string; amount: string }[]) {
+  const marker = `${layout.width}-${Date.now()}`;
+  const supplierName = `E2E Pemasok ${prefix} ${marker}`;
+  const fabricName = `E2E Marbella ${prefix} ${marker}`;
+  await createSupplier(page, supplierName);
+  await createFabric(page, fabricName, [...COLOURS]);
+  await createPurchase(
+    page,
+    supplierName,
+    lines.map((line) => ({ type: "Kain" as const, itemName: fabricName, color: line.color, qty: line.qty, amount: line.amount })),
+  );
+  return { fabricName, purchaseUrl: page.url() };
+}
+
+/** Receive a 3-colour PO with a defect on Mocca and Tosca only partly; receive the rest of Tosca;
+ * exchange Mocca's defect and receive its replacement into Mocca. */
+async function runReceiveColours(page: Page, layout: Layout): Promise<void> {
+  const { fabricName, purchaseUrl } = await createColourPurchase(page, layout, "Terima", [
+    { color: "Sage", qty: "10", amount: "195.000" },
+    { color: "Mocca", qty: "8", amount: "160.000" },
+    { color: "Tosca", qty: "5", amount: "97.500" },
+  ]);
+
+  // The receive form: one row per colour, swatch + name, prefilled with what is left.
+  await page.getByRole("link", { name: "Terima barang" }).click();
+  await expect(page.getByTestId("receive-line-color")).toHaveText([...COLOURS]);
+  await expect(receiveLine(page, "Sage").getByRole("textbox", { name: `${fabricName}, Sage` })).toHaveValue("10.00");
+  await page.goto(purchaseUrl);
+  await receiveColours(page, fabricName, { Sage: { good: "10" }, Mocca: { good: "7", defect: "1" }, Tosca: { good: "3" } });
+
+  await expectColourLine(page, layout, "Sage", { diterima: "10.00 yard", cacat: "0.00 yard", sisa: "0.00 yard" });
+  await expectColourLine(page, layout, "Mocca", { diterima: "7.00 yard", cacat: "1.00 yard", sisa: "0.00 yard" });
+  await expectColourLine(page, layout, "Tosca", { diterima: "3.00 yard", cacat: "0.00 yard", sisa: "2.00 yard" });
+  // Receipt history and the defect history name the colour of every line.
+  const receipt = page.getByTestId("receipt-row").first();
+  await expect(receipt.getByTestId("receipt-item-color")).toHaveText([...COLOURS]);
+  await expect(receipt.getByTestId("receipt-item").filter({ hasText: "Mocca" })).toContainText("7.00 yard · ditolak (cacat) 1.00 yard");
+  await expect(page.getByTestId("defect-row").getByTestId("defect-row-color")).toHaveText("Mocca");
+
+  // /stock/defects: the fabric's defect stock, split by colour, in this layout.
+  await page.goto("/stock/defects");
+  const defectRow = page.locator(layout === MOBILE ? '[data-testid="defect-material-card"]' : '[data-testid="defect-material-row"]').filter({ hasText: fabricName });
+  await expect(defectRow.getByTestId("defect-color-chip")).toHaveText(["Mocca1.00 yard"]);
+
+  // Partial receipt: only Tosca is left, prefilled with its 2.00 yard.
+  await page.goto(purchaseUrl);
+  await page.getByRole("link", { name: "Terima barang" }).click();
+  await expect(page.getByTestId("receive-line")).toHaveCount(1);
+  await expect(receiveLine(page, "Tosca").getByRole("textbox", { name: `${fabricName}, Tosca` })).toHaveValue("2.00");
+  await page.goto(purchaseUrl);
+  await receiveColours(page, fabricName, { Tosca: { good: "2" } });
+  await expectColourLine(page, layout, "Tosca", { diterima: "5.00 yard", cacat: "0.00 yard", sisa: "0.00 yard" });
+
+  // Exchange: Mocca's defective yard goes back; the replacement arrives on the Mocca line.
+  await page.getByRole("button", { name: `Kembalikan ke supplier: ${fabricName}, Mocca` }).click();
+  const dialog = page.getByRole("dialog", { name: `Kembalikan ${fabricName}, Mocca` });
+  await dialog.getByLabel("Alasan").fill("Ada noda, tukar");
+  await dialog.getByRole("button", { name: "Kembalikan", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Barang cacat dikembalikan ke supplier");
+  await expectColourLine(page, layout, "Mocca", { diterima: "7.00 yard", cacat: "0.00 yard", ditukar: "1.00 yard", sisa: "1.00 yard" });
+  await expect(page.getByTestId("defect-row").filter({ hasText: "Dikembalikan untuk ditukar" }).getByTestId("defect-row-color")).toHaveText("Mocca");
+
+  await page.getByRole("link", { name: "Terima barang" }).click();
+  await expect(page.getByTestId("receive-line-color")).toHaveText(["Mocca"]);
+  await page.goto(purchaseUrl);
+  await receiveColours(page, fabricName, { Mocca: { good: "1" } });
+  await expectColourLine(page, layout, "Mocca", { diterima: "8.00 yard", cacat: "0.00 yard", ditukar: "1.00 yard", sisa: "0.00 yard" });
+  await expect(page.getByText("Diterima lengkap").first()).toBeVisible();
+  await expect(page.getByTestId("receipt-row").first().getByTestId("receipt-item-color")).toHaveText(["Mocca"]);
+}
+
+/** Undo is blocked only by a later movement of the SAME colour. Before S4/S5 the UI has no way to
+ * consume a specific colour, so the later movement here is another receipt's reversal (a
+ * 'purchase_void', which blocks like a consumption); the unit tests cover production/adjustment. */
+async function runUndoPerColour(page: Page, layout: Layout): Promise<void> {
+  const { fabricName } = await createColourPurchase(page, layout, "Batal", [
+    { color: "Sage", qty: "10", amount: "195.000" },
+    { color: "Mocca", qty: "8", amount: "160.000" },
+  ]);
+  await receiveColours(page, fabricName, { Sage: { good: "5" }, Mocca: { good: "0" } }); // R1: Sage 5
+  await receiveColours(page, fabricName, { Sage: { good: "0" }, Mocca: { good: "8" } }); // R2: Mocca 8
+  await receiveColours(page, fabricName, { Sage: { good: "5" } }); // R3: Sage 5
+  const rows = page.getByTestId("receipt-row");
+  await expect(rows).toHaveCount(3);
+
+  const undo = async (row: ReturnType<Page["getByTestId"]>) => {
+    await row.getByRole("button", { name: /Batalkan penerimaan/ }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Batalkan penerimaan" }).click();
+    return dialog;
+  };
+
+  // R3 (newest, Sage): nothing after it.
+  await undo(rows.first());
+  await expect(rows).toHaveCount(4, { timeout: 15_000 });
+  // R2 (Mocca): R3's Sage reversal came after it, but that is ANOTHER colour, so it is allowed.
+  await undo(rows.filter({ has: page.getByTestId("receipt-item-color").getByText("Mocca", { exact: true }) }));
+  await expect(rows).toHaveCount(5, { timeout: 15_000 });
+  await expectColourLine(page, layout, "Mocca", { diterima: "0.00 yard", cacat: "0.00 yard", sisa: "8.00 yard" });
+  // R1 (oldest, Sage): Sage moved after it (R3's reversal), so it is refused.
+  const dialog = await undo(rows.last());
+  await expect(dialog).toContainText("tidak bisa dibatalkan karena bahannya sudah dipakai atau disesuaikan sesudahnya");
+  await dialog.getByRole("button", { name: "Batal", exact: true }).click();
+  await expect(rows).toHaveCount(5);
+  await expectColourLine(page, layout, "Sage", { diterima: "5.00 yard", cacat: "0.00 yard", sisa: "5.00 yard" });
+}
+
+test.describe("Penerimaan kain per warna", () => {
+  for (const layout of [MOBILE, DESKTOP]) {
+    test(`receive a 3-colour PO with a defect, a partial receipt and an exchange, at ${layout.label}`, async ({ page }) => {
+      test.setTimeout(240_000);
+      await page.setViewportSize({ width: layout.width, height: layout.height });
+      await loginAs(page, E2E_FABRIC_COLOUR_EMAIL);
+      await runReceiveColours(page, layout);
+    });
+
+    test(`undo a receipt is blocked only by the same colour, at ${layout.label}`, async ({ page }) => {
+      test.setTimeout(240_000);
+      await page.setViewportSize({ width: layout.width, height: layout.height });
+      await loginAs(page, E2E_FABRIC_COLOUR_EMAIL);
+      await runUndoPerColour(page, layout);
+    });
+  }
+});
 
 test.describe("Pembelian kain per warna", () => {
   for (const layout of [MOBILE, DESKTOP]) {

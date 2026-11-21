@@ -3,6 +3,7 @@ import { Card, CardList, TableContainer, TableHead, Th, Tr, Td } from "@ammari/u
 import { formatRupiah } from "@ammari/ui/lib";
 import type { DefectStockMaterialRow, DefectStockSkuRow } from "@/lib/defects/queries";
 import { DEFECT_ITEM_KIND_LABELS } from "@/lib/defects/labels";
+import { DefectColorChips } from "./item-defect-section";
 
 // The two lists on /stock/defects (S5). Each renders both layouts — CardList for phones,
 // TableContainer for tablet/desktop — like every other list page. `valueAmount` is null for a
@@ -91,6 +92,7 @@ export function DefectMaterialList({ rows }: { rows: DefectStockMaterialRow[] })
                   Cacat {materialQty(row)}
                   {row.valueAmount !== null && <> · {formatRupiah(row.valueAmount)}</>}
                 </p>
+                {row.colors.length > 0 && <DefectColorChips kind="fabric" colors={row.colors} />}
               </Card>
             </Link>
           </li>
@@ -110,6 +112,11 @@ export function DefectMaterialList({ rows }: { rows: DefectStockMaterialRow[] })
                 <Link href={materialHref(row)} className="font-medium text-brand hover:underline">
                   {row.name}
                 </Link>
+                {row.colors.length > 0 && (
+                  <div className="mt-1.5">
+                    <DefectColorChips kind="fabric" colors={row.colors} />
+                  </div>
+                )}
               </Td>
               <Td className="text-neutral-700">{DEFECT_ITEM_KIND_LABELS[row.kind]}</Td>
               <Td className="tabular-nums text-neutral-700">{materialQty(row)}</Td>
