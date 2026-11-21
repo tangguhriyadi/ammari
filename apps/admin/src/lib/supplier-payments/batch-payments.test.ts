@@ -92,7 +92,7 @@ async function batchFixture(tx: TestDatabase, options: { post?: boolean; noServi
     {
       fabricId: fabric.id,
       producedAt: "2026-10-01",
-      fabricYards: 10,
+      fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }],
       lines: [{ sku: variant.sku, qty: 10 }],
       extraCosts: options.noServiceLines
         ? []

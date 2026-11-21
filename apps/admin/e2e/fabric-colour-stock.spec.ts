@@ -3,10 +3,14 @@ import sharp from "sharp";
 import { loginAs } from "./helpers/login";
 import { openCreated } from "./helpers/open-created";
 import { createPurchase, createSupplier } from "./helpers/purchase";
+import { addVariants, createProductDraft } from "./helpers/product";
+import { postBatch } from "./helpers/production";
 import { E2E_FABRIC_COLOUR_EMAIL } from "./global-setup";
+import { generateSku } from "@ammari/db/catalog";
 
 // docs/plans/fabric-colour-stock.md sessions S2 (purchase lines per colour), S3 (receiving, undo,
-// defects and exchange per colour) and S4 (stock pages and adjustments per colour). Every flow runs at 390px
+// defects and exchange per colour), S4 (stock pages and adjustments per colour) and S5 (production
+// usage per colour, "Pindahkan ke warna"). Every flow runs at 390px
 // AND 1280px (CLAUDE.md's rule): the purchase detail's Barang list renders two independent layouts
 // (CardList for phones, TableContainer for desktop), so each pass asserts its own layout's rows
 // and that the other layout's rows are hidden.
@@ -465,6 +469,238 @@ async function runStockPerColour(page: Page, layout: Layout): Promise<void> {
   await page.locator("li").filter({ has: page.locator('input[value="Tosca"]') }).getByRole("switch", { name: "Aktif" }).click();
   await expectColourCards(page, [["Mocca", "0.00 yard"], ["Sage", "9.00 yard"]], "9.00 yard");
 }
+
+// ---------- S5: production usage per colour, "Pindahkan ke warna" ----------
+
+/** A product on `fabricName` with an M variant in each of `colours`; returns each colour's SKU. */
+async function createProductWithColours(page: Page, fabricName: string, productName: string, colours: string[]): Promise<Record<string, string>> {
+  const { code } = await createProductDraft(page, { name: productName, fabricName, active: false });
+  const skus: Record<string, string> = {};
+  for (const colour of colours) {
+    await addVariants(page, new RegExp(colour), ["M"]);
+    skus[colour] = generateSku({ code, closure: "front_zip", color: colour, size: "M" });
+    await expect(page.locator(`:text-is("${skus[colour]}"):visible`)).toBeVisible();
+  }
+  return skus;
+}
+
+/** The "Pemakaian kain" rows: exactly `expected` [source option label start, yards], in order. */
+async function expectUsageRows(page: Page, expected: [string, string][]): Promise<void> {
+  const rows = page.getByTestId("fabric-usage-row");
+  await expect(rows).toHaveCount(expected.length);
+  for (const [index, [source, yards]] of expected.entries()) {
+    await expect(page.getByLabel(`Warna sumber ${index + 1}`, { exact: true }).locator("option:checked")).toHaveText(new RegExp(`^${source} \\(stok`));
+    await expect(page.getByLabel(`Yard ${index + 1}`, { exact: true })).toHaveValue(yards);
+  }
+}
+
+/** Ledger rows in this layout as a multiset of colours: movements written in one transaction (a
+ * receipt of two lines, a batch's usage rows, a move's out/in pair) share created_at, so their
+ * relative order is not fixed. */
+async function expectLedgerColourSet(page: Page, layout: Layout, colours: string[]): Promise<void> {
+  const rows = page.locator(LEDGER_ROW[layout.label]!);
+  await expect(rows).toHaveCount(colours.length);
+  expect((await rows.getByTestId("fabric-ledger-color").allTextContents()).sort()).toEqual([...colours].sort());
+  await expect(page.locator(LEDGER_ROW[otherLayout(layout).label]!).first()).toBeHidden();
+}
+
+/** PO with colours (Sage 10, Mocca 8) → receive (Mocca 1 yard rejected) → stock per colour →
+ * production with Sage + Mocca SKUs, the default split edited → a short post refused listing both
+ * colours → post → stock per colour after posting and the batch's fabric cost per colour. */
+async function runProductionPerColour(page: Page, layout: Layout): Promise<void> {
+  const { fabricName, fabricId } = await createColourPurchase(page, layout, "Produksi", [
+    { color: "Sage", qty: "10", amount: "195.000" },
+    { color: "Mocca", qty: "8", amount: "240.000" },
+  ]);
+  await receiveColours(page, fabricName, { Sage: { good: "10" }, Mocca: { good: "7", defect: "1" } });
+
+  const stockUrl = `/stock/fabrics/${fabricId}`;
+  await page.goto(stockUrl);
+  await expectColourCards(page, [["Mocca", "7.00 yard"], ["Sage", "10.00 yard"], ["Tosca", "0.00 yard"]], "17.00 yard");
+  await expect(page.getByTestId("item-defect-section").getByTestId("defect-color-chip")).toHaveText(["Mocca1.00 yard"]);
+
+  const skus = await createProductWithColours(page, fabricName, `E2E Gamis Warna ${layout.width}-${Date.now()}`, ["Sage", "Mocca"]);
+
+  // Default split (A4): 10 yard over Sage 6 pcs and Mocca 4 pcs, colours by name, stock beside.
+  await page.goto("/production/new");
+  await page.locator("#batch-fabric").selectOption({ label: fabricName });
+  await page.locator("#batch-fabric-yards").fill("10");
+  await page.locator(`#qty-${skus.Sage}`).fill("6");
+  await page.locator(`#qty-${skus.Mocca}`).fill("4");
+  await expectUsageRows(page, [["Mocca", "4"], ["Sage", "6"]]);
+  await expect(page.getByTestId("fabric-usage-stock")).toHaveText(["Stok Mocca7.00 yard", "Stok Sage10.00 yard"]);
+  // Estimate: each colour at its own average (Mocca 30.000/yard, Sage 19.500/yard).
+  await expect(page.getByText("Rp 237.000")).toBeVisible();
+
+  // Edited split: the total follows the rows; a row beyond its colour's stock is flagged.
+  await page.getByLabel("Yard 1", { exact: true }).fill("8");
+  await expect(page.getByTestId("fabric-usage-shortfall")).toHaveText("kurang 1.00 yard");
+  await expect(page.locator("#batch-fabric-yards")).toHaveValue("14");
+  await page.getByLabel("Yard 1", { exact: true }).fill("3");
+  await page.getByLabel("Yard 2", { exact: true }).fill("5.5");
+  await expect(page.getByTestId("fabric-usage-shortfall")).toHaveCount(0);
+  await expect(page.locator("#batch-fabric-yards")).toHaveValue("8.5");
+  await expect(page.getByTestId("fabric-usage-total")).toHaveText("Total pemakaian 8.50 yard");
+  await page.getByRole("button", { name: "Simpan draf" }).click();
+  await openCreated(page, "/production");
+  const batchUrl = page.url();
+
+  // The saved rows come back as edited (not re-split).
+  await expectUsageRows(page, [["Mocca", "3"], ["Sage", "5.5"]]);
+
+  // Over both colours' stock: posting refuses, naming every short colour in one message.
+  await page.getByLabel("Yard 1", { exact: true }).fill("8");
+  await page.getByLabel("Yard 2", { exact: true }).fill("11");
+  await page.getByRole("button", { name: "Simpan draf" }).click();
+  await expect(page).toHaveURL(/\/production$/, { timeout: 15_000 });
+  await page.goto(batchUrl);
+  await page.getByRole("button", { name: "Posting batch" }).click();
+  await page.getByRole("button", { name: "Posting", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Stok kurang" })).toHaveText("Stok kurang: Mocca kurang 1.00 yard, Sage kurang 1.00 yard.", {
+    timeout: 15_000,
+  });
+
+  // Back to the edited split, saved, posted.
+  await page.goto(batchUrl);
+  await page.getByLabel("Yard 1", { exact: true }).fill("3");
+  await page.getByLabel("Yard 2", { exact: true }).fill("5.5");
+  await page.getByRole("button", { name: "Simpan draf" }).click();
+  await expect(page).toHaveURL(/\/production$/, { timeout: 15_000 });
+  await page.goto(batchUrl);
+  await postBatch(page);
+
+  // The posted batch: usage per colour, and the fabric cost per colour at each colour's average.
+  await expect(page.getByTestId("batch-fabric-usage-color")).toHaveText(["Mocca", "Sage"]);
+  await expect(page.getByTestId("batch-fabric-usage-yards")).toHaveText(["3.00 yard", "5.50 yard"]);
+  await expect(page.getByTestId("batch-fabric-cost-color")).toHaveText(["Mocca", "Sage"]);
+  await expect(page.getByTestId("batch-fabric-cost-value")).toHaveText(["Rp 90.000", "Rp 107.250"]);
+
+  // Stock per colour after posting: Mocca 7 - 3, Sage 10 - 5.5; the ledger rows name the colour.
+  await page.goto(stockUrl);
+  await expectColourCards(page, [["Mocca", "4.00 yard"], ["Sage", "4.50 yard"], ["Tosca", "0.00 yard"]], "8.50 yard");
+  await expectLedgerColourSet(page, layout, ["Mocca", "Sage", "Mocca", "Sage"]);
+}
+
+/** Old stock is all "Tanpa warna" (Ameera's 13.45 yard): move most of it into a colour, refuse
+ * moving more than is left or without a reason, move between colours, then use the rest of
+ * Tanpa warna in production through an extra usage row. */
+async function runMoveToColour(page: Page, layout: Layout): Promise<void> {
+  const marker = `${layout.width}-${Date.now()}`;
+  const supplierName = `E2E Pemasok Pindah ${marker}`;
+  const fabricName = `E2E Ameera Pindah ${marker}`;
+  await createSupplier(page, supplierName);
+  const fabricUrl = await createFabric(page, fabricName, ["Sage"]);
+  const fabricId = new URL(fabricUrl).pathname.split("/").at(-1)!;
+  // No active colour while it is bought and received: it lands in Tanpa warna, like old stock.
+  await page.getByRole("switch", { name: "Aktif" }).click();
+  await expect(page.getByRole("switch", { name: "Aktif" })).toHaveAttribute("aria-checked", "false");
+  await createPurchase(page, supplierName, [{ type: "Kain", itemName: fabricName, qty: "13.45", amount: "269.000" }]);
+  await receiveColours(page, fabricName, {});
+  await page.goto(fabricUrl);
+  await page.getByRole("switch", { name: "Aktif" }).click();
+  await expect(page.getByRole("switch", { name: "Aktif" })).toHaveAttribute("aria-checked", "true");
+  await page.locator("#new-fabric-color-name").fill("Mocca");
+  await page.getByRole("button", { name: "Tambah warna", exact: true }).click();
+  // The add field clears only once the colour is saved (its own typed value would match too).
+  await expect(page.locator("#new-fabric-color-name")).toHaveValue("", { timeout: 15_000 });
+  await expect(page.locator('input[value="Mocca"]')).toBeVisible();
+
+  const stockUrl = `/stock/fabrics/${fabricId}`;
+  await page.goto(stockUrl);
+  await expectColourCards(page, [["Mocca", "0.00 yard"], ["Sage", "0.00 yard"], ["Tanpa warna", "13.45 yard"]], "13.45 yard");
+  await expect(page.getByTestId("fabric-total-balance-value")).toHaveText("Nilai Rp 269.000 · ≈ Rp 20.000/yard");
+
+  const openMove = async () => {
+    await page.getByRole("button", { name: "Pindahkan ke warna" }).click();
+    return page.getByRole("dialog", { name: "Pindahkan ke warna" });
+  };
+  let dialog = await openMove();
+  // Only Tanpa warna holds stock: preselected as the source.
+  await expect(dialog.getByRole("combobox", { name: "Dari" }).locator("option:checked")).toHaveText("Tanpa warna (stok 13.45 yard)");
+  await dialog.getByRole("combobox", { name: "Ke warna" }).selectOption({ label: "Sage (stok 0.00 yard)" });
+  await dialog.getByRole("textbox", { name: "Jumlah yard" }).fill("10");
+  await dialog.getByRole("button", { name: "Pindahkan", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Alasan wajib diisi.");
+  await dialog.getByRole("textbox", { name: "Alasan" }).fill("Hitung ulang stok lama per warna");
+  await dialog.getByRole("button", { name: "Pindahkan", exact: true }).click();
+  await expect(dialog).toBeHidden({ timeout: 15_000 });
+  // Total quantity and value unchanged; the value moved at Tanpa warna's average.
+  await expectColourCards(page, [["Mocca", "0.00 yard"], ["Sage", "10.00 yard"], ["Tanpa warna", "3.45 yard"]], "13.45 yard");
+  await expect(page.getByTestId("fabric-color-balance").filter({ hasText: "Sage" }).getByTestId("fabric-color-balance-value")).toHaveText(
+    "Nilai Rp 200.000 · ≈ Rp 20.000/yard",
+  );
+  await expect(page.getByTestId("fabric-total-balance-value")).toHaveText("Nilai Rp 269.000 · ≈ Rp 20.000/yard");
+  // A pair of movements on top of the receipt, each naming the other colour and the reason.
+  await expectLedgerColourSet(page, layout, ["Sage", "Tanpa warna", "Tanpa warna"]);
+  const ledgerRows = page.locator(LEDGER_ROW[layout.label]!);
+  await expect(ledgerRows.last().getByTestId("fabric-ledger-color")).toHaveText("Tanpa warna");
+  await expect(ledgerRows.filter({ hasText: "Pindah dari Tanpa warna: Hitung ulang stok lama per warna" }).getByTestId("fabric-ledger-color")).toHaveText("Sage");
+  await expect(ledgerRows.filter({ hasText: "Pindah ke Sage: Hitung ulang stok lama per warna" }).getByTestId("fabric-ledger-color")).toHaveText("Tanpa warna");
+
+  // More than is left in the source: refused, nothing moves.
+  dialog = await openMove();
+  await dialog.getByRole("combobox", { name: "Dari" }).selectOption({ label: "Tanpa warna (stok 3.45 yard)" });
+  await dialog.getByRole("combobox", { name: "Ke warna" }).selectOption({ label: "Mocca (stok 0.00 yard)" });
+  await dialog.getByRole("textbox", { name: "Jumlah yard" }).fill("5");
+  await dialog.getByRole("textbox", { name: "Alasan" }).fill("Coba lebih");
+  await dialog.getByRole("button", { name: "Pindahkan", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Stok Tanpa warna tidak cukup (stok sekarang 3.45 yard).");
+
+  // Colour to colour: Sage 2.5 into Mocca; the source can't be the target.
+  await dialog.getByRole("combobox", { name: "Dari" }).selectOption({ label: "Sage (stok 10.00 yard)" });
+  await expect(dialog.getByRole("combobox", { name: "Ke warna" }).locator("option:not([disabled])")).toHaveText(["Mocca (stok 0.00 yard)"]);
+  await dialog.getByRole("combobox", { name: "Ke warna" }).selectOption({ label: "Mocca (stok 0.00 yard)" });
+  await dialog.getByRole("textbox", { name: "Jumlah yard" }).fill("2.5");
+  await dialog.getByRole("textbox", { name: "Alasan" }).fill("Salah warna saat hitung");
+  await dialog.getByRole("button", { name: "Pindahkan", exact: true }).click();
+  await expect(dialog).toBeHidden({ timeout: 15_000 });
+  await expectColourCards(page, [["Mocca", "2.50 yard"], ["Sage", "7.50 yard"], ["Tanpa warna", "3.45 yard"]], "13.45 yard");
+
+  // Production: Sage's default row (9 yard) is short; a second row takes the rest from Tanpa warna.
+  const skus = await createProductWithColours(page, fabricName, `E2E Gamis Pindah ${marker}`, ["Sage"]);
+  await page.goto("/production/new");
+  await page.locator("#batch-fabric").selectOption({ label: fabricName });
+  await page.locator("#batch-fabric-yards").fill("9");
+  await page.locator(`#qty-${skus.Sage}`).fill("3");
+  await expectUsageRows(page, [["Sage", "9"]]);
+  await expect(page.getByTestId("fabric-usage-shortfall")).toHaveText("kurang 1.50 yard");
+  await page.getByRole("button", { name: "+ Tambah warna" }).click();
+  // The new row starts on the first unused bucket holding stock (Mocca); switch it to Tanpa warna.
+  const secondSource = page.getByLabel("Warna sumber 2", { exact: true });
+  await expect(secondSource.locator("option:checked")).toHaveText("Mocca (stok 2.50 yard)");
+  // Sage is taken by row 1, so it can't be picked twice.
+  await expect(secondSource.locator("option:disabled")).toHaveText(["Sage (stok 7.50 yard)"]);
+  await secondSource.selectOption({ label: "Tanpa warna (stok 3.45 yard)" });
+  await page.getByLabel("Yard 1", { exact: true }).fill("7.5");
+  await page.getByLabel("Yard 2", { exact: true }).fill("1.5");
+  await expect(page.getByTestId("fabric-usage-shortfall")).toHaveCount(0);
+  await expect(page.locator("#batch-fabric-yards")).toHaveValue("9");
+  await page.getByRole("button", { name: "Simpan draf" }).click();
+  await openCreated(page, "/production");
+  await postBatch(page);
+  await expect(page.getByTestId("batch-fabric-usage-color")).toHaveText(["Sage", "Tanpa warna"]);
+
+  await page.goto(stockUrl);
+  await expectColourCards(page, [["Mocca", "2.50 yard"], ["Sage", "0.00 yard"], ["Tanpa warna", "1.95 yard"]], "4.45 yard");
+}
+
+test.describe("Produksi dan pindah warna", () => {
+  for (const layout of [MOBILE, DESKTOP]) {
+    test(`PO with colours, receive, production with an edited split, stock per colour after posting, at ${layout.label}`, async ({ page }) => {
+      test.setTimeout(300_000);
+      await page.setViewportSize({ width: layout.width, height: layout.height });
+      await loginAs(page, E2E_FABRIC_COLOUR_EMAIL);
+      await runProductionPerColour(page, layout);
+    });
+
+    test(`move Tanpa warna stock into colours, then use the rest in production, at ${layout.label}`, async ({ page }) => {
+      test.setTimeout(300_000);
+      await page.setViewportSize({ width: layout.width, height: layout.height });
+      await loginAs(page, E2E_FABRIC_COLOUR_EMAIL);
+      await runMoveToColour(page, layout);
+    });
+  }
+});
 
 test.describe("Stok kain per warna", () => {
   for (const layout of [MOBILE, DESKTOP]) {

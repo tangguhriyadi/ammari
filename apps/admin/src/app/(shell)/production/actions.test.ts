@@ -18,6 +18,13 @@ vi.mock("@/lib/production/queries", () => ({
   updateDraft: updateDraftMock,
 }));
 
+const { listFabricColorBalancesMock } = vi.hoisted(() => ({
+  listFabricColorBalancesMock: vi.fn().mockResolvedValue([
+    { fabricColorId: "sage", name: "Sage", hex: null, isActive: true, hasMovements: true, qty: 10, valueAmount: 195_000 },
+  ]),
+}));
+vi.mock("@/lib/inventory/fabric-stock", () => ({ listFabricColorBalances: listFabricColorBalancesMock }));
+
 const { postGoodsReceiptForBatchMock, closeBatchShortMock } = vi.hoisted(() => ({
   postGoodsReceiptForBatchMock: vi.fn().mockResolvedValue({ receipt: { receiptNo: "GR-202610-001" }, status: "partially_received" }),
   closeBatchShortMock: vi.fn().mockResolvedValue({ id: "batch-1" }),
@@ -34,7 +41,8 @@ vi.mock("@/lib/storefront-stock", () => ({
   skusForBatchLines: vi.fn().mockResolvedValue([]),
 }));
 
-const { createDraftAction, updateDraftAction, deleteDraftAction, postBatchAction, receiveBatchAction, closeBatchAction } = await import("./actions");
+const { createDraftAction, updateDraftAction, deleteDraftAction, postBatchAction, receiveBatchAction, closeBatchAction, getFabricUsageStockAction } =
+  await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
   return {
@@ -218,5 +226,68 @@ describe("output receipt actions (S4): inventory.receive receives, inventory.man
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
     expect(await closeBatchAction({ batchId: NIL_ID, reason: "Tidak dilanjutkan" })).toEqual({ ok: true, data: undefined });
     expect(closeBatchShortMock).toHaveBeenCalledWith(NIL_ID, "Tidak dilanjutkan", "staff-1");
+  });
+});
+
+describe("fabric usage rows per colour (docs/plans/fabric-colour-stock.md S5)", () => {
+  test("parsed yards and the Tanpa warna source (null) are forwarded; omitted means an empty set", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage"]));
+    updateDraftMock.mockClear();
+    await updateDraftAction(NIL_ID, {
+      producedAt: "2026-11-21",
+      fabricYards: "12.5",
+      lines: [],
+      fabricUsages: [
+        { fabricColorId: null, yards: "10" },
+        { fabricColorId: NIL_ID, yards: "2.5" },
+      ],
+    });
+    const [, input] = updateDraftMock.mock.calls[0]!;
+    expect(input.fabricUsages).toEqual([
+      { fabricColorId: null, yards: 10 },
+      { fabricColorId: NIL_ID, yards: 2.5 },
+    ]);
+
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage"]));
+    createDraftMock.mockClear();
+    await createDraftAction({ fabricId: NIL_ID, producedAt: "2026-11-21", fabricYards: "1", lines: [] });
+    expect(createDraftMock.mock.calls[0]![0].fabricUsages).toEqual([]);
+  });
+
+  test("a usage row with invalid yards is refused before the query layer", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage"]));
+    updateDraftMock.mockClear();
+    const result = await updateDraftAction(NIL_ID, {
+      producedAt: "2026-11-21",
+      fabricYards: "",
+      lines: [],
+      fabricUsages: [{ fabricColorId: null, yards: "1.234" }],
+    });
+    expect(result).toEqual({ ok: false, error: "Jumlah tidak valid." });
+    expect(updateDraftMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("getFabricUsageStockAction strips cost data without finance.view_profit", () => {
+  test("production.manage only: quantities, no values", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage"]));
+    await expect(getFabricUsageStockAction(NIL_ID)).resolves.toEqual([
+      { fabricColorId: "sage", name: "Sage", hex: null, isActive: true, qty: 10, valueAmount: null },
+    ]);
+  });
+
+  test("with finance.view_profit: values included", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage", "finance.view_profit"]));
+    const [row] = await getFabricUsageStockAction(NIL_ID);
+    expect(row?.valueAmount).toBe(195_000);
+  });
+
+  test("a malformed fabric id returns nothing; a session without production.manage is rejected", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["production.manage"]));
+    listFabricColorBalancesMock.mockClear();
+    await expect(getFabricUsageStockAction("bukan-uuid")).resolves.toEqual([]);
+    expect(listFabricColorBalancesMock).not.toHaveBeenCalled();
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.view", "finance.view_profit"]));
+    await expect(getFabricUsageStockAction(NIL_ID)).rejects.toThrow();
   });
 });

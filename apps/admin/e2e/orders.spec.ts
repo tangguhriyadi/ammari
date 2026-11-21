@@ -36,8 +36,9 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
   await page.goto("/production/new");
   await page.locator("#batch-fabric").selectOption({ label: fabricName });
   await page.locator("#batch-fabric-yards").fill("10");
-  await expect(page.getByText("Rp 1.000.000")).toBeVisible(); // the live fabric-cost estimate
   await page.getByLabel("M", { exact: true }).fill("5");
+  // The live fabric-cost estimate, once the SKU gives the yards a colour (fabric-colour-stock S5).
+  await expect(page.getByText("Rp 1.000.000")).toBeVisible();
   await page.getByRole("button", { name: "Simpan draf" }).click();
   await openCreated(page, "/production");
 

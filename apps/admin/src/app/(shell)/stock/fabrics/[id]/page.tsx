@@ -56,6 +56,10 @@ export default async function FabricStockDetailPage({
   if (!fabricHasActiveColors && !adjustOptions.some((option) => option.fabricColorId === null)) {
     adjustOptions.push({ fabricColorId: null, name: null, isActive: true, qty: 0 });
   }
+  // "Pindahkan ke warna" (A3): from any bucket holding stock, into an active colour.
+  const toMoveOption = (row: (typeof colorBalances)[number]) => ({ fabricColorId: row.fabricColorId, name: row.name, isActive: row.isActive, qty: row.qty });
+  const moveSources = colorBalances.filter((row) => row.qty > 0).map(toMoveOption);
+  const moveTargets = colorBalances.filter((row) => row.fabricColorId !== null && row.isActive).map(toMoveOption);
   const basePath = `/stock/fabrics/${id}`;
 
   return (
@@ -64,7 +68,15 @@ export default async function FabricStockDetailPage({
       <PageHeader title={fabric.name} description={fabric.supplier ?? undefined} />
       <FabricColorBalances rows={colorStock} total={{ qty: balance.qty, valueAmount: canViewProfit ? balance.valueAmount : null }} />
       <div className="mb-6 flex flex-wrap items-center gap-3">
-        {canManage && <FabricStockControls fabricId={fabric.id} colorOptions={adjustOptions} requireColor={fabricHasActiveColors} />}
+        {canManage && (
+          <FabricStockControls
+            fabricId={fabric.id}
+            colorOptions={adjustOptions}
+            requireColor={fabricHasActiveColors}
+            moveSources={moveSources}
+            moveTargets={moveTargets}
+          />
+        )}
         {canViewMaster && (
           <Link href={`/fabrics/${id}`} className="inline-flex min-h-11 items-center text-base font-medium text-brand hover:underline">
             Lihat data master →

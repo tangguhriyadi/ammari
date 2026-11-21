@@ -36,7 +36,7 @@ async function postedBatch(tx: TestDatabase) {
     {
       fabricId: fabric.id,
       producedAt: "2026-10-01",
-      fabricYards: 10,
+      fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }],
       lines: [
         { sku: variantA.sku, qty: 3 },
         { sku: variantB.sku, qty: 2 },
@@ -189,7 +189,7 @@ describe("postGoodsReceiptForBatch", () => {
   test("refuses a draft, a fully received and a closed batch", async () => {
     await withRollback(async (tx) => {
       const { staff, batch, fabric, variantA, lineA, lineB } = await postedBatch(tx);
-      const draft = await createDraft({ fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 1, lines: [{ sku: variantA.sku, qty: 1 }] }, null, tx);
+      const draft = await createDraft({ fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 1, fabricUsages: [{ fabricColorId: null, yards: 1 }], lines: [{ sku: variantA.sku, qty: 1 }] }, null, tx);
       const [draftLine] = await tx.select().from(productionBatchItems).where(eq(productionBatchItems.productionBatchId, draft.id));
       await expect(receive(tx, draft.id, staff.id, [{ productionBatchItemId: draftLine!.id, qtyAccepted: 1 }])).rejects.toThrow("belum diposting");
 
@@ -260,7 +260,7 @@ describe("closeBatchShort (Tutup batch)", () => {
       ]);
       await expect(closeBatchShort(done.batch.id, "Tutup", done.staff.id, tx)).rejects.toThrow("sudah diterima lengkap");
 
-      const draft = await createDraft({ fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 1, lines: [{ sku: variantA.sku, qty: 1 }] }, null, tx);
+      const draft = await createDraft({ fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 1, fabricUsages: [{ fabricColorId: null, yards: 1 }], lines: [{ sku: variantA.sku, qty: 1 }] }, null, tx);
       await expect(closeBatchShort(draft.id, "Tutup", staff.id, tx)).rejects.toThrow("belum diposting");
       expect(lineA.id).not.toBe(lineB.id);
     });
@@ -419,7 +419,7 @@ describe("listUnreceivedBatchesForProduct (stock-count guard)", () => {
     await withRollback(async (tx) => {
       const { staff, batch, fabric, productA, variantA } = await postedBatch(tx);
       await closeBatchShort(batch.id, "Tidak dilanjutkan", staff.id, tx);
-      await createDraft({ fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 1, lines: [{ sku: variantA.sku, qty: 1 }] }, null, tx);
+      await createDraft({ fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 1, fabricUsages: [{ fabricColorId: null, yards: 1 }], lines: [{ sku: variantA.sku, qty: 1 }] }, null, tx);
       expect(await listUnreceivedBatchesForProduct(productA.id, tx)).toEqual([]);
     });
   });

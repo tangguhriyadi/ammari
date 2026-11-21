@@ -1,6 +1,7 @@
 # Plan: Fabric stock per colour (Pembelian, Penerimaan, Stok, Produksi)
 
-Status (2026-11-21): **Approved** (owner decisions in §10). S1 (schema) implemented and reviewed
+Status (2026-11-21): **Approved** (owner decisions in §10). S1 to S4 committed; S5 implemented,
+awaiting review and commit (notes below); S6 (SPEC.md + deploy note) open. S1 (schema) implemented and reviewed
 (database-reviewer, typescript-reviewer), awaiting commit. S1 notes: migration 0046; per-bucket
 reads `getFabricColorBalance` / `listFabricColorBalances` in `lib/inventory/fabric-stock.ts`; both
 void paths (`reverseGoodsReceipt`, `voidFabricPurchase`) already copy `fabric_color_id` so S1 is a
@@ -18,7 +19,55 @@ only while that bucket is non-zero, Tanpa warna also when the fabric has no acti
 bucket may go below zero); `listFabricColorBalancesByFabric` feeds the `/stock/fabrics` chips;
 `listFabricStockLedger` has colour per row and a `?warna=<id>|tanpa` filter (running balance of
 the filtered bucket); the cards/total on `/fabrics/[id]` and `/stock/fabrics/[id]` replace the old
-single headline. The e2e drives the same-colour adjustment blocking undo through the UI.
+single headline. The e2e drives the same-colour adjustment blocking undo through the UI. S4
+committed. S5 (production usage per colour + "Pindahkan ke warna") implemented, awaiting review and
+commit:
+- **Drafts** (`createDraft`/`updateDraft`): `fabricUsages[]` replaces the batch's
+  `production_batch_fabric_usages` rows as a set (colour must belong to the fabric, inactive allowed,
+  no duplicate source, yards > 0 with 2 decimals, max 50 rows); `fabric_yards` = Σ rows when there
+  are rows, else the typed total (a draft saved before any SKU is picked). Audit `after.fabricUsages`
+  names each colour.
+- **Form** (`fabric-usage-section.tsx`): "Pemakaian kain" rows with each bucket's stock and a
+  "kurang X yard" flag. Default (A4) = `splitYardsByPcs` (`lib/production/fabric-usage.ts`: by pcs
+  per SKU colour, 0.01 rounding, remainder on the colour with most pcs, sums exactly) recomputed
+  while untouched; editing a row switches to manual rows and "Jumlah yard" follows their sum;
+  typing "Jumlah yard" or "Bagi sesuai pcs" re-splits. "+ Tambah warna" adds a source (Tanpa warna
+  is always offered), "Ambil dari Tanpa warna" appears on a short row when Tanpa warna covers it. A
+  saved draft opens with its rows; a draft without rows (saved before S5) opens on the default split
+  of its yards. Estimate = Σ rows × each bucket's own average (`estimateFabricUsageCost`; replaces
+  `fabric-cost-estimate.ts`). Stock quantities are shown to any `production.manage` session,
+  values only with `finance.view_profit` (`getFabricUsageStockAction`).
+- **Posting** (`postBatch`): no usage rows → "Isi pemakaian kain per warna lalu simpan."; rows
+  must add up to `fabric_yards` (only the previous release can drift them apart) → "Pemakaian kain
+  per warna (X yard) tidak sama dengan jumlah yard batch (Y yard). Buka draf, periksa pemakaian
+  kain, lalu simpan."; lock the fabric once, check each row against its OWN bucket, every shortage
+  (fabric colours and accessories) in one message, colours by name ("Stok kurang: Mocca kurang 1.00
+  yard, Sage kurang 3.20 yard."); one `production` movement per row valued at that bucket's average
+  (zero-residual when it empties the bucket); `fabric_cost_amount` = Σ; HPP formula unchanged.
+  Audit `after.fabricConsumption`. Posted rows are frozen by the 0046 trigger.
+- **Display**: batch detail shows "Pemakaian kain" per colour; `BatchCostsSection` shows Kain per
+  colour with value (`getBatchFabricConsumption`); a batch posted before S5 shows "Kain: N yard
+  (Tanpa warna, sebelum stok per warna)".
+- **"Pindahkan ke warna"** (`reclassifyFabricStock`, `reclassifyFabricStockAction`,
+  `inventory.manage`, `/stock/fabrics/[id]` dialog): source = any bucket holding stock (Tanpa warna,
+  a colour, an inactive colour), target = another ACTIVE colour of the same fabric; reason required;
+  an out/in `adjustment` pair (`reason='other'`, `ref_type='manual'`, notes "Pindah ke Sage: …" /
+  "Pindah dari Tanpa warna: …"), out valued at the source average, in = exact negation; source can't
+  go below zero; one `adjust` audit entry `after: { reason, out, in }` with both colour names. No
+  migration (0047 not needed).
+- **S3 gap closed**: every path that subtracts from a bucket now checks that bucket: production
+  (above), adjustments (S4), receipt reversal (S3), reclassify (above), and `voidFabricPurchase`'s
+  negative backstop, which now checks the void's own bucket instead of the fabric total.
+- **Rollback after S5** (database review): the S4 image's `postBatch` ignores usage rows, checks
+  the fabric TOTAL and writes one colourless movement for the whole yardage, so posting a batch
+  while rolled back can drive "Tanpa warna" negative while the colours keep their stock (shown in
+  brick red). The new `postBatch`'s sum check catches a draft the old release edited, not this.
+  Rule: after a rollback past S5, don't post batches until S5 is redeployed. If one was posted
+  anyway, repair it with "Sesuaikan stok": +N on Tanpa warna and -N on the colour the batch really
+  used ("Pindahkan ke warna" can't target Tanpa warna). Belongs in `docs/deploy.md` with S6.
+- Note for review: movements written in one transaction (a receipt of two lines, a batch's usage
+  rows, a reclassify pair) share `created_at`, so their order within the ledger is by id, not by
+  intent. The running balance is still right; the e2e asserts those rows order-agnostically.
 
 The owner buys fabric per colour, with a different yardage (and sometimes a different price per
 yard) for each colour. Example: PO-202611-001 at JMS Textile, Marbella Anti UV in 6 colours, 838
@@ -79,7 +128,8 @@ stays valid as **"Tanpa warna"**. Admin only; the storefront is untouched.
   balance check `fabric_yards ≤ fabric balance` → one `production` movement valued with
   `valueDeltaForConsumption(balance, -yards)` (moving average, zero-residual rule,
   `packages/commerce/src/inventory/moving-average.ts`) → `fabric_cost_amount` → `unit_cost =
-  ceil(total / pcs)` frozen on every line. Draft estimate: `production/fabric-cost-estimate.ts`.
+  ceil(total / pcs)` frozen on every line. Draft estimate: `production/fabric-cost-estimate.ts`
+  (replaced in S5 by `estimateFabricUsageCost` in `production/fabric-usage.ts`, per bucket).
   Form: `production-batch-form.tsx` (one "yard" input, `getFabricBalanceAction`).
 - **Audit log:** `writeAuditLog` everywhere; catalog has `fabric`, `fabric_color`,
   `fabric_stock_movement`, `purchase`, `goods_receipt`, `production_batch`.
@@ -413,6 +463,46 @@ After S2 (purchase lines per colour) is deployed, and before receiving anything:
 
 Existing stock (bought before this feature) shows as **Tanpa warna**. Either use it in production
 by picking Tanpa warna as the source, or do one stock count and move it into colours (S5).
+
+### 8.1 Owner steps once S5 is deployed
+
+**PO-202611-001 (JMS Textile, Marbella Anti UV), if it is still not received:**
+
+1. **Bahan → Marbella Anti UV → Warna**: all 6 colours exist and are active (name, supplier code,
+   hex).
+2. **Pembelian → PO-202611-001 → Ubah pesanan**. The old line shows "Tanpa warna (data lama)" with
+   the hint "Baris lama tanpa warna.". On that line type **Harga per yard** `19.500`, tap
+   **"Tambah semua warna"** (one line per colour, each with Rp 19.500/yard), fill each colour's
+   **Jumlah** (they must add up to 838 yard; the footer shows the yard total per fabric), add ongkir
+   to a line's Total harga if it was charged, then **delete the old colourless line** (Hapus) and
+   **Simpan**. The total should stay Rp 16.341.000 (+ ongkir); if a DP was already paid, the new
+   total only has to be at least what was paid.
+3. When the fabric arrives: **Terima barang**. There is one row per colour; fill Diterima and
+   "Ditolak (cacat)" per colour (or keep the prefilled remaining yards). Partial deliveries are
+   fine: receive again later, only the colours still open are listed.
+4. Check **Stok → Kain → Marbella Anti UV**: one card per colour with its yards and average price.
+
+If PO-202611-001 was already received before S2/S3, it sits in Tanpa warna: use the steps below.
+
+**Moving existing Tanpa warna stock into colours (e.g. Ameera 13.45 yard):**
+
+1. Count the roll per colour first (how many yards of each colour are really there).
+2. **Bahan → Ameera → Warna**: the colours exist and are active.
+3. **Stok → Kain → Ameera → "Pindahkan ke warna"**. Dari: **Tanpa warna** (preselected when it is
+   the only bucket with stock), Ke warna: the colour, Jumlah yard: that colour's counted yards,
+   Alasan: e.g. "Hitung ulang stok lama per warna". Tap **Pindahkan**. Repeat per colour.
+4. The fabric's total yards and total value do not change; each colour gets the old average price
+   per yard (Tanpa warna's). The history shows each move as a pair "Pindah ke …" / "Pindah dari …".
+5. If the count differs from the system (e.g. 13.00 found, 13.45 recorded), first **Sesuaikan
+   stok** on Tanpa warna for the difference (reason "Hitung ulang"), then move the rest.
+6. Anything left in Tanpa warna can still be used directly in production: in the batch's
+   "Pemakaian kain", switch a row's **Warna sumber** to Tanpa warna (or "Ambil dari Tanpa warna"
+   on a short row).
+
+**Draft production batches saved before S5:** open each one. "Pemakaian kain" is prefilled with
+the default split of its yards by pcs per colour; adjust the source (e.g. Tanpa warna while old
+stock is still there) and yards, then **Simpan draf** before posting. Posting a draft that was never
+saved with these rows is refused with "Isi pemakaian kain per warna lalu simpan.".
 
 ---
 

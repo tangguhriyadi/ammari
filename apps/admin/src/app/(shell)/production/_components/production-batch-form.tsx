@@ -2,22 +2,23 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { Button, Input, Label, Select, Textarea, useToast } from "@ammari/ui";
 import { formatRupiah } from "@ammari/ui/lib";
 import { useUnsavedChangesGuard } from "@/lib/use-unsaved-changes-guard";
 import type { EligibleSkuRow, ProductUsingFabricRow } from "@/lib/production/queries";
 import type { SupplierOption } from "@/lib/suppliers/queries";
-import { estimateFabricCost } from "@/lib/production/fabric-cost-estimate";
-import type { RawMaterialBalance } from "@ammari/commerce/moving-average";
+import type { FabricUsageStock } from "@/lib/production/fabric-usage-stock";
 import { parseDecimalQuantity } from "@/lib/production/decimal-quantity";
+import { estimateFabricUsageCost, formatYardsInput, pcsByFabricColor, splitYardsByPcs } from "@/lib/production/fabric-usage";
 import {
   createDraftAction,
-  getFabricBalanceAction,
+  getFabricUsageStockAction,
   listProductsUsingFabricAction,
   suggestEligibleSkusAction,
   updateDraftAction,
 } from "../actions";
+import { FabricUsageSection, fabricColorIdOf, sourceOf, type FabricUsageRowState } from "./fabric-usage-section";
 import { BatchLinePicker } from "./batch-line-picker";
 import { ExtraCostLines, type ActiveCostComponentOption, type ExtraCostLineState } from "./extra-cost-lines";
 
@@ -33,6 +34,9 @@ interface ProductionBatchFormCommonProps {
     fabricYards: number | null;
     notes: string;
     lines: { sku: string; qty: number }[];
+    /** The draft's saved usage rows (edit mode). Empty: the form starts on the default split by
+     * pcs, which is also what a draft saved before stock per colour opens with. */
+    fabricUsages: { fabricColorId: string | null; colorName: string | null; colorHex: string | null; colorIsActive: boolean; yards: number }[];
   };
   /** The selected fabric's eligible SKUs — for create mode, this is re-fetched client-side
    * (`suggestEligibleSkusAction`) whenever the fabric select changes, since the initial server
@@ -57,7 +61,43 @@ interface ProductionBatchFormCommonProps {
 // non-null assertion at the one call site that needs it.
 export type ProductionBatchFormProps =
   | ({ mode: "create"; fabrics: FabricOption[] } & ProductionBatchFormCommonProps)
-  | ({ mode: "edit"; batchId: string; fixedFabricName: string; fixedFabricBalance: RawMaterialBalance } & ProductionBatchFormCommonProps);
+  | ({
+      mode: "edit";
+      batchId: string;
+      fixedFabricName: string;
+      /** The fabric's stock per colour bucket (values stripped without finance.view_profit). */
+      fixedFabricStock: FabricUsageStock[];
+    } & ProductionBatchFormCommonProps);
+
+function initialUsageRows(usages: ProductionBatchFormCommonProps["initialValues"]["fabricUsages"]): FabricUsageRowState[] {
+  return usages.map((usage) => ({ key: sourceOf(usage.fabricColorId), source: sourceOf(usage.fabricColorId), yards: formatYardsInput(usage.yards) }));
+}
+
+/** Every bucket a usage row may draw from: the fabric's buckets with stock, "Tanpa warna" always
+ * (old stock is all there), plus any colour a saved row already uses (e.g. since deactivated). */
+function usageBuckets(
+  stock: FabricUsageStock[],
+  saved: ProductionBatchFormCommonProps["initialValues"]["fabricUsages"],
+  skuColors: readonly Pick<EligibleSkuRow, "colorId" | "colorName" | "colorHex">[],
+): FabricUsageStock[] {
+  const buckets = [...stock];
+  const has = (fabricColorId: string | null) => buckets.some((bucket) => bucket.fabricColorId === fabricColorId);
+  for (const usage of saved) {
+    if (usage.fabricColorId !== null && !has(usage.fabricColorId)) {
+      buckets.push({ fabricColorId: usage.fabricColorId, name: usage.colorName, hex: usage.colorHex, isActive: usage.colorIsActive, qty: 0, valueAmount: null });
+    }
+  }
+  // A SKU's colour the stock list leaves out (an inactive colour without history): the default
+  // split can still name it, so it needs an option, or the <select> would show another colour.
+  for (const sku of skuColors) {
+    if (!has(sku.colorId)) {
+      buckets.push({ fabricColorId: sku.colorId, name: sku.colorName, hex: sku.colorHex, isActive: false, qty: 0, valueAmount: null });
+    }
+  }
+  const colors = buckets.filter((bucket) => bucket.fabricColorId !== null).sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", "id"));
+  const colorless = buckets.find((bucket) => bucket.fabricColorId === null) ?? { fabricColorId: null, name: null, hex: null, isActive: true, qty: 0, valueAmount: null };
+  return [...colors, colorless];
+}
 
 export function ProductionBatchForm(props: ProductionBatchFormProps) {
   const {
@@ -73,9 +113,12 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
   const toast = useToast();
   const [fabricId, setFabricId] = useState(initialValues.fabricId);
   const [eligibleSkus, setEligibleSkus] = useState(initialEligibleSkus);
-  const [fabricBalance, setFabricBalance] = useState<RawMaterialBalance | null>(
-    props.mode === "edit" ? props.fixedFabricBalance : null,
-  );
+  const [fabricStock, setFabricStock] = useState<FabricUsageStock[]>(props.mode === "edit" ? props.fixedFabricStock : []);
+  // "auto" = the rows ARE the default split of the yards by pcs per colour (A4), recomputed as the
+  // yards or pcs change; "manual" = the staff edited a row, so the rows stay as she left them and
+  // the yards follow their sum. A saved draft with rows opens in "manual" (her rows are kept).
+  const [usageMode, setUsageMode] = useState<"auto" | "manual">(initialValues.fabricUsages.length > 0 ? "manual" : "auto");
+  const [manualUsageRows, setManualUsageRows] = useState<FabricUsageRowState[]>(() => initialUsageRows(initialValues.fabricUsages));
   const [producedAt, setProducedAt] = useState(initialValues.producedAt);
   const [fabricYardsText, setFabricYardsText] = useState(
     initialValues.fabricYards !== null ? String(initialValues.fabricYards) : "",
@@ -108,9 +151,9 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
     // already-applied eligible-SKU list/quantities after the user has moved on.
     let ignore = false;
     startFabricLoad(async () => {
-      const [rows, balance, productsForFabric] = await Promise.all([
+      const [rows, stock, productsForFabric] = await Promise.all([
         suggestEligibleSkusAction(fabricId),
-        canViewProfit ? getFabricBalanceAction(fabricId) : Promise.resolve(null),
+        getFabricUsageStockAction(fabricId),
         listProductsUsingFabricAction(fabricId),
       ]);
       if (ignore) return;
@@ -118,24 +161,17 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
       // A fabric switch invalidates any previously staged quantities (they belonged to the OLD
       // fabric's SKUs) — clear rather than silently carrying over qty for SKUs no longer shown.
       setQuantities({});
-      setFabricBalance(balance);
+      setFabricStock(stock);
+      setUsageMode("auto");
+      setManualUsageRows([]);
       setProductsUsingFabric(productsForFabric);
     });
     return () => {
       ignore = true;
     };
-  }, [fabricId, mode, canViewProfit]);
+  }, [fabricId, mode]);
 
   const visibleEligibleSkus = mode === "create" && !fabricId ? [] : eligibleSkus;
-
-  const isDirty =
-    fabricId !== initialValues.fabricId ||
-    producedAt !== initialValues.producedAt ||
-    fabricYardsText !== (initialValues.fabricYards !== null ? String(initialValues.fabricYards) : "") ||
-    notes !== initialValues.notes ||
-    JSON.stringify(quantities) !== JSON.stringify(Object.fromEntries(initialValues.lines.map((l) => [l.sku, l.qty]))) ||
-    (initialExtraCosts ? JSON.stringify(extraCostLines) !== JSON.stringify(initialExtraCosts) : false);
-  useUnsavedChangesGuard(isDirty, "Ada perubahan batch produksi yang belum disimpan. Tinggalkan halaman ini?");
 
   const fabricYardsNumber = parseDecimalQuantity(fabricYardsText);
   const lines = Object.entries(quantities)
@@ -144,16 +180,99 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
   const totalPcs = lines.reduce((sum, line) => sum + line.qty, 0);
   const yardsPerPcs = fabricYardsNumber !== null && totalPcs > 0 ? fabricYardsNumber / totalPcs : null;
 
-  const estimatedFabricCost = canViewProfit && fabricBalance ? estimateFabricCost(fabricYardsNumber, fabricBalance) : null;
+  // Pcs per fabric colour (every SKU maps to one colour), colours by name.
+  const pcsByColor = useMemo(() => {
+    // eligibleSkus, not visibleEligibleSkus: with no fabric picked `quantities` is empty anyway.
+    const colorBySku = new Map(eligibleSkus.map((row) => [row.sku, row]));
+    const colorLines = Object.entries(quantities).flatMap(([sku, qty]) => {
+      const row = colorBySku.get(sku);
+      return row ? [{ colorId: row.colorId, colorName: row.colorName, qty }] : [];
+    });
+    colorLines.sort((a, b) => a.colorName.localeCompare(b.colorName, "id"));
+    return pcsByFabricColor(colorLines);
+  }, [eligibleSkus, quantities]);
+
+  const buckets = useMemo(
+    () => usageBuckets(fabricStock, initialValues.fabricUsages, eligibleSkus),
+    [fabricStock, initialValues.fabricUsages, eligibleSkus],
+  );
+  const defaultUsageRows: FabricUsageRowState[] = splitYardsByPcs(fabricYardsNumber, pcsByColor).map((row) => ({
+    key: sourceOf(row.fabricColorId),
+    source: sourceOf(row.fabricColorId),
+    yards: formatYardsInput(row.yards),
+  }));
+  const usageRows = usageMode === "auto" ? defaultUsageRows : manualUsageRows;
+
+  /** A row edit switches to manual rows (starting from what is on screen); the yards follow. */
+  function changeUsageRows(next: FabricUsageRowState[]) {
+    setUsageMode("manual");
+    setManualUsageRows(next);
+    const centi = next.reduce((sum, row) => sum + Math.round((parseDecimalQuantity(row.yards) ?? 0) * 100), 0);
+    setFabricYardsText(centi > 0 ? formatYardsInput(centi / 100) : "");
+  }
+
+  // What the rows were on open: the saved rows, or (a draft saved before stock per colour, or a new
+  // one) the default split of the saved yards, so opening such a draft is not "unsaved changes".
+  const [initialUsageSnapshot] = useState(() => {
+    if (initialValues.fabricUsages.length > 0) return initialUsageRows(initialValues.fabricUsages).map((row) => [row.source, row.yards]);
+    const colorBySku = new Map(initialEligibleSkus.map((row) => [row.sku, row]));
+    const initialPcs = pcsByFabricColor(
+      initialValues.lines
+        .flatMap((line) => {
+          const row = colorBySku.get(line.sku);
+          return row ? [{ colorId: row.colorId, colorName: row.colorName, qty: line.qty }] : [];
+        })
+        .sort((a, b) => a.colorName.localeCompare(b.colorName, "id")),
+    );
+    return splitYardsByPcs(initialValues.fabricYards, initialPcs).map((row) => [sourceOf(row.fabricColorId), formatYardsInput(row.yards)]);
+  });
+
+  const isDirty =
+    fabricId !== initialValues.fabricId ||
+    producedAt !== initialValues.producedAt ||
+    fabricYardsText !== (initialValues.fabricYards !== null ? String(initialValues.fabricYards) : "") ||
+    notes !== initialValues.notes ||
+    JSON.stringify(quantities) !== JSON.stringify(Object.fromEntries(initialValues.lines.map((l) => [l.sku, l.qty]))) ||
+    JSON.stringify(usageRows.map((row) => [row.source, row.yards])) !==
+      JSON.stringify(initialUsageSnapshot) ||
+    (initialExtraCosts ? JSON.stringify(extraCostLines) !== JSON.stringify(initialExtraCosts) : false);
+  useUnsavedChangesGuard(isDirty, "Ada perubahan batch produksi yang belum disimpan. Tinggalkan halaman ini?");
+
+  const parsedUsageRows = usageRows.map((row) => ({ fabricColorId: fabricColorIdOf(row.source), yards: parseDecimalQuantity(row.yards) }));
+  const estimatedFabricCost =
+    canViewProfit && parsedUsageRows.every((row) => row.yards !== null)
+      ? estimateFabricUsageCost(
+          parsedUsageRows.map((row) => ({ fabricColorId: row.fabricColorId, yards: row.yards! })),
+          (fabricColorId) => {
+            const bucket = buckets.find((candidate) => candidate.fabricColorId === fabricColorId);
+            return bucket && bucket.valueAmount !== null ? { qty: bucket.qty, valueAmount: bucket.valueAmount } : undefined;
+          },
+        )
+      : null;
 
   function handleSubmit() {
     setError(null);
+    // Early hints only; the server validates again (ownership, duplicates, the sum).
+    if (parsedUsageRows.some((row) => row.yards === null)) {
+      setError("Isi yard pemakaian kain dengan angka lebih dari 0, maksimal 2 desimal.");
+      return;
+    }
+    const seenSources = new Set<string>();
+    for (const row of usageRows) {
+      if (seenSources.has(row.source)) {
+        const bucket = buckets.find((candidate) => sourceOf(candidate.fabricColorId) === row.source);
+        setError(`Warna ${bucket?.name ?? "Tanpa warna"} muncul dua kali di pemakaian kain.`);
+        return;
+      }
+      seenSources.add(row.source);
+    }
     startTransition(async () => {
       const payload = {
         producedAt,
         fabricYards: fabricYardsText,
         notes,
         lines,
+        fabricUsages: usageRows.map((row) => ({ fabricColorId: fabricColorIdOf(row.source), yards: row.yards })),
         extraCosts: initialExtraCosts !== undefined
           ? extraCostLines.map((line) => ({
               id: line.id,
@@ -221,9 +340,17 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
             id="batch-fabric-yards"
             inputMode="decimal"
             value={fabricYardsText}
-            onChange={(event) => setFabricYardsText(event.target.value)}
+            onChange={(event) => {
+              // Typing the total re-splits it by pcs (A4); the rows below follow.
+              setFabricYardsText(event.target.value);
+              setUsageMode("auto");
+            }}
             placeholder="0"
+            aria-describedby="batch-fabric-yards-hint"
           />
+          <p id="batch-fabric-yards-hint" className="mt-1 text-sm text-neutral-600">
+            Mengubah jumlah yard membagi ulang pemakaian kain sesuai pcs.
+          </p>
         </div>
       </div>
 
@@ -251,6 +378,17 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
         <p className="text-base text-neutral-600">Pilih bahan untuk memilih SKU.</p>
       )}
 
+      {fabricId && (
+        <FabricUsageSection
+          rows={usageRows}
+          buckets={buckets}
+          isDefaultSplit={usageMode === "auto"}
+          canResplit={fabricYardsNumber !== null && pcsByColor.length > 0}
+          onRowsChange={changeUsageRows}
+          onResplit={() => setUsageMode("auto")}
+        />
+      )}
+
       {canViewProfit && (
         <>
           <div>
@@ -259,7 +397,7 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
               {estimatedFabricCost !== null ? formatRupiah(estimatedFabricCost) : "-"}
             </p>
             <p className="text-sm text-neutral-600">
-              Dihitung dari rata-rata harga beli bahan saat ini × jumlah yard. Nilai final dihitung ulang saat posting.
+              Dihitung dari rata-rata harga beli tiap warna saat ini × yard pemakaiannya. Nilai final dihitung ulang saat posting.
             </p>
           </div>
           <ExtraCostLines

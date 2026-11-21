@@ -433,8 +433,10 @@ export async function voidFabricPurchase(movementId: string, actorStaffUserId: s
 
     // Defensive backstop, not the primary guarantee — see voidAccessoryPurchase's identical
     // comment for why this is unreachable in practice given the later-movement check above.
-    const balance = await getFabricBalance(original.fabricId, tx);
-    if (balance.qty - original.qty < 0) {
+    // Checked on the void's own bucket (docs/plans/fabric-colour-stock.md S5): another colour's
+    // stock is not this colour's, so the fabric total staying >= 0 is not enough.
+    const balance = await getFabricColorBalance(original.fabricId, original.fabricColorId, tx);
+    if (Math.round(balance.qty * 100) - Math.round(original.qty * 100) < 0) {
       throw new ActionError("Pembatalan ini akan membuat stok menjadi negatif.");
     }
 
@@ -569,5 +571,86 @@ export async function recordFabricAdjustment(
       after: { ...movement, colorName: colorLabel },
     });
     return movement;
+  });
+}
+
+// ---------- "Pindahkan ke warna" (docs/plans/fabric-colour-stock.md D7, owner decision A3) ----------
+
+export interface ReclassifyFabricStockInput {
+  fabricId: string;
+  /** The source bucket; `null` = "Tanpa warna". Any colour of the fabric, inactive included (it
+   * may still hold stock to move out). */
+  fromColorId: FabricColorBucket;
+  /** The target: an ACTIVE colour of the same fabric, never the source. */
+  toColorId: string;
+  qty: number;
+  /** The required free-text reason, stored on both rows' note. */
+  note: string;
+}
+
+/** Moves yards between two buckets of ONE fabric as a pair of `adjustment` movements
+ * (`reason='other'`, `ref_type='manual'`) in one transaction: out of the source at the source's
+ * moving average (zero-residual rule when it empties the source), into the target with the exact
+ * negated value. The fabric's total quantity and value are unchanged, nothing is rewritten, and
+ * the source can never go below zero. One audit entry names both colours. */
+export async function reclassifyFabricStock(
+  input: ReclassifyFabricStockInput,
+  actorStaffUserId: string | null,
+  db: Database = defaultDb,
+) {
+  if (!Number.isFinite(input.qty) || input.qty <= 0) throw new FieldError("qty", "Jumlah harus lebih dari 0.");
+  if (Math.round(input.qty * 100) / 100 !== input.qty) throw new FieldError("qty", "Maksimal 2 desimal.");
+  if (input.qty >= MAX_ADJUSTMENT_YARDS) throw new FieldError("qty", "Jumlah terlalu besar.");
+  const reason = input.note.trim();
+  if (reason === "") throw new FieldError("note", "Alasan wajib diisi.");
+  if (typeof input.toColorId !== "string") throw new FieldError("toColorId", "Pilih warna tujuan.");
+  if (input.toColorId === input.fromColorId) throw new FieldError("toColorId", "Pilih warna tujuan yang berbeda dari warna asal.");
+
+  return db.transaction(async (tx) => {
+    const fabric = await lockFabricForUpdate(tx, input.fabricId);
+    if (!fabric) throw new ActionError("Bahan tidak ditemukan.");
+
+    // FOR SHARE: a concurrent deactivation of the target waits for this move (same reasoning as
+    // recordFabricAdjustment).
+    const colors = await tx
+      .select({ id: fabricColors.id, name: fabricColors.name, isActive: fabricColors.isActive })
+      .from(fabricColors)
+      .where(eq(fabricColors.fabricId, input.fabricId))
+      .for("share");
+    const from = input.fromColorId === null ? null : colors.find((color) => color.id === input.fromColorId);
+    if (from === undefined) throw new FieldError("fromColorId", "Warna asal tidak ditemukan untuk bahan ini.");
+    const to = colors.find((color) => color.id === input.toColorId);
+    if (!to) throw new FieldError("toColorId", "Warna tujuan tidak ditemukan untuk bahan ini.");
+    if (!to.isActive) throw new FieldError("toColorId", `Warna ${to.name} sudah nonaktif.`);
+    const fromLabel = from?.name ?? "Tanpa warna";
+
+    const source = await getFabricColorBalance(input.fabricId, input.fromColorId, tx);
+    const sourceCenti = Math.round(source.qty * 100);
+    const moveCenti = Math.round(input.qty * 100);
+    if (sourceCenti < moveCenti) {
+      throw new FieldError("qty", `Stok ${fromLabel} tidak cukup (stok sekarang ${source.qty.toFixed(2)} yard).`);
+    }
+    // Exactly -source.qty when the source empties, so the zero-residual rule fires on an exact 0.
+    const outValue = valueDeltaForConsumption(source, sourceCenti === moveCenti ? -source.qty : -input.qty);
+
+    const common = { fabricId: input.fabricId, type: "adjustment" as const, refType: "manual" as const, reason: "other" as const, createdByStaffUserId: actorStaffUserId };
+    const [out] = await tx
+      .insert(fabricStockMovements)
+      .values({ ...common, fabricColorId: input.fromColorId, qty: -input.qty, valueAmount: outValue, note: `Pindah ke ${to.name}: ${reason}` })
+      .returning();
+    const [into] = await tx
+      .insert(fabricStockMovements)
+      .values({ ...common, fabricColorId: to.id, qty: input.qty, valueAmount: -outValue, note: `Pindah dari ${fromLabel}: ${reason}` })
+      .returning();
+    if (!out || !into) throw new Error("failed to insert fabric reclassification movements");
+
+    await writeAuditLog(tx, {
+      actorStaffUserId,
+      action: "adjust",
+      entityType: "fabric_stock_movement",
+      entityId: out.id,
+      after: { reason, out: { ...out, colorName: fromLabel }, in: { ...into, colorName: to.name } },
+    });
+    return { out, in: into };
   });
 }

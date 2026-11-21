@@ -15,6 +15,7 @@ const {
   deleteFabricColorAction,
   voidFabricPurchaseAction,
   recordFabricAdjustmentAction,
+  reclassifyFabricStockAction,
 } = await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
@@ -70,4 +71,31 @@ describe("fabric stock actions require inventory.manage (not products.manage)", 
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions([]));
     await expect(recordFabricAdjustmentAction({ fabricId: NIL_ID, fabricColorId: null, deltaQty: -1.5, reason: "damaged" })).rejects.toThrow();
   });
+
+  test("reclassifyFabricStockAction rejects a session without inventory.manage, even with products.manage", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["products.manage", "inventory.view"]));
+    await expect(reclassifyFabricStockAction({ fabricId: NIL_ID, fromColorId: null, toColorId: NIL_ID, qty: 1, note: "x" })).rejects.toThrow();
+  });
+
+  test("reclassifyFabricStockAction requires a reason before reaching the database", async () => {
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
+    await expect(reclassifyFabricStockAction({ fabricId: NIL_ID, fromColorId: null, toColorId: NIL_ID, qty: 1, note: "  " })).resolves.toEqual({
+      ok: false,
+      error: "Alasan wajib diisi.",
+    });
+  });
+
+  test("reclassifyFabricStockAction validates the quantity and colours before reaching the database", async () => {
+    const base = { fabricId: NIL_ID, fromColorId: null, toColorId: NIL_ID, qty: 1, note: "alasan" };
+    for (const [input, error] of [
+      [{ ...base, qty: 1.234 }, "Maksimal 2 desimal."],
+      [{ ...base, qty: -1 }, "Jumlah harus lebih dari 0."],
+      [{ ...base, qty: 100_000_000 }, "Jumlah terlalu besar."],
+      [{ ...base, toColorId: "bukan-uuid" }, "Pilih warna tujuan."],
+    ] as const) {
+      getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["inventory.manage"]));
+      await expect(reclassifyFabricStockAction(input)).resolves.toEqual({ ok: false, error });
+    }
+  });
 });
+

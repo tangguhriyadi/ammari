@@ -112,6 +112,12 @@ export const FIELD_LABELS: Record<string, string> = {
   postedByStaffUserId: "Diposting oleh (ID staf)",
   fabricYards: "Kain (yard)",
   fabricCostAmount: "Biaya kain",
+  // docs/plans/fabric-colour-stock.md S5: usage per colour, and "Pindahkan ke warna" (out/in pair).
+  fabricUsages: "Pemakaian kain per warna",
+  fabricConsumption: "Kain terpakai per warna",
+  yards: "Yard",
+  out: "Keluar dari",
+  in: "Masuk ke",
   unitCostAmount: "HPP per pcs",
   extraCostsTotal: "Total biaya tambahan",
   accessoryCostTotal: "Total biaya aksesoris",

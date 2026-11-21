@@ -93,7 +93,6 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   // By id, not getByLabel — same required-asterisk reasoning as #product-fabric elsewhere.
   await page.locator("#batch-fabric").selectOption({ label: fabricName });
   await page.locator("#batch-fabric-yards").fill("10");
-  await expect(page.getByText("Rp 1.000.000")).toBeVisible(); // the live fabric-cost estimate
   await page.getByRole("button", { name: "+ Tambah biaya" }).click();
   await page.locator("#extra-cost-component-0").selectOption({ label: componentName });
   // Unit price is prefilled from the component's default (2.000) — left as-is; there is no
@@ -102,6 +101,9 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   await expect(page.locator("#extra-cost-supplier-0 option:checked")).toHaveText(tailorName);
   await page.locator("#extra-cost-supplier-0").selectOption({ label: overrideName });
   await page.getByLabel("M", { exact: true }).fill("5");
+  // The live fabric-cost estimate: the 10 yards go to the SKU's colour (Sage, where the purchase
+  // landed), at Sage's own average (docs/plans/fabric-colour-stock.md S5).
+  await expect(page.getByText("Rp 1.000.000")).toBeVisible();
   await page.getByRole("button", { name: "Simpan draf" }).click();
   await openCreated(page, "/production");
 
@@ -118,7 +120,10 @@ test("a staffer purchases fabric and an accessory, sets a recipe, creates a draf
   // 8. The posted detail shows the full cost breakdown: Kain (fabric, computed from the purchase
   // average), Aksesoris (the accessory consumed), Biaya variabel (the extra-cost line), and
   // HPP/pcs = ceil((1.000.000 + 5*2.000 + 5*2.000) / 5) = 204.000.
-  await expect(page.getByText("Rp 1.000.000")).toBeVisible(); // Kain
+  await expect(page.getByText("Rp 1.000.000 (10 yard)")).toBeVisible(); // Kain
+  // ...taken from the SKU's colour, at that colour's average (docs/plans/fabric-colour-stock.md S5).
+  await expect(page.getByTestId("batch-fabric-cost-color")).toHaveText(["Sage"]);
+  await expect(page.getByTestId("batch-fabric-cost-value")).toHaveText(["Rp 1.000.000"]);
   await expect(page.getByText(`${accessoryName} (5 pcs)`)).toBeVisible();
   await expect(page.getByText(`${componentName} (5 pcs × Rp 2.000)`)).toBeVisible();
   // The line's own supplier (the override, not the component's default) is snapshotted onto it.

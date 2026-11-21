@@ -21,7 +21,7 @@ export default async function NewProductionBatchPage() {
       <ProductionBatchForm
         mode="create"
         fabrics={fabrics.map((fabric) => ({ id: fabric.id, name: fabric.name }))}
-        initialValues={{ fabricId: "", producedAt: todayInJakarta(), fabricYards: null, notes: "", lines: [] }}
+        initialValues={{ fabricId: "", producedAt: todayInJakarta(), fabricYards: null, notes: "", lines: [], fabricUsages: [] }}
         eligibleSkus={[]}
         canViewProfit={canViewProfit}
         initialExtraCosts={canViewProfit ? [] : undefined}

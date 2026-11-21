@@ -91,7 +91,7 @@ async function postedBatch(tx: TestDatabase) {
   const { variant: variantB } = await insertVariantForProduct(tx, fabric.id, color.id, {}, "L");
   await recordFabricPurchase({ fabricId: fabric.id, qty: 10, totalAmountPaid: 1_000_000, purchasedAt: "2026-09-01" }, null, tx);
   const draft = await createDraft(
-    { fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 10, lines: [{ sku: variantA.sku, qty: 3 }, { sku: variantB.sku, qty: 2 }] },
+    { fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }], lines: [{ sku: variantA.sku, qty: 3 }, { sku: variantB.sku, qty: 2 }] },
     null,
     tx,
   );
@@ -766,7 +766,7 @@ describe("per-source-line valuation (§10 R1): a disposition is valued at its ow
       const { fabric, variant } = await insertProductVariant(tx);
       await recordFabricPurchase({ fabricId: fabric.id, qty: 10, totalAmountPaid: 1_000_000, purchasedAt: "2026-09-01" }, null, tx);
       const batchOf = async (fabricYards: number) => {
-        const draft = await createDraft({ fabricId: fabric.id, producedAt: "2026-10-01", fabricYards, lines: [{ sku: variant.sku, qty: 2 }] }, null, tx);
+        const draft = await createDraft({ fabricId: fabric.id, producedAt: "2026-10-01", fabricYards, fabricUsages: [{ fabricColorId: null, yards: fabricYards }], lines: [{ sku: variant.sku, qty: 2 }] }, null, tx);
         await postBatch(draft.id, staff.id, tx);
         const [batchLine] = await tx.select().from(productionBatchItems).where(eq(productionBatchItems.productionBatchId, draft.id));
         return { batch: draft, line: batchLine! };

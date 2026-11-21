@@ -34,8 +34,13 @@ import {
   updateDraft,
 } from "./queries";
 
+/** Every fixture's stock is colourless (recordFabricPurchase), so by default the batch takes its
+ * yards from "Tanpa warna" (docs/plans/fabric-colour-stock.md S5); per-colour usage has its own
+ * tests in fabric-usage-colour.test.ts. */
 async function insertBatchFixture(tx: TestDatabase, fabricId: string, overrides: Partial<Parameters<typeof createDraft>[0]> = {}) {
-  return createDraft({ fabricId, producedAt: "2026-10-01", fabricYards: 10, lines: [], ...overrides }, null, tx);
+  const fabricYards = overrides.fabricYards === undefined ? 10 : overrides.fabricYards;
+  const fabricUsages = overrides.fabricUsages ?? (fabricYards === null ? [] : [{ fabricColorId: null, yards: fabricYards }]);
+  return createDraft({ fabricId, producedAt: "2026-10-01", lines: [], ...overrides, fabricYards, fabricUsages }, null, tx);
 }
 
 async function insertCostComponentFixture(tx: TestDatabase, overrides: Partial<typeof costComponents.$inferInsert> = {}) {
@@ -272,14 +277,14 @@ describe("postBatch", () => {
     });
   });
 
-  test("rejects posting on insufficient fabric stock, naming the fabric", async () => {
+  test("rejects posting on insufficient fabric stock, naming the short bucket and by how much", async () => {
     await withRollback(async (tx) => {
       const { fabric, variant } = await insertProductVariant(tx);
       const staff = await insertStaffUser(tx);
       await purchaseFabricStock(tx, fabric.id, 5, 50_000); // only 5 yards, batch needs 10
       const batch = await insertBatchFixture(tx, fabric.id, { lines: [{ sku: variant.sku, qty: 1 }] });
 
-      await expect(postBatch(batch.id, staff.id, tx)).rejects.toThrow(new RegExp(fabric.name));
+      await expect(postBatch(batch.id, staff.id, tx)).rejects.toThrow("Stok kurang: Tanpa warna kurang 5.00 yard.");
     });
   });
 
@@ -301,8 +306,7 @@ describe("postBatch", () => {
       }
       expect(caught).toBeInstanceOf(Error);
       const message = String((caught as Error).message);
-      expect(message).toMatch(new RegExp(fabric.name));
-      expect(message).toMatch(/Kancing Kurang/);
+      expect(message).toBe("Stok kurang: Tanpa warna kurang 9.00 yard, Kancing Kurang kurang 4 pcs.");
 
       // Nothing was consumed — the whole post was rejected before any movement was written.
       expect(await getFabricBalance(fabric.id, tx)).toEqual({ qty: 1, valueAmount: 10_000 });
@@ -389,7 +393,7 @@ describe("postBatch", () => {
       await postBatch(batch.id, staff.id, tx);
 
       await expect(
-        updateDraft(batch.id, { producedAt: "2026-10-02", fabricYards: 5, lines: [] }, staff.id, tx),
+        updateDraft(batch.id, { producedAt: "2026-10-02", fabricYards: 5, fabricUsages: [{ fabricColorId: null, yards: 5 }], lines: [] }, staff.id, tx),
       ).rejects.toThrow(/sudah diposting/);
       await expect(deleteDraft(batch.id, staff.id, tx)).rejects.toThrow(/sudah diposting/);
     });
@@ -421,7 +425,7 @@ describe("postBatch", () => {
           batch.id,
           {
             producedAt: "2026-10-01",
-            fabricYards: 10,
+            fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }],
             lines: [{ sku: variant.sku, qty: 2 }],
             extraCosts: [{ costComponentId: component.id, unitPrice: 50_000 }],
           },
@@ -542,7 +546,7 @@ describe("syncExtraCostLines", () => {
           batchB.id,
           {
             producedAt: "2026-10-01",
-            fabricYards: 10,
+            fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }],
             lines: [],
             extraCosts: [{ id: lineOnBatchA!.id, costComponentId: component.id, unitPrice: 2000 }],
           },
@@ -567,7 +571,7 @@ describe("syncExtraCostLines", () => {
       await expect(
         updateDraft(
           batch.id,
-          { producedAt: "2026-10-01", fabricYards: 10, lines: [], extraCosts: [{ costComponentId: component.id, unitPrice: 1000 }] },
+          { producedAt: "2026-10-01", fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }], lines: [], extraCosts: [{ costComponentId: component.id, unitPrice: 1000 }] },
           staff.id,
           tx,
         ),
@@ -589,7 +593,7 @@ describe("syncExtraCostLines", () => {
       // inactive — only a brand NEW line requires an active component.
       await updateDraft(
         batch.id,
-        { producedAt: "2026-10-01", fabricYards: 10, lines: [], extraCosts: [{ id: line!.id, costComponentId: component.id, unitPrice: 2000 }] },
+        { producedAt: "2026-10-01", fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }], lines: [], extraCosts: [{ id: line!.id, costComponentId: component.id, unitPrice: 2000 }] },
         staff.id,
         tx,
       );
@@ -625,7 +629,7 @@ describe("syncExtraCostLines", () => {
         batch.id,
         {
           producedAt: "2026-10-01",
-          fabricYards: 10,
+          fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }],
           lines: [{ sku: variant.sku, qty: 7 }],
           extraCosts: [{ id: line!.id, costComponentId: component.id, unitPrice: 1000 }],
         },
@@ -656,7 +660,7 @@ describe("component name/unit/cost_type snapshot", () => {
       // SAME existing cost line only via its id.
       await updateDraft(
         batch.id,
-        { producedAt: "2026-10-03", fabricYards: 10, lines: [], extraCosts: [{ id: line!.id, costComponentId: component.id, unitPrice: 500 }] },
+        { producedAt: "2026-10-03", fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }], lines: [], extraCosts: [{ id: line!.id, costComponentId: component.id, unitPrice: 500 }] },
         staff.id,
         tx,
       );
@@ -863,7 +867,7 @@ describe("cost visibility", () => {
       const batch = await insertBatchFixture(tx, fabric.id, { extraCosts: [{ costComponentId: component.id, unitPrice: 10_000 }] });
 
       // A production.manage-only edit — no `extraCosts` key at all.
-      await updateDraft(batch.id, { producedAt: "2026-10-05", fabricYards: 12, lines: [] }, staff.id, tx);
+      await updateDraft(batch.id, { producedAt: "2026-10-05", fabricYards: 12, fabricUsages: [{ fabricColorId: null, yards: 12 }], lines: [] }, staff.id, tx);
 
       const extraCosts = await getBatchExtraCosts(batch.id, tx);
       expect(extraCosts).toHaveLength(1);

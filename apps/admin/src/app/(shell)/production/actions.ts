@@ -5,10 +5,12 @@ import { z } from "zod";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
 import { parseRupiah } from "@/lib/products/money";
-import { optionalDecimalQuantityString } from "@/lib/production/decimal-quantity";
+import { decimalQuantityString, optionalDecimalQuantityString } from "@/lib/production/decimal-quantity";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import * as productionQueries from "@/lib/production/queries";
-import { getFabricBalance } from "@/lib/inventory/fabric-stock";
+import { listFabricColorBalances } from "@/lib/inventory/fabric-stock";
+import { isUuid } from "@/lib/purchases/queries";
+import { toFabricUsageStock, type FabricUsageStock } from "@/lib/production/fabric-usage-stock";
 import { saveAccessoryOverride } from "@/lib/production/accessory-needs";
 import { closeBatchShort, postGoodsReceiptForBatch } from "@/lib/receipts/production";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
@@ -51,6 +53,14 @@ const extraCostLineSchema = z.object({
   supplierId: z.string().uuid("Supplier tidak valid.").nullable().optional(),
 });
 
+// One source bucket of the batch's fabric usage (docs/plans/fabric-colour-stock.md D6): a colour
+// of the batch's fabric, or null for "Tanpa warna". Ownership, duplicates and the sum are checked
+// by the query layer.
+const fabricUsageSchema = z.object({
+  fabricColorId: z.string().uuid("Warna tidak valid.").nullable(),
+  yards: decimalQuantityString,
+});
+
 const draftFieldsSchema = z.object({
   producedAt: z.string().date("Tanggal tidak valid."),
   fabricYards: optionalDecimalQuantityString,
@@ -68,8 +78,11 @@ const draftFieldsSchema = z.object({
   // lib/production/queries.ts's CreateDraftInput/UpdateDraftInput doc comments. There is no
   // `costs`/fabric-cost field at all anymore — fabric cost is computed only at posting (see
   // postBatch); the draft form shows a read-only, non-binding estimate instead (see
-  // fabric-cost-estimate.ts).
+  // fabric-usage.ts (estimateFabricUsageCost)).
   extraCosts: z.array(extraCostLineSchema).optional(),
+  // The whole set of usage rows (replaces the draft's). Omitted = none; the form always sends it.
+  // When non-empty, fabric_yards is their sum and `fabricYards` above is ignored.
+  fabricUsages: z.array(fabricUsageSchema).max(50, "Terlalu banyak baris pemakaian kain.").default([]),
 });
 
 const createDraftSchema = draftFieldsSchema.extend({
@@ -98,6 +111,7 @@ export async function createDraftAction(
         fabricYards: parsed.data.fabricYards,
         notes: parsed.data.notes || null,
         lines: parsed.data.lines,
+        fabricUsages: parsed.data.fabricUsages,
         extraCosts,
       },
       session.staffUser.id,
@@ -125,6 +139,7 @@ export async function updateDraftAction(
         fabricYards: parsed.data.fabricYards,
         notes: parsed.data.notes || null,
         lines: parsed.data.lines,
+        fabricUsages: parsed.data.fabricUsages,
         extraCosts,
       },
       session.staffUser.id,
@@ -180,14 +195,16 @@ export async function listProductsUsingFabricAction(fabricId: string) {
   return productionQueries.listProductsUsingFabric(fabricId);
 }
 
-/** Cost data (a moving-average cost is derived from it) — gated behind finance.view_profit, not
- * just production.manage, same discipline every other cost figure in this feature follows. Feeds
- * the draft form's read-only fabric-cost ESTIMATE only (see fabric-cost-estimate.ts) — never
- * authoritative; postBatch computes the real value at posting from whatever the balance is AT
- * THAT MOMENT. */
-export async function getFabricBalanceAction(fabricId: string) {
-  await requirePermission("finance.view_profit");
-  return getFabricBalance(fabricId);
+/** The fabric's stock per colour bucket for the draft form's "Pemakaian kain" rows (create mode
+ * re-fetches it when the fabric changes). Quantities are fine for production.manage (the draft
+ * page already shows accessory stock); the value, from which a moving average is derived, only
+ * with finance.view_profit. The estimate it feeds is never authoritative: postBatch values the
+ * consumption from each bucket's balance AT POSTING. */
+export async function getFabricUsageStockAction(fabricId: string): Promise<FabricUsageStock[]> {
+  const session = await requirePermission("production.manage");
+  if (!isUuid(fabricId)) return [];
+  const canViewProfit = session.permissionKeys.includes("finance.view_profit");
+  return toFabricUsageStock(await listFabricColorBalances(fabricId), canViewProfit);
 }
 
 const setAccessoryOverrideSchema = z.object({

@@ -233,3 +233,28 @@ export async function recordFabricAdjustmentAction(
     return { id: movement.id };
   });
 }
+
+// "Pindahkan ke warna" (docs/plans/fabric-colour-stock.md D7, owner decision A3).
+const reclassifyFabricStockSchema = z.object({
+  fabricId: z.string().uuid(),
+  // null = "Tanpa warna". Which buckets are allowed is decided under the fabric lock.
+  fromColorId: z.string().uuid("Pilih warna asal.").nullable(),
+  toColorId: z.string().uuid("Pilih warna tujuan."),
+  qty: z.coerce
+    .number()
+    .refine((value) => Number.isFinite(value) && value > 0, "Jumlah harus lebih dari 0.")
+    .refine((value) => Number(value.toFixed(2)) === value, "Maksimal 2 desimal.")
+    .refine((value) => value < fabricStockQueries.MAX_ADJUSTMENT_YARDS, "Jumlah terlalu besar."),
+  note: z.string().trim().min(1, "Alasan wajib diisi.").max(1000, "Alasan terlalu panjang."),
+});
+
+export async function reclassifyFabricStockAction(input: z.input<typeof reclassifyFabricStockSchema>): Promise<ActionResult> {
+  const session = await requirePermission("inventory.manage");
+  const parsed = reclassifyFabricStockSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    await fabricStockQueries.reclassifyFabricStock(parsed.data, session.staffUser.id);
+    revalidateAdmin(...FABRIC_SECTIONS);
+    return undefined;
+  });
+}

@@ -108,7 +108,7 @@ async function postedBatch(tx: TestDatabase) {
     {
       fabricId: fabric.id,
       producedAt: "2026-10-01",
-      fabricYards: 10,
+      fabricYards: 10, fabricUsages: [{ fabricColorId: null, yards: 10 }],
       lines: [
         { sku: variantA.sku, qty: 3 },
         { sku: variantB.sku, qty: 2 },

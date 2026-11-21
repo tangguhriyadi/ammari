@@ -1,6 +1,7 @@
 import { formatRupiah } from "@ammari/ui/lib";
 import { Badge, Card } from "@ammari/ui";
-import { getBatchAccessoryConsumption, getBatchCosts, getBatchExtraCosts, type BatchLineRow } from "@/lib/production/queries";
+import { getBatchAccessoryConsumption, getBatchCosts, getBatchExtraCosts, getBatchFabricConsumption, type BatchLineRow } from "@/lib/production/queries";
+import { FabricColorLabel } from "@/components/fabric-color-label";
 import { getCurrentCostAssumption } from "@/lib/products/queries";
 import { calculateBatasHpp } from "@/lib/products/batas-hpp";
 import { unabsorbedValue, type BatchReceiptSummary } from "@/lib/receipts/production";
@@ -37,6 +38,9 @@ export async function BatchCostsSection({
   if (!costs) return null;
   const extraCosts = await getBatchExtraCosts(batchId);
   const accessoryConsumption = await getBatchAccessoryConsumption(batchId);
+  // Per colour bucket (docs/plans/fabric-colour-stock.md S5); one colourless row for a batch
+  // posted before stock per colour.
+  const fabricConsumption = await getBatchFabricConsumption(batchId);
   const variableCosts = extraCosts.filter((line) => line.costType === "variable");
   const fixedCosts = extraCosts.filter((line) => line.costType === "fixed");
   const accessoryTotal = accessoryConsumption.reduce((sum, row) => sum + row.valueAmount, 0);
@@ -73,6 +77,25 @@ export async function BatchCostsSection({
           {formatRupiah(costs.fabricCostAmount)}
           {fabricYards !== null && <span className="text-sm text-neutral-600"> ({fabricYards} yard)</span>}
         </dd>
+        {fabricConsumption.length > 1 || fabricConsumption.some((row) => row.fabricColorId !== null) ? (
+          <ul className="mt-1 flex flex-col gap-1">
+            {fabricConsumption.map((row) => (
+              <li
+                key={row.fabricColorId ?? "none"}
+                data-testid="batch-fabric-cost"
+                className="flex items-center justify-between gap-2 text-sm text-neutral-700"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <FabricColorLabel name={row.colorName} hex={row.colorHex} testId="batch-fabric-cost-color" />
+                  <span className="tabular-nums">({row.qty.toFixed(2)} yard)</span>
+                </span>
+                <span className="tabular-nums" data-testid="batch-fabric-cost-value">
+                  {formatRupiah(row.valueAmount)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       {accessoryConsumption.length > 0 && (

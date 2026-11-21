@@ -35,7 +35,7 @@ async function insertComponent(tx: TestDatabase, overrides: Partial<typeof costC
 async function draftWithCosts(tx: TestDatabase, extraCosts: ExtraCostLineInput[]) {
   const { fabric, variant } = await insertProductVariant(tx);
   const batch = await createDraft(
-    { fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 2, lines: [{ sku: variant.sku, qty: 2 }], extraCosts },
+    { fabricId: fabric.id, producedAt: "2026-10-01", fabricYards: 2, fabricUsages: [{ fabricColorId: null, yards: 2 }], lines: [{ sku: variant.sku, qty: 2 }], extraCosts },
     null,
     tx,
   );
@@ -43,7 +43,7 @@ async function draftWithCosts(tx: TestDatabase, extraCosts: ExtraCostLineInput[]
 }
 
 function resave(batchId: string, sku: string, extraCosts: ExtraCostLineInput[], tx: TestDatabase) {
-  return updateDraft(batchId, { producedAt: "2026-10-02", fabricYards: 2, lines: [{ sku, qty: 2 }], extraCosts }, null, tx);
+  return updateDraft(batchId, { producedAt: "2026-10-02", fabricYards: 2, fabricUsages: [{ fabricColorId: null, yards: 2 }], lines: [{ sku, qty: 2 }], extraCosts }, null, tx);
 }
 
 /** drizzle wraps the driver error; the trigger's own RAISE text is on `.cause`. */

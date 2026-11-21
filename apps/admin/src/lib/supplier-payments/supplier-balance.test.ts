@@ -124,7 +124,7 @@ async function fixture(tx: TestDatabase) {
   const draftInput = (producedAt: string) => ({
     fabricId: batchFabric.id,
     producedAt,
-    fabricYards: 5,
+    fabricYards: 5, fabricUsages: [{ fabricColorId: null, yards: 5 }],
     lines: [{ sku: variant.sku, qty: 5 }],
   });
   const sewing = await insertComponent(tx);

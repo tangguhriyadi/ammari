@@ -154,7 +154,7 @@ async function postedBatch(tx: TestDatabase, staffId: string, producedAt: string
   await recordFabricPurchase({ fabricId: fabric.id, qty: 20, totalAmountPaid: 2_000_000, purchasedAt: "2000-12-01" }, null, tx);
   const [component] = await tx.insert(costComponents).values({ name: `Jahit ${randomUUID().slice(0, 8)}`, unit: "pcs", costType: "fixed" }).returning();
   const batch = await createDraft(
-    { fabricId: fabric.id, producedAt, fabricYards: 5, lines: [{ sku: variant.sku, qty: 5 }], extraCosts: [{ costComponentId: component!.id, unitPrice: sewingAmount, supplierId: null }] },
+    { fabricId: fabric.id, producedAt, fabricYards: 5, fabricUsages: [{ fabricColorId: null, yards: 5 }], lines: [{ sku: variant.sku, qty: 5 }], extraCosts: [{ costComponentId: component!.id, unitPrice: sewingAmount, supplierId: null }] },
     staffId,
     tx,
   );

@@ -9,6 +9,7 @@ import {
   fabricStockMovements,
   productionBatches,
   productionBatchAccessoryOverrides,
+  productionBatchFabricUsages,
   productionBatchCosts,
   productionBatchItems,
   products,
@@ -23,7 +24,7 @@ import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import { lockAccessoryForUpdate, lockFabricForUpdate } from "@/lib/inventory/db";
 import { getAccessoryBalance } from "@/lib/inventory/accessories";
-import { getFabricBalance } from "@/lib/inventory/fabric-stock";
+import { getFabricColorBalance } from "@/lib/inventory/fabric-stock";
 import { valueDeltaForConsumption, type RawMaterialBalance } from "@ammari/commerce/moving-average";
 import { lockProductionBatchForUpdate, type Tx } from "./db";
 import { generateBatchNumber } from "./batch-number";
@@ -243,6 +244,41 @@ export interface BatchDetail {
   postedAt: Date | null;
   postedByName: string | null;
   lines: BatchLineRow[];
+  /** Yards per source bucket (quantities, not cost). Empty for a draft not yet saved with usage
+   * rows and for every batch posted before stock per colour (its consumption was colourless). */
+  fabricUsages: BatchFabricUsageRow[];
+}
+
+export interface BatchFabricUsageRow {
+  /** `null` = "Tanpa warna". */
+  fabricColorId: string | null;
+  colorName: string | null;
+  colorHex: string | null;
+  /** The colour's CURRENT active state (true for "Tanpa warna"). */
+  colorIsActive: boolean;
+  yards: number;
+}
+
+/** Colours by name, "Tanpa warna" last (the order every per-colour list in the admin uses). */
+function byColorName<T extends { colorName: string | null }>(a: T, b: T): number {
+  if (a.colorName === null) return b.colorName === null ? 0 : 1;
+  if (b.colorName === null) return -1;
+  return a.colorName.localeCompare(b.colorName, "id");
+}
+
+async function listBatchFabricUsages(id: string, db: Database): Promise<BatchFabricUsageRow[]> {
+  const rows = await db
+    .select({
+      fabricColorId: productionBatchFabricUsages.fabricColorId,
+      colorName: fabricColors.name,
+      colorHex: fabricColors.hex,
+      colorIsActive: sql<boolean>`coalesce(${fabricColors.isActive}, true)`,
+      yards: productionBatchFabricUsages.yards,
+    })
+    .from(productionBatchFabricUsages)
+    .leftJoin(fabricColors, eq(fabricColors.id, productionBatchFabricUsages.fabricColorId))
+    .where(eq(productionBatchFabricUsages.productionBatchId, id));
+  return rows.sort(byColorName);
 }
 
 /** Deliberately selects ONLY non-cost columns from production_batches — fabric_cost_amount is
@@ -292,7 +328,37 @@ export async function getBatchDetail(id: string, db: Database = defaultDb): Prom
     .where(eq(productionBatchItems.productionBatchId, id))
     .orderBy(products.name, fabricColors.name, productVariants.size);
 
-  return { ...batch, lines };
+  return { ...batch, lines, fabricUsages: await listBatchFabricUsages(id, db) };
+}
+
+export interface BatchFabricConsumptionRow {
+  /** `null` = "Tanpa warna" (also every batch posted before stock per colour). */
+  fabricColorId: string | null;
+  colorName: string | null;
+  colorHex: string | null;
+  /** Positive yards consumed. */
+  qty: number;
+  /** Positive cost of that consumption — cost data, same gating contract as getBatchCosts. */
+  valueAmount: number;
+}
+
+/** The posted batch's fabric cost per colour bucket, read back from its own
+ * fabric_stock_movements rows (the ledger is the record, as for getBatchAccessoryConsumption).
+ * Same gating contract as getBatchCosts. Empty for a draft. */
+export async function getBatchFabricConsumption(id: string, db: Database = defaultDb): Promise<BatchFabricConsumptionRow[]> {
+  const rows = await db
+    .select({
+      fabricColorId: fabricStockMovements.fabricColorId,
+      colorName: fabricColors.name,
+      colorHex: fabricColors.hex,
+      qty: sql<string>`-sum(${fabricStockMovements.qty})`,
+      valueAmount: sql<string>`-sum(${fabricStockMovements.valueAmount})::bigint`,
+    })
+    .from(fabricStockMovements)
+    .leftJoin(fabricColors, eq(fabricColors.id, fabricStockMovements.fabricColorId))
+    .where(and(eq(fabricStockMovements.refType, "production_batch"), eq(fabricStockMovements.refId, id)))
+    .groupBy(fabricStockMovements.fabricColorId, fabricColors.name, fabricColors.hex);
+  return rows.map((row) => ({ ...row, qty: Number(row.qty), valueAmount: Number(row.valueAmount) })).sort(byColorName);
 }
 
 export interface BatchCosts {
@@ -305,7 +371,7 @@ export interface BatchCosts {
  * calls this conditionally, so the component (and this query) never runs at all for a session
  * without the permission, rather than running it and hiding the result. Only ever meaningful once
  * `status = 'posted'` — a draft's fabric_cost_amount is still its 0 column default (the fabric
- * cost is no longer settable at draft time at all; see fabric-cost-estimate.ts for the draft's
+ * cost is no longer settable at draft time at all; see fabric-usage.ts (estimateFabricUsageCost) for the draft's
  * own live estimate instead). */
 export async function getBatchCosts(id: string, db: Database = defaultDb): Promise<BatchCosts | null> {
   const [row] = await db
@@ -442,15 +508,99 @@ export interface ExtraCostLineInput {
 export interface CreateDraftInput {
   fabricId: string;
   producedAt: string;
+  /** Used only when `fabricUsages` is empty; otherwise fabric_yards is their sum. */
   fabricYards: number | null;
   notes?: string | null;
   lines: BatchLineInput[];
+  /** The batch's fabric usage per source bucket (the whole set; omitted = none). Posting
+   * requires at least one row. */
+  fabricUsages?: FabricUsageInput[];
   /** `undefined` when the caller's session lacks finance.view_profit — see
    * ExtraCostLineInput/syncExtraCostLines' own doc comments for the `undefined`-means-"don't
    * touch" contract (not `?? []`, which would silently delete an existing owner-entered list on
    * an update by a session that can't see costs at all). Fabric cost itself is never part of
-   * this input anymore — it's computed only at posting (see postBatch/fabric-cost-estimate.ts). */
+   * this input anymore — it's computed only at posting (see postBatch/fabric-usage.ts (estimateFabricUsageCost)). */
   extraCosts?: ExtraCostLineInput[];
+}
+
+/** One source bucket of a draft's fabric usage (docs/plans/fabric-colour-stock.md D6, A4). */
+export interface FabricUsageInput {
+  /** `null` = "Tanpa warna". Any colour of the batch's fabric, inactive included (it may still
+   * hold stock). */
+  fabricColorId: string | null;
+  yards: number;
+}
+
+/** A stored usage row as the audit log records it (colour named, so the log reads without ids). */
+interface FabricUsageAuditRow {
+  fabricColorId: string | null;
+  colorName: string;
+  yards: number;
+}
+
+const MAX_FABRIC_USAGE_ROWS = 50;
+
+/** Validates `usages` against the batch's fabric and replaces the batch's usage rows with them
+ * (a draft's usage, like its lines, has no history worth keeping row by row). Returns the rows
+ * with colour names for the audit entry. The composite FK (fabric_color_id, fabric_id) is the
+ * real guarantee that a colour belongs to the fabric; the check here gives the message. */
+async function replaceFabricUsages(
+  tx: Tx,
+  productionBatchId: string,
+  fabricId: string,
+  usages: readonly FabricUsageInput[],
+): Promise<FabricUsageAuditRow[]> {
+  const colors =
+    usages.some((usage) => usage.fabricColorId !== null)
+      ? await tx.select({ id: fabricColors.id, name: fabricColors.name }).from(fabricColors).where(eq(fabricColors.fabricId, fabricId))
+      : [];
+  const nameById = new Map(colors.map((color) => [color.id, color.name]));
+  const seen = new Set<string>();
+  const rows = usages.map((usage) => {
+    const colorName = usage.fabricColorId === null ? "Tanpa warna" : nameById.get(usage.fabricColorId);
+    if (colorName === undefined) throw new FieldError("fabricUsages", "Warna ini bukan warna bahan batch ini.");
+    const key = usage.fabricColorId ?? "none";
+    if (seen.has(key)) throw new FieldError("fabricUsages", `Warna ${colorName} muncul dua kali di pemakaian kain.`);
+    seen.add(key);
+    return { fabricColorId: usage.fabricColorId, colorName, yards: usage.yards };
+  });
+
+  await tx.delete(productionBatchFabricUsages).where(eq(productionBatchFabricUsages.productionBatchId, productionBatchId));
+  if (rows.length > 0) {
+    try {
+      await tx
+        .insert(productionBatchFabricUsages)
+        .values(rows.map((row) => ({ productionBatchId, fabricId, fabricColorId: row.fabricColorId, yards: row.yards })));
+    } catch (error) {
+      // A colour deleted between the check above and this insert.
+      if (isPostgresErrorCode(error, "23503")) throw new FieldError("fabricUsages", "Warna ini bukan warna bahan batch ini.");
+      throw error;
+    }
+  }
+  return rows;
+}
+
+/** The shape checks that need no database: row count and yards (> 0, 2 decimals, numeric(10,2)).
+ * Run before anything is written, so fabric_yards = Σ rows can never hit a DB constraint first. */
+function assertFabricUsageShape(usages: readonly FabricUsageInput[]): void {
+  if (usages.length > MAX_FABRIC_USAGE_ROWS) throw new FieldError("fabricUsages", "Terlalu banyak baris pemakaian kain.");
+  for (const usage of usages) {
+    if (!Number.isFinite(usage.yards) || usage.yards <= 0) throw new FieldError("fabricUsages", "Yard pemakaian kain harus lebih dari 0.");
+    if (Math.round(usage.yards * 100) / 100 !== usage.yards) throw new FieldError("fabricUsages", "Yard pemakaian kain maksimal 2 desimal.");
+    if (usage.yards >= 100_000_000) throw new FieldError("fabricUsages", "Yard pemakaian kain terlalu besar.");
+  }
+  // fabric_yards = Σ rows is numeric(10,2) too: rows that each fit can still overflow together.
+  if (usages.reduce((sum, usage) => sum + Math.round(usage.yards * 100), 0) >= 10_000_000_000) {
+    throw new FieldError("fabricUsages", "Total yard pemakaian kain terlalu besar.");
+  }
+}
+
+/** production_batches.fabric_yards for a save: the sum of the usage rows when there are any
+ * (D6: the rows decide, so the old release and every reader of fabric_yards stay right), else the
+ * typed total (a draft saved before any SKU, hence any colour, was picked). */
+function fabricYardsFor(usages: readonly FabricUsageInput[], typedYards: number | null): number | null {
+  if (usages.length === 0) return typedYards;
+  return usages.reduce((sum, usage) => sum + Math.round(usage.yards * 100), 0) / 100;
 }
 
 async function insertLines(tx: Tx, productionBatchId: string, fabricId: string, lines: readonly BatchLineInput[]): Promise<void> {
@@ -643,6 +793,8 @@ async function syncExtraCostLines(
 }
 
 export async function createDraft(input: CreateDraftInput, actorStaffUserId: string | null, db: Database = defaultDb) {
+  const fabricUsages = input.fabricUsages ?? [];
+  assertFabricUsageShape(fabricUsages);
   return db.transaction(async (tx) => {
     const batchNo = await generateBatchNumber(tx);
     const [batch] = await tx
@@ -651,13 +803,14 @@ export async function createDraft(input: CreateDraftInput, actorStaffUserId: str
         fabricId: input.fabricId,
         batchNo,
         producedAt: input.producedAt,
-        fabricYards: input.fabricYards,
+        fabricYards: fabricYardsFor(fabricUsages, input.fabricYards),
         notes: input.notes ?? null,
       })
       .returning();
     if (!batch) throw new Error("failed to insert production batch");
 
     await insertLines(tx, batch.id, input.fabricId, input.lines);
+    const usageAudit = await replaceFabricUsages(tx, batch.id, input.fabricId, fabricUsages);
     if (input.extraCosts !== undefined) {
       const totalPcs = input.lines.reduce((sum, line) => sum + line.qty, 0);
       await syncExtraCostLines(tx, batch.id, input.extraCosts, totalPcs);
@@ -668,7 +821,7 @@ export async function createDraft(input: CreateDraftInput, actorStaffUserId: str
       action: "create",
       entityType: "production_batch",
       entityId: batch.id,
-      after: { ...batch, lines: input.lines },
+      after: { ...batch, lines: input.lines, fabricUsages: usageAudit },
     });
     return batch;
   });
@@ -676,9 +829,12 @@ export async function createDraft(input: CreateDraftInput, actorStaffUserId: str
 
 export interface UpdateDraftInput {
   producedAt: string;
+  /** Same contract as CreateDraftInput.fabricYards. */
   fabricYards: number | null;
   notes?: string | null;
   lines: BatchLineInput[];
+  /** The whole set, replacing the draft's rows (omitted = none), like `lines`. */
+  fabricUsages?: FabricUsageInput[];
   /** Same `undefined`-means-"don't touch" contract as CreateDraftInput.extraCosts — when
    * omitted, syncExtraCostLines isn't even called, so an existing owner-entered list is never
    * read or written. */
@@ -692,6 +848,8 @@ export interface UpdateDraftInput {
  * backstop — see migration 0007 — but the row lock is what actually prevents the race itself,
  * same reasoning lockProductForUpdate's own doc comment gives for the products feature.) */
 export async function updateDraft(id: string, input: UpdateDraftInput, actorStaffUserId: string | null, db: Database = defaultDb) {
+  const fabricUsages = input.fabricUsages ?? [];
+  assertFabricUsageShape(fabricUsages);
   return db.transaction(async (tx) => {
     const before = await lockProductionBatchForUpdate(tx, id);
     if (!before) throw new ActionError("Batch tidak ditemukan.");
@@ -701,7 +859,7 @@ export async function updateDraft(id: string, input: UpdateDraftInput, actorStaf
       .update(productionBatches)
       .set({
         producedAt: input.producedAt,
-        fabricYards: input.fabricYards,
+        fabricYards: fabricYardsFor(fabricUsages, input.fabricYards),
         notes: input.notes ?? null,
       })
       .where(eq(productionBatches.id, id))
@@ -713,6 +871,7 @@ export async function updateDraft(id: string, input: UpdateDraftInput, actorStaf
     // lines the form submitted are now the whole set".
     await tx.delete(productionBatchItems).where(eq(productionBatchItems.productionBatchId, id));
     await insertLines(tx, id, before.fabricId, input.lines);
+    const usageAudit = await replaceFabricUsages(tx, id, before.fabricId, fabricUsages);
 
     if (input.extraCosts !== undefined) {
       const totalPcs = input.lines.reduce((sum, line) => sum + line.qty, 0);
@@ -725,7 +884,7 @@ export async function updateDraft(id: string, input: UpdateDraftInput, actorStaf
       entityType: "production_batch",
       entityId: id,
       before,
-      after: { ...after, lines: input.lines },
+      after: { ...after, lines: input.lines, fabricUsages: usageAudit },
     });
     return after;
   });
@@ -758,22 +917,26 @@ export interface PostedBatchResult {
  * 3. Resolve the accessory recipe for every line (resolveAccessoryNeeds) — any unresolved
  *    size-group row rejects immediately with a message naming every product/size/group (a
  *    configuration problem, not a stock race).
- * 4. Lock the fabric row (always exactly one), then every NEEDED accessory row in sorted id
- *    order — deterministic, avoids a deadlock against a concurrent post/purchase/adjustment on
+ * 3b. Read the fabric usage rows (docs/plans/fabric-colour-stock.md D6): at least one, and their
+ *    sum must equal fabric_yards (a draft saved by the release before S5 has none).
+ * 4. Lock the fabric row (always exactly one; it covers every colour bucket, D3), then every
+ *    NEEDED accessory row in sorted id order — deterministic, avoids a deadlock against a concurrent post/purchase/adjustment on
  *    the same items (same reasoning saveStockCount sorts SKUs before locking).
- * 5. Collect EVERY shortage (fabric included) before writing anything — rejects listing every
+ * 5. Collect EVERY shortage (each fabric colour bucket against its OWN balance, never the
+ *    fabric total) before writing anything — rejects listing every
  *    short item in ONE message, not fail-fast on the first.
  * 6. Re-verify every variable-cost line's quantity against the batch's ACTUAL total pcs (never
  *    trusts whatever a prior draft save computed, or a client-submitted value — there is none).
  * 7. Value the fabric and every accessory's consumption at their CURRENT moving-average cost
  *    (valueDeltaForConsumption — the same zero-residual rule accessories/fabric adjustments
- *    already use applies for free), write one fabric_stock_movements row and one
- *    accessory_movements row per resolved accessory (ref_type='production_batch').
+ *    already use applies for free), write one fabric_stock_movements row per usage
+ *    row (its colour bucket, valued at that bucket's average, A1) and one accessory_movements row
+ *    per resolved accessory (ref_type='production_batch').
  * 8. totalCost = fabricCost + Σ(accessory consumption costs) + Σ(production_batch_costs.total,
  *    variable AND fixed). unitCost = ceil(totalCost / totalPcs), written to every line — frozen
  *    from here on (HPP is never rewritten, D20).
  * 9. status='posted', posted_at, posted_by_staff_user_id, fabric_cost_amount (computed, not
- *    user-entered — see fabric-cost-estimate.ts for the draft's own non-binding estimate).
+ *    user-entered — see fabric-usage.ts (estimateFabricUsageCost) for the draft's own non-binding estimate).
  *    receipt_status stays at its 'pending' default.
  * 10. One audit_log entry for the whole post.
  *
@@ -795,6 +958,29 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
     const fabricYards = before.fabricYards;
     const totalPcs = lines.reduce((sum, line) => sum + line.qty, 0);
 
+    // Fabric usage per colour bucket (docs/plans/fabric-colour-stock.md D6). Read after the batch
+    // lock: a concurrent updateDraft (which replaces these rows) holds the same lock.
+    const usages = await tx
+      .select({
+        fabricColorId: productionBatchFabricUsages.fabricColorId,
+        colorName: fabricColors.name,
+        yards: productionBatchFabricUsages.yards,
+      })
+      .from(productionBatchFabricUsages)
+      .leftJoin(fabricColors, eq(fabricColors.id, productionBatchFabricUsages.fabricColorId))
+      .where(eq(productionBatchFabricUsages.productionBatchId, id));
+    // A draft last saved by the release before S5 has fabric_yards but no rows.
+    if (usages.length === 0) throw new ActionError("Isi pemakaian kain per warna lalu simpan.");
+    const usageCenti = usages.reduce((sum, usage) => sum + Math.round(usage.yards * 100), 0);
+    // Saves since S5 keep fabric_yards = Σ rows; only the previous release can drift them apart
+    // (it rewrites fabric_yards without touching the rows). Never guess which one is right.
+    if (usageCenti !== Math.round(fabricYards * 100)) {
+      throw new ActionError(
+        `Pemakaian kain per warna (${(usageCenti / 100).toFixed(2)} yard) tidak sama dengan jumlah yard batch (${fabricYards.toFixed(2)} yard). Buka draf, periksa pemakaian kain, lalu simpan.`,
+      );
+    }
+    usages.sort(byColorName);
+
     const { neededByAccessoryId, unresolved } = await resolveAccessoryNeeds(
       lines.map((line) => ({ sku: line.sku, qty: line.qty })),
       tx,
@@ -806,9 +992,14 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
       throw new ActionError(`Resep aksesoris belum lengkap untuk: ${names}.`);
     }
 
+    // One lock for every colour of the fabric (D3), then each usage row's OWN bucket balance:
+    // another colour's stock (or the fabric total) never covers this one.
     const fabric = await lockFabricForUpdate(tx, before.fabricId);
     if (!fabric) throw new Error("fabric not found for an existing production batch");
-    const fabricBalanceBefore = await getFabricBalance(before.fabricId, tx);
+    const usageBalances = [];
+    for (const usage of usages) {
+      usageBalances.push({ ...usage, balance: await getFabricColorBalance(before.fabricId, usage.fabricColorId, tx) });
+    }
 
     const accessoryIds = [...neededByAccessoryId.keys()].sort();
     const overrideRows =
@@ -835,9 +1026,12 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
     const accessoryById = new Map(accessoryRows.map((row) => [row.id, row]));
 
     const effectiveNeedByAccessoryId = new Map<string, number>();
+    // Every shortage, each colour bucket separately, in ONE message (whole hundredths of a yard,
+    // never float compares).
     const shortages: string[] = [];
-    if (fabricYards > fabricBalanceBefore.qty) {
-      shortages.push(`${fabric.name}: butuh ${fabricYards} yard, stok ${fabricBalanceBefore.qty} yard`);
+    for (const usage of usageBalances) {
+      const shortCenti = Math.round(usage.yards * 100) - Math.round(usage.balance.qty * 100);
+      if (shortCenti > 0) shortages.push(`${usage.colorName ?? "Tanpa warna"} kurang ${(shortCenti / 100).toFixed(2)} yard`);
     }
     for (const accessoryId of accessoryIds) {
       const computedQty = neededByAccessoryId.get(accessoryId)!;
@@ -845,11 +1039,11 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
       effectiveNeedByAccessoryId.set(accessoryId, effectiveQty);
       const balance = accessoryBalanceBefore.get(accessoryId)!;
       if (effectiveQty > balance.qty) {
-        shortages.push(`${accessoryById.get(accessoryId)?.name ?? accessoryId}: butuh ${effectiveQty} pcs, stok ${balance.qty} pcs`);
+        shortages.push(`${accessoryById.get(accessoryId)?.name ?? accessoryId} kurang ${effectiveQty - balance.qty} pcs`);
       }
     }
     if (shortages.length > 0) {
-      throw new ActionError(`Stok tidak cukup untuk posting: ${shortages.join("; ")}.`);
+      throw new ActionError(`Stok kurang: ${shortages.join(", ")}.`);
     }
 
     // Re-verify (never trust) every variable line's quantity — see this function's own doc
@@ -859,17 +1053,34 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
       .set({ quantity: totalPcs })
       .where(and(eq(productionBatchCosts.productionBatchId, id), eq(productionBatchCosts.costType, "variable")));
 
-    const fabricConsumptionValue = valueDeltaForConsumption(fabricBalanceBefore, -fabricYards);
-    await tx.insert(fabricStockMovements).values({
-      fabricId: before.fabricId,
-      qty: -fabricYards,
-      valueAmount: fabricConsumptionValue,
-      type: "production",
-      refType: "production_batch",
-      refId: id,
-      createdByStaffUserId: actorStaffUserId,
+    // One 'production' movement per usage row, valued at THAT bucket's moving average (A1). Each
+    // bucket appears once (unique per batch), so its balance read above is still current. Exactly
+    // -balance.qty when a row empties its bucket, so the zero-residual rule fires on an exact 0.
+    const fabricConsumption = usageBalances.map((usage) => {
+      const empties = Math.round(usage.yards * 100) === Math.round(usage.balance.qty * 100);
+      // The ledger row's value (<= 0) and the cost it represents (>= 0) are kept apart.
+      const movementValue = valueDeltaForConsumption(usage.balance, empties ? -usage.balance.qty : -usage.yards);
+      return {
+        fabricColorId: usage.fabricColorId,
+        colorName: usage.colorName ?? "Tanpa warna",
+        yards: usage.yards,
+        movementValue,
+        valueAmount: Math.abs(movementValue),
+      };
     });
-    const fabricCostAmount = -fabricConsumptionValue;
+    await tx.insert(fabricStockMovements).values(
+      fabricConsumption.map((row) => ({
+        fabricId: before.fabricId,
+        fabricColorId: row.fabricColorId,
+        qty: -row.yards,
+        valueAmount: row.movementValue,
+        type: "production" as const,
+        refType: "production_batch" as const,
+        refId: id,
+        createdByStaffUserId: actorStaffUserId,
+      })),
+    );
+    const fabricCostAmount = fabricConsumption.reduce((sum, row) => sum + row.valueAmount, 0);
 
     let accessoryCostTotal = 0;
     // An override of exactly 0 means "none of this needed after all" — skipped entirely rather
@@ -918,7 +1129,19 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
       entityType: "production_batch",
       entityId: id,
       before,
-      after: { ...after, unitCostAmount, totalPcs, accessoryCostTotal, extraCostsTotal },
+      after: {
+        ...after,
+        unitCostAmount,
+        totalPcs,
+        fabricConsumption: fabricConsumption.map((row) => ({
+          fabricColorId: row.fabricColorId,
+          colorName: row.colorName,
+          yards: row.yards,
+          valueAmount: row.valueAmount,
+        })),
+        accessoryCostTotal,
+        extraCostsTotal,
+      },
     });
 
     return { id, unitCostAmount, totalPcs };

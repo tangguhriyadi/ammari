@@ -57,7 +57,7 @@ async function batchWithReceipt(tx: TestDatabase, staffId: string, tailorId: str
     {
       fabricId: fabric.id,
       producedAt: "2026-10-01",
-      fabricYards: 2,
+      fabricYards: 2, fabricUsages: [{ fabricColorId: null, yards: 2 }],
       lines: [{ sku: variant.sku, qty: 2 }],
       extraCosts: [{ costComponentId: component!.id, unitPrice: 1000, supplierId: tailorId }],
     },

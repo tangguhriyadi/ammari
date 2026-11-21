@@ -7,7 +7,8 @@ import { getBatchReceiptSummary, listReceiptsForBatch } from "@/lib/receipts/pro
 import { getLineDefectTotals, heldDefectValue, listDefectMovementsForBatch, stripDefectMovementAmounts } from "@/lib/defects/queries";
 import type { LineDefectTotals } from "@/lib/defects/valuation";
 import { listActiveCostComponents } from "@/lib/production/cost-components";
-import { getFabricBalance } from "@/lib/inventory/fabric-stock";
+import { listFabricColorBalances } from "@/lib/inventory/fabric-stock";
+import { toFabricUsageStock } from "@/lib/production/fabric-usage-stock";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { listActiveSupplierOptions } from "@/lib/suppliers/queries";
 import { ProductionBatchForm } from "../_components/production-batch-form";
@@ -117,12 +118,14 @@ async function DraftView({
 }) {
   // Cost data is never fetched at all for a session without finance.view_profit: same
   // ProductBatasHpp pattern used by products/[id]/page.tsx. Independent reads, so in parallel.
-  const [eligibleSkus, extraCosts, activeCostComponents, supplierOptions, fabricBalance] = await Promise.all([
+  const [eligibleSkus, extraCosts, activeCostComponents, supplierOptions, fabricColorBalances] = await Promise.all([
     listEligibleSkusForFabric(batch.fabricId),
     canViewProfit ? getBatchExtraCosts(batch.id) : Promise.resolve([]),
     canViewProfit ? listActiveCostComponents() : Promise.resolve([]),
     canViewProfit ? listActiveSupplierOptions("service") : Promise.resolve([]),
-    canViewProfit ? getFabricBalance(batch.fabricId) : Promise.resolve({ qty: 0, valueAmount: 0 }),
+    // Quantities for every production.manage session (shown next to each usage row); values
+    // stripped below without finance.view_profit.
+    listFabricColorBalances(batch.fabricId),
   ]);
 
   return (
@@ -131,14 +134,15 @@ async function DraftView({
         mode="edit"
         batchId={batch.id}
         fixedFabricName={batch.fabricName}
-        // Never shipped to a session without finance.view_profit — same contract as new/page.tsx.
-        fixedFabricBalance={fabricBalance}
+        // Values never shipped to a session without finance.view_profit (toFabricUsageStock).
+        fixedFabricStock={toFabricUsageStock(fabricColorBalances, canViewProfit)}
         initialValues={{
           fabricId: batch.fabricId,
           producedAt: batch.producedAt,
           fabricYards: batch.fabricYards,
           notes: batch.notes ?? "",
           lines: batch.lines.map((line) => ({ sku: line.sku, qty: line.qty })),
+          fabricUsages: batch.fabricUsages,
         }}
         eligibleSkus={eligibleSkus}
         canViewProfit={canViewProfit}
