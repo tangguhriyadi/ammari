@@ -3,6 +3,7 @@ import { and, asc, count, desc, eq, ilike, inArray, isNotNull, isNull, or, sql, 
 import { alias } from "drizzle-orm/pg-core";
 import {
   accessories,
+  fabricColors,
   fabrics,
   goodsReceiptItems,
   goodsReceipts,
@@ -33,6 +34,10 @@ import { closedStatus, isOpenPurchaseStatus, type LineProgress } from "./status"
 export interface PurchaseLineInput {
   itemType: PurchaseItemType;
   itemId: string;
+  /** Fabric lines only (docs/plans/fabric-colour-stock.md D4). Null/absent = "Tanpa warna", allowed
+   * only for a fabric without active colours, or kept from an existing line on an edit (decision
+   * A2). */
+  fabricColorId?: string | null;
   qtyOrdered: number;
   /** What the owner paid for this line, ongkir included (D6). */
   totalAmount: number;
@@ -72,26 +77,71 @@ function validateLines(lines: readonly PurchaseLineInput[]): void {
       throw new FieldError("lines", "Jumlah aksesoris harus bilangan bulat.");
     }
     if (!Number.isSafeInteger(line.totalAmount) || line.totalAmount < 0) throw new FieldError("lines", "Total harga tidak valid.");
-    const key = `${line.itemType}:${line.itemId}`;
+    if (line.itemType !== "fabric" && line.fabricColorId) throw new FieldError("lines", "Warna hanya untuk barang jenis kain.");
+    // One line per (fabric, colour): the two partial unique indexes from 0046 are the backstop.
+    const key = line.itemType === "fabric" ? `fabric:${line.itemId}:${line.fabricColorId ?? "none"}` : `${line.itemType}:${line.itemId}`;
     if (seen.has(key)) throw new FieldError("lines", "Barang yang sama tidak boleh muncul dua kali dalam satu pesanan.");
     seen.add(key);
   }
 }
 
+/** What an edit keeps from the document's current lines: a choice that was valid when it was made
+ * stays allowed even if the master data has changed since (same rule as the supplier). */
+interface AlreadyOrdered {
+  accessoryIds: ReadonlySet<string>;
+  /** Colours already on the document (may have been deactivated since). */
+  fabricColorIds: ReadonlySet<string>;
+  /** Fabrics the document already orders as a colourless line (from before colours existed on the
+   * fabric, or before fabric colour stock): such a line may be kept as is. */
+  colorlessFabricIds: ReadonlySet<string>;
+}
+
+const NOTHING_ORDERED: AlreadyOrdered = { accessoryIds: new Set(), fabricColorIds: new Set(), colorlessFabricIds: new Set() };
+
 /** Every line's item must exist; an accessory must still be active to be newly ordered. Read with
  * FOR SHARE so a concurrent deactivation can't slip between this check and the insert.
- * `alreadyOrderedAccessoryIds`: on an edit, accessories the document already orders stay allowed
- * even if deactivated since (same rule as the supplier: keeping the current choice is fine). */
-async function assertItemsOrderable(
-  tx: Tx,
-  lines: readonly PurchaseLineInput[],
-  alreadyOrderedAccessoryIds: ReadonlySet<string> = new Set(),
-): Promise<void> {
+ * `alreadyOrdered`: on an edit, what the document already orders stays allowed even if the master
+ * data changed since (same rule as the supplier: keeping the current choice is fine).
+ *
+ * Fabric colours (docs/plans/fabric-colour-stock.md D4, decision A2): a colour must belong to the
+ * line's fabric and be active (or already on this document); a fabric with ≥1 active colour needs
+ * a colour on every line, except a colourless line the document already had. The fabric's colours
+ * are read FOR SHARE in the same transaction, so a concurrent deactivation of a chosen colour
+ * waits for this one (a colour created concurrently is not seen; it only matters for the next
+ * save). */
+async function assertItemsOrderable(tx: Tx, lines: readonly PurchaseLineInput[], alreadyOrdered: AlreadyOrdered = NOTHING_ORDERED): Promise<void> {
   const fabricIds = [...new Set(lines.filter((line) => line.itemType === "fabric").map((line) => line.itemId))].sort();
   const accessoryIds = [...new Set(lines.filter((line) => line.itemType === "accessory").map((line) => line.itemId))].sort();
   if (fabricIds.length > 0) {
-    const rows = await tx.select({ id: fabrics.id }).from(fabrics).where(inArray(fabrics.id, fabricIds)).orderBy(fabrics.id).for("share");
+    const rows = await tx
+      .select({ id: fabrics.id, name: fabrics.name })
+      .from(fabrics)
+      .where(inArray(fabrics.id, fabricIds))
+      .orderBy(fabrics.id)
+      .for("share");
     if (rows.length !== fabricIds.length) throw new FieldError("lines", "Bahan tidak ditemukan.");
+    const fabricNames = new Map(rows.map((row) => [row.id, row.name]));
+    const colors = await tx
+      .select({ id: fabricColors.id, fabricId: fabricColors.fabricId, name: fabricColors.name, isActive: fabricColors.isActive })
+      .from(fabricColors)
+      .where(inArray(fabricColors.fabricId, fabricIds))
+      .orderBy(fabricColors.id)
+      .for("share");
+    const colorsById = new Map(colors.map((color) => [color.id, color]));
+    const fabricsWithActiveColors = new Set(colors.filter((color) => color.isActive).map((color) => color.fabricId));
+    for (const line of lines) {
+      if (line.itemType !== "fabric") continue;
+      const fabricName = fabricNames.get(line.itemId)!;
+      if (line.fabricColorId) {
+        const color = colorsById.get(line.fabricColorId);
+        if (!color || color.fabricId !== line.itemId) throw new FieldError("lines", `Warna tidak ditemukan untuk ${fabricName}.`);
+        if (!color.isActive && !alreadyOrdered.fabricColorIds.has(color.id)) {
+          throw new FieldError("lines", `Warna ${color.name} sudah nonaktif dan tidak bisa dipesan.`);
+        }
+      } else if (fabricsWithActiveColors.has(line.itemId) && !alreadyOrdered.colorlessFabricIds.has(line.itemId)) {
+        throw new FieldError("lines", `Pilih warna untuk ${fabricName}.`);
+      }
+    }
   }
   if (accessoryIds.length > 0) {
     const rows = await tx
@@ -101,7 +151,7 @@ async function assertItemsOrderable(
       .orderBy(accessories.id)
       .for("share");
     if (rows.length !== accessoryIds.length) throw new FieldError("lines", "Aksesoris tidak ditemukan.");
-    const inactive = rows.find((row) => !row.isActive && !alreadyOrderedAccessoryIds.has(row.id));
+    const inactive = rows.find((row) => !row.isActive && !alreadyOrdered.accessoryIds.has(row.id));
     if (inactive) throw new FieldError("lines", `Aksesoris "${inactive.name}" sudah nonaktif dan tidak bisa dipesan.`);
   }
 }
@@ -112,9 +162,26 @@ function lineValues(purchaseId: string, lines: readonly PurchaseLineInput[]) {
     itemType: line.itemType,
     fabricId: line.itemType === "fabric" ? line.itemId : null,
     accessoryId: line.itemType === "accessory" ? line.itemId : null,
+    fabricColorId: line.itemType === "fabric" ? (line.fabricColorId ?? null) : null,
     qtyOrdered: line.qtyOrdered,
     totalAmount: line.totalAmount,
   }));
+}
+
+/** Audit `lines` with each line's colour name next to its id (D10), so the activity log reads
+ * "Sage" without a lookup. One query for every colour on the lines. */
+async function withColorNames<T extends { fabricColorId: string | null }>(tx: Tx, lines: readonly T[]): Promise<(T & { fabricColorName: string | null })[]> {
+  const colorIds = [...new Set(lines.flatMap((line) => (line.fabricColorId ? [line.fabricColorId] : [])))];
+  const names =
+    colorIds.length === 0
+      ? new Map<string, string>()
+      : new Map(
+          (await tx.select({ id: fabricColors.id, name: fabricColors.name }).from(fabricColors).where(inArray(fabricColors.id, colorIds))).map((row) => [
+            row.id,
+            row.name,
+          ]),
+        );
+  return lines.map((line) => ({ ...line, fabricColorName: line.fabricColorId ? (names.get(line.fabricColorId) ?? null) : null }));
 }
 
 function assertOrderedAt(orderedAt: string): void {
@@ -143,7 +210,13 @@ export async function createPurchase(input: PurchaseInput, actorStaffUserId: str
     if (!purchase) throw new Error("failed to insert purchase");
     const lines = await tx.insert(purchaseItems).values(lineValues(purchase.id, input.lines)).returning();
 
-    await writeAuditLog(tx, { actorStaffUserId, action: "create", entityType: "purchase", entityId: purchase.id, after: { purchase, lines } });
+    await writeAuditLog(tx, {
+      actorStaffUserId,
+      action: "create",
+      entityType: "purchase",
+      entityId: purchase.id,
+      after: { purchase, lines: await withColorNames(tx, lines) },
+    });
     return purchase;
   });
 }
@@ -190,9 +263,13 @@ export async function updatePurchase(id: string, input: PurchaseInput, actorStaf
       throw new FieldError("lines", `Total pembelian tidak boleh lebih kecil dari yang sudah dibayar (${formatRupiah(paid)}).`);
     }
     const beforeLines = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, id));
-    const currentAccessoryIds = new Set(beforeLines.flatMap((line) => (line.accessoryId ? [line.accessoryId] : [])));
-    await assertItemsOrderable(tx, input.lines, currentAccessoryIds);
+    await assertItemsOrderable(tx, input.lines, {
+      accessoryIds: new Set(beforeLines.flatMap((line) => (line.accessoryId ? [line.accessoryId] : []))),
+      fabricColorIds: new Set(beforeLines.flatMap((line) => (line.fabricColorId ? [line.fabricColorId] : []))),
+      colorlessFabricIds: new Set(beforeLines.flatMap((line) => (line.fabricId && !line.fabricColorId ? [line.fabricId] : []))),
+    });
 
+    const beforeAudit = await withColorNames(tx, beforeLines);
     await tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id));
     const lines = await tx.insert(purchaseItems).values(lineValues(id, input.lines)).returning();
     const [purchase] = await tx
@@ -207,8 +284,8 @@ export async function updatePurchase(id: string, input: PurchaseInput, actorStaf
       action: "update",
       entityType: "purchase",
       entityId: id,
-      before: { purchase: before, lines: beforeLines },
-      after: { purchase, lines },
+      before: { purchase: before, lines: beforeAudit },
+      after: { purchase, lines: await withColorNames(tx, lines) },
     });
     return purchase;
   });
@@ -409,6 +486,12 @@ export interface PurchaseDocumentLine {
   itemType: PurchaseItemType;
   itemId: string;
   itemName: string;
+  /** Fabric lines (docs/plans/fabric-colour-stock.md D4); all null = "Tanpa warna" (and always
+   * null on an accessory line). */
+  fabricColorId: string | null;
+  colorName: string | null;
+  colorHex: string | null;
+  colorIsActive: boolean | null;
   qtyOrdered: number;
   accepted: number;
   /** Net rejected into defect stock at receipt (everything that ever arrived defective). */
@@ -494,14 +577,26 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
         accessoryId: purchaseItems.accessoryId,
         fabricName: fabrics.name,
         accessoryName: accessories.name,
+        fabricColorId: purchaseItems.fabricColorId,
+        colorName: fabricColors.name,
+        colorHex: fabricColors.hex,
+        colorIsActive: fabricColors.isActive,
         qtyOrdered: purchaseItems.qtyOrdered,
         totalAmount: purchaseItems.totalAmount,
       })
       .from(purchaseItems)
       .leftJoin(fabrics, eq(fabrics.id, purchaseItems.fabricId))
       .leftJoin(accessories, eq(accessories.id, purchaseItems.accessoryId))
+      .leftJoin(fabricColors, eq(fabricColors.id, purchaseItems.fabricColorId))
       .where(eq(purchaseItems.purchaseId, id))
-      .orderBy(asc(purchaseItems.createdAt), asc(purchaseItems.id)),
+      // Lines saved together share created_at; within one save, a fabric's colours sit together
+      // (by name), "Tanpa warna" first.
+      .orderBy(
+        asc(purchaseItems.createdAt),
+        asc(sql`coalesce(${fabrics.name}, ${accessories.name})`),
+        sql`${fabricColors.name} asc nulls first`,
+        asc(purchaseItems.id),
+      ),
     getLineQuantities(id, db),
     hasAnyReceipt(db, id),
   ]);
@@ -517,6 +612,10 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
         itemType: line.itemType,
         itemId: (line.fabricId ?? line.accessoryId)!,
         itemName: (line.fabricName ?? line.accessoryName)!,
+        fabricColorId: line.fabricColorId,
+        colorName: line.colorName,
+        colorHex: line.colorHex,
+        colorIsActive: line.colorIsActive,
         qtyOrdered: line.qtyOrdered,
         accepted,
         rejected,
@@ -535,6 +634,48 @@ export async function getPurchaseDocument(id: string, db: Database = defaultDb):
 export function stripPurchaseDocumentAmounts(document: PurchaseDocument, canViewProfit: boolean): PurchaseDocument {
   if (canViewProfit) return document;
   return { ...document, lines: document.lines.map((line) => ({ ...line, totalAmountPaid: null })) };
+}
+
+export interface PurchaseFabricColorOption {
+  id: string;
+  name: string;
+  hex: string | null;
+  supplierColorCode: string | null;
+  isActive: boolean;
+}
+
+export interface PurchaseFabricOption {
+  id: string;
+  name: string;
+  /** Active colours, plus `keepColorIds` (an edited document's current colours) even if inactive. */
+  colors: PurchaseFabricColorOption[];
+}
+
+/** Every fabric for the purchase form's "Bahan" picker, each with the colours a line may pick
+ * (docs/plans/fabric-colour-stock.md §4.1). Two queries, no N+1. */
+export async function listPurchaseFabricOptions(keepColorIds: readonly string[] = [], db: Database = defaultDb): Promise<PurchaseFabricOption[]> {
+  const [fabricRows, colorRows] = await Promise.all([
+    db.select({ id: fabrics.id, name: fabrics.name }).from(fabrics).orderBy(asc(fabrics.name)),
+    db
+      .select({
+        id: fabricColors.id,
+        fabricId: fabricColors.fabricId,
+        name: fabricColors.name,
+        hex: fabricColors.hex,
+        supplierColorCode: fabricColors.supplierColorCode,
+        isActive: fabricColors.isActive,
+      })
+      .from(fabricColors)
+      .where(keepColorIds.length > 0 ? or(eq(fabricColors.isActive, true), inArray(fabricColors.id, [...keepColorIds])) : eq(fabricColors.isActive, true))
+      .orderBy(asc(fabricColors.name)),
+  ]);
+  const colorsByFabric = new Map<string, PurchaseFabricColorOption[]>();
+  for (const { fabricId, ...color } of colorRows) {
+    const list = colorsByFabric.get(fabricId) ?? [];
+    list.push(color);
+    colorsByFabric.set(fabricId, list);
+  }
+  return fabricRows.map((fabric) => ({ ...fabric, colors: colorsByFabric.get(fabric.id) ?? [] }));
 }
 
 export function formatPurchaseQty(itemType: PurchaseItemType, qty: number): string {

@@ -1,6 +1,6 @@
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { listActiveFabrics } from "@/lib/products/fabric-queries";
+import { listPurchaseFabricOptions } from "@/lib/purchases/queries";
 import { listActiveAccessories } from "@/lib/inventory/accessories";
 import { listActiveSupplierOptions } from "@/lib/suppliers/queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
@@ -9,7 +9,7 @@ import { PurchaseForm } from "../_components/purchase-form";
 export default async function NewPurchasePage() {
   await requirePermission("inventory.manage");
 
-  const [suppliers, fabrics, accessories] = await Promise.all([listActiveSupplierOptions(undefined), listActiveFabrics(), listActiveAccessories()]);
+  const [suppliers, fabrics, accessories] = await Promise.all([listActiveSupplierOptions(undefined), listPurchaseFabricOptions(), listActiveAccessories()]);
 
   return (
     <>
@@ -18,7 +18,7 @@ export default async function NewPurchasePage() {
       <PurchaseForm
         mode="create"
         suppliers={suppliers}
-        fabrics={fabrics.map((fabric) => ({ id: fabric.id, name: fabric.name }))}
+        fabrics={fabrics}
         accessories={accessories.map((accessory) => ({ id: accessory.id, name: accessory.name }))}
       />
     </>

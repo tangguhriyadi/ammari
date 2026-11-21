@@ -29,6 +29,12 @@ function firstIssue(error: z.ZodError): string {
 const purchaseLineSchema = z.object({
   itemType: z.enum(PURCHASE_ITEM_TYPES),
   itemId: z.string().uuid("Pilih barang terlebih dahulu."),
+  // Fabric lines (docs/plans/fabric-colour-stock.md D4); "" or absent = Tanpa warna. Whether a
+  // colour is required/allowed is decided by createPurchase/updatePurchase against the database.
+  fabricColorId: z
+    .union([z.literal(""), z.string().uuid("Warna tidak valid.")])
+    .optional()
+    .transform((value) => value || null),
   qtyOrdered: z.string().transform((value, ctx) => {
     const parsed = parseDecimalQuantity(value);
     if (parsed === null || parsed > MAX_QTY) {

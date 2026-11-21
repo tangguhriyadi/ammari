@@ -64,6 +64,7 @@ async function runPurchaseFlow(page: Page, layout: Layout): Promise<void> {
   await page.locator("#purchase-supplier").selectOption({ label: supplierName });
   await page.getByLabel("Jenis barang 1").selectOption({ label: "Kain" });
   await page.getByLabel("Barang 1", { exact: true }).selectOption({ label: fabricName });
+  await page.getByLabel("Warna barang 1", { exact: true }).selectOption({ label: "Hitam" });
   await page.getByLabel("Jumlah barang 1").fill("10");
   await page.getByLabel("Total harga barang 1").fill("1.000.000");
   await expect(page.getByText("≈ Rp 100.000/yard (otomatis)")).toBeVisible();

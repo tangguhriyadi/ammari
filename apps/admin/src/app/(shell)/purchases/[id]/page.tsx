@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { PageHeader, Badge, Breadcrumb, Button, Card, CardList, TableContainer, TableHead, Th, Tr, Td } from "@ammari/ui";
+import { PageHeader, Badge, Breadcrumb, Button, Card, CardList, ColorSwatch, TableContainer, TableHead, Th, Tr, Td } from "@ammari/ui";
 import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import type { StaffSessionData } from "@ammari/auth/staff";
 import { requirePermission } from "@/lib/auth/require-permission";
@@ -244,7 +244,10 @@ function PurchaseLines({ document, actions }: { document: PurchaseDocument; acti
         {document.lines.map((line) => (
           <li key={line.id} data-testid="purchase-line-card">
             <Card className="flex flex-col gap-2">
-              <p className="text-base font-medium text-neutral-900">{line.itemName}</p>
+              <div>
+                <p className="text-base font-medium text-neutral-900">{line.itemName}</p>
+                <LineColor line={line} />
+              </div>
               <dl className="grid grid-cols-2 gap-2 text-sm">
                 <QtyCell label="Dipesan" value={formatPurchaseQty(line.itemType, line.qtyOrdered)} />
                 <QtyCell label="Diterima" value={formatPurchaseQty(line.itemType, line.accepted)} />
@@ -274,7 +277,10 @@ function PurchaseLines({ document, actions }: { document: PurchaseDocument; acti
         <tbody>
           {document.lines.map((line) => (
             <Tr key={line.id} data-testid="purchase-line-row">
-              <Td className="font-medium text-neutral-900">{line.itemName}</Td>
+              <Td>
+                <span className="font-medium text-neutral-900">{line.itemName}</span>
+                <LineColor line={line} />
+              </Td>
               <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.qtyOrdered)}</Td>
               <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.accepted)}</Td>
               <Td className="tabular-nums text-neutral-700">{formatPurchaseQty(line.itemType, line.defectHeld)}</Td>
@@ -293,6 +299,25 @@ function PurchaseLines({ document, actions }: { document: PurchaseDocument; acti
         </p>
       )}
     </>
+  );
+}
+
+/** A fabric line's colour (docs/plans/fabric-colour-stock.md §4.1): swatch + name, or "Tanpa
+ * warna" for a colourless line. Accessory lines have no colour and show nothing. */
+function LineColor({ line }: { line: PurchaseLine }) {
+  if (line.itemType !== "fabric") return null;
+  return (
+    <span className="mt-0.5 flex items-center gap-1.5 text-sm text-neutral-700" data-testid="purchase-line-color">
+      {line.colorName !== null ? (
+        <>
+          <ColorSwatch hex={line.colorHex} className="size-4" />
+          {line.colorName}
+          {line.colorIsActive === false && <span className="text-neutral-600">(nonaktif)</span>}
+        </>
+      ) : (
+        <span className="text-neutral-600">Tanpa warna</span>
+      )}
+    </span>
   );
 }
 

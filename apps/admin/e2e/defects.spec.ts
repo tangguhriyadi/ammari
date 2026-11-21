@@ -82,7 +82,8 @@ async function purchaseWithRejects(page: Page, layout: Layout): Promise<void> {
   if (layout.rowTag === "tr") {
     // Dipesan / Diterima / Cacat / Ditukar / Dilepas / Sisa (S6), then the line's defect actions.
     await expect(lineRow.getByRole("cell")).toHaveText([
-      "E2E Katun Cacat " + marker,
+      // Name, then the line's colour (docs/plans/fabric-colour-stock.md S2).
+      "E2E Katun Cacat " + marker + "Sage",
       "10.00 yard",
       "8.00 yard",
       "2.00 yard",

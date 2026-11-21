@@ -18,6 +18,9 @@ async function saveAndLand(page: Page, button: Locator, landing: RegExp, fallbac
 export interface PurchaseLineSpec {
   type: "Kain" | "Aksesoris";
   itemName: string;
+  /** Kain lines: the colour to pick (docs/plans/fabric-colour-stock.md D4). Omitted = the fabric's
+   * first colour when it has any (a colour is required then), none when it has no active colour. */
+  color?: string;
   qty: string;
   amount: string;
 }
@@ -27,6 +30,21 @@ export async function createSupplier(page: Page, name: string): Promise<void> {
   await page.goto("/suppliers/new");
   await page.getByLabel("Nama supplier").fill(name);
   await saveAndLand(page, page.getByRole("button", { name: "Simpan", exact: true }), /\/suppliers$/, "/suppliers");
+}
+
+/** The "Warna" select appears on a Kain line once its fabric has active colours. */
+async function pickColor(page: Page, number: number, color: string | undefined): Promise<void> {
+  // exact: "Tambah semua warna barang N" (a button) would match too.
+  const select = page.getByLabel(`Warna barang ${number}`, { exact: true });
+  if (color !== undefined) {
+    await select.selectOption({ label: color });
+    return;
+  }
+  const shown = await select.waitFor({ state: "visible", timeout: 1_500 }).then(
+    () => true,
+    () => false,
+  );
+  if (shown) await select.selectOption({ index: 1 });
 }
 
 /** Fills and saves /purchases/new with `lines`, then opens the new document's detail page. Since
@@ -40,6 +58,7 @@ export async function createPurchase(page: Page, supplierName: string, lines: Pu
     if (index > 0) await page.getByRole("button", { name: "+ Tambah barang" }).click();
     await page.getByLabel(`Jenis barang ${number}`).selectOption({ label: line.type });
     await page.getByLabel(`Barang ${number}`, { exact: true }).selectOption({ label: line.itemName });
+    if (line.type === "Kain") await pickColor(page, number, line.color);
     await page.getByLabel(`Jumlah barang ${number}`).fill(line.qty);
     await page.getByLabel(`Total harga barang ${number}`).fill(line.amount);
   }

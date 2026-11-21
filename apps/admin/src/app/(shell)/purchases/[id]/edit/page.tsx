@@ -1,9 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import { PageHeader, Breadcrumb } from "@ammari/ui";
 import { requirePermission } from "@/lib/auth/require-permission";
-import { listActiveFabrics } from "@/lib/products/fabric-queries";
 import { listActiveAccessories } from "@/lib/inventory/accessories";
-import { getPurchaseDocument, isUuid } from "@/lib/purchases/queries";
+import { getPurchaseDocument, isUuid, listPurchaseFabricOptions } from "@/lib/purchases/queries";
 import { listActiveSupplierOptions } from "@/lib/suppliers/queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { PurchaseForm } from "../../_components/purchase-form";
@@ -22,7 +21,13 @@ export default async function EditPurchasePage({ params }: { params: Promise<{ i
     redirect(`/purchases/${id}`);
   }
 
-  const [suppliers, fabrics, accessories] = await Promise.all([listActiveSupplierOptions(undefined), listActiveFabrics(), listActiveAccessories()]);
+  // A line's colour deactivated since the order was placed must still be offered (and shown).
+  const currentColorIds = document.lines.flatMap((line) => (line.fabricColorId ? [line.fabricColorId] : []));
+  const [suppliers, fabrics, accessories] = await Promise.all([
+    listActiveSupplierOptions(undefined),
+    listPurchaseFabricOptions(currentColorIds),
+    listActiveAccessories(),
+  ]);
   const accessoryOptions = accessories.map((accessory) => ({ id: accessory.id, name: accessory.name }));
   // A line's accessory deactivated since the order was placed must still show as selected.
   for (const line of document.lines) {
@@ -40,7 +45,7 @@ export default async function EditPurchasePage({ params }: { params: Promise<{ i
         purchaseId={id}
         suppliers={suppliers}
         currentSupplier={{ id: document.supplierId, name: document.supplierName }}
-        fabrics={fabrics.map((fabric) => ({ id: fabric.id, name: fabric.name }))}
+        fabrics={fabrics}
         accessories={accessoryOptions}
         initialValues={{
           supplierId: document.supplierId,
@@ -49,6 +54,7 @@ export default async function EditPurchasePage({ params }: { params: Promise<{ i
           lines: document.lines.map((line) => ({
             itemType: line.itemType,
             itemId: line.itemId,
+            fabricColorId: line.fabricColorId ?? "",
             qtyOrdered: String(line.qtyOrdered),
             totalAmount: String(line.totalAmountPaid ?? 0),
           })),
