@@ -27,6 +27,11 @@ export function SizeChartTable({ rows }: { rows: StorefrontSizeChartRow[] }) {
       <div data-testid="size-chart-scroll" tabIndex={0} role="region" aria-label="Tabel panduan ukuran" className="overflow-x-auto overscroll-x-contain focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ink">
         <SizeChartTableBody rows={rows} />
       </div>
+      {/* Only ever rendered with a chart: All Size products show their fit note instead of this
+          component (app/products/[slug]/page.tsx). The column's gap-3 is its top margin. */}
+      <p data-testid="size-chart-tolerance-note" className="text-[15px] text-ink-muted">
+        *Ukuran dapat berbeda 1–2 cm karena proses jahit dan pengukuran manual.
+      </p>
       {/* The table's min width only overflows below `sm`; from there every column fits. */}
       <p className="text-[15px] text-ink-muted sm:hidden" aria-hidden="true">
         Geser tabel ke samping untuk melihat semua kolom.

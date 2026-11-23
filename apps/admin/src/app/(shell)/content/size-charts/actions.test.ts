@@ -1,9 +1,28 @@
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 // Same mocking strategy as products/actions.test.ts — exercises requirePermission's actual
 // enforcement without a real session/DB.
 const { getStaffSessionMock } = vi.hoisted(() => ({ getStaffSessionMock: vi.fn() }));
 vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMock }));
+
+// Storefront revalidation is a network call to apps/web; the DB writes are covered by
+// lib/content/size-charts.test.ts. Both are mocked so the wiring test below asserts only the
+// action's own behaviour. Other tests keep the real query module (they never reach the DB).
+const m = vi.hoisted(() => ({
+  revalidateProductSlugs: vi.fn(),
+  updateSizeChart: vi.fn(),
+  listProductSlugsUsingSizeChart: vi.fn(),
+}));
+vi.mock("@/lib/revalidate", () => ({ revalidateProductSlugs: m.revalidateProductSlugs }));
+vi.mock("@/lib/content/size-charts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/content/size-charts")>()),
+  updateSizeChart: m.updateSizeChart,
+  listProductSlugsUsingSizeChart: m.listProductSlugsUsingSizeChart,
+}));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 const { createSizeChartAction, updateSizeChartAction, deleteSizeChartAction } = await import("./actions");
 
@@ -75,5 +94,39 @@ describe("size chart action validation (shape only — never reaches the DB)", (
       rows: [{ ...VALID_ROWS[0], bustCm: 0 }, ...VALID_ROWS.slice(1)],
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("updateSizeChartAction revalidates the storefront", () => {
+  const CHART_ID = "11111111-1111-4111-8111-111111111111";
+
+  beforeEach(() => {
+    getStaffSessionMock.mockResolvedValue(sessionWithPermissions(["content.manage"]));
+    m.updateSizeChart.mockResolvedValue({ id: CHART_ID, name: "Gamis Reguler", rows: [...VALID_ROWS] });
+    m.listProductSlugsUsingSizeChart.mockResolvedValue(["haura", "zahra", "alesha"]);
+  });
+
+  test("requests revalidation of every product page using the saved chart", async () => {
+    m.revalidateProductSlugs.mockResolvedValue({ ok: true });
+    const result = await updateSizeChartAction(CHART_ID, { name: "Gamis Reguler", rows: [...VALID_ROWS] });
+
+    expect(result).toEqual({ ok: true, data: { id: CHART_ID, revalidationOk: true } });
+    expect(m.listProductSlugsUsingSizeChart).toHaveBeenCalledWith(CHART_ID);
+    expect(m.revalidateProductSlugs).toHaveBeenCalledTimes(1);
+    expect(m.revalidateProductSlugs).toHaveBeenCalledWith(["haura", "zahra", "alesha"]);
+    // Only after the write has committed.
+    expect(m.updateSizeChart.mock.invocationCallOrder[0]).toBeLessThan(m.revalidateProductSlugs.mock.invocationCallOrder[0]!);
+  });
+
+  test("a storefront that cannot be reached still saves, and says so", async () => {
+    m.revalidateProductSlugs.mockResolvedValue({ ok: false });
+    const result = await updateSizeChartAction(CHART_ID, { name: "Gamis Reguler", rows: [...VALID_ROWS] });
+    expect(result).toEqual({ ok: true, data: { id: CHART_ID, revalidationOk: false } });
+  });
+
+  test("a failed save requests no revalidation", async () => {
+    m.updateSizeChart.mockRejectedValue(new Error("boom"));
+    await updateSizeChartAction(CHART_ID, { name: "Gamis Reguler", rows: [...VALID_ROWS] }).catch(() => undefined);
+    expect(m.revalidateProductSlugs).not.toHaveBeenCalled();
   });
 });

@@ -5,7 +5,15 @@ import { insertProductVariant } from "@ammari/db/test-fixtures";
 import { products, sizeCharts, sizeChartRows } from "@ammari/db/schema";
 import { CUTTING_SIZES, type CuttingSize } from "@ammari/db/schema";
 import { ActionError, FieldError } from "@/lib/errors";
-import { createSizeChart, deleteSizeChart, getSizeChartDetail, listSizeCharts, updateSizeChart, type SizeChartRowInput } from "./size-charts";
+import {
+  createSizeChart,
+  deleteSizeChart,
+  getSizeChartDetail,
+  listProductSlugsUsingSizeChart,
+  listSizeCharts,
+  updateSizeChart,
+  type SizeChartRowInput,
+} from "./size-charts";
 
 const ACTOR_ID = null;
 
@@ -102,6 +110,23 @@ describe("listSizeCharts", () => {
       const chart = await createSizeChart({ name: "Chart Baru", rows: fullRows() }, ACTOR_ID, tx);
       const list = await listSizeCharts(tx);
       expect(list.find((row) => row.id === chart.id)?.productCount).toBe(0);
+    });
+  });
+});
+
+describe("listProductSlugsUsingSizeChart", () => {
+  test("returns the slug of every product pointing at the chart, and none of the others", async () => {
+    await withRollback(async (tx) => {
+      const chart = await createSizeChart({ name: "Chart Slug", rows: fullRows() }, ACTOR_ID, tx);
+      const other = await createSizeChart({ name: "Chart Lain", rows: fullRows() }, ACTOR_ID, tx);
+      const { product: a } = await insertProductVariant(tx);
+      const { product: b } = await insertProductVariant(tx);
+      const { product: c } = await insertProductVariant(tx);
+      await tx.update(products).set({ sizeChartId: chart.id }).where(eq(products.id, a.id));
+      await tx.update(products).set({ sizeChartId: chart.id }).where(eq(products.id, b.id));
+      await tx.update(products).set({ sizeChartId: other.id }).where(eq(products.id, c.id));
+
+      expect((await listProductSlugsUsingSizeChart(chart.id, tx)).sort()).toEqual([a.slug, b.slug].sort());
     });
   });
 });

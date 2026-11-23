@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button, Input, Label, useToast } from "@ammari/ui";
 import { CUTTING_SIZES, type CuttingSize } from "@ammari/db/schema";
+import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
 import { createSizeChartAction, deleteSizeChartAction, updateSizeChartAction } from "../actions";
 
 export interface SizeChartRowValues {
@@ -78,7 +79,11 @@ export function SizeChartForm({
         setFieldErrors(result.fieldErrors ?? {});
         return;
       }
-      toast.success(isCreate ? "Size chart berhasil ditambahkan" : "Perubahan berhasil disimpan");
+      if (result.data.revalidationOk) {
+        toast.success(isCreate ? "Size chart berhasil ditambahkan" : "Perubahan berhasil disimpan");
+      } else {
+        toast.error(STOREFRONT_STALE_MESSAGE);
+      }
       router.push("/content/size-charts");
     });
   }

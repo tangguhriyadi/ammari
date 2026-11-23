@@ -48,6 +48,14 @@ export async function listSizeCharts(db: Database = defaultDb): Promise<SizeChar
   return charts.map((chart) => ({ ...chart, productCount: countBySizeChartId.get(chart.id) ?? 0 }));
 }
 
+/** Slugs of every product pointing at this chart — the storefront product pages a chart save must
+ * revalidate. Not filtered on `is_published_on_storefront`, same posture as
+ * `revalidateProductSlug`: an extra revalidation for a hidden product is harmless. */
+export async function listProductSlugsUsingSizeChart(sizeChartId: string, db: Database = defaultDb): Promise<string[]> {
+  const rows = await db.select({ slug: products.slug }).from(products).where(eq(products.sizeChartId, sizeChartId));
+  return rows.map((row) => row.slug);
+}
+
 export interface SizeChartDetail {
   id: string;
   name: string;

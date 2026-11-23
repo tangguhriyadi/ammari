@@ -7,6 +7,7 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import * as sizeChartQueries from "@/lib/content/size-charts";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
+import { revalidateProductSlugs } from "@/lib/revalidate";
 
 const sizeChartRowSchema = z.object({
   size: z.enum(CUTTING_SIZES),
@@ -33,29 +34,36 @@ const sizeChartSchema = z.object({
 
 export async function createSizeChartAction(
   input: z.input<typeof sizeChartSchema>,
-): Promise<ActionResult<{ id: string }>> {
+): Promise<ActionResult<{ id: string; revalidationOk: boolean }>> {
   const session = await requirePermission("content.manage");
   const parsed = sizeChartSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const chart = await sizeChartQueries.createSizeChart(parsed.data, session.staffUser.id);
-    // Size charts are also offered on each product's storefront section.
+    // Size charts are also offered on each product's storefront section. No storefront call: a
+    // brand-new chart has no product pointing at it yet — attaching it to a product goes through
+    // updateProductStorefrontAction, which revalidates that product's page.
     revalidateAdmin("/content", "/products");
-    return { id: chart.id };
+    return { id: chart.id, revalidationOk: true };
   });
 }
 
 export async function updateSizeChartAction(
   id: string,
   input: z.input<typeof sizeChartSchema>,
-): Promise<ActionResult<{ id: string }>> {
+): Promise<ActionResult<{ id: string; revalidationOk: boolean }>> {
   const session = await requirePermission("content.manage");
   const parsed = sizeChartSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
     const chart = await sizeChartQueries.updateSizeChart(id, parsed.data, session.staffUser.id);
     revalidateAdmin("/content", "/products");
-    return { id: chart.id };
+    // Every storefront product page showing this chart caches it with the product's own data
+    // (apps/web lib/content/product-data.ts), so each one must be refreshed. Never throws: a
+    // failure only surfaces as `revalidationOk: false`, never a failed save.
+    const slugs = await sizeChartQueries.listProductSlugsUsingSizeChart(chart.id);
+    const revalidationOk = (await revalidateProductSlugs(slugs)).ok;
+    return { id: chart.id, revalidationOk };
   });
 }
 
