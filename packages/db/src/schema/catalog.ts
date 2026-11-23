@@ -688,10 +688,20 @@ export const productionBatchCosts = pgTable(
     // posted batch's cost lines — nothing to change there.
     supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }),
     supplierName: text("supplier_name"),
+    // Migration 0047: "Berlaku untuk". NULL = "Semua produk" (every line before 0047, and every
+    // line the previous release inserts): the line is spread over the whole batch's pcs, as
+    // before. A product id = the line applies to that product only: a variable line's quantity is
+    // that product's pcs in the batch (the production_batch_costs_scoped_quantity trigger
+    // recomputes it on every write, so a release that doesn't know the column can't inflate it),
+    // and postBatch spreads the line's total over that product's pcs only. Frozen once posted by
+    // prevent_posted_batch_cost_mutation, like every other column.
+    productId: uuid("product_id").references(() => products.id, { onDelete: "restrict" }),
     ...createdAtOnly(),
   },
   (table) => [
     index("production_batch_costs_production_batch_id_idx").on(table.productionBatchId),
+    // ON DELETE RESTRICT FK, indexed for the same reason as supplier_id.
+    index("production_batch_costs_product_id_idx").on(table.productId),
     // ON DELETE RESTRICT FK — indexed (same reasoning as cost_component_id below), and the
     // future per-supplier payable view (D28) reads by it.
     index("production_batch_costs_supplier_id_idx").on(table.supplierId),

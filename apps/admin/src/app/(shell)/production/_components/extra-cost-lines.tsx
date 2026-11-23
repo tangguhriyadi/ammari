@@ -57,6 +57,24 @@ export interface ExtraCostLineState {
   /** EXISTING line only: the supplier saved on it (its name snapshot), so a since-deactivated
    * supplier keeps showing as the selected value. */
   currentSupplier?: CurrentSupplier | null;
+  /** "Berlaku untuk": "" = Semua produk, else one product of the batch (migration 0047). Editable
+   * on an existing line too while the batch is a draft. */
+  productId: string;
+  /** The chosen product's name (saved, or picked in this session), so the choice still reads right after its SKUs
+   * are removed from the batch. */
+  productName?: string;
+}
+
+/** A product with pcs in the batch being edited: the "Berlaku untuk" choices. */
+export interface BatchProductPcsOption {
+  productId: string;
+  productName: string;
+  pcs: number;
+}
+
+/** The lines scoped to a product that no longer has pcs in the batch (blocks saving). */
+export function scopedLinesWithoutProduct(lines: readonly ExtraCostLineState[], batchProducts: readonly BatchProductPcsOption[]): ExtraCostLineState[] {
+  return lines.filter((line) => line.productId !== "" && !batchProducts.some((product) => product.productId === line.productId));
 }
 
 export interface ExtraCostLinesProps {
@@ -65,9 +83,11 @@ export interface ExtraCostLinesProps {
   supplierOptions: SupplierOption[];
   lines: ExtraCostLineState[];
   onChange: (lines: ExtraCostLineState[]) => void;
-  /** The batch's current total pcs (summed across its lines) — a 'variable' line's effective
-   * quantity for the live preview total below. */
+  /** The batch's current total pcs (summed across its lines) — a batch-wide 'variable' line's
+   * effective quantity for the live preview total below. */
   totalPcs: number;
+  /** Products with pcs in the batch (a scoped variable line multiplies its product's pcs). */
+  batchProducts: BatchProductPcsOption[];
   /** The product(s) tied to the currently-selected fabric, regardless of active-variant state —
    * `[]` when no fabric is selected, when editing an existing draft (fabric fixed, not
    * re-fetched), or when the fabric genuinely has no product at all. Lets the `totalPcs === 0`
@@ -76,14 +96,24 @@ export interface ExtraCostLinesProps {
   productsUsingFabric: ProductUsingFabricRow[];
 }
 
-function effectiveQuantity(line: ExtraCostLineState, totalPcs: number): number {
-  return line.costType === "variable" ? totalPcs : 1;
+function effectiveQuantity(line: ExtraCostLineState, totalPcs: number, batchProducts: readonly BatchProductPcsOption[]): number {
+  if (line.costType === "fixed") return 1;
+  if (line.productId === "") return totalPcs;
+  return batchProducts.find((product) => product.productId === line.productId)?.pcs ?? 0;
 }
 
 /** The "Biaya lain" section of a production batch draft — only ever rendered by the caller when
  * the session holds finance.view_profit (see ProductionBatchForm), same gating as the fabric
  * cost estimate right above it. */
-export function ExtraCostLines({ activeComponents, supplierOptions, lines, onChange, totalPcs, productsUsingFabric }: ExtraCostLinesProps) {
+export function ExtraCostLines({
+  activeComponents,
+  supplierOptions,
+  lines,
+  onChange,
+  totalPcs,
+  batchProducts,
+  productsUsingFabric,
+}: ExtraCostLinesProps) {
   const componentById = new Map(activeComponents.map((component) => [component.id, component]));
 
   function updateLine(index: number, patch: Partial<ExtraCostLineState>) {
@@ -104,6 +134,7 @@ export function ExtraCostLines({ activeComponents, supplierOptions, lines, onCha
         costType: first?.costType ?? "variable",
         unitPrice: first?.defaultUnitPrice !== null && first?.defaultUnitPrice !== undefined ? String(first.defaultUnitPrice) : "",
         supplierId: prefillSupplierId(first),
+        productId: "",
       },
     ]);
   }
@@ -111,7 +142,7 @@ export function ExtraCostLines({ activeComponents, supplierOptions, lines, onCha
   const grandTotal = lines.reduce((sum, line) => {
     const unitPrice = Number.parseInt(line.unitPrice, 10);
     if (!Number.isFinite(unitPrice)) return sum;
-    return sum + previewLineTotal(effectiveQuantity(line, totalPcs), unitPrice);
+    return sum + previewLineTotal(effectiveQuantity(line, totalPcs, batchProducts), unitPrice);
   }, 0);
 
   return (
@@ -128,7 +159,9 @@ export function ExtraCostLines({ activeComponents, supplierOptions, lines, onCha
       {lines.map((line, index) => {
         const isExisting = Boolean(line.id);
         const unitPrice = Number.parseInt(line.unitPrice, 10);
-        const quantity = effectiveQuantity(line, totalPcs);
+        const quantity = effectiveQuantity(line, totalPcs, batchProducts);
+        const scopedProduct = batchProducts.find((product) => product.productId === line.productId);
+        const scopeMissing = line.productId !== "" && !scopedProduct;
         const lineTotal = Number.isFinite(unitPrice) && quantity > 0 ? previewLineTotal(quantity, unitPrice) : null;
         const priceLabel = line.costType === "variable" ? "Harga per pcs" : "Nominal";
         const typeLabel = line.costType === "variable" ? "Variabel" : "Tetap";
@@ -199,8 +232,50 @@ export function ExtraCostLines({ activeComponents, supplierOptions, lines, onCha
                   current={line.currentSupplier}
                 />
               </div>
+              <div>
+                <Label htmlFor={`extra-cost-scope-${index}`}>Berlaku untuk</Label>
+                <Select
+                  id={`extra-cost-scope-${index}`}
+                  value={line.productId}
+                  onChange={(event) =>
+                    updateLine(index, {
+                      productId: event.target.value,
+                      // Kept so the line still names its product if that product's SKUs are removed.
+                      productName: batchProducts.find((product) => product.productId === event.target.value)?.productName,
+                    })
+                  }
+                  aria-invalid={scopeMissing || undefined}
+                  aria-describedby={scopeMissing ? `extra-cost-scope-error-${index}` : undefined}
+                >
+                  <option value="">Semua produk</option>
+                  {batchProducts.map((product) => (
+                    <option key={product.productId} value={product.productId}>
+                      {product.productName}
+                    </option>
+                  ))}
+                  {scopeMissing && (
+                    <option value={line.productId}>{line.productName ?? "Produk lain"} (tidak ada SKU di batch)</option>
+                  )}
+                </Select>
+              </div>
             </div>
+            {scopeMissing && (
+              <p id={`extra-cost-scope-error-${index}`} role="alert" className="text-sm text-danger-700">
+                {line.productName ?? "Produk ini"} tidak punya SKU di batch ini. Ubah &quot;Berlaku untuk&quot; atau hapus biaya ini sebelum menyimpan.
+              </p>
+            )}
+            {line.costType === "variable" && scopedProduct && (
+              <p className="text-sm text-neutral-600">
+                × {scopedProduct.pcs} pcs {scopedProduct.productName} (otomatis, dari baris produksi produk ini)
+              </p>
+            )}
+            {line.costType === "fixed" && scopedProduct && (
+              <p className="text-sm text-neutral-600">
+                Dibagi ke {scopedProduct.pcs} pcs {scopedProduct.productName} saja
+              </p>
+            )}
             {line.costType === "variable" &&
+              line.productId === "" &&
               (totalPcs > 0 ? (
                 <p className="text-sm text-neutral-600">× {totalPcs} pcs (otomatis, dari total baris produksi)</p>
               ) : productsUsingFabric.length > 0 ? (

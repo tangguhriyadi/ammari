@@ -120,6 +120,11 @@ export const FIELD_LABELS: Record<string, string> = {
   in: "Masuk ke",
   unitCostAmount: "HPP per pcs",
   extraCostsTotal: "Total biaya tambahan",
+  // Cost lines with "Berlaku untuk" and HPP per product (migration 0047).
+  extraCosts: "Biaya lain",
+  unitCosts: "HPP per produk",
+  componentName: "Komponen biaya",
+  productName: "Produk",
   accessoryCostTotal: "Total biaya aksesoris",
   totalPcs: "Total pcs",
   unit: "Satuan",

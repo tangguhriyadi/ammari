@@ -51,6 +51,10 @@ const extraCostLineSchema = z.object({
   // existing line keeps its own; null = none; an id = that supplier (must be active when newly
   // chosen). See ExtraCostLineInput.supplierId in lib/production/queries.ts.
   supplierId: z.string().uuid("Supplier tidak valid.").nullable().optional(),
+  // "Berlaku untuk" (migration 0047): null = Semua produk, an id = that product only (must have
+  // SKUs in this save's lines, checked by the query layer). Same omitted/null/id contract as
+  // supplierId. See ExtraCostLineInput.productId.
+  productId: z.string().uuid("Produk tidak valid.").nullable().optional(),
 });
 
 // One source bucket of the batch's fabric usage (docs/plans/fabric-colour-stock.md D6): a colour

@@ -48,9 +48,15 @@ export async function BatchCostsSection({
   const fixedTotal = fixedCosts.reduce((sum, line) => sum + line.total, 0);
   const totalCost = costs.fabricCostAmount + accessoryTotal + variableTotal + fixedTotal;
   const costAssumption = await getCurrentCostAssumption();
-  // Every line in one batch shares the same unit cost (ceil(totalCost / totalPcs), written to
-  // every line at posting) — showing the first is the same as showing "the" HPP/pcs.
-  const unitCostAmount = lines[0]?.unitCostAmount ?? null;
+  // HPP per product (migration 0047): every line of one product shares one unit cost, written at
+  // posting. Without scoped cost lines every product has the same one, shown as a single HPP/pcs.
+  const productHpp = summarizeProductHpp({
+    lines,
+    sharedTotal: costs.fabricCostAmount + accessoryTotal + extraCosts.filter((line) => line.productId === null).reduce((sum, line) => sum + line.total, 0),
+    extraCosts,
+  });
+  const hasScopedCosts = extraCosts.some((line) => line.productId !== null);
+  const uniformUnitCost = !hasScopedCosts && new Set(productHpp.map((row) => row.unitCostAmount)).size === 1 ? productHpp[0]!.unitCostAmount : null;
   const unitCostByLineId = new Map(lines.map((line) => [line.id, line.unitCostAmount]));
   const unabsorbed =
     receiptSummary?.receiptStatus === "closed"
@@ -128,6 +134,7 @@ export async function BatchCostsSection({
             <div key={line.id} className="flex items-center justify-between gap-2 text-sm text-neutral-700">
               <span>
                 {line.componentName} ({line.quantity} {line.componentUnit} × {formatRupiah(line.unitPrice)})
+                <CostLineScope productName={line.productName} productId={line.productId} />
                 {line.supplierName !== null && <span className="block text-neutral-600">Supplier: {line.supplierName}</span>}
               </span>
               <span className="tabular-nums">{formatRupiah(line.total)}</span>
@@ -143,6 +150,7 @@ export async function BatchCostsSection({
             <div key={line.id} className="flex items-center justify-between gap-2 text-sm text-neutral-700">
               <span>
                 {line.componentName}
+                <CostLineScope productName={line.productName} productId={line.productId} />
                 {line.supplierName !== null && <span className="block text-neutral-600">Supplier: {line.supplierName}</span>}
               </span>
               <span className="tabular-nums">{formatRupiah(line.total)}</span>
@@ -156,11 +164,36 @@ export async function BatchCostsSection({
         <dd className="font-semibold text-neutral-900 tabular-nums">{formatRupiah(totalCost)}</dd>
       </div>
 
-      {unitCostAmount !== null && (
+      {uniformUnitCost !== null ? (
         <div className="flex items-center justify-between gap-2 text-base">
           <dt className="text-neutral-600">HPP/pcs</dt>
-          <dd className="font-semibold text-neutral-900 tabular-nums">{formatRupiah(unitCostAmount)}</dd>
+          <dd className="font-semibold text-neutral-900 tabular-nums">{formatRupiah(uniformUnitCost)}</dd>
         </div>
+      ) : (
+        productHpp.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <p className="text-base text-neutral-600">HPP per produk</p>
+            <ul className="flex flex-col gap-2">
+              {productHpp.map((row) => (
+                <li key={row.productId} data-testid="batch-product-hpp" className="flex flex-col gap-1 text-sm text-neutral-700">
+                  <div className="flex items-center justify-between gap-2 text-base">
+                    <span className="text-neutral-900">
+                      {row.productName} <span className="text-sm text-neutral-600">({row.pcs} pcs)</span>
+                    </span>
+                    <span className="font-semibold text-neutral-900 tabular-nums" data-testid="batch-product-hpp-value">
+                      {formatRupiah(row.unitCostAmount)}/pcs
+                    </span>
+                  </div>
+                  <span className="tabular-nums">Biaya bersama {formatRupiah(Math.round(row.sharedPerPcs))}/pcs</span>
+                  {row.scopedTotal > 0 && (
+                    <span className="tabular-nums">Biaya khusus produk {formatRupiah(Math.round(row.scopedTotal / row.pcs))}/pcs</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <p className="text-sm text-neutral-600">Rincian per pcs dibulatkan; HPP dibulatkan ke atas.</p>
+          </div>
+        )
       )}
 
       {unabsorbed !== null && (
@@ -215,4 +248,52 @@ export async function BatchCostsSection({
       )}
     </Card>
   );
+}
+
+function CostLineScope({ productId, productName }: { productId: string | null; productName: string | null }) {
+  if (productId === null) return null;
+  return <span className="block text-neutral-600">Berlaku untuk: {productName ?? "produk lain"}</span>;
+}
+
+interface ProductHppRow {
+  productId: string;
+  productName: string;
+  pcs: number;
+  /** The frozen HPP written to this product's lines at posting. */
+  unitCostAmount: number;
+  sharedPerPcs: number;
+  scopedTotal: number;
+}
+
+/** One row per product of the batch, by name. The HPP itself is read back from the lines (never
+ * recomputed); the shared and product-only parts are the breakdown that led to it. */
+function summarizeProductHpp(params: {
+  lines: readonly BatchLineRow[];
+  sharedTotal: number;
+  extraCosts: readonly { productId: string | null; total: number }[];
+}): ProductHppRow[] {
+  const totalPcs = params.lines.reduce((sum, line) => sum + line.qty, 0);
+  if (totalPcs === 0) return [];
+  const byProduct = new Map<string, ProductHppRow>();
+  for (const line of params.lines) {
+    const current = byProduct.get(line.productId);
+    if (current) {
+      current.pcs += line.qty;
+      continue;
+    }
+    byProduct.set(line.productId, {
+      productId: line.productId,
+      productName: line.productName,
+      pcs: line.qty,
+      unitCostAmount: line.unitCostAmount,
+      sharedPerPcs: params.sharedTotal / totalPcs,
+      scopedTotal: 0,
+    });
+  }
+  for (const cost of params.extraCosts) {
+    if (cost.productId === null) continue;
+    const row = byProduct.get(cost.productId);
+    if (row) row.scopedTotal += cost.total;
+  }
+  return [...byProduct.values()].sort((a, b) => a.productName.localeCompare(b.productName, "id"));
 }

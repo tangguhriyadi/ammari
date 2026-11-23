@@ -160,6 +160,8 @@ async function DraftView({
                   line.supplierId !== null && line.supplierName !== null
                     ? { id: line.supplierId, name: line.supplierName, isActive: line.supplierIsActive ?? false }
                     : null,
+                productId: line.productId ?? "",
+                productName: line.productName ?? undefined,
               }))
             : undefined
         }

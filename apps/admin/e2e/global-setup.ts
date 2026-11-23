@@ -90,6 +90,10 @@ export const E2E_PRODUCTION_PAYMENTS_EMAIL = "production-payments@e2e.ammari.tes
 // throttle" reasoning. Owner role: builds its own fabric (products.manage), purchase
 // (inventory.manage + finance.view_profit) and DP payment (supplier_payments.manage).
 export const E2E_FABRIC_COLOUR_EMAIL = "fabric-colour@e2e.ammari.test";
+// production-scoped-costs.spec.ts (cost lines "Berlaku untuk" one product, migration 0047), same
+// "fresh email, clean OTP throttle" reasoning. Owner role: builds its own fabric, products,
+// purchase, supplier, cost component and batch, posts it and reads its supplier bill.
+export const E2E_SCOPED_COSTS_EMAIL = "scoped-costs@e2e.ammari.test";
 // Dedicated emails for ads-expenses.spec.ts (docs/plans/growth.md session S2), same "fresh email,
 // clean OTP throttle" reasoning. The first sits on the predefined Keuangan role (`finance`:
 // ads_expenses.manage + finance.view_profit, as shipped by migration 0041); the second on the
@@ -516,6 +520,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_SUPPLIER_PAYMENTS_EMAIL, "E2E Supplier Payments", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_PRODUCTION_PAYMENTS_EMAIL, "E2E Production Payments", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_FABRIC_COLOUR_EMAIL, "E2E Fabric Colour", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_SCOPED_COSTS_EMAIL, "E2E Scoped Costs", OWNER_ROLE_KEY);
   await ensureLimitedRole(E2E_PRODUCTION_NO_FINANCE_ROLE_KEY, ["production.manage"]);
   await ensureStaffFixture(E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL, "E2E Production Payments (no finance)", E2E_PRODUCTION_NO_FINANCE_ROLE_KEY);
   await ensureStaffFixture(E2E_EXPENSES_EMAIL, "E2E Keuangan", "finance");

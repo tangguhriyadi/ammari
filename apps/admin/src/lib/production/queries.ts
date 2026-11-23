@@ -29,6 +29,7 @@ import { valueDeltaForConsumption, type RawMaterialBalance } from "@ammari/comme
 import { lockProductionBatchForUpdate, type Tx } from "./db";
 import { generateBatchNumber } from "./batch-number";
 import { calculateUnitCost } from "./unit-cost";
+import { allocateBatchHpp, costLineQuantity } from "./batch-hpp";
 import { resolveAccessoryNeeds } from "./accessory-needs";
 import { lockSelectableSuppliers } from "@/lib/suppliers/queries";
 import { effectiveReceiptStatuses } from "@/lib/receipts/production";
@@ -212,6 +213,8 @@ export function stripBatchListPaymentAmounts(rows: ListBatchesRow[], canViewProf
 export interface BatchLineRow {
   id: string;
   sku: string;
+  /** The SKU's product: groups lines for HPP per product (cost lines can be scoped to one). */
+  productId: string;
   qty: number;
   // IS real cost data (the per-pcs HPP, computed at posting) — unlike every other field on this
   // row, this one is NOT safe to render outside a finance.view_profit-gated component. It is
@@ -314,6 +317,7 @@ export async function getBatchDetail(id: string, db: Database = defaultDb): Prom
       sku: productionBatchItems.sku,
       qty: productionBatchItems.qty,
       unitCostAmount: productionBatchItems.unitCostAmount,
+      productId: products.id,
       size: productVariants.size,
       colorName: fabricColors.name,
       colorHex: fabricColors.hex,
@@ -401,6 +405,10 @@ export interface ExtraCostLineRow {
    * form keep showing a since-deactivated supplier as the line's current value without offering
    * it as a new choice. Never used for the name (see supplierName). */
   supplierIsActive: boolean | null;
+  /** "Berlaku untuk" (migration 0047): null = "Semua produk" (spread over the whole batch), else
+   * the one product this line applies to, with its CURRENT name. */
+  productId: string | null;
+  productName: string | null;
 }
 
 /** Same gating contract as getBatchCosts — itemized extra costs are cost data too. */
@@ -418,9 +426,12 @@ export async function getBatchExtraCosts(id: string, db: Database = defaultDb): 
       supplierId: productionBatchCosts.supplierId,
       supplierName: productionBatchCosts.supplierName,
       supplierIsActive: suppliers.isActive,
+      productId: productionBatchCosts.productId,
+      productName: products.name,
     })
     .from(productionBatchCosts)
     .leftJoin(suppliers, eq(suppliers.id, productionBatchCosts.supplierId))
+    .leftJoin(products, eq(products.id, productionBatchCosts.productId))
     .where(eq(productionBatchCosts.productionBatchId, id))
     .orderBy(productionBatchCosts.createdAt);
 }
@@ -503,6 +514,11 @@ export interface ExtraCostLineInput {
    *    line whose supplier changes); an existing line re-submitting its current, since-
    *    deactivated supplier is left alone. */
   supplierId?: string | null;
+  /** "Berlaku untuk" (migration 0047), same three meanings as supplierId:
+   *  - `undefined`: a NEW line applies to every product; an EXISTING line keeps its own;
+   *  - `null`: "Semua produk", spread over the whole batch's pcs;
+   *  - a product id: that product only. It must have SKUs in the lines being saved. */
+  productId?: string | null;
 }
 
 export interface CreateDraftInput {
@@ -662,13 +678,20 @@ async function insertLines(tx: Tx, productionBatchId: string, fabricId: string, 
  * doesn't silently rewrite the line). Every newly chosen supplier is checked and FOR SHARE-locked
  * by lockSelectableSuppliers before anything is written, so a concurrent deactivation can't slip
  * in between the check and the write. A posted batch never reaches here (updateDraft rejects it),
- * and prevent_posted_batch_cost_mutation rejects any change to its lines regardless. */
+ * and prevent_posted_batch_cost_mutation rejects any change to its lines regardless.
+ *
+ * "Berlaku untuk" (migration 0047, see ExtraCostLineInput.productId): editable on an existing line
+ * too while the batch is a draft. A scoped line's product must have pcs in `batchPcs` (the lines
+ * being saved in this same call); a variable scoped line's quantity is that product's pcs (the
+ * production_batch_costs_scoped_quantity trigger recomputes the same value). Returns the batch's
+ * lines as saved, for the audit entry. */
 async function syncExtraCostLines(
   tx: Tx,
   productionBatchId: string,
   lines: readonly ExtraCostLineInput[],
-  totalPcs: number,
-): Promise<void> {
+  batchPcs: BatchPcsByProduct,
+): Promise<CostLineAuditRow[]> {
+  const { totalPcs, pcsByProduct } = batchPcs;
   const existing = await tx
     .select()
     .from(productionBatchCosts)
@@ -685,6 +708,26 @@ async function syncExtraCostLines(
   const componentIds = [...new Set(newLines.map((line) => line.costComponentId))];
   const components = componentIds.length > 0 ? await tx.select().from(costComponents).where(inArray(costComponents.id, componentIds)) : [];
   const componentById = new Map(components.map((component) => [component.id, component]));
+
+  // "Berlaku untuk" each submitted line ends up with, checked before anything is written.
+  const productIdOf = (line: ExtraCostLineInput): string | null =>
+    line.productId !== undefined ? line.productId : line.id ? (existingById.get(line.id)!.productId ?? null) : null;
+  const missingProductIds = [
+    ...new Set(lines.map(productIdOf).filter((productId): productId is string => productId !== null && !pcsByProduct.has(productId))),
+  ];
+  if (missingProductIds.length > 0) {
+    const names = await tx.select({ id: products.id, name: products.name }).from(products).where(inArray(products.id, missingProductIds));
+    const nameById = new Map(names.map((row) => [row.id, row.name]));
+    const line = lines.find((candidate) => productIdOf(candidate) === missingProductIds[0])!;
+    const componentName = line.id ? existingById.get(line.id)!.componentName : (componentById.get(line.costComponentId)?.name ?? "ini");
+    const productName = nameById.get(missingProductIds[0]!);
+    throw new FieldError(
+      "productId",
+      productName
+        ? `Biaya "${componentName}" berlaku untuk ${productName}, tetapi ${productName} tidak punya SKU di batch ini. Ubah "Berlaku untuk" atau hapus biaya itu dulu.`
+        : `Produk untuk biaya "${componentName}" tidak ditemukan. Pilih "Berlaku untuk" lagi.`,
+    );
+  }
 
   // Explicit new choices: a new line naming a supplier, or an existing line changing to one.
   // These must be active, or the whole save is rejected.
@@ -733,7 +776,8 @@ async function syncExtraCostLines(
         `Tambahkan minimal satu baris produksi (SKU) sebelum menyimpan biaya variabel "${existingRow.componentName}".`,
       );
     }
-    const quantity = existingRow.costType === "variable" ? totalPcs : 1;
+    const productId = productIdOf(line);
+    const quantity = costLineQuantity({ costType: existingRow.costType, productId }, pcsByProduct, totalPcs);
     const supplierChange =
       line.supplierId === undefined || line.supplierId === existingRow.supplierId
         ? {}
@@ -742,54 +786,136 @@ async function syncExtraCostLines(
           : { supplierId: line.supplierId, supplierName: chosenSuppliers.get(line.supplierId)!.name };
     await tx
       .update(productionBatchCosts)
-      .set({ quantity, unitPrice: line.unitPrice, ...supplierChange })
+      .set({ quantity, unitPrice: line.unitPrice, productId, ...supplierChange })
       .where(and(eq(productionBatchCosts.id, line.id), eq(productionBatchCosts.productionBatchId, productionBatchId)));
   }
 
-  if (newLines.length === 0) return;
+  if (newLines.length > 0) {
+    const values = newLines.map((line) => {
+      const component = componentById.get(line.costComponentId);
+      if (!component) throw new FieldError("costComponentId", "Komponen biaya tidak ditemukan.");
+      // Only a NEW line requires an active component — an EXISTING line (handled in the update
+      // loop above) never re-checks this, so a component deactivated after the line was added
+      // keeps working, exactly as required.
+      // KNOWN GAP (low impact, not fixed): this is read-then-write, not atomic — nothing stops a
+      // concurrent setCostComponentActive(componentId, false) from committing between the SELECT
+      // above and this INSERT, so a brand-new line could end up referencing a component that's
+      // inactive by the time this transaction commits. The batch row lock only serializes against
+      // another write to THIS batch, not against a write to cost_components. Soft validation rule,
+      // not a financial double-count — accepted rather than adding FOR SHARE/a stricter check.
+      if (!component.isActive) {
+        throw new FieldError("costComponentId", `Komponen "${component.name}" sudah dinonaktifkan dan tidak bisa dipakai untuk baris baru.`);
+      }
+      if (component.costType === "variable" && totalPcs <= 0) {
+        throw new FieldError(
+          "costComponentId",
+          `Tambahkan minimal satu baris produksi (SKU) sebelum menambah biaya variabel "${component.name}".`,
+        );
+      }
+      const supplier =
+        line.supplierId === undefined
+          ? component.defaultSupplierId
+            ? activeDefaultById.get(component.defaultSupplierId)
+            : undefined
+          : line.supplierId === null
+            ? undefined
+            : chosenSuppliers.get(line.supplierId);
+      const productId = productIdOf(line);
+      return {
+        productionBatchId,
+        costComponentId: component.id,
+        componentName: component.name,
+        componentUnit: component.unit,
+        costType: component.costType,
+        quantity: costLineQuantity({ costType: component.costType, productId }, pcsByProduct, totalPcs),
+        unitPrice: line.unitPrice,
+        supplierId: supplier?.id ?? null,
+        supplierName: supplier?.name ?? null,
+        productId,
+      };
+    });
+    await tx.insert(productionBatchCosts).values(values);
+  }
 
-  const values = newLines.map((line) => {
-    const component = componentById.get(line.costComponentId);
-    if (!component) throw new FieldError("costComponentId", "Komponen biaya tidak ditemukan.");
-    // Only a NEW line requires an active component — an EXISTING line (handled in the update
-    // loop above) never re-checks this, so a component deactivated after the line was added
-    // keeps working, exactly as required.
-    // KNOWN GAP (low impact, not fixed): this is read-then-write, not atomic — nothing stops a
-    // concurrent setCostComponentActive(componentId, false) from committing between the SELECT
-    // above and this INSERT, so a brand-new line could end up referencing a component that's
-    // inactive by the time this transaction commits. The batch row lock only serializes against
-    // another write to THIS batch, not against a write to cost_components. Soft validation rule,
-    // not a financial double-count — accepted rather than adding FOR SHARE/a stricter check.
-    if (!component.isActive) {
-      throw new FieldError("costComponentId", `Komponen "${component.name}" sudah dinonaktifkan dan tidak bisa dipakai untuk baris baru.`);
-    }
-    if (component.costType === "variable" && totalPcs <= 0) {
-      throw new FieldError(
-        "costComponentId",
-        `Tambahkan minimal satu baris produksi (SKU) sebelum menambah biaya variabel "${component.name}".`,
-      );
-    }
-    const supplier =
-      line.supplierId === undefined
-        ? component.defaultSupplierId
-          ? activeDefaultById.get(component.defaultSupplierId)
-          : undefined
-        : line.supplierId === null
-          ? undefined
-          : chosenSuppliers.get(line.supplierId);
-    return {
-      productionBatchId,
-      costComponentId: component.id,
-      componentName: component.name,
-      componentUnit: component.unit,
-      costType: component.costType,
-      quantity: component.costType === "variable" ? totalPcs : 1,
-      unitPrice: line.unitPrice,
-      supplierId: supplier?.id ?? null,
-      supplierName: supplier?.name ?? null,
-    };
-  });
-  await tx.insert(productionBatchCosts).values(values);
+  return listCostLinesForAudit(tx, productionBatchId);
+}
+
+/** A cost line as the audit log records it: amounts plus "Berlaku untuk" named, so the log reads
+ * without ids. */
+interface CostLineAuditRow {
+  componentName: string;
+  costType: CostComponentType;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+  supplierName: string | null;
+  productId: string | null;
+  /** "Semua produk" for a batch-wide line. */
+  productName: string;
+}
+
+async function listCostLinesForAudit(tx: Tx, productionBatchId: string): Promise<CostLineAuditRow[]> {
+  const rows = await tx
+    .select({
+      componentName: productionBatchCosts.componentName,
+      costType: productionBatchCosts.costType,
+      quantity: productionBatchCosts.quantity,
+      unitPrice: productionBatchCosts.unitPrice,
+      total: productionBatchCosts.total,
+      supplierName: productionBatchCosts.supplierName,
+      productId: productionBatchCosts.productId,
+      productName: products.name,
+    })
+    .from(productionBatchCosts)
+    .leftJoin(products, eq(products.id, productionBatchCosts.productId))
+    .where(eq(productionBatchCosts.productionBatchId, productionBatchId))
+    .orderBy(productionBatchCosts.createdAt, productionBatchCosts.id);
+  return rows.map((row) => ({ ...row, productName: row.productId === null ? "Semua produk" : (row.productName ?? row.productId) }));
+}
+
+async function namedUnitCosts<T extends { productId: string }>(tx: Tx, rows: readonly T[]): Promise<(T & { productName: string })[]> {
+  if (rows.length === 0) return [];
+  const names = await tx
+    .select({ id: products.id, name: products.name })
+    .from(products)
+    .where(inArray(products.id, rows.map((row) => row.productId)));
+  const nameById = new Map(names.map((row) => [row.id, row.name]));
+  return rows.map((row) => ({ ...row, productName: nameById.get(row.productId) ?? row.productId }));
+}
+
+/** The batch's pcs per product, read back from its saved lines (each SKU belongs to one product).
+ * Read after the lines are written in the same transaction, under the batch row lock. */
+interface BatchPcsByProduct {
+  totalPcs: number;
+  pcsByProduct: Map<string, number>;
+}
+
+async function readBatchPcsByProduct(tx: Tx, productionBatchId: string): Promise<BatchPcsByProduct> {
+  const rows = await tx
+    .select({ productId: productVariants.productId, pcs: sql<number>`sum(${productionBatchItems.qty})::int` })
+    .from(productionBatchItems)
+    .innerJoin(productVariants, eq(productVariants.sku, productionBatchItems.sku))
+    .where(eq(productionBatchItems.productionBatchId, productionBatchId))
+    .groupBy(productVariants.productId);
+  const pcsByProduct = new Map(rows.map((row) => [row.productId, Number(row.pcs)]));
+  return { totalPcs: rows.reduce((sum, row) => sum + Number(row.pcs), 0), pcsByProduct };
+}
+
+/** A save that doesn't touch the cost lines (a session without finance.view_profit) must still
+ * not leave a scoped line whose product just lost every SKU in the batch. */
+async function assertScopedCostLinesHaveProducts(tx: Tx, productionBatchId: string, batchPcs: BatchPcsByProduct): Promise<void> {
+  const scoped = await tx
+    .select({ componentName: productionBatchCosts.componentName, productId: productionBatchCosts.productId, productName: products.name })
+    .from(productionBatchCosts)
+    .innerJoin(products, eq(products.id, productionBatchCosts.productId))
+    .where(eq(productionBatchCosts.productionBatchId, productionBatchId));
+  const orphan = scoped.find((row) => row.productId !== null && !batchPcs.pcsByProduct.has(row.productId));
+  if (orphan) {
+    throw new FieldError(
+      "productId",
+      `Biaya "${orphan.componentName}" berlaku untuk ${orphan.productName}, tetapi ${orphan.productName} tidak punya SKU di batch ini. Ubah "Berlaku untuk" atau hapus biaya itu dulu.`,
+    );
+  }
 }
 
 export async function createDraft(input: CreateDraftInput, actorStaffUserId: string | null, db: Database = defaultDb) {
@@ -811,17 +937,17 @@ export async function createDraft(input: CreateDraftInput, actorStaffUserId: str
 
     await insertLines(tx, batch.id, input.fabricId, input.lines);
     const usageAudit = await replaceFabricUsages(tx, batch.id, input.fabricId, fabricUsages);
-    if (input.extraCosts !== undefined) {
-      const totalPcs = input.lines.reduce((sum, line) => sum + line.qty, 0);
-      await syncExtraCostLines(tx, batch.id, input.extraCosts, totalPcs);
-    }
+    const costAudit =
+      input.extraCosts !== undefined
+        ? await syncExtraCostLines(tx, batch.id, input.extraCosts, await readBatchPcsByProduct(tx, batch.id))
+        : undefined;
 
     await writeAuditLog(tx, {
       actorStaffUserId,
       action: "create",
       entityType: "production_batch",
       entityId: batch.id,
-      after: { ...batch, lines: input.lines, fabricUsages: usageAudit },
+      after: { ...batch, lines: input.lines, fabricUsages: usageAudit, ...(costAudit ? { extraCosts: costAudit } : {}) },
     });
     return batch;
   });
@@ -873,9 +999,14 @@ export async function updateDraft(id: string, input: UpdateDraftInput, actorStaf
     await insertLines(tx, id, before.fabricId, input.lines);
     const usageAudit = await replaceFabricUsages(tx, id, before.fabricId, fabricUsages);
 
+    const batchPcs = await readBatchPcsByProduct(tx, id);
+    let costAudit: CostLineAuditRow[] | undefined;
+    let costsBefore: CostLineAuditRow[] | undefined;
     if (input.extraCosts !== undefined) {
-      const totalPcs = input.lines.reduce((sum, line) => sum + line.qty, 0);
-      await syncExtraCostLines(tx, id, input.extraCosts, totalPcs);
+      costsBefore = await listCostLinesForAudit(tx, id);
+      costAudit = await syncExtraCostLines(tx, id, input.extraCosts, batchPcs);
+    } else {
+      await assertScopedCostLinesHaveProducts(tx, id, batchPcs);
     }
 
     await writeAuditLog(tx, {
@@ -883,8 +1014,8 @@ export async function updateDraft(id: string, input: UpdateDraftInput, actorStaf
       action: "update",
       entityType: "production_batch",
       entityId: id,
-      before,
-      after: { ...after, lines: input.lines, fabricUsages: usageAudit },
+      before: costsBefore ? { ...before, extraCosts: costsBefore } : before,
+      after: { ...after, lines: input.lines, fabricUsages: usageAudit, ...(costAudit ? { extraCosts: costAudit } : {}) },
     });
     return after;
   });
@@ -905,8 +1036,12 @@ export async function deleteDraft(id: string, actorStaffUserId: string | null, d
 
 export interface PostedBatchResult {
   id: string;
+  /** ceil(total batch cost / total pcs): the batch average. Each SKU's own HPP is in `unitCosts`
+   * (they differ only when a cost line is scoped to one product). */
   unitCostAmount: number;
   totalPcs: number;
+  /** HPP per pcs per product, as written to that product's lines. */
+  unitCosts: { productId: string; pcs: number; unitCostAmount: number }[];
 }
 
 /** Steps (ALL inside one transaction):
@@ -932,9 +1067,12 @@ export interface PostedBatchResult {
  *    already use applies for free), write one fabric_stock_movements row per usage
  *    row (its colour bucket, valued at that bucket's average, A1) and one accessory_movements row
  *    per resolved accessory (ref_type='production_batch').
- * 8. totalCost = fabricCost + Σ(accessory consumption costs) + Σ(production_batch_costs.total,
- *    variable AND fixed). unitCost = ceil(totalCost / totalPcs), written to every line — frozen
- *    from here on (HPP is never rewritten, D20).
+ * 8. HPP per product (batch-hpp.ts, migration 0047): shared = fabricCost + Σ(accessory
+ *    consumption costs) + Σ(batch-wide production_batch_costs.total, variable AND fixed), spread
+ *    over every pcs; each line scoped to one product is spread over that product's pcs only.
+ *    unitCost = ceil(shared / totalPcs + scoped / productPcs), written to that product's lines;
+ *    with no scoped lines it is ceil(totalCost / totalPcs) on every line, as before. Frozen from
+ *    here on (HPP is never rewritten, D20).
  * 9. status='posted', posted_at, posted_by_staff_user_id, fabric_cost_amount (computed, not
  *    user-entered — see fabric-usage.ts (estimateFabricUsageCost) for the draft's own non-binding estimate).
  *    receipt_status stays at its 'pending' default.
@@ -1046,12 +1184,46 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
       throw new ActionError(`Stok kurang: ${shortages.join(", ")}.`);
     }
 
+    // Every scoped cost line's product must still have SKUs in the batch (a save by the previous
+    // release could have removed them; the trigger rejects the line's next write, not this read).
+    const batchPcs = await readBatchPcsByProduct(tx, id);
+    const costLines = await tx
+      .select({
+        id: productionBatchCosts.id,
+        componentName: productionBatchCosts.componentName,
+        costType: productionBatchCosts.costType,
+        productId: productionBatchCosts.productId,
+        productName: products.name,
+      })
+      .from(productionBatchCosts)
+      .leftJoin(products, eq(products.id, productionBatchCosts.productId))
+      .where(eq(productionBatchCosts.productionBatchId, id));
+    const orphan = costLines.find((line) => line.productId !== null && !batchPcs.pcsByProduct.has(line.productId));
+    if (orphan) {
+      throw new ActionError(
+        `Biaya "${orphan.componentName}" berlaku untuk ${orphan.productName ?? "produk lain"}, tetapi produk itu tidak punya SKU di batch ini. Buka draf, ubah "Berlaku untuk" atau hapus biaya itu, lalu simpan.`,
+      );
+    }
+
     // Re-verify (never trust) every variable line's quantity — see this function's own doc
-    // comment, step 6.
+    // comment, step 6. Batch-wide lines take the batch's pcs; scoped lines their product's pcs.
     await tx
       .update(productionBatchCosts)
       .set({ quantity: totalPcs })
-      .where(and(eq(productionBatchCosts.productionBatchId, id), eq(productionBatchCosts.costType, "variable")));
+      .where(
+        and(
+          eq(productionBatchCosts.productionBatchId, id),
+          eq(productionBatchCosts.costType, "variable"),
+          isNull(productionBatchCosts.productId),
+        ),
+      );
+    for (const line of costLines) {
+      if (line.productId === null || line.costType !== "variable") continue;
+      await tx
+        .update(productionBatchCosts)
+        .set({ quantity: costLineQuantity(line, batchPcs.pcsByProduct, totalPcs) })
+        .where(eq(productionBatchCosts.id, line.id));
+    }
 
     // One 'production' movement per usage row, valued at THAT bucket's moving average (A1). Each
     // bucket appears once (unique per batch), so its balance read above is still current. Exactly
@@ -1106,15 +1278,39 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
     }
 
     const extraCostRows = await tx
-      .select({ total: productionBatchCosts.total })
+      .select({ total: productionBatchCosts.total, productId: productionBatchCosts.productId })
       .from(productionBatchCosts)
       .where(eq(productionBatchCosts.productionBatchId, id));
     const extraCostsTotal = extraCostRows.reduce((sum, row) => sum + row.total, 0);
 
     const totalCost = fabricCostAmount + accessoryCostTotal + extraCostsTotal;
     const unitCostAmount = calculateUnitCost(totalCost, totalPcs);
+    const allocation = allocateBatchHpp({
+      materialCost: fabricCostAmount + accessoryCostTotal,
+      costLines: extraCostRows,
+      products: [...batchPcs.pcsByProduct].map(([productId, pcs]) => ({ productId, pcs })),
+    });
 
-    await tx.update(productionBatchItems).set({ unitCostAmount }).where(eq(productionBatchItems.productionBatchId, id));
+    // Each product's lines get that product's HPP (one UPDATE per product in the batch).
+    for (const product of allocation.products) {
+      await tx
+        .update(productionBatchItems)
+        .set({ unitCostAmount: product.unitCostAmount })
+        .where(
+          and(
+            eq(productionBatchItems.productionBatchId, id),
+            inArray(
+              productionBatchItems.sku,
+              tx.select({ sku: productVariants.sku }).from(productVariants).where(eq(productVariants.productId, product.productId)),
+            ),
+          ),
+        );
+    }
+    const unitCosts = allocation.products.map(({ productId, pcs, unitCostAmount: productUnitCost }) => ({
+      productId,
+      pcs,
+      unitCostAmount: productUnitCost,
+    }));
 
     const [after] = await tx
       .update(productionBatches)
@@ -1141,9 +1337,13 @@ export async function postBatch(id: string, actorStaffUserId: string, db: Databa
         })),
         accessoryCostTotal,
         extraCostsTotal,
+        // HPP per product (named, so the log reads without ids) and the cost lines with their
+        // "Berlaku untuk" (migration 0047).
+        unitCosts: await namedUnitCosts(tx, unitCosts),
+        extraCosts: await listCostLinesForAudit(tx, id),
       },
     });
 
-    return { id, unitCostAmount, totalPcs };
+    return { id, unitCostAmount, totalPcs, unitCosts };
   });
 }

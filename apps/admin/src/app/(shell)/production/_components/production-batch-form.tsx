@@ -20,7 +20,14 @@ import {
 } from "../actions";
 import { FabricUsageSection, fabricColorIdOf, sourceOf, type FabricUsageRowState } from "./fabric-usage-section";
 import { BatchLinePicker } from "./batch-line-picker";
-import { ExtraCostLines, type ActiveCostComponentOption, type ExtraCostLineState } from "./extra-cost-lines";
+import {
+  ExtraCostLines,
+  scopedLinesWithoutProduct,
+  type ActiveCostComponentOption,
+  type BatchProductPcsOption,
+  type ExtraCostLineState,
+} from "./extra-cost-lines";
+import { HppEstimate } from "./hpp-estimate";
 
 interface FabricOption {
   id: string;
@@ -165,6 +172,9 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
       setUsageMode("auto");
       setManualUsageRows([]);
       setProductsUsingFabric(productsForFabric);
+      // The old fabric's products are gone with its quantities: every cost line goes back to
+      // "Semua produk" rather than pointing at a product this batch can't contain.
+      setExtraCostLines((current) => current.map((line) => (line.productId === "" ? line : { ...line, productId: "", productName: undefined })));
     });
     return () => {
       ignore = true;
@@ -190,6 +200,19 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
     });
     colorLines.sort((a, b) => a.colorName.localeCompare(b.colorName, "id"));
     return pcsByFabricColor(colorLines);
+  }, [eligibleSkus, quantities]);
+
+  // Products with pcs in the batch, by name: the cost lines' "Berlaku untuk" choices.
+  const batchProducts = useMemo<BatchProductPcsOption[]>(() => {
+    const skuRows = new Map(eligibleSkus.map((row) => [row.sku, row]));
+    const byProduct = new Map<string, BatchProductPcsOption>();
+    for (const [sku, qty] of Object.entries(quantities)) {
+      const row = skuRows.get(sku);
+      if (!row || qty <= 0) continue;
+      const current = byProduct.get(row.productId);
+      byProduct.set(row.productId, { productId: row.productId, productName: row.productName, pcs: (current?.pcs ?? 0) + qty });
+    }
+    return [...byProduct.values()].sort((a, b) => a.productName.localeCompare(b.productName, "id"));
   }, [eligibleSkus, quantities]);
 
   const buckets = useMemo(
@@ -266,6 +289,15 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
       }
       seenSources.add(row.source);
     }
+    const orphanCost = initialExtraCosts !== undefined ? scopedLinesWithoutProduct(extraCostLines, batchProducts)[0] : undefined;
+    if (orphanCost) {
+      const componentName = orphanCost.componentName ?? activeCostComponents.find((component) => component.id === orphanCost.costComponentId)?.name;
+      const productName = orphanCost.productName ?? "produk itu";
+      setError(
+        `Biaya "${componentName ?? "lain"}" berlaku untuk ${productName}, tetapi ${productName} tidak punya SKU di batch ini. Ubah "Berlaku untuk" atau hapus biaya itu dulu.`,
+      );
+      return;
+    }
     startTransition(async () => {
       const payload = {
         producedAt,
@@ -279,6 +311,7 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
               costComponentId: line.costComponentId,
               unitPrice: line.unitPrice,
               supplierId: line.supplierId || null,
+              productId: line.productId || null,
             }))
           : undefined,
       };
@@ -406,8 +439,10 @@ export function ProductionBatchForm(props: ProductionBatchFormProps) {
             lines={extraCostLines}
             onChange={setExtraCostLines}
             totalPcs={totalPcs}
+            batchProducts={batchProducts}
             productsUsingFabric={productsUsingFabric}
           />
+          <HppEstimate estimatedFabricCost={estimatedFabricCost} lines={extraCostLines} batchProducts={batchProducts} />
         </>
       )}
       {!canViewProfit && mode === "edit" && (

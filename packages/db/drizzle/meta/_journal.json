@@ -330,6 +330,13 @@
       "when": 1795239588340,
       "tag": "0046_fabric_colour_stock",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1795416391861,
+      "tag": "0047_batch_cost_product_scope",
+      "breakpoints": true
     }
   ]
 }

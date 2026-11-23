@@ -237,7 +237,9 @@ describe("postBatch per colour bucket", () => {
       expect(await getFabricColorBalance(fabric.id, mocca.id, tx)).toEqual({ qty: 4.5, valueAmount: 135_000 });
       expect((await getBatchCosts(batch.id, tx))?.fabricCostAmount).toBe(153_000);
       // ceil(153.000 / 5 pcs), no accessories or extra costs.
-      expect(result).toEqual({ id: batch.id, unitCostAmount: 30_600, totalPcs: 5 });
+      expect(result).toMatchObject({ id: batch.id, unitCostAmount: 30_600, totalPcs: 5 });
+      // Two products, no scoped cost line: both get the batch's HPP.
+      expect(result.unitCosts.map((row) => row.unitCostAmount)).toEqual([30_600, 30_600]);
 
       expect(await getBatchFabricConsumption(batch.id, tx)).toEqual([
         { fabricColorId: mocca.id, colorName: "Mocca", colorHex: null, qty: 2.5, valueAmount: 75_000 },
