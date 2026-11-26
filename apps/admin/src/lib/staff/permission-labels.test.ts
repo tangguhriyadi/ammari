@@ -22,12 +22,22 @@ describe("permission labels", () => {
     }
   });
 
-  test("the sensitive set is exactly money, staff and access, and the bulk customer-data export", () => {
+  test("the sensitive set is exactly money, the books, staff and access, and the bulk customer-data export", () => {
     const sensitive = Object.entries(PERMISSION_LABELS)
       .filter(([, label]) => label.sensitive)
       .map(([key]) => key)
       .sort();
-    expect(sensitive).toEqual(["audit_log.view", "customers.export", "finance.view_profit", "roles.manage", "staff.manage", "supplier_payments.manage"]);
+    expect(sensitive).toEqual([
+      "accounting.close",
+      "accounting.manage",
+      "accounting.view",
+      "audit_log.view",
+      "customers.export",
+      "finance.view_profit",
+      "roles.manage",
+      "staff.manage",
+      "supplier_payments.manage",
+    ]);
     for (const key of sensitive) expect(PERMISSION_LABELS[key]!.warning).toBeTruthy();
   });
 

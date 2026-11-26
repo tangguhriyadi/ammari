@@ -581,6 +581,62 @@ from the cut-over date whenever a rule lands, and January closes by 10 Feb [D-23
 Every session: `/plan` approval first, `database-reviewer` + `typescript-reviewer` +
 `react-reviewer` at `/code-review`, and the migration file read before committing.
 
+### 8.1 Carried over from the Session 1 review (26 Nov 2026)
+
+The Session 1 `/code-review` (`database-reviewer` + `typescript-reviewer`) found items that belong to
+later sessions. Fixed in Session 1 itself, in migration 0049: journals refused outside READ COMMITTED
+(the period lock's status read needs a fresh snapshot); every reopen needs a new stamp and a written
+reason; account reads in the line and mapping triggers take `FOR SHARE` (no check-then-write against
+a concurrent header/deactivation change); a reversal must mirror its target line for line; the TS
+validator checks account code and memo like the DB.
+
+**Session 3 (Data Master Akun + Pemetaan akun):**
+- A parent account must be a header (today nothing stops a postable account with lines from getting
+  children, which would double count in roll-ups), and `accounts_parent_no_cycle` can race: two
+  concurrent parent changes can each pass and together form a cycle. Add the header rule and
+  serialise parent changes (advisory lock or `FOR UPDATE` on the chain).
+- `seed.ts` `seedAccounting` can fail on an edited dev database: `account_mappings_guard_target`
+  (BEFORE INSERT) fires before `ON CONFLICT DO NOTHING`, so if the accountant re-maps a default key
+  and deactivates its original target, re-seeding raises "must be active". Skip the check when the
+  key already exists, or seed with `INSERT ... SELECT ... WHERE NOT EXISTS`.
+- `bank_name` / `account_no_last4` are not restricted to cash/bank accounts, and an account code's
+  leading digit is not tied to its type (a `6-xxxx` asset is allowed). Enforce both in the account
+  editor and, if wanted, a CHECK/trigger.
+
+**Session 12 (cron, Rekonsiliasi polish, docs and runbook):**
+- **Runbook: revoke TRUNCATE.** Row-level triggers do not fire on `TRUNCATE`, so `TRUNCATE
+  journal_lines` (or `journal_entries CASCADE`) bypasses every append-only guard; the same holds for
+  the existing append-only tables. Decided (26 Nov 2026): no TRUNCATE triggers (e2e-db.ts resets
+  its own database with TRUNCATE). Instead, on prod and dev, `REVOKE TRUNCATE` from the app's
+  database role on every ledger and append-only table: `accounts`, `account_mappings`,
+  `fiscal_periods`, `journal_entries`, `journal_lines`, `posting_runs`, `posting_issues`,
+  `tax_settings`, `stock_movements`, `fabric_stock_movements`, `accessory_movements`,
+  `defect_movements`, `goods_receipts`, `goods_receipt_items`, `supplier_payments`,
+  `purchase_attachments`, `private_files`, `business_expenses`, `audit_log` (re-check the list
+  against the schema when writing the runbook). The app role must not own these tables (an owner
+  always keeps TRUNCATE and can disable triggers). Add a **verification check** run by the deploy
+  pipeline or a health endpoint: `has_table_privilege(<app role>, '<table>', 'TRUNCATE')` is false
+  for every table in the list, failing loudly otherwise.
+- Runbook notes for data-only restores: `journal_entries_guard_insert` forces `created_at = now()`
+  and lines are refused outside the entry's own transaction, so a data-only restore/`COPY` into the
+  journal tables needs triggers disabled by the owner (a full `pg_restore` is fine: triggers are
+  created after the data).
+- Multi-month close (year end): lock months in ascending order, post the closing entries before
+  setting `status = 'closed'`; two closers that both already hold a shared lock on the same month
+  would deadlock (Postgres resolves it by aborting one). Document in the close code (Session 4
+  builds it; record the rule there).
+- Constraint hardening: tie `entry_no`'s `YYYYMM` to `entry_date`; a lower bound on `entry_date`
+  (the trial month start); the trial-month CHECK hardcodes `2026-12-01` (fine while D-22 stands).
+- Indexes, once real volume exists: `journal_lines (account_code) INCLUDE (entry_id, debit,
+  credit)` for index-only ledger/trial-balance scans; partial (`WHERE ... IS NOT NULL`) dimension
+  indexes on `channel_id`, `supplier_id`, `order_id`, `cash_account_code`.
+- Test hygiene: `migrationsUpTo` is duplicated in each `migration-00xx.test.ts` (move them to
+  `packages/db/test/scratch-database.ts`); `accounting-ledger.test.ts` copies the whole migrations
+  folder via `migrationsUpTo(Number.MAX_SAFE_INTEGER)` where `migrationsFolder` would do; its
+  "nothing is left behind by a refused entry" test counts across the whole scratch database and
+  passes vacuously when run alone with `-t`; `migration-0048.test.ts`'s comment "no later migration
+  touches categories" is only true today.
+
 ---
 
 ## 9. Risks

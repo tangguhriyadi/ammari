@@ -502,3 +502,71 @@ export type BusinessExpenseMethod = (typeof BUSINESS_EXPENSE_METHODS)[number];
 /** voucher_adjustments.kind (plan §9.3): an owner void or extension, always with a reason. */
 export const VOUCHER_ADJUSTMENT_KINDS = ["void", "extend"] as const;
 export type VoucherAdjustmentKind = (typeof VOUCHER_ADJUSTMENT_KINDS)[number];
+
+// ---------- Akuntansi: buku besar berpasangan (docs/plans/accounting.md §2.1, migration 0049) ----------
+// The ledger is derived: a posting service (packages/accounting, later sessions) reads existing
+// source records and writes journals into these tables only. Indonesian labels live in apps/admin.
+
+/** accounts.type. contra_revenue (Potongan/Retur penjualan) is shown under revenue; cogs = HPP. */
+export const ACCOUNT_TYPES = [
+  "asset",
+  "liability",
+  "equity",
+  "revenue",
+  "contra_revenue",
+  "cogs",
+  "expense",
+  "other_income",
+  "other_expense",
+  "tax",
+] as const;
+export type AccountType = (typeof ACCOUNT_TYPES)[number];
+
+export const ACCOUNT_NORMAL_BALANCES = ["debit", "credit"] as const;
+export type AccountNormalBalance = (typeof ACCOUNT_NORMAL_BALANCES)[number];
+
+/** How the direct-method Arus kas classifies a line by its counter-account (plan §6). `cash`
+ * marks the cash, bank and platform-balance accounts themselves; `none` is never classified. */
+export const CASH_FLOW_GROUPS = ["operating", "investing", "financing", "cash", "none"] as const;
+export type CashFlowGroup = (typeof CASH_FLOW_GROUPS)[number];
+
+/** The account types the purchase-side guard refuses (plan §3 guard, §4.8, D-14): an expense,
+ * HPP, other expense or tax account. Revenue types are not "expense" and are not listed. */
+export const EXPENSE_LIKE_ACCOUNT_TYPES = ["cogs", "expense", "other_expense", "tax"] as const satisfies readonly AccountType[];
+
+export const JOURNAL_ENTRY_KINDS = ["system", "manual", "opening", "reversal", "closing", "depreciation"] as const;
+export type JournalEntryKind = (typeof JOURNAL_ENTRY_KINDS)[number];
+
+export const FISCAL_PERIOD_STATUSES = ["open", "closed"] as const;
+export type FiscalPeriodStatus = (typeof FISCAL_PERIOD_STATUSES)[number];
+
+/** December 2026 is the trial month (D-22): the engine posts it, and it is never closed. */
+export const ACCOUNTING_TRIAL_MONTH = "2026-12-01";
+
+/** The official books start here (D-22); opening balances are as of the day before. */
+export const ACCOUNTING_CUTOVER_DATE = "2027-01-01";
+
+export const POSTING_RUN_TRIGGERS = ["cron", "manual"] as const;
+export type PostingRunTrigger = (typeof POSTING_RUN_TRIGGERS)[number];
+
+export const POSTING_RUN_STATUSES = ["running", "succeeded", "failed"] as const;
+export type PostingRunStatus = (typeof POSTING_RUN_STATUSES)[number];
+
+export const TAXPAYER_TYPES = ["individual", "company"] as const;
+export type TaxpayerType = (typeof TAXPAYER_TYPES)[number];
+
+/** Purchase-side journal sources (plan §4.4/§4.5 rules P1-P6, R1, R4): every line of a journal
+ * with one of these (source_type, source_event) pairs must be on a balance-sheet account, never
+ * on an EXPENSE_LIKE_ACCOUNT_TYPES account (D-14: fabric and accessory purchases are always
+ * inventory; supplier payments only clear utang or build an advance). `event: null` = every event
+ * of that source type. The journal_line_purchase_guard trigger (migration 0049) holds the same
+ * list; migration-0049.test.ts proves each pair is refused. Not listed on purpose: raw-material
+ * adjustments (P7, 6-4101/6-4102), the batch WIP close (R3, 5-1201/6-4102) and defect disposal
+ * (A2, 6-4103), which post to those named expense accounts by decided policy (D-7, D-15, D-16). */
+export const PURCHASE_SIDE_JOURNAL_SOURCES = [
+  { sourceType: "goods_receipt_item", event: null },
+  { sourceType: "supplier_payment", event: null },
+  { sourceType: "purchase", event: null },
+  { sourceType: "production_batch", event: "posted" },
+  { sourceType: "defect_movement", event: "return_out" },
+] as const satisfies readonly { sourceType: string; event: string | null }[];

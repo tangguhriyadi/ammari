@@ -320,6 +320,9 @@ describe("migration 0048 (expense categories and items)", () => {
       const [{ count: migrationsAfter }] = (await client`select count(*)::int as count from drizzle.__drizzle_migrations`) as unknown as [{ count: number }];
       expect(migrationsAfter).toBe(migrationsBefore);
       await client.unsafe(seedInsertStatement());
+      // seed.ts is always the current code and writes tables later migrations add (0049:
+      // accounts), so it runs against the latest schema; no later migration touches categories.
+      await migrate(drizzle(client), { migrationsFolder });
       await seed(drizzle(client));
       expect(await categoriesSql()).toEqual(categoriesBeforeRerun);
       expect(categoriesBeforeRerun.find((row) => row.code === "ads_meta")!.name).toBe("Iklan Facebook & Instagram");
@@ -341,6 +344,8 @@ describe("migration 0048 (expense categories and items)", () => {
       // What packages/db/test/e2e-db.ts does before every e2e run (TRUNCATE skips row triggers).
       await client.unsafe(`TRUNCATE TABLE expense_items, expense_categories RESTART IDENTITY CASCADE`);
       expect(await codes()).toEqual([]);
+      // As above: the current seed.ts needs the current schema.
+      await migrate(drizzle(client), { migrationsFolder });
       await seed(drizzle(client));
       expect(await codes()).toEqual(DEFAULT_EXPENSE_CATEGORIES.map((category) => category.code));
     } finally {

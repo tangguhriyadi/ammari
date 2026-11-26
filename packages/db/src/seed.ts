@@ -1,6 +1,9 @@
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { db as defaultDb } from "./client";
+import { CHART_OF_ACCOUNTS, DEFAULT_ACCOUNT_MAPPINGS, INITIAL_TAX_SETTING } from "./accounting/chart-of-accounts";
 import {
+  accountMappings,
+  accounts,
   channels,
   costAssumptions,
   costComponents,
@@ -17,6 +20,7 @@ import {
   staffUsers,
   storefrontHomepageSections,
   storeSettings,
+  taxSettings,
 } from "./schema";
 import type { ChannelId } from "./schema";
 import {
@@ -274,6 +278,21 @@ async function seedDefaultExpenseCategories(db: Database) {
     .onConflictDoNothing();
 }
 
+// Same dual mechanism: migration 0049 inserts the Chart of Accounts, the initial account mappings
+// and the PPh final setting for dev/prod (posting rules match system_key/mapping_key by literal),
+// and this restores them after e2e-db.ts's TRUNCATE. Insert-only, no conflict target on accounts
+// (same as seedDefaultExpenseCategories): an existing row may carry the accountant's rename, and
+// another account that already took one of these names must not make the seed fail. Accounts are inserted in CHART_OF_ACCOUNTS order (parents
+// first) in one statement.
+async function seedAccounting(db: Database) {
+  await db
+    .insert(accounts)
+    .values(CHART_OF_ACCOUNTS.map(({ systemKey, ...account }) => ({ ...account, systemKey, isSystem: systemKey !== null })))
+    .onConflictDoNothing();
+  await db.insert(accountMappings).values([...DEFAULT_ACCOUNT_MAPPINGS]).onConflictDoNothing({ target: accountMappings.mappingKey });
+  await db.insert(taxSettings).values(INITIAL_TAX_SETTING).onConflictDoNothing({ target: taxSettings.effectiveFrom });
+}
+
 // Same dual mechanism again: migration 0039 inserts the one sales_goal row for dev/prod (the
 // Ringkasan target tracker reads it), and this restores it after e2e-db.ts's TRUNCATE. Values match
 // migration 0039 exactly (keep the two in sync by hand). Insert-only: an existing row may hold the
@@ -318,6 +337,7 @@ export async function seed(db: Database = defaultDb) {
   await seedCostComponentDefaults(db);
   await seedDefaultProductType(db);
   await seedDefaultExpenseCategories(db);
+  await seedAccounting(db);
   await seedSalesGoal(db);
   await seedStaffUsers(db);
 }

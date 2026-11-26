@@ -240,7 +240,11 @@ describe("migration 0027", () => {
       await migrateTo(client, migrationsFolder);
       const columns = await client<{ table_name: string; column_name: string; is_nullable: string }[]>`
         select table_name, column_name, is_nullable from information_schema.columns
-        where column_name in ('reopened_at', 'reopened_by_staff_user_id', 'reopen_reason') order by table_name, column_name`;
+        where column_name in ('reopened_at', 'reopened_by_staff_user_id', 'reopen_reason')
+          -- Only the two tables 0027 changed: this test runs to the latest migration, and later
+          -- ones may add same-named columns elsewhere (0049: fiscal_periods.reopened_at/_by).
+          and table_schema = 'public' and table_name in ('production_batches', 'purchases')
+        order by table_name, column_name`;
       expect(columns).toHaveLength(6);
       expect(columns.every((column) => column.is_nullable === "YES")).toBe(true);
       const triggers = await client`select tgname from pg_trigger where tgrelid = 'defect_movements'::regclass and not tgisinternal order by tgname`;

@@ -61,6 +61,20 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
     group: "finance",
     description: "Record and void supplier payments, and view payment proofs",
   },
+  // docs/plans/accounting.md §7: the double-entry books. Shipped by migration 0049 to super_admin
+  // and owner only; the predefined finance role gets none by default (owner capital, prive and
+  // bank balances are more sensitive than finance.view_profit's management figures).
+  {
+    key: "accounting.view",
+    group: "accounting",
+    description: "View the books: journals, ledgers, financial statements and reconciliation",
+  },
+  {
+    key: "accounting.manage",
+    group: "accounting",
+    description: "Manage the chart of accounts and mappings, manual and opening journals, fixed assets, tax settings, and run posting",
+  },
+  { key: "accounting.close", group: "accounting", description: "Close and reopen accounting periods, and run year-end closing" },
   { key: "settings.manage", group: "settings", description: "Manage targets, cost assumptions, and settings" },
   { key: "customers.view", group: "customers", description: "View customers" },
   // docs/plans/growth.md §8.3, owner answer Q7: record a customer's promo-consent withdrawal.

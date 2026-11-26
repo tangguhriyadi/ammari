@@ -14,6 +14,7 @@ export const PERMISSION_AREAS = [
   "Produk",
   "Bahan & Pembelian",
   "Keuangan",
+  "Akuntansi",
   "Pelanggan",
   "Konten",
   "Pengaturan",
@@ -57,6 +58,24 @@ export const PERMISSION_LABELS: Record<PermissionKey, PermissionLabel> = {
     warning: "Bisa mencatat uang keluar ke supplier.",
   },
   "ads_expenses.manage": { area: "Keuangan", label: "Catat dan batalkan biaya iklan dan operasional, lihat buktinya" },
+  "accounting.view": {
+    area: "Akuntansi",
+    label: "Lihat pembukuan: jurnal, buku besar, laporan keuangan, rekonsiliasi",
+    sensitive: true,
+    warning: "Bisa melihat modal pemilik, prive, dan saldo kas dan bank.",
+  },
+  "accounting.manage": {
+    area: "Akuntansi",
+    label: "Kelola akun dan pemetaan, jurnal manual dan saldo awal, aset tetap, pengaturan pajak, jalankan posting",
+    sensitive: true,
+    warning: "Bisa mengubah isi pembukuan.",
+  },
+  "accounting.close": {
+    area: "Akuntansi",
+    label: "Tutup dan buka kembali bulan pembukuan, tutup buku akhir tahun",
+    sensitive: true,
+    warning: "Bisa mengunci dan membuka kembali bulan yang sudah ditutup.",
+  },
   "customers.view": { area: "Pelanggan", label: "Lihat data pelanggan (data pribadi)" },
   "customers.manage": { area: "Pelanggan", label: "Catat penarikan persetujuan promo pelanggan" },
   "customers.export": {
