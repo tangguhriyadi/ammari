@@ -129,6 +129,16 @@ export const E2E_EXPENSE_SUMMARY_MONTH = "2026-02";
 // settings test changes the categories and puts these two back.
 export const E2E_MONTHLY_BILL_CATEGORIES = ["salary", "rent"] as const;
 export const E2E_MONTHLY_BILLS_EXPENSE_NO = "BYA-E2E-GAJI";
+// ads-expenses.spec.ts (docs/plans/expense-master-data.md session S4): an owner-made operating
+// category "Langganan" with items, as the owner would set it up in Data Master. Biteship Grow
+// carries a default amount, Claude has none, VPS Lama is deactivated (never offered). The
+// system categories keep no items, so the other expense specs record exactly as before.
+export const E2E_ITEM_CATEGORY = { code: "langganan", name: "Langganan" } as const;
+export const E2E_ITEMS = [
+  { name: "Biteship Grow", defaultAmount: 149_000, isActive: true, sortOrder: 10 },
+  { name: "Claude", defaultAmount: null, isActive: true, sortOrder: 20 },
+  { name: "VPS Lama", defaultAmount: 90_000, isActive: false, sortOrder: 30 },
+] as const;
 // customers.spec.ts (docs/plans/growth.md sessions S4 and S5): Pelanggan & Voucher. An owner (voids
 // and extends vouchers), a CS staff on the predefined customer_service role (records a promo
 // withdrawal, never voids or extends), and a role with overview.view + orders.view but NOT
@@ -403,6 +413,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     suppliers,
     privateFiles,
     businessExpenses,
+    expenseCategories,
+    expenseItems,
     salesGoal,
     customers,
     customerAuthUsers,
@@ -850,6 +862,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     }
 
     await tx.update(salesGoal).set({ monthlyBillCategories: [...E2E_MONTHLY_BILL_CATEGORIES] }).where(eq(salesGoal.id, 1));
+    await tx.insert(expenseCategories).values({ ...E2E_ITEM_CATEGORY, kind: "operating", sortOrder: 160 }).onConflictDoNothing();
+    await tx
+      .insert(expenseItems)
+      .values(E2E_ITEMS.map((item) => ({ ...item, categoryCode: E2E_ITEM_CATEGORY.code })))
+      .onConflictDoNothing();
     const thisMonth = new Date(Date.now() + 7 * 60 * 60_000).toISOString().slice(0, 7);
     type ExpenseSeed = { date: string; category: "ads_shopee" | "ads_tiktok" | "ads_meta" | "endorsement" | "salary" | "rent"; channelId: "shopee" | "tiktok" | "web" | null; amount: number; expenseNo?: string; voided?: boolean };
     const feb = (day: string) => `${E2E_EXPENSE_SUMMARY_MONTH}-${day}`;

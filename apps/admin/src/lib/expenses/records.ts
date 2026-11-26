@@ -4,6 +4,7 @@ import { alias, unionAll } from "drizzle-orm/pg-core";
 import {
   businessExpenses,
   expenseCategories,
+  expenseItems,
   privateFiles,
   staffUsers,
   supplierPayments,
@@ -55,6 +56,9 @@ export const EXPENSE_MESSAGES = {
 export interface BusinessExpenseInput {
   expenseDate: string;
   category: BusinessExpenseCategory;
+  /** An expense_items id of `category` (owner answer D1: picked from the list, never typed).
+   * Required when the category has active items; checked against the table, not here. */
+  itemId?: string | null;
   amount: number;
   method: BusinessExpenseMethod;
   channelId: ChannelId | null;
@@ -97,7 +101,8 @@ export function normalizeExpenseInput(input: BusinessExpenseInput, category: Exp
   if (note !== null && note.length > MAX_EXPENSE_NOTE_LENGTH) throw new FieldError("note", EXPENSE_MESSAGES.noteTooLong);
   if (input.category === "other" && note === null) throw new FieldError("note", EXPENSE_MESSAGES.noteRequired);
 
-  return { expenseDate: input.expenseDate, category: input.category, amount: input.amount, method: input.method, channelId, campaign, note };
+  const itemId = optionalText(input.itemId);
+  return { expenseDate: input.expenseDate, category: input.category, itemId, amount: input.amount, method: input.method, channelId, campaign, note };
 }
 
 export function normalizeVoidReason(reason: string): string {
@@ -110,14 +115,16 @@ export function normalizeVoidReason(reason: string): string {
 // ---------- Writes ----------
 
 /** Plan §5 step 3: number (advisory lock), private_files row, expense row, audit `record`, in one
- * transaction. The file must already be in private storage (storePrivateUpload). The category is
- * locked FOR SHARE and must be active (expense-master-data.md §3.5): an inactive one is refused
- * for a NEW expense, while its past expenses stay as they are. */
+ * transaction. The file must already be in private storage (storePrivateUpload). The category and
+ * the item are locked FOR SHARE and must be active, the item must belong to the category, and a
+ * category with active items needs one (expense-master-data.md §3.5, S4): an inactive one is
+ * refused for a NEW expense, while its past expenses stay as they are. The audit entry names the
+ * item (id and its name at record time), since the list shows the item's CURRENT name (D6). */
 export async function recordBusinessExpense(input: BusinessExpenseInput, file: StoredPrivateFile, actorStaffUserId: string, db: Database = defaultDb) {
   if (file.purpose !== "expense_proof") throw new Error(`expected an expense_proof file, got ${file.purpose}`);
 
   return db.transaction(async (tx) => {
-    const { category } = await lockSelectableExpenseCategoryAndItem(tx, input.category, null);
+    const { category, item } = await lockSelectableExpenseCategoryAndItem(tx, input.category, optionalText(input.itemId));
     const values = normalizeExpenseInput(input, category);
     const expenseNo = await nextDocumentNumber(tx, "BYA", businessExpenses.expenseNo);
     const [fileRow] = await tx.insert(privateFiles).values(privateFileValues(file, actorStaffUserId)).returning();
@@ -128,7 +135,7 @@ export async function recordBusinessExpense(input: BusinessExpenseInput, file: S
       .returning();
     if (!row) throw new Error("failed to insert business expense");
 
-    await writeAuditLog(tx, { actorStaffUserId, action: "record", entityType: "business_expense", entityId: row.id, after: { expense: row, file: fileRow } });
+    await writeAuditLog(tx, { actorStaffUserId, action: "record", entityType: "business_expense", entityId: row.id, after: { expense: row, file: fileRow, item } });
     return row;
   });
 }
@@ -199,6 +206,9 @@ export interface BusinessExpenseRow {
   channelId: ChannelId | null;
   campaign: string | null;
   note: string | null;
+  /** The item's CURRENT name (renames apply to past expenses, D6); null for an expense recorded
+   * without one, as every expense before session S4. */
+  itemName: string | null;
   recordedByName: string | null;
   createdAt: Date;
   proof: PrivateFileRef;
@@ -231,7 +241,15 @@ export async function listBusinessExpenses(
       ? inArray(businessExpenses.category, db.select({ code: expenseCategories.code }).from(expenseCategories).where(inArray(expenseCategories.kind, [...groupKinds])))
       : undefined,
     filters.category ? eq(businessExpenses.category, filters.category) : undefined,
-    pattern ? or(ilike(businessExpenses.expenseNo, pattern), ilike(businessExpenses.campaign, pattern), ilike(businessExpenses.note, pattern)) : undefined,
+    pattern
+      ? or(
+          ilike(businessExpenses.expenseNo, pattern),
+          ilike(businessExpenses.campaign, pattern),
+          ilike(businessExpenses.note, pattern),
+          // The item name too (plan S4); a subquery so the count and total need no join.
+          inArray(businessExpenses.itemId, db.select({ id: expenseItems.id }).from(expenseItems).where(ilike(expenseItems.name, pattern))),
+        )
+      : undefined,
   ];
   const listWhere = and(...base, filters.showVoided ? undefined : isNull(businessExpenses.voidedAt));
   const totalWhere = and(...base, isNull(businessExpenses.voidedAt));
@@ -255,6 +273,7 @@ export async function listBusinessExpenses(
       channelId: businessExpenses.channelId,
       campaign: businessExpenses.campaign,
       note: businessExpenses.note,
+      itemName: sql<string | null>`${expenseItems.name}::text`,
       recordedByName: recordedBy.name,
       createdAt: businessExpenses.createdAt,
       fileId: privateFiles.id,
@@ -266,6 +285,7 @@ export async function listBusinessExpenses(
     })
     .from(businessExpenses)
     .innerJoin(privateFiles, eq(privateFiles.id, businessExpenses.proofFileId))
+    .leftJoin(expenseItems, eq(expenseItems.id, businessExpenses.itemId))
     .leftJoin(recordedBy, eq(recordedBy.id, businessExpenses.recordedByStaffUserId))
     .leftJoin(voidedBy, eq(voidedBy.id, businessExpenses.voidedByStaffUserId))
     .where(listWhere)

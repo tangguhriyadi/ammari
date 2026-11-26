@@ -1,7 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import sharp from "sharp";
+import * as XLSX from "xlsx";
 import { loginAs } from "./helpers/login";
-import { E2E_EXPENSES_CS_EMAIL, E2E_EXPENSES_EMAIL } from "./global-setup";
+import { E2E_EXPENSES_CS_EMAIL, E2E_EXPENSES_EMAIL, E2E_ITEM_CATEGORY } from "./global-setup";
 
 // docs/plans/growth.md session S2: "Iklan & Biaya", Pengeluaran. The whole flow runs at 390px AND
 // 1280px (CLAUDE.md's rule): the list renders a CardList on phones and a TableContainer on
@@ -141,6 +142,91 @@ async function runExpenseFlow(page: Page, layout: Layout): Promise<void> {
   await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();
   expect((await page.request.get(proofSrc!)).status()).toBe(403);
 }
+
+/** docs/plans/expense-master-data.md session S4: category first, then one of its active items;
+ * the item's default amount fills Jumlah, the amount stays editable, and the item shows in the
+ * list and the Excel file. Uses the seeded "Langganan" (global-setup E2E_ITEMS). */
+async function runItemFlow(page: Page, layout: Layout): Promise<void> {
+  const marker = `E2E-item-${layout.label}-${Date.now()}`;
+  await search(page, marker);
+
+  const dialog = await openRecordDialog(page);
+  // A category without items shows no item field.
+  await dialog.getByLabel("Kategori").selectOption("salary");
+  await expect(dialog.getByLabel("Item biaya")).toHaveCount(0);
+
+  // Langganan has items: the field appears, only active items are offered, and it is required.
+  await dialog.getByLabel("Kategori").selectOption(E2E_ITEM_CATEGORY.code);
+  const item = dialog.getByLabel("Item biaya");
+  await expect(item).toBeVisible();
+  await expect(item.locator("option")).toHaveText(["Pilih item", "Biteship Grow", "Claude"]);
+  await expect(dialog.getByRole("link", { name: "Data Master Kategori Biaya (tab baru)" })).toHaveAttribute("href", `/expense-categories/${E2E_ITEM_CATEGORY.code}`);
+  await expect(dialog.getByLabel("Jumlah")).toHaveValue("");
+  await dialog.locator('input[type="file"]').setInputFiles({ name: `langganan-${marker}.jpg`, mimeType: "image/jpeg", buffer: await receiptPhoto(3) });
+  await expect(dialog.getByTestId("private-file-selected")).toContainText(`langganan-${marker}.jpg`);
+  await dialog.getByRole("button", { name: "Simpan biaya" }).click();
+  await expect(dialog.getByText("Pilih item biaya.")).toBeVisible();
+
+  // Biteship Grow's default fills an empty Jumlah; Claude (no default) clears an untouched one.
+  await item.selectOption({ label: "Biteship Grow" });
+  await expect(dialog.getByText("Pilih item biaya.")).toHaveCount(0);
+  await expect(dialog.getByLabel("Jumlah")).toHaveValue("149.000");
+  await item.selectOption({ label: "Claude" });
+  await expect(dialog.getByLabel("Jumlah")).toHaveValue("");
+  // Changing the category resets the item.
+  await item.selectOption({ label: "Biteship Grow" });
+  await dialog.getByLabel("Kategori").selectOption("packaging");
+  await expect(dialog.getByLabel("Item biaya")).toHaveCount(0);
+  await dialog.getByLabel("Kategori").selectOption(E2E_ITEM_CATEGORY.code);
+  await expect(item).toHaveValue("");
+  await item.selectOption({ label: "Biteship Grow" });
+  await expect(dialog.getByLabel("Jumlah")).toHaveValue("149.000");
+
+  // The amount stays editable, and a typed amount is never overwritten by a default.
+  await dialog.getByLabel("Jumlah").fill("150.000");
+  await item.selectOption({ label: "Claude" });
+  await item.selectOption({ label: "Biteship Grow" });
+  await expect(dialog.getByLabel("Jumlah")).toHaveValue("150.000");
+  await dialog.getByLabel("Catatan").fill(`Paket bulanan ${marker}`);
+  await dialog.getByRole("button", { name: "Simpan biaya" }).click();
+  await expect(page.getByRole("status")).toContainText(/Biaya BYA-\d{6}-\d{3} dicatat\./, { timeout: 15_000 });
+  await expect(dialog).toBeHidden();
+
+  const row = page.locator(layout.row).filter({ hasText: marker });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("Langganan · Biteship Grow");
+  await expect(row).toContainText("Rp 150.000");
+  await expect(page.locator(layout.hiddenRow).filter({ hasText: marker }).first()).toBeHidden();
+  // Cari matches the item name too.
+  await search(page, "biteship grow");
+  await expect(page.locator(layout.row).filter({ hasText: marker })).toBeVisible();
+  // An older expense without an item reads as before (the seeded Gaji of this month).
+  await search(page, "BYA-E2E-GAJI");
+  const gaji = page.locator(layout.row).filter({ hasText: "BYA-E2E-GAJI" });
+  await expect(gaji).toContainText("Gaji");
+  await expect(gaji).not.toContainText("Gaji ·");
+
+  // The monthly Excel file has the Item column, with this expense's item.
+  const response = await page.request.get("/ads-expenses/report?format=xlsx");
+  expect(response.status()).toBe(200);
+  const workbook = XLSX.read(await response.body(), { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<(string | number)[]>(workbook.Sheets.Biaya!, { header: 1 });
+  expect(rows[0]).toEqual(["Tanggal bayar", "No. biaya", "Kategori", "Item", "Kanal", "Kampanye", "Jumlah (Rp)", "Metode", "Catatan", "Dicatat oleh"]);
+  const exported = rows.find((cells) => cells[8] === `Paket bulanan ${marker}`);
+  expect(exported?.slice(2, 4)).toEqual(["Langganan", "Biteship Grow"]);
+  expect(exported?.[6]).toBe(150_000);
+}
+
+test.describe("Iklan & Biaya: item biaya", () => {
+  for (const layout of [MOBILE, DESKTOP]) {
+    test(`Langganan with Biteship Grow: default amount, edit, list and Excel at ${layout.label === "mobile" ? "390px" : "1280px"}`, async ({ page }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize(layout.viewport);
+      await loginAs(page, E2E_EXPENSES_EMAIL);
+      await runItemFlow(page, layout);
+    });
+  }
+});
 
 test.describe("Iklan & Biaya: pengeluaran", () => {
   for (const layout of [MOBILE, DESKTOP]) {

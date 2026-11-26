@@ -17,7 +17,7 @@ import {
   type BusinessExpenseInput,
 } from "./records";
 import { defaultExpenseCategory as cat } from "@/lib/expense-categories/default-catalog";
-import { createExpenseCategory, createExpenseItem, listExpenseCategories, listExpenseItems, setExpenseCategoryActive } from "@/lib/expense-categories/queries";
+import { createExpenseCategory, createExpenseItem, listExpenseCategories, listExpenseItems, setExpenseCategoryActive, setExpenseItemActive } from "@/lib/expense-categories/queries";
 
 // docs/plans/growth.md §5, session S2: the expense write paths and the list read.
 
@@ -71,6 +71,7 @@ describe("normalizeExpenseInput", () => {
     expect(normalize(expense({ campaign: "  11.11  ", note: "  " }))).toEqual({
       expenseDate: "2026-10-05",
       category: "ads_shopee",
+      itemId: null,
       amount: 500_000,
       method: "platform_balance",
       channelId: "shopee",
@@ -327,6 +328,91 @@ describe("categories from expense_categories (docs/plans/expense-master-data.md 
     });
   });
 });
+
+describe("items on a new expense (docs/plans/expense-master-data.md S4)", () => {
+  test("a category with active items requires one; the item is stored, audited by id and name, listed and searchable", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const langganan = await createExpenseCategory({ name: `Langganan ${randomUUID().slice(0, 6)}`, kind: "operating", sortOrder: 160 }, null, tx);
+      const marker = randomUUID().slice(0, 8);
+      const biteship = await createExpenseItem(langganan.code, { name: `Biteship Grow ${marker}`, defaultAmount: 149_000, sortOrder: 1 }, null, tx);
+      const langgananExpense = (overrides: Partial<BusinessExpenseInput> = {}) => expense({ category: langganan.code, method: "transfer", ...overrides });
+
+      // No item: refused with the item field's own message, and nothing written.
+      const file = storedFile();
+      const missing = await rejectionOf(recordBusinessExpense(langgananExpense(), file, staff.id, tx));
+      expect(missing).toMatchObject({ field: "itemId", message: "Pilih item biaya." });
+      expect(await tx.select().from(privateFiles).where(eq(privateFiles.id, file.id))).toHaveLength(0);
+      // An empty string is "no item" too (the form posts "" for an unpicked select).
+      expect(await fieldOfAsync(recordBusinessExpense(langgananExpense({ itemId: "  " }), storedFile(), staff.id, tx))).toBe("itemId");
+
+      const row = await recordBusinessExpense(langgananExpense({ itemId: biteship.id, amount: 150_000 }), storedFile(), staff.id, tx);
+      expect(row).toMatchObject({ category: langganan.code, itemId: biteship.id, amount: 150_000 });
+      const [audit] = await tx.select().from(auditLog).where(and(eq(auditLog.entityId, row.id), eq(auditLog.action, "record")));
+      expect(audit!.after).toMatchObject({ expense: { itemId: biteship.id }, item: { id: biteship.id, name: biteship.name } });
+
+      const listed = await listBusinessExpenses({ month: "2026-10", q: `grow ${marker}` }, undefined, undefined, tx);
+      expect(listed.rows.map((listedRow) => [listedRow.id, listedRow.itemName])).toEqual([[row.id, biteship.name]]);
+      expect(listed.total).toBe(150_000);
+      // Deactivating the item never touches the past expense: it still lists with its item.
+      await setExpenseItemActive(biteship.id, false, null, tx);
+      expect((await listBusinessExpenses({ month: "2026-10", q: row.expenseNo }, undefined, undefined, tx)).rows[0]!.itemName).toBe(biteship.name);
+
+      // A category without items needs none, and lists without an item name (as older expenses).
+      const salary = await recordBusinessExpense(expense({ category: "salary", method: "transfer" }), storedFile(), staff.id, tx);
+      expect(salary.itemId).toBeNull();
+      expect((await listBusinessExpenses({ month: "2026-10", q: salary.expenseNo }, undefined, undefined, tx)).rows[0]!.itemName).toBeNull();
+    });
+  });
+
+  test("an item of another category, an inactive item and a malformed id are refused", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const langganan = await createExpenseCategory({ name: `Langganan ${randomUUID().slice(0, 6)}`, kind: "operating", sortOrder: 160 }, null, tx);
+      const vps = await createExpenseItem(langganan.code, { name: "VPS", sortOrder: 1 }, null, tx);
+      const claude = await createExpenseItem(langganan.code, { name: "Claude", sortOrder: 2 }, null, tx);
+      const packagingItem = await createExpenseItem("packaging", { name: `Kardus ${randomUUID().slice(0, 6)}`, sortOrder: 1 }, null, tx);
+      const langgananExpense = (itemId: string) => expense({ category: langganan.code, method: "transfer", itemId });
+
+      expect(await rejectionOf(recordBusinessExpense(langgananExpense(packagingItem.id), storedFile(), staff.id, tx))).toMatchObject({
+        field: "itemId",
+        message: "Item biaya tidak ditemukan.",
+      });
+      expect(await fieldOfAsync(recordBusinessExpense(langgananExpense(randomUUID()), storedFile(), staff.id, tx))).toBe("itemId");
+      expect(await fieldOfAsync(recordBusinessExpense(langgananExpense("not-a-uuid"), storedFile(), staff.id, tx))).toBe("itemId");
+
+      await setExpenseItemActive(vps.id, false, null, tx);
+      expect(await rejectionOf(recordBusinessExpense(langgananExpense(vps.id), storedFile(), staff.id, tx))).toMatchObject({
+        field: "itemId",
+        message: expect.stringMatching(/dinonaktifkan/),
+      });
+      // Its sibling still records; once every item is inactive the category needs no item again.
+      expect((await recordBusinessExpense(langgananExpense(claude.id), storedFile(), staff.id, tx)).itemId).toBe(claude.id);
+      await setExpenseItemActive(claude.id, false, null, tx);
+      expect((await recordBusinessExpense(expense({ category: langganan.code, method: "transfer" }), storedFile(), staff.id, tx)).itemId).toBeNull();
+    });
+  });
+
+  test("Lainnya still needs a note when it has items", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const servis = await createExpenseItem("other", { name: `Servis ${randomUUID().slice(0, 6)}`, sortOrder: 1 }, null, tx);
+      expect(await fieldOfAsync(recordBusinessExpense(expense({ category: "other", method: "cash", itemId: servis.id }), storedFile(), staff.id, tx))).toBe("note");
+      const row = await recordBusinessExpense(expense({ category: "other", method: "cash", itemId: servis.id, note: "Mesin jahit" }), storedFile(), staff.id, tx);
+      expect(row).toMatchObject({ itemId: servis.id, note: "Mesin jahit" });
+    });
+  });
+});
+
+async function rejectionOf(promise: Promise<unknown>): Promise<FieldError> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof FieldError) return error;
+    throw error;
+  }
+  throw new Error("expected a FieldError");
+}
 
 async function fieldOfAsync(promise: Promise<unknown>): Promise<string | null> {
   try {

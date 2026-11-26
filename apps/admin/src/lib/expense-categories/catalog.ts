@@ -1,4 +1,5 @@
 import type { ChannelId, ExpenseCategoryKind } from "@ammari/db/schema";
+import { parseRupiah } from "@/lib/products/money";
 import { EXPENSE_CATEGORY_GROUPS, type ExpenseCategoryGroup } from "@/lib/expenses/labels";
 
 // "Kategori Biaya" as the app sees it (docs/plans/expense-master-data.md §3.5). Plain module, no
@@ -66,4 +67,43 @@ export function expenseCategoriesInGroup<T extends Pick<ExpenseCategoryInfo, "ki
 /** The categories a NEW expense or a new monthly-bill choice may use: active ones only. */
 export function selectableExpenseCategories<T extends Pick<ExpenseCategoryInfo, "isActive">>(categories: readonly T[]): T[] {
   return categories.filter((category) => category.isActive);
+}
+
+// ---------- Items on a NEW expense (expense-master-data.md §3.5, session S4) ----------
+
+export const EXPENSE_ITEM_MESSAGES = {
+  itemRequired: "Pilih item biaya.",
+} as const;
+
+/** The active items of one category, in display order (`items` is the catalog's active list). */
+export function expenseItemsOfCategory<T extends Pick<ExpenseItemInfo, "categoryCode">>(items: readonly T[], categoryCode: string): T[] {
+  return items.filter((item) => item.categoryCode === categoryCode);
+}
+
+/** Owner answer D1 (no free-text item): a category with at least one active item REQUIRES an
+ * item; one without any shows no item field at all. */
+export function expenseItemRequirement(activeItemCount: number): "required" | "hidden" {
+  return activeItemCount > 0 ? "required" : "hidden";
+}
+
+/** The rule both the form and the server apply: the error for a missing item, or null. A chosen
+ * item's category and status are checked against the table (lockSelectableExpenseCategoryAndItem). */
+export function expenseItemSelectionError(activeItemCount: number, itemId: string | null): string | null {
+  return expenseItemRequirement(activeItemCount) === "required" && itemId === null ? EXPENSE_ITEM_MESSAGES.itemRequired : null;
+}
+
+/** What "Jumlah" holds after the item changes (owner answer D4). The user's own amount is never
+ * touched; "untouched" means Jumlah is empty or still holds the previous item's default (by value,
+ * so "149000" counts as "149.000"). An untouched Jumlah takes the new item's default, or is
+ * cleared when the new item (or no item, after a category change) has none, so a default never
+ * outlives the item it came from. `formatDefault` renders an amount the way the input shows it. */
+export function amountAfterItemChange(
+  currentAmount: string,
+  previousDefault: number | null,
+  nextDefault: number | null,
+  formatDefault: (amount: number) => string,
+): string {
+  const holdsPreviousDefault = previousDefault !== null && parseRupiah(currentAmount) === previousDefault;
+  if (currentAmount.trim() !== "" && !holdsPreviousDefault) return currentAmount;
+  return nextDefault === null ? "" : formatDefault(nextDefault);
 }

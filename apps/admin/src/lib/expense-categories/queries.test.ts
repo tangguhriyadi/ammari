@@ -9,7 +9,7 @@ import {
   createExpenseItem,
   expenseCategoryCodeBase,
   getExpenseCategoryCatalog,
-  getSelectableExpenseCategory,
+  getSelectableExpenseCategoryAndItem,
   listExpenseCategories,
   listExpenseItems,
   lockSelectableExpenseCategoryAndItem,
@@ -167,14 +167,19 @@ describe("selecting a category for a NEW expense", () => {
       expect(await rejection(lockSelectableExpenseCategoryAndItem(tx, category.code, foreign.id))).toMatchObject({ field: "itemId" });
       expect(await rejection(lockSelectableExpenseCategoryAndItem(tx, category.code, "not-a-uuid"))).toMatchObject({ field: "itemId" });
       expect(await rejection(lockSelectableExpenseCategoryAndItem(tx, "hadiah", null))).toMatchObject({ field: "category", message: "Pilih kategori." });
+      // Session S4: a category with active items needs one, in the lock and in the plain pre-check.
+      expect(await rejection(lockSelectableExpenseCategoryAndItem(tx, category.code, null))).toMatchObject({ field: "itemId", message: "Pilih item biaya." });
+      expect(await rejection(getSelectableExpenseCategoryAndItem(category.code, null, tx))).toMatchObject({ field: "itemId", message: "Pilih item biaya." });
+      expect(await rejection(getSelectableExpenseCategoryAndItem(category.code, foreign.id, tx))).toMatchObject({ field: "itemId" });
+      expect(await getSelectableExpenseCategoryAndItem(category.code, vps.id, tx)).toMatchObject({ category: { code: category.code }, item: { id: vps.id, name: "VPS" } });
 
       await setExpenseItemActive(vps.id, false, null, tx);
       expect(await rejection(lockSelectableExpenseCategoryAndItem(tx, category.code, vps.id))).toMatchObject({ field: "itemId", message: expect.stringMatching(/dinonaktifkan/) });
 
       await setExpenseCategoryActive(category.code, false, null, tx);
       expect(await rejection(lockSelectableExpenseCategoryAndItem(tx, category.code, null))).toMatchObject({ field: "category", message: expect.stringMatching(/dinonaktifkan/) });
-      expect(await rejection(getSelectableExpenseCategory(category.code, tx))).toMatchObject({ field: "category", message: expect.stringMatching(/dinonaktifkan/) });
-      expect(await getSelectableExpenseCategory("salary", tx)).toMatchObject({ code: "salary", kind: "operating", fixedChannelId: null });
+      expect(await rejection(getSelectableExpenseCategoryAndItem(category.code, null, tx))).toMatchObject({ field: "category", message: expect.stringMatching(/dinonaktifkan/) });
+      expect((await getSelectableExpenseCategoryAndItem("salary", null, tx)).category).toMatchObject({ code: "salary", kind: "operating", fixedChannelId: null });
     });
   });
 });

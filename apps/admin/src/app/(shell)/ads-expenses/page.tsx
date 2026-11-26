@@ -29,16 +29,21 @@ export default async function AdsExpensesPage({ searchParams }: { searchParams: 
   await requireAllPermissions(["ads_expenses.manage", "finance.view_profit"]);
   const raw = await searchParams;
   const tab = parseExpenseTab(raw);
-  const { categories } = await loadExpenseCategoryCatalog();
-  // Only active categories can take a NEW expense (expense-master-data.md §3.5).
+  const { categories, items } = await loadExpenseCategoryCatalog();
+  // Only active categories can take a NEW expense (expense-master-data.md §3.5), with their active
+  // items (the catalog's items are the active ones already).
   const recordOptions = selectableExpenseCategories(categories).map(({ code, name, kind, fixedChannelId }) => ({ code, name, kind, fixedChannelId }));
+  const recordCodes = new Set(recordOptions.map((category) => category.code));
+  const recordItems = items
+    .filter((item) => recordCodes.has(item.categoryCode))
+    .map(({ id, categoryCode, name, note, defaultAmount }) => ({ id, categoryCode, name, note, defaultAmount }));
   const header = (
     <>
       <Breadcrumb items={rootCrumbs("/ads-expenses")} />
       <PageHeader
         title="Iklan & Biaya"
         description="Biaya iklan dan operasional yang sudah dibayar, dengan buktinya. Biaya dihitung pada tanggal dibayar."
-        actions={<RecordExpenseButton categories={recordOptions} />}
+        actions={<RecordExpenseButton categories={recordOptions} items={recordItems} />}
       />
       <div className="mb-6 border-b border-neutral-200 pb-4">
         <Tabs
@@ -113,7 +118,7 @@ export default async function AdsExpensesPage({ searchParams }: { searchParams: 
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="expense-q">Cari</Label>
-            <Input id="expense-q" name="q" defaultValue={params.q ?? ""} placeholder="No. biaya, kampanye, catatan" />
+            <Input id="expense-q" name="q" defaultValue={params.q ?? ""} placeholder="No. biaya, item, kampanye, catatan" />
           </div>
           <Checkbox name="voided" value="1" defaultChecked={params.showVoided} label="Tampilkan yang dibatalkan" />
           <div className="flex items-center gap-3">

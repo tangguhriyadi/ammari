@@ -24,6 +24,13 @@ function marketingLine(row: BusinessExpenseRow): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+/** "Langganan · Biteship Grow"; just the category for an expense without an item (every one
+ * recorded before items existed, expense-master-data.md S4). Both are CURRENT names (D6). */
+function categoryAndItem(categories: readonly Pick<ExpenseCategoryInfo, "code" | "name">[], row: BusinessExpenseRow): string {
+  const category = expenseCategoryLabel(categories, row.category);
+  return row.itemName ? `${category} · ${row.itemName}` : category;
+}
+
 /** `categories` is the whole catalog (inactive included), so a past expense keeps its category's
  * current name. */
 export function ExpenseList({ rows, categories }: { rows: BusinessExpenseRow[]; categories: readonly Pick<ExpenseCategoryInfo, "code" | "name">[] }) {
@@ -47,7 +54,7 @@ export function ExpenseList({ rows, categories }: { rows: BusinessExpenseRow[]; 
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-base font-medium text-neutral-900">
-                      <Struck voided={voided}>{expenseCategoryLabel(categories, row.category)}</Struck>
+                      <Struck voided={voided}>{categoryAndItem(categories, row)}</Struck>
                     </p>
                     <p className="text-sm text-neutral-600">
                       {row.expenseNo} · {formatDate(new Date(row.expenseDate))} · {EXPENSE_METHOD_LABELS[row.method]}
@@ -101,7 +108,7 @@ export function ExpenseList({ rows, categories }: { rows: BusinessExpenseRow[]; 
                   </div>
                 </Td>
                 <Td className="text-neutral-700">{formatDate(new Date(row.expenseDate))}</Td>
-                <Td className="text-neutral-700">{expenseCategoryLabel(categories, row.category)}</Td>
+                <Td className="text-neutral-700">{categoryAndItem(categories, row)}</Td>
                 <Td className="text-neutral-700">{marketingLine(row) ?? "-"}</Td>
                 <Td className="tabular-nums text-neutral-900">
                   <Struck voided={voided}>{formatRupiah(row.amount)}</Struck>

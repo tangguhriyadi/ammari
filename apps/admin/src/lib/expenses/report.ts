@@ -1,6 +1,6 @@
 import "server-only";
-import { and, asc, eq, gte, isNull, lte } from "drizzle-orm";
-import { businessExpenses, staffUsers, type BusinessExpenseCategory, type BusinessExpenseMethod, type ChannelId } from "@ammari/db/schema";
+import { and, asc, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import { businessExpenses, expenseItems, staffUsers, type BusinessExpenseCategory, type BusinessExpenseMethod, type ChannelId } from "@ammari/db/schema";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import type { ExpenseCategoryInfo } from "@/lib/expense-categories/catalog";
 import { getExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
@@ -22,6 +22,8 @@ export interface ReportExpenseRow {
   expenseNo: string;
   expenseDate: string;
   category: BusinessExpenseCategory;
+  /** The item's current name; null for an expense recorded without one. */
+  itemName: string | null;
   channelId: ChannelId | null;
   campaign: string | null;
   amount: number;
@@ -49,6 +51,7 @@ async function listReportExpenses(params: ExpenseSummaryParams, db: Database): P
       expenseNo: businessExpenses.expenseNo,
       expenseDate: businessExpenses.expenseDate,
       category: businessExpenses.category,
+      itemName: sql<string | null>`${expenseItems.name}::text`,
       channelId: businessExpenses.channelId,
       campaign: businessExpenses.campaign,
       amount: businessExpenses.amount,
@@ -57,6 +60,7 @@ async function listReportExpenses(params: ExpenseSummaryParams, db: Database): P
       recordedByName: staffUsers.name,
     })
     .from(businessExpenses)
+    .leftJoin(expenseItems, eq(expenseItems.id, businessExpenses.itemId))
     .leftJoin(staffUsers, eq(staffUsers.id, businessExpenses.recordedByStaffUserId))
     .where(and(isNull(businessExpenses.voidedAt), gte(businessExpenses.expenseDate, params.range.from), lte(businessExpenses.expenseDate, params.range.to)))
     .orderBy(asc(businessExpenses.expenseDate), asc(businessExpenses.createdAt), asc(businessExpenses.expenseNo));

@@ -10,7 +10,7 @@ import { REPORT_DISCLAIMER, breakEvenText, channelReportRows, profitAndLossLines
 
 // The monthly report as an Excel file (docs/plans/growth.md session S6, owner addition A), with the
 // vendored SheetJS (apps/admin/vendor/README.md). Sheets: Ringkasan, Per kanal, Biaya (one row
-// per non-voided expense; never the proof file), Pesanan (one row per counted order).
+// per non-voided expense with its item, expense-master-data.md S4; never the proof file), Pesanan (one row per counted order).
 //
 // Formula injection: every cell is written as a typed cell, so text is a string cell ("s") and
 // never a formula; text that came from a person (notes, campaigns, names, order numbers) also goes
@@ -77,11 +77,12 @@ function channelSheet(report: MonthlyReport): XLSX.WorkSheet {
 function expenseSheet(report: MonthlyReport): XLSX.WorkSheet {
   const total = report.expenseRows.reduce((sum, row) => sum + row.amount, 0);
   const rows: Cell[][] = [
-    ["Tanggal bayar", "No. biaya", "Kategori", "Kanal", "Kampanye", "Jumlah (Rp)", "Metode", "Catatan", "Dicatat oleh"],
+    ["Tanggal bayar", "No. biaya", "Kategori", "Item", "Kanal", "Kampanye", "Jumlah (Rp)", "Metode", "Catatan", "Dicatat oleh"],
     ...report.expenseRows.map((row): Cell[] => [
       row.expenseDate,
       row.expenseNo,
       expenseCategoryLabel(report.categories, row.category),
+      row.itemName,
       channelLabel(row.channelId),
       row.campaign,
       row.amount,
@@ -90,9 +91,9 @@ function expenseSheet(report: MonthlyReport): XLSX.WorkSheet {
       row.recordedByName,
     ]),
     [],
-    ["Total", null, null, null, null, total],
+    ["Total", null, null, null, null, null, total],
   ];
-  return sheet(rows, { widths: [14, 18, 14, 12, 20, 16, 14, 40, 20], moneyColumns: [5] });
+  return sheet(rows, { widths: [14, 18, 14, 18, 12, 20, 16, 14, 40, 20], moneyColumns: [6] });
 }
 
 function orderSheet(report: MonthlyReport): XLSX.WorkSheet {

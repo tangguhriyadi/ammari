@@ -10,6 +10,7 @@ import { getMonthlyReport, recordMonthlyReportDownload } from "./report";
 import { renderMonthlyReportPdf } from "./report-pdf";
 import { renderMonthlyReportXlsx } from "./report-xlsx";
 import { parseExpenseSummaryParams } from "./search-params";
+import { createExpenseItem } from "@/lib/expense-categories/queries";
 
 // "Unduh laporan bulanan" (docs/plans/growth.md session S6, owner addition A): the rows behind the
 // Ringkasan add up to its figures, both files carry them, and the download is audited without a
@@ -18,7 +19,7 @@ import { parseExpenseSummaryParams } from "./search-params";
 const NOW = new Date("2033-01-01T00:00:00Z");
 const PARAMS = parseExpenseSummaryParams({ period: "month", month: "2032-05" }, NOW);
 
-async function insertExpense(tx: TestDatabase, staffId: string, values: { expenseDate: string; category: BusinessExpenseCategory; amount: number; channelId?: ChannelId | null; note?: string; voided?: boolean }) {
+async function insertExpense(tx: TestDatabase, staffId: string, values: { expenseDate: string; category: BusinessExpenseCategory; itemId?: string; amount: number; channelId?: ChannelId | null; note?: string; voided?: boolean }) {
   const fileId = randomUUID();
   const sha = createHash("sha256").update(fileId).digest("hex");
   await tx.insert(privateFiles).values({
@@ -40,6 +41,7 @@ async function insertExpense(tx: TestDatabase, staffId: string, values: { expens
       expenseNo: `BYA-RPT-${randomUUID().slice(0, 8)}`,
       expenseDate: values.expenseDate,
       category: values.category,
+      itemId: values.itemId ?? null,
       amount: values.amount,
       method: "transfer",
       channelId: values.channelId ?? null,
@@ -67,11 +69,13 @@ async function seedMonth(tx: TestDatabase) {
   await order({ status: "shipped", channelId: "whatsapp", channelOrderNo: null }, 200_000, 0);
   await order({ status: "cancelled", channelId: "whatsapp", channelOrderNo: null }, 999_000, 1);
   // A note a spreadsheet would run as a formula.
-  const formula = await insertExpense(tx, staff.id, { expenseDate: "2032-05-02", category: "other", amount: 100_000, note: "=HYPERLINK(\"http://x\")" });
+  // Lainnya with an item (session S4); the Shopee ad below has none, as every older expense.
+  const item = await createExpenseItem("other", { name: `Servis mesin ${randomUUID().slice(0, 6)}`, sortOrder: 1 }, null, tx);
+  const formula = await insertExpense(tx, staff.id, { expenseDate: "2032-05-02", category: "other", itemId: item.id, amount: 100_000, note: "=HYPERLINK(\"http://x\")" });
   await insertExpense(tx, staff.id, { expenseDate: "2032-05-03", category: "ads_shopee", amount: 100_000, channelId: "shopee" });
   await insertExpense(tx, staff.id, { expenseDate: "2032-05-04", category: "rent", amount: 5_000_000, voided: true });
   await insertExpense(tx, staff.id, { expenseDate: "2032-06-01", category: "rent", amount: 7_000_000 });
-  return { staff, formula };
+  return { staff, formula, item };
 }
 
 describe("getMonthlyReport", () => {
@@ -83,7 +87,8 @@ describe("getMonthlyReport", () => {
       expect(money).toMatchObject({ omzet: 1_500_000, hpp: 500_000, platformFee: 50_000, labaSetelahBiayaPlatform: 950_000, webShippingSubsidy: 20_000, linesWithoutCost: 1 });
       expect(report.expenseRows.map((row) => row.category)).toEqual(["other", "ads_shopee"]);
       expect(report.expenseRows.reduce((sum, row) => sum + row.amount, 0)).toBe(expenses.total);
-      expect(report.expenseRows[0]).toMatchObject({ recordedByName: "Test Staff", method: "transfer" });
+      expect(report.expenseRows[0]).toMatchObject({ recordedByName: "Test Staff", method: "transfer", itemName: expect.stringMatching(/^Servis mesin/) });
+      expect(report.expenseRows[1]!.itemName).toBeNull();
       expect(report.orderRows).toHaveLength(3);
       const sum = (key: "omzet" | "hpp" | "platformFee" | "webShippingSubsidy") => report.orderRows.reduce((total, row) => total + row[key], 0);
       expect([sum("omzet"), sum("hpp"), sum("platformFee"), sum("webShippingSubsidy")]).toEqual([money.omzet, money.hpp, money.platformFee, money.webShippingSubsidy]);
@@ -99,7 +104,7 @@ describe("getMonthlyReport", () => {
 describe("the files", () => {
   test("Excel: four sheets with the same figures, money as numbers, a formula-looking note as inert text", async () => {
     await withRollback(async (tx) => {
-      const { formula } = await seedMonth(tx);
+      const { formula, item } = await seedMonth(tx);
       const report = await getMonthlyReport(PARAMS, NOW, tx);
       const workbook = XLSX.read(renderMonthlyReportXlsx(report, "2033-01-01"), { type: "buffer" });
       expect(workbook.SheetNames).toEqual(["Ringkasan", "Per kanal", "Biaya", "Pesanan"]);
@@ -114,15 +119,18 @@ describe("the files", () => {
 
       const expenses = workbook.Sheets.Biaya!;
       const rows = XLSX.utils.sheet_to_json<(string | number)[]>(expenses, { header: 1 });
-      expect(rows[0]).toEqual(["Tanggal bayar", "No. biaya", "Kategori", "Kanal", "Kampanye", "Jumlah (Rp)", "Metode", "Catatan", "Dicatat oleh"]);
+      expect(rows[0]).toEqual(["Tanggal bayar", "No. biaya", "Kategori", "Item", "Kanal", "Kampanye", "Jumlah (Rp)", "Metode", "Catatan", "Dicatat oleh"]);
       const formulaRow = rows.find((row) => row[1] === formula.expenseNo)!;
-      expect(formulaRow[7]).toBe("'=HYPERLINK(\"http://x\")");
+      expect(formulaRow.slice(2, 4)).toEqual(["Lainnya", item.name]);
+      // An expense without an item leaves the cell empty.
+      expect(rows.find((row) => row[2] === "Iklan Shopee")?.[3]).toBeUndefined();
+      expect(formulaRow[8]).toBe("'=HYPERLINK(\"http://x\")");
       // No cell anywhere is a formula.
       for (const name of workbook.SheetNames) {
         const sheet = workbook.Sheets[name]!;
         for (const [address, cell] of Object.entries(sheet)) if (!address.startsWith("!")) expect((cell as XLSX.CellObject).f).toBeUndefined();
       }
-      expect([rows.at(-1)?.[0], rows.at(-1)?.[5]]).toEqual(["Total", 200_000]);
+      expect([rows.at(-1)?.[0], rows.at(-1)?.[6]]).toEqual(["Total", 200_000]);
 
       const orders = XLSX.utils.sheet_to_json<(string | number)[]>(workbook.Sheets.Pesanan!, { header: 1 });
       expect(orders).toHaveLength(1 + 3 + 2);

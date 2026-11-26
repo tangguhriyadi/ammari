@@ -14,7 +14,7 @@ import {
 import { qualifiedColumn as q } from "@ammari/db/sql-helpers";
 import { ActionError, FieldError, isPostgresErrorCode, mapUniqueViolation } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "@/lib/db";
-import type { ExpenseCategoryCatalog, ExpenseCategoryInfo, ExpenseItemInfo } from "./catalog";
+import { expenseItemSelectionError, type ExpenseCategoryCatalog, type ExpenseCategoryInfo, type ExpenseItemInfo } from "./catalog";
 
 // "Kategori Biaya" master data (docs/plans/expense-master-data.md §3.5, session S2): the catalog
 // every expense figure, list and form reads instead of the old fixed code list, the category and
@@ -371,39 +371,55 @@ export interface SelectedExpenseCategory {
   item: { id: string; name: string } | null;
 }
 
+/** Both reads below share these rules; `lock` takes FOR SHARE on the category and the item.
+ *  1. The category exists and is active.
+ *  2. A chosen item exists IN THAT CATEGORY (also the composite FK) and is active.
+ *  3. No item chosen: the category must have no active item (owner answer D1, session S4). */
+async function selectCategoryAndItem(db: Database | Tx, code: string, itemId: string | null, lock: boolean): Promise<SelectedExpenseCategory> {
+  if (!CODE_PATTERN.test(code)) throw new FieldError("category", EXPENSE_CATEGORY_MESSAGES.categoryRequired);
+  const categoryQuery = db.select(categoryColumns).from(expenseCategories).where(eq(expenseCategories.code, code));
+  const [row] = lock ? await categoryQuery.for("share") : await categoryQuery.limit(1);
+  // An unknown code can only come from a stale or edited form: ask for a pick.
+  if (!row) throw new FieldError("category", EXPENSE_CATEGORY_MESSAGES.categoryRequired);
+  if (!row.isActive) throw new FieldError("category", EXPENSE_CATEGORY_MESSAGES.categoryInactive(row.name));
+  const category = toCategoryInfo(row);
+
+  if (itemId === null) {
+    // Not locked: an item activated or added concurrently can at worst let one expense through
+    // without an item, which is what every expense recorded before it looks like. The rule is
+    // about completeness, not money.
+    const [{ activeItems } = { activeItems: 0 }] = await db
+      .select({ activeItems: sql<number>`count(*)::int` })
+      .from(expenseItems)
+      .where(and(eq(expenseItems.categoryCode, code), eq(expenseItems.isActive, true)));
+    const missing = expenseItemSelectionError(activeItems, null);
+    if (missing) throw new FieldError("itemId", missing);
+    return { category, item: null };
+  }
+
+  if (!UUID_PATTERN.test(itemId)) throw new FieldError("itemId", EXPENSE_CATEGORY_MESSAGES.itemNotFound);
+  const itemQuery = db
+    .select({ id: expenseItems.id, name: sql<string>`${expenseItems.name}::text`, isActive: expenseItems.isActive })
+    .from(expenseItems)
+    .where(and(eq(expenseItems.id, itemId), eq(expenseItems.categoryCode, code)));
+  const [item] = lock ? await itemQuery.for("share") : await itemQuery.limit(1);
+  if (!item) throw new FieldError("itemId", EXPENSE_CATEGORY_MESSAGES.itemNotFound);
+  if (!item.isActive) throw new FieldError("itemId", EXPENSE_CATEGORY_MESSAGES.itemInactive(item.name));
+  return { category, item: { id: item.id, name: item.name } };
+}
+
 /** A plain read with the same rules as the lock below, for validating a form BEFORE its proof is
  * stored (so a refused form leaves no object behind). Not a guard: the write re-checks under
  * lockSelectableExpenseCategoryAndItem. */
-export async function getSelectableExpenseCategory(code: string, db: Database = defaultDb): Promise<ExpenseCategoryInfo> {
-  if (!CODE_PATTERN.test(code)) throw new FieldError("category", EXPENSE_CATEGORY_MESSAGES.categoryRequired);
-  const [row] = await db.select(categoryColumns).from(expenseCategories).where(eq(expenseCategories.code, code)).limit(1);
-  // An unknown code can only come from a stale or edited form: ask for a pick.
-  if (!row) throw new FieldError("category", EXPENSE_CATEGORY_MESSAGES.categoryRequired);
-  if (!row.isActive) throw new FieldError("category", EXPENSE_CATEGORY_MESSAGES.categoryInactive(row.name));
-  return toCategoryInfo(row);
+export async function getSelectableExpenseCategoryAndItem(code: string, itemId: string | null, db: Database = defaultDb): Promise<SelectedExpenseCategory> {
+  return selectCategoryAndItem(db, code, itemId, false);
 }
 
 /** For a write that is about to record a NEW expense against `code` (and `itemId`): `SELECT ...
- * FOR SHARE` both and reject an unknown or inactive one (field-scoped, Indonesian). FOR SHARE, so a
- * concurrent setExpenseCategoryActive/setExpenseItemActive (an UPDATE) waits for this transaction
- * instead of slipping in between the check and the INSERT, the same shape as
- * lockSelectableProductType. Historical expenses never pass through here, so deactivating never
- * touches them. The item must belong to the category (also the composite FK). */
+ * FOR SHARE` both and apply the rules above (field-scoped, Indonesian). FOR SHARE, so a concurrent
+ * setExpenseCategoryActive/setExpenseItemActive (an UPDATE) waits for this transaction instead of
+ * slipping in between the check and the INSERT, the same shape as lockSelectableProductType.
+ * Historical expenses never pass through here, so deactivating never touches them. */
 export async function lockSelectableExpenseCategoryAndItem(tx: Tx, code: string, itemId: string | null): Promise<SelectedExpenseCategory> {
-  if (!CODE_PATTERN.test(code)) throw new FieldError("category", EXPENSE_CATEGORY_MESSAGES.categoryRequired);
-  const [row] = await tx.select(categoryColumns).from(expenseCategories).where(eq(expenseCategories.code, code)).for("share");
-  // An unknown code can only come from a stale or edited form: ask for a pick.
-  if (!row) throw new FieldError("category", EXPENSE_CATEGORY_MESSAGES.categoryRequired);
-  if (!row.isActive) throw new FieldError("category", EXPENSE_CATEGORY_MESSAGES.categoryInactive(row.name));
-  if (itemId === null) return { category: toCategoryInfo(row), item: null };
-
-  if (!UUID_PATTERN.test(itemId)) throw new FieldError("itemId", EXPENSE_CATEGORY_MESSAGES.itemNotFound);
-  const [item] = await tx
-    .select({ id: expenseItems.id, name: sql<string>`${expenseItems.name}::text`, isActive: expenseItems.isActive })
-    .from(expenseItems)
-    .where(and(eq(expenseItems.id, itemId), eq(expenseItems.categoryCode, code)))
-    .for("share");
-  if (!item) throw new FieldError("itemId", EXPENSE_CATEGORY_MESSAGES.itemNotFound);
-  if (!item.isActive) throw new FieldError("itemId", EXPENSE_CATEGORY_MESSAGES.itemInactive(item.name));
-  return { category: toCategoryInfo(row), item: { id: item.id, name: item.name } };
+  return selectCategoryAndItem(tx, code, itemId, true);
 }

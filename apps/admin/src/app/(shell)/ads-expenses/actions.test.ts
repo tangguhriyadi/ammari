@@ -8,19 +8,26 @@ vi.mock("@/lib/supplier-payments/store-upload", () => ({ storePrivateUpload: sto
 
 // The category read (expense_categories) is covered against the database in
 // lib/expense-categories/queries.test.ts and lib/expenses/records.test.ts; here it answers from the
-// seed with the same refusal the real one gives for an unknown code.
+// seed with the same refusal the real one gives for an unknown code, and knows one item
+// (ITEM_ID, of "packaging") so the item path can be followed.
+const ITEM_ID = "11111111-1111-4111-8111-111111111111";
+const { selectMock } = vi.hoisted(() => ({ selectMock: vi.fn() }));
 vi.mock("@/lib/expense-categories/queries", async () => {
   const { defaultExpenseCategory } = await import("@/lib/expense-categories/default-catalog");
   const { FieldError } = await import("@/lib/errors");
-  return {
-    getSelectableExpenseCategory: vi.fn(async (code: string) => {
-      try {
-        return defaultExpenseCategory(code);
-      } catch {
-        throw new FieldError("category", "Pilih kategori.");
-      }
-    }),
-  };
+  selectMock.mockImplementation(async (code: string, itemId: string | null) => {
+    let category;
+    try {
+      category = defaultExpenseCategory(code);
+    } catch {
+      throw new FieldError("category", "Pilih kategori.");
+    }
+    if (code === "packaging" && itemId === null) throw new FieldError("itemId", "Pilih item biaya.");
+    if (itemId === null) return { category, item: null };
+    if (code !== "packaging" || itemId !== ITEM_ID) throw new FieldError("itemId", "Item biaya tidak ditemukan.");
+    return { category, item: { id: ITEM_ID, name: "Kardus" } };
+  });
+  return { getSelectableExpenseCategoryAndItem: selectMock };
 });
 
 const { findExpenseProofDuplicatesAction, recordBusinessExpenseAction, voidBusinessExpenseAction } = await import("./actions");
@@ -102,6 +109,19 @@ describe("input validation, before any storage call", () => {
       fieldErrors: { note: "Untuk kategori Lainnya, tulis di catatan biaya apa ini." },
     });
     expect(await recordBusinessExpenseAction(recordForm({ expenseDate: "2999-01-01" }))).toMatchObject({ ok: false, fieldErrors: { expenseDate: "Tanggal bayar tidak boleh di masa depan." } });
+    expect(storePrivateUploadMock).not.toHaveBeenCalled();
+  });
+
+  test("the item: a malformed id, another category's item, and a missing required item are refused before storage", async () => {
+    getStaffSessionMock.mockResolvedValue(sessionWithPermissions(EXPENSE_KEYS));
+    const packaging = { category: "packaging", channelId: "", method: "cash" };
+    expect(await recordBusinessExpenseAction(recordForm({ ...packaging, itemId: "kardus" }))).toMatchObject({ ok: false, fieldErrors: { itemId: "Item biaya tidak ditemukan." } });
+    expect(await recordBusinessExpenseAction(recordForm({ itemId: ITEM_ID }))).toMatchObject({ ok: false, fieldErrors: { itemId: "Item biaya tidak ditemukan." } });
+    expect(selectMock).toHaveBeenLastCalledWith("ads_shopee", ITEM_ID);
+    expect(await recordBusinessExpenseAction(recordForm({ ...packaging, itemId: "" }))).toMatchObject({ ok: false, fieldErrors: { itemId: "Pilih item biaya." } });
+    expect(selectMock).toHaveBeenLastCalledWith("packaging", null);
+    // No itemId field at all (an older form) is "no item".
+    expect(await recordBusinessExpenseAction(recordForm(packaging))).toMatchObject({ ok: false, fieldErrors: { itemId: "Pilih item biaya." } });
     expect(storePrivateUploadMock).not.toHaveBeenCalled();
   });
 

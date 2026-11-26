@@ -1,10 +1,21 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, Dialog, Input, Label, Select, Textarea, useToast } from "@ammari/ui";
+import { formatNumber } from "@ammari/ui/lib";
 import type { BusinessExpenseCategory, BusinessExpenseMethod } from "@ammari/db/schema";
-import { expenseCategoriesInGroup, findExpenseCategory, type ExpenseCategoryInfo } from "@/lib/expense-categories/catalog";
+import {
+  amountAfterItemChange,
+  expenseCategoriesInGroup,
+  expenseItemRequirement,
+  expenseItemSelectionError,
+  expenseItemsOfCategory,
+  findExpenseCategory,
+  type ExpenseCategoryInfo,
+  type ExpenseItemInfo,
+} from "@/lib/expense-categories/catalog";
 import { expenseChannelRule } from "@/lib/expenses/figures";
 import { EXPENSE_CATEGORY_GROUPS, EXPENSE_METHOD_LABELS, MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, expenseCategoryHint } from "@/lib/expenses/labels";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
@@ -17,23 +28,30 @@ import { findExpenseProofDuplicatesAction, recordBusinessExpenseAction } from ".
 // channel for an ad or endorse (fixed for Iklan Shopee/TikTok), an optional campaign, a note
 // (required for Lainnya) and a REQUIRED proof. The server re-checks every rule; this form only
 // gives early feedback. The categories are the catalog's ACTIVE ones (expense_categories), passed
-// in by the server page; the client never queries.
+// in by the server page with their ACTIVE items; the client never queries.
+//
+// Items (docs/plans/expense-master-data.md §3.5, session S4): after the category, "Item biaya"
+// lists that category's active items. It is required when there are any and hidden when there are
+// none (owner answer D1: no free-text item; details go in Catatan). An item's default amount fills
+// Jumlah unless the user typed their own (amountAfterItemChange, D4).
 
 const NOTE_MAX = 500;
 const CAMPAIGN_MAX = 120;
-const FIELDS = ["expenseDate", "category", "amount", "method", "channelId", "campaign", "note", "proof"] as const;
+const FIELDS = ["expenseDate", "category", "itemId", "amount", "method", "channelId", "campaign", "note", "proof"] as const;
 const METHODS = Object.keys(EXPENSE_METHOD_LABELS) as BusinessExpenseMethod[];
 
 type FieldErrors = Partial<Record<(typeof FIELDS)[number], string>>;
 
 export type RecordExpenseCategoryOption = Pick<ExpenseCategoryInfo, "code" | "name" | "kind" | "fixedChannelId">;
+export type RecordExpenseItemOption = Pick<ExpenseItemInfo, "id" | "categoryCode" | "name" | "note" | "defaultAmount">;
 
-export function RecordExpenseButton({ categories }: { categories: readonly RecordExpenseCategoryOption[] }) {
+export function RecordExpenseButton({ categories, items }: { categories: readonly RecordExpenseCategoryOption[]; items: readonly RecordExpenseItemOption[] }) {
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [expenseDate, setExpenseDate] = useState("");
   const [category, setCategory] = useState<BusinessExpenseCategory | "">("");
+  const [itemId, setItemId] = useState("");
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState<BusinessExpenseMethod>("transfer");
   const [channelId, setChannelId] = useState("");
@@ -51,10 +69,14 @@ export function RecordExpenseButton({ categories }: { categories: readonly Recor
   const selected = category === "" ? undefined : findExpenseCategory(categories, category);
   const rule = selected ? expenseChannelRule(selected) : null;
   const hint = category === "" ? undefined : expenseCategoryHint(category);
+  const categoryItems = category === "" ? [] : expenseItemsOfCategory(items, category);
+  const itemRequirement = expenseItemRequirement(categoryItems.length);
+  const selectedItem = categoryItems.find((item) => item.id === itemId);
 
   function reset() {
     setExpenseDate(todayInJakarta());
     setCategory("");
+    setItemId("");
     setAmount("");
     setMethod("transfer");
     setChannelId("");
@@ -67,8 +89,20 @@ export function RecordExpenseButton({ categories }: { categories: readonly Recor
     setFieldErrors({});
   }
 
+  /** The item select (and a default it filled in) belongs to one category. */
+  function changeItem(nextId: string, nextCategory: string) {
+    const nextItem = nextId === "" ? undefined : expenseItemsOfCategory(items, nextCategory).find((item) => item.id === nextId);
+    setItemId(nextItem?.id ?? "");
+    // Computed from the rendered value (one event per render), so the amount error is cleared only
+    // when Jumlah actually changes.
+    const nextAmount = amountAfterItemChange(amount, selectedItem?.defaultAmount ?? null, nextItem?.defaultAmount ?? null, formatNumber);
+    setAmount(nextAmount);
+    setFieldErrors((current) => ({ ...current, itemId: undefined, ...(nextAmount !== amount ? { amount: undefined } : {}) }));
+  }
+
   function handleCategory(next: BusinessExpenseCategory | "") {
     setCategory(next);
+    changeItem("", next);
     const nextCategory = next === "" ? undefined : findExpenseCategory(categories, next);
     const nextRule = nextCategory ? expenseChannelRule(nextCategory) : null;
     // A fixed ad shows its own channel; an operating cost has none and no campaign.
@@ -101,6 +135,8 @@ export function RecordExpenseButton({ categories }: { categories: readonly Recor
     setError(null);
     const early: FieldErrors = {};
     if (category === "") early.category = "Pilih kategori.";
+    const itemError = category === "" ? null : expenseItemSelectionError(categoryItems.length, itemId === "" ? null : itemId);
+    if (itemError) early.itemId = itemError;
     if (expenseDate === "") early.expenseDate = "Tanggal bayar tidak valid.";
     const parsedAmount = parseRupiah(amount);
     if (parsedAmount === null || parsedAmount <= 0) early.amount = "Jumlah harus bilangan bulat lebih dari 0, maksimal Rp1.000.000.000.";
@@ -115,6 +151,7 @@ export function RecordExpenseButton({ categories }: { categories: readonly Recor
     const formData = new FormData();
     formData.set("expenseDate", expenseDate);
     formData.set("category", category);
+    formData.set("itemId", itemId);
     formData.set("amount", amount);
     formData.set("method", method);
     formData.set("channelId", channelId);
@@ -127,7 +164,10 @@ export function RecordExpenseButton({ categories }: { categories: readonly Recor
         if (!result.ok) {
           // A field's own error shows under that field; anything else under the form.
           const shown: readonly string[] = FIELDS;
-          if (result.fieldErrors && Object.keys(result.fieldErrors).every((key) => shown.includes(key))) setFieldErrors(result.fieldErrors as FieldErrors);
+          // An item error while the item field is hidden means the category gained items after
+          // this page loaded: say so under the form, where it is visible.
+          if (result.fieldErrors?.itemId && itemRequirement === "hidden") setError("Kategori ini sekarang punya daftar item. Muat ulang halaman, lalu pilih item biaya.");
+          else if (result.fieldErrors && Object.keys(result.fieldErrors).every((key) => shown.includes(key))) setFieldErrors(result.fieldErrors as FieldErrors);
           else setError(result.error);
           return;
         }
@@ -214,6 +254,47 @@ export function RecordExpenseButton({ categories }: { categories: readonly Recor
               </p>
             )}
           </div>
+          {itemRequirement === "required" && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="expense-item" required>
+                Item biaya
+              </Label>
+              <Select
+                id="expense-item"
+                value={itemId}
+                onChange={(event) => changeItem(event.target.value, category)}
+                error={fieldErrors.itemId}
+                disabled={pending}
+                aria-describedby={selectedItem?.note ? "expense-item-hint" : undefined}
+              >
+                <option value="">Pilih item</option>
+                {categoryItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </Select>
+              {selectedItem?.note && (
+                <p id="expense-item-hint" className="text-sm text-neutral-600">
+                  {selectedItem.note}
+                </p>
+              )}
+              {/* A new tab, so the half-filled form (and the chosen proof) is not lost. The list
+                  here refreshes after the dialog closes and the page reloads. */}
+              <p className="text-sm text-neutral-600">
+                Item tidak ada di daftar? Tambahkan di{" "}
+                <Link
+                  href={`/expense-categories/${encodeURIComponent(category)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-brand hover:underline"
+                >
+                  Data Master Kategori Biaya (tab baru)
+                </Link>
+                , lalu muat ulang halaman ini.
+              </p>
+            </div>
+          )}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="expense-amount" required>
               Jumlah

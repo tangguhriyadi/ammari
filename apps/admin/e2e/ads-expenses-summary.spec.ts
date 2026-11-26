@@ -182,7 +182,8 @@ for (const layout of LAYOUTS) {
       const expenses = sheetRows("Biaya");
       expect(expenses.filter((row) => typeof row[1] === "string" && row[1] !== "No. biaya")).toHaveLength(7);
       expect(expenses.flat()).not.toContain(999_000);
-      expect(expenses.at(-1)?.[5]).toBe(1_030_000);
+      expect(expenses[0]?.[3]).toBe("Item");
+      expect(expenses.at(-1)?.[6]).toBe(1_030_000);
       expect(sheetRows("Pesanan").at(-1)?.slice(3, 4)).toEqual([2_000_000]);
       expect(sheetRows("Per kanal").find((row) => row[0] === "Shopee")).toEqual(["Shopee", 1_000_000, 1, 100_000, "10,0", "Di atas titik impas"]);
 
