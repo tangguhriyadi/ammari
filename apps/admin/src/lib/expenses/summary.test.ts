@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
+import * as XLSX from "xlsx";
 import { describe, expect, test } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
@@ -20,7 +21,12 @@ import { createExpenseCategory, getExpenseCategoryCatalog, setExpenseCategoryAct
 import { recordFabricPurchase } from "@/lib/inventory/fabric-stock";
 import { getChannelBreakdown, getPeriodTotals } from "@/lib/overview/queries";
 import { createDraft, postBatch } from "@/lib/production/queries";
+import { getCashOutflow } from "./cash-outflow";
+import { listProductionOutflows } from "./production-outflows";
+import { getMonthlyReport } from "./report";
 import { profitAndLossLines } from "./report-content";
+import { renderMonthlyReportXlsx } from "./report-xlsx";
+import { parseExpenseSummaryParams } from "./search-params";
 import { buildRoasRows, labaBersih, monthRange } from "./figures";
 import { dateRangeToTimeRange, getExpenseBreakdown, getExpenseSummary, getExpenseTotal, getMonthlyBillsReminder } from "./summary";
 
@@ -434,6 +440,124 @@ describe("accounting guard (expense-master-data.md §3.11): supplier payments ne
       const after = await snapshot();
       expect(after).toEqual(before);
       expect(after.lines.map((line) => line.label)).not.toContain("Biaya produksi");
+    });
+  });
+
+  test("extended (session S6): one month of operating, ad, endorse, purchase and batch payments; the cash summary and Pengeluaran produksi include the payments, every profit figure, the monthly report and the Overview tile do not", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      await ordersFixture(tx);
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-02", category: "salary", amount: 400_000 });
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-03", category: "ads_shopee", amount: 100_000, channelId: "shopee" });
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-04", category: "ads_meta", amount: 50_000, channelId: "web" });
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-04", category: "endorsement", amount: 150_000 });
+
+      const [supplier] = await tx.insert(suppliers).values({ name: `Pemasok Guard ${randomUUID().slice(0, 8)}` }).returning();
+      const [purchase] = await tx
+        .insert(purchases)
+        .values({ purchaseNo: `PO-203103-${randomUUID().slice(0, 4)}`, supplierId: supplier!.id, orderedAt: "2031-03-01", createdByStaffUserId: staff.id })
+        .returning();
+      const { fabric, variant } = await insertProductVariant(tx);
+      const [sewing] = await tx.insert(costComponents).values({ name: `Ongkos jahit ${randomUUID().slice(0, 8)}`, unit: "pcs", costType: "variable" }).returning();
+      await recordFabricPurchase({ fabricId: fabric!.id, qty: 10, totalAmountPaid: 1_000_000, purchasedAt: "2026-09-01" }, null, tx);
+      const batch = await createDraft(
+        {
+          fabricId: fabric!.id,
+          producedAt: "2026-10-01",
+          fabricYards: 10,
+          fabricUsages: [{ fabricColorId: null, yards: 10 }],
+          lines: [{ sku: variant!.sku, qty: 10 }],
+          extraCosts: [{ costComponentId: sewing!.id, unitPrice: 20_000, supplierId: supplier!.id }],
+        },
+        staff.id,
+        tx,
+      );
+      await postBatch(batch.id, staff.id, tx);
+
+      const now = new Date("2032-01-01T00:00:00Z");
+      const params = parseExpenseSummaryParams({ period: "month", month: "2031-03" }, now);
+      const xlsxSheets = (bytes: Uint8Array) => {
+        const workbook = XLSX.read(bytes, { type: "buffer" });
+        return Object.fromEntries(workbook.SheetNames.map((name) => [name, XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[name]!, { header: 1 })]));
+      };
+      const profit = async () => {
+        const summary = await getExpenseSummary(MONTH, now, tx);
+        const { categories } = await getExpenseCategoryCatalog(tx);
+        const report = await getMonthlyReport(params, now, tx);
+        // The Overview "Laba bersih" tile: the period's money minus getExpenseTotal (overview-kpi-tiles.tsx).
+        const totals = await getPeriodTotals(dateRangeToTimeRange(MONTH, now), { canViewProfit: true }, tx);
+        const tileExpenses = await getExpenseTotal(MONTH, tx);
+        return {
+          net: summary.net,
+          expenses: summary.expenses,
+          roasRows: summary.roasRows,
+          breakEven: summary.breakEven,
+          lines: profitAndLossLines(summary, categories),
+          // The PDF and the Excel file are drawn from this one object.
+          report,
+          xlsx: xlsxSheets(renderMonthlyReportXlsx(report, "2032-01-01")),
+          overviewTile: {
+            expenses: tileExpenses,
+            net: labaBersih({ labaSetelahBiayaPlatform: totals.money!.labaSetelahBiayaPlatform, webShippingSubsidy: totals.money!.webShippingSubsidy, expenses: tileExpenses }),
+          },
+        };
+      };
+      const before = await profit();
+      expect(before.net).toBe(200_000);
+      expect(before.expenses.total).toBe(700_000);
+      expect(before.overviewTile).toEqual({ expenses: 700_000, net: 200_000 });
+      expect(await getCashOutflow("2031-03", tx)).toEqual({ operating: 400_000, production: 0, ads: 300_000, total: 700_000 });
+
+      let seq = 0;
+      const payment = async (values: Partial<typeof supplierPayments.$inferInsert>, amount: number, voided = false) => {
+        const file = proofFileValues(staff.id, "payment_proof");
+        await tx.insert(privateFiles).values(file);
+        seq += 1;
+        const paymentNo = `BYR-GUARD-${randomUUID().slice(0, 8)}-${seq}`;
+        const [row] = await tx
+          .insert(supplierPayments)
+          .values({
+            paymentNo,
+            paidAt: "2031-03-15",
+            amount,
+            method: "transfer",
+            proofFileId: file.id,
+            recordedByStaffUserId: staff.id,
+            supplierId: supplier!.id,
+            supplierName: supplier!.name,
+            ...values,
+          } as typeof supplierPayments.$inferInsert)
+          .returning();
+        if (voided) {
+          await tx.update(supplierPayments).set({ voidedAt: new Date(), voidedByStaffUserId: staff.id, voidReason: "Salah catat" }).where(eq(supplierPayments.id, row!.id));
+        }
+        return paymentNo;
+      };
+      const paymentNos = [
+        await payment({ targetType: "purchase", purchaseId: purchase!.id, paidAt: "2031-03-01" }, 3_000_000),
+        await payment({ targetType: "purchase", purchaseId: purchase!.id, paidAt: "2031-03-31" }, 2_000_000),
+        await payment({ targetType: "production_batch", productionBatchId: batch.id }, 200_000),
+      ];
+      const voidedNo = await payment({ targetType: "purchase", purchaseId: purchase!.id }, 999_000, true);
+      // Just outside the month on both sides.
+      await payment({ targetType: "production_batch", productionBatchId: batch.id, paidAt: "2031-02-28" }, 11_000);
+      await payment({ targetType: "production_batch", productionBatchId: batch.id, paidAt: "2031-04-01" }, 13_000);
+
+      // Cash flow includes the month's non-voided payments.
+      expect(await getCashOutflow("2031-03", tx)).toEqual({ operating: 400_000, production: 5_200_000, ads: 300_000, total: 5_900_000 });
+      const outflows = await listProductionOutflows({ month: "2031-03", q: supplier!.name }, ["inventory.view", "production.manage"], undefined, "100", tx);
+      expect(outflows.rows.map((row) => row.paymentNo).sort()).toEqual([...paymentNos].sort());
+      expect(outflows.total).toBe(5_200_000);
+
+      // Profit is untouched: Laba bersih, total expenses, every P&L line, ROAS, Titik impas, the
+      // monthly report (and so its PDF/Excel) and the Overview tile.
+      const after = await profit();
+      expect(after).toEqual(before);
+      expect(after.lines.map((line) => line.label)).not.toContain("Biaya produksi");
+      const workbookText = JSON.stringify(after.xlsx);
+      expect(workbookText).not.toContain("Biaya produksi");
+      for (const paymentNo of [...paymentNos, voidedNo]) expect(workbookText).not.toContain(paymentNo);
+      expect(after.report.expenseRows).toHaveLength(4);
     });
   });
 });

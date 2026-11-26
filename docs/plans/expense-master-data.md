@@ -1,8 +1,9 @@
 # Expense categories and cost items as master data ("Kategori Biaya")
 
-Status: **plan, not implemented.** Owner request 2026-11-26: manage the categories and cost items
-of "Iklan & Biaya" → "Catat biaya" from Data Master, so that recording an expense means picking a
-category and then an item from that category's list.
+Status: **implemented (sessions S1 to S6).** Owner request 2026-11-26: manage the categories and
+cost items of "Iklan & Biaya" → "Catat biaya" from Data Master, so that recording an expense means
+picking a category and then an item from that category's list. §1 and §2 describe the state
+*before* this work; §3 is the design as built, with the S6 notes in §3.12.
 
 Revision 2 (2026-11-26): owner answered D1–D6 (§5) and added scope: split "Iklan & Biaya" into
 two menus, **Iklan** and **Biaya** (§3.8), a read-only **Pengeluaran produksi** tab fed by
@@ -443,6 +444,34 @@ must not change that:
   `code`; app-level reserved-name check on `name`) so an owner-made category cannot collide with
   it.
 - Tests (S2 baseline, S6 extended): see §4.
+
+### 3.12 As built in S6 (final state)
+
+- **Pengeluaran produksi** (`/expenses?tab=production`): `lib/expenses/production-outflows.ts`
+  (query) and `lib/expenses/production-outflow-rows.ts` (pure rules: labels, numbering, status,
+  links). Params `month` (default this Jakarta month), `source` (`purchase` / `production`), `q`
+  (payment no, PO no, batch no, payee), `page`/`perPage`. Columns as §3.9; the item shows its
+  detail in brackets ("Biaya bahan baku (Kain & aksesoris)"). Batch component names are in the
+  batch page's line order (`created_at`, `id`); lines saved in one statement share `created_at`,
+  so their relative order follows the id, exactly as on the batch page. The status badge is the
+  shared `PaymentStatusBadge`; a purchase's tagihan comes from `purchaseLineTagihanSql` (pinned to
+  `purchaseTagihan` by purchase-payments.test.ts), a batch payee's from `batchTagihan`.
+- **Arus kas keluar**: `lib/expenses/cash-outflow.ts` (one aggregate over `business_expenses` by
+  kind, plus `getProductionOutflowTotal`) and the pure `cash-outflow-sum.ts`. The heading names the
+  month ("Arus kas keluar Februari 2026") instead of "bulan ini", because it follows the tab below
+  it (`cashSummaryMonth`): the list's month (or the last month of its `from`/`to` window), the
+  production tab's month, or the last month of Laba rugi's period.
+- **Accounting guard**: behavioural in `summary.test.ts` (S2 baseline + S6 extended: Laba bersih,
+  `expenses`, P&L lines, ROAS, Titik impas, `getMonthlyReport` and its Excel sheets, and the
+  Overview tile are identical with and without the month's supplier payments, while
+  `getCashOutflow` and `listProductionOutflows` include them), and static in
+  `accounting-guard.test.ts` (the profit-path modules never name `supplier_payments`, and only the
+  two Biaya components import the cash-flow readers).
+- **Follow-ups from S5**: the monthly-bill reminder shows one link per menu holding a missing
+  category ("Catat di Biaya", then "Catat di Iklan"; `lib/expenses/monthly-bill-links.ts`), and the
+  activity-log area is labelled "Iklan dan Biaya".
+- e2e: `expenses-production.spec.ts` (390px and 1280px) on a February 2026 fixture seeded in
+  `global-setup.ts` (PO-E2E-KAS with DP, a voided payment and pelunasan; BTC-E2E-KAS paid once).
 
 ---
 

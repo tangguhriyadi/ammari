@@ -100,9 +100,9 @@ export function expenseListHref(params: ExpenseListParams, now: Date = new Date(
 
 /** Iklan: "Catatan iklan" (default) or "ROAS" (`?tab=roas`). */
 export type AdsTab = "list" | "roas";
-/** Biaya: "Biaya operasional" (default) or "Laba rugi" (`?tab=pnl`). Session S6 adds
- * "Pengeluaran produksi" (`?tab=production`) here. */
-export type ExpensesTab = "list" | "pnl";
+/** Biaya: "Biaya operasional" (default), "Pengeluaran produksi" (`?tab=production`, read-only,
+ * session S6) or "Laba rugi" (`?tab=pnl`). */
+export type ExpensesTab = "list" | "production" | "pnl";
 /** The two tabs that show getExpenseSummary for a whole-month period. */
 export type ExpenseSummaryView = "roas" | "pnl";
 
@@ -111,7 +111,8 @@ export function parseAdsTab(raw: Raw): AdsTab {
 }
 
 export function parseExpensesTab(raw: Raw): ExpensesTab {
-  return single(raw.tab) === "pnl" ? "pnl" : "list";
+  const tab = single(raw.tab);
+  return tab === "pnl" || tab === "production" ? tab : "list";
 }
 
 /** The menu that hosts a summary view: ROAS on Iklan, Laba rugi on Biaya (owner answer D8). */
@@ -217,4 +218,50 @@ export function expenseReportHref(params: Pick<ExpenseSummaryParams, "period" | 
     search.set("to", params.toMonth);
   }
   return `${EXPENSE_REPORT_PATH}?${search.toString()}`;
+}
+
+// ---------- "Pengeluaran produksi" and the cash summary (expense-master-data.md §3.9, §3.10) ----------
+
+export const PRODUCTION_OUTFLOW_SOURCES = ["purchase", "production"] as const;
+export type ProductionOutflowSourceFilter = (typeof PRODUCTION_OUTFLOW_SOURCES)[number];
+
+export interface ProductionOutflowParams {
+  month: string;
+  /** "Sumber": Pembelian or Produksi; undefined is Semua. */
+  source?: ProductionOutflowSourceFilter;
+  q?: string;
+}
+
+/** A whole Jakarta month that has started (default and fallback: this month). */
+function parseMonthParam(value: string | undefined, now: Date): string {
+  const current = monthToDate(now).month;
+  return value && MONTH_PARAM.test(value) && value >= MIN_SUMMARY_MONTH && value <= current ? value : current;
+}
+
+/** Never throws on user input: anything unknown falls back to this month, every source, no
+ * search. */
+export function parseProductionOutflowParams(raw: Raw, now: Date = new Date()): ProductionOutflowParams {
+  const rawSource = single(raw.source);
+  const source = PRODUCTION_OUTFLOW_SOURCES.find((key) => key === rawSource);
+  const q = single(raw.q)?.trim().slice(0, 100) || undefined;
+  return { month: parseMonthParam(single(raw.month), now), source, q };
+}
+
+/** The tab's URL; this month is left out, like expenseListHref. */
+export function productionOutflowHref(params: ProductionOutflowParams, now: Date = new Date()): string {
+  const search = new URLSearchParams({ tab: "production" });
+  if (params.month !== monthToDate(now).month) search.set("month", params.month);
+  if (params.source) search.set("source", params.source);
+  if (params.q) search.set("q", params.q);
+  return `${EXPENSE_MENU_PATHS.operational}?${search.toString()}`;
+}
+
+/** The month "Arus kas keluar" shows, following the tab below it: the list's month (or the last
+ * month of its date window), the production tab's month, or the last month of Laba rugi's
+ * period. */
+export function cashSummaryMonth(raw: Raw, tab: ExpensesTab, now: Date = new Date()): string {
+  if (tab === "pnl") return parseExpenseSummaryParams(raw, now).toMonth;
+  if (tab === "production") return parseProductionOutflowParams(raw, now).month;
+  const list = parseExpenseListParams(raw, [], "operational", now);
+  return list.range ? list.range.to.slice(0, 7) : list.month;
 }

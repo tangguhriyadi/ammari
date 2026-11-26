@@ -4,9 +4,9 @@ import { ChevronRight } from "lucide-react";
 import { Badge, Card, Skeleton } from "@ammari/ui";
 import { formatNumber, formatRupiah, formatShortDate } from "@ammari/ui/lib";
 import { jakartaMidnight } from "@ammari/commerce/jakarta-day";
-import { expenseListHref, expenseMenuPath } from "@/lib/expenses/search-params";
+import { monthlyBillLinks } from "@/lib/expenses/monthly-bill-links";
 import { getMonthlyBillsReminder } from "@/lib/expenses/summary";
-import { expenseCategoryLabel, expenseGroupOfKind, findExpenseCategory } from "@/lib/expense-categories/catalog";
+import { expenseCategoryLabel } from "@/lib/expense-categories/catalog";
 import { loadExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
 import { joinCategoryLabels } from "@/lib/expenses/labels";
 import { formatCompactRupiah, formatDateRange, formatMonthYear } from "@/lib/overview/format";
@@ -324,26 +324,27 @@ async function MonthlyBillsBlock({ now }: { now: Date }) {
   if (reminder.state === "off") return null;
   const catalog = await loadExpenseCategoryCatalog();
   const missing = reminder.state === "missing" ? reminder : null;
-  // The menu (expense-master-data.md §3.8): Iklan when every missing category is an ad or endorse
-  // category, else Biaya (Gaji, Sewa, Utilitas; any active category may be a monthly bill, owner
-  // answer D3).
-  const isMarketing = (code: string) => {
-    const category = findExpenseCategory(catalog.categories, code);
-    return category !== undefined && expenseGroupOfKind(category.kind) === "marketing";
-  };
-  const group = missing && missing.missing.length > 0 && missing.missing.every(isMarketing) ? ("marketing" as const) : ("operational" as const);
-  const menuLabel = group === "marketing" ? "Iklan" : "Biaya";
+  // One link per menu holding a missing category (expense-master-data.md §3.8): Biaya for Gaji,
+  // Sewa, Utilitas; Iklan too when an ad or endorse category was chosen (owner answer D3).
+  const [primary, ...others] = monthlyBillLinks(missing, catalog.categories);
   return (
     <Block
       title="Biaya bulanan belum dicatat"
       count={missing ? 1 : 0}
       countText={missing ? formatMonthYear(missing.month) : undefined}
-      href={
-        missing
-          ? expenseListHref({ month: missing.to.slice(0, 7), range: { from: missing.from, to: missing.to }, group, showVoided: false })
-          : expenseMenuPath(group)
-      }
-      hrefLabel={`Catat di ${menuLabel}`}
+      href={primary.href}
+      hrefLabel={primary.label}
+      extraLinks={others.map((link) => (
+        <Link
+          key={link.group}
+          href={link.href}
+          className="inline-flex min-h-11 items-center gap-1 text-base font-medium text-brand underline-offset-2 hover:underline"
+          data-testid={`action-monthly-bills-${link.group}`}
+        >
+          {link.label}
+          <ChevronRight aria-hidden="true" className="size-4" />
+        </Link>
+      ))}
       testId="action-monthly-bills"
       detail={
         missing && (

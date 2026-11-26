@@ -164,12 +164,23 @@ pnpm workspaces + Turborepo:
 
 ### 3.2 Admin — first week of November 2026
 
-- Ads & expenses — "Iklan & Biaya" (`/ads-expenses`, built in growth sessions S1 to S3 and S6,
-  [docs/plans/growth.md](plans/growth.md)): append-only expenses with a required proof and void
-  (`business_expenses`), and a "Ringkasan" tab per whole month or month range: Laba bersih, biaya
-  per kategori, iklan vs omzet (ROAS against the period's own break-even, §6), and "Unduh laporan
-  bulanan" as PDF or Excel (management P&L, per channel, expense and order rows; audited). Needs
-  `ads_expenses.manage` + `finance.view_profit`.
+- Ads & expenses — two menus in "Pertumbuhan" (growth sessions S1 to S3 and S6,
+  [docs/plans/growth.md](plans/growth.md); split by
+  [docs/plans/expense-master-data.md](plans/expense-master-data.md) S5/S6). Append-only expenses
+  with a required proof and void (`business_expenses`), each a category and, when the category has
+  items, an item from Data Master "Kategori Biaya" (`/expense-categories`).
+  - **Iklan** (`/ads`): "Catatan iklan" (categories of kind ad and endorsement, "Catat iklan") and
+    "ROAS" (`?tab=roas`): biaya pemasaran, ROAS per channel against the period's own break-even (§6).
+  - **Biaya** (`/expenses`): "Biaya operasional" (kind operating, "Catat biaya"), "Pengeluaran
+    produksi" (`?tab=production`, read-only: non-voided `supplier_payments` paid in the month, for
+    purchases as "Biaya bahan baku" (Kain / Aksesoris) and batches as that payee's cost-line names,
+    with "Pembayaran ke-n" and the bill's current status; a fixed banner says they reach profit
+    only as HPP) and "Laba rugi" (`?tab=pnl`, whole months or a month range: Laba bersih, biaya per
+    kategori, "Unduh laporan bulanan" as PDF or Excel at `/expenses/report`, audited). Above the
+    tabs, "Arus kas keluar" for the month: Biaya operasional + Pengeluaran produksi + Iklan &
+    endorse = Total uang keluar, cash flow and not profit (seller-balance payments included).
+  - Old `/ads-expenses` URLs and `/iklan-biaya` redirect (308) to the matching menu.
+  - Everything needs `ads_expenses.manage` + `finance.view_profit`.
 - Customers & vouchers — "Pelanggan & Voucher" (`/customers`, growth sessions S4 to S6): customer
   list with masked contacts and a full-contact detail (read-only identity), staff-recorded promo
   withdrawal, voucher overview with owner void/extend and history (`voucher_adjustments`), and
@@ -583,6 +594,10 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   remaining balance is refused. "Total utang" per supplier = remaining over their purchases plus
   their share of posted batches; overpaid documents show "Lebih bayar" separately. Amounts need
   `finance.view_profit`; recording, voiding and viewing proofs also `supplier_payments.manage`.
+  Supplier payments are **never an expense**: purchase and production cost reaches Laba bersih
+  only as HPP of sold orders. Biaya "Pengeluaran produksi" and "Arus kas keluar" read them live as
+  cash flow; the P&L, ROAS, the monthly report and the Overview tile never read them
+  (docs/plans/expense-master-data.md §3.11).
 
 ### 5.2 Orders & finance
 
@@ -660,12 +675,19 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   fee. Ongkir paid by the buyer is pass-through, not sales revenue; the subsidy is a shipping
   expense.
 - `business_expenses` (migration 0042, docs/plans/growth.md §3) — every ad and operating expense
-  that left the business: `expense_no` (`BYA-YYYYMM-NNN`), payment date (Jakarta), fixed category
-  (Iklan Meta/TikTok/Shopee, Endorse/KOL, Ongkir bahan, Packaging, Gaji, Sewa, Utilitas, Lainnya),
+  that left the business: `expense_no` (`BYA-YYYYMM-NNN`), payment date (Jakarta), category (FK to
+  `expense_categories`), optional `item_id` (composite FK to `expense_items` of the same category),
   amount, method, optional channel for marketing categories, required proof (`private_files`,
   purpose `expense_proof`). Append-only: no edit, no delete, void with a reason (trigger). Counted
-  on the payment date (cash basis). `sales_goal.monthly_bill_categories` (migration 0043) drives the
-  "Biaya bulanan belum dicatat" reminder.
+  on the payment date (cash basis). `sales_goal.monthly_bill_categories` (migration 0043; any active
+  category since 0048) drives the "Biaya bulanan belum dicatat" reminder, which links to each menu
+  (Iklan / Biaya) holding a missing category.
+- `expense_categories` / `expense_items` (migration 0048, docs/plans/expense-master-data.md) —
+  owner-managed master data ("Kategori Biaya"). A category's immutable `kind` (`ad`, `endorsement`,
+  `operating`) decides ROAS, the menu and the P&L grouping; the ten original codes are system rows
+  shipped in the migration (renamable, never deactivated). Items carry an optional default amount.
+  No delete, only deactivate. The code `biaya_produksi` / name "Biaya produksi" is reserved for the
+  supplier-payment display label.
 - `ad_spend_daily`, `expenses` — created by migration 0000, never read or written; superseded by
   `business_expenses` and to be dropped by a later contract migration once dev and prod show 0 rows
   (owner answer A2).
@@ -738,7 +760,7 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   "Biaya platform belum lengkap untuk N pesanan"; other channels have no platform fee and never
   count as incomplete. `seller_shipping_subsidy` counts as a platform cost; web shipping subsidy and
   ad spend stay out. Profit from the actual payout (`order_settlements`, the income export) is later.
-- ROAS per channel (Iklan & Biaya "Ringkasan", whole months) — ROAS = omzet ÷ biaya iklan, judged
+- ROAS per channel (Iklan, tab "ROAS", whole months) — ROAS = omzet ÷ biaya iklan, judged
   against the period's own **titik impas ROAS** = omzet ÷ (laba setelah biaya platform − web
   shipping subsidy), i.e. 1 ÷ contribution margin (growth session S6, owner decision 2026-10-27).
   No omzet: not computed; contribution ≤ 0: no break-even (every ad loses). The earlier fixed 8.3
@@ -799,7 +821,8 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
   code matches by literal value also ships in a migration (CLAUDE.md). Roles and role→permission
   mappings live in the database and are editable from the admin UI.
 - Growth keys (migration 0042, docs/plans/growth.md §7, §8.1): `ads_expenses.manage` (+
-  `finance.view_profit`) opens Iklan & Biaya, records and voids expenses, views their proofs and
+  `finance.view_profit`) opens Iklan and Biaya (including Pengeluaran produksi and Arus kas
+  keluar) and Data Master "Kategori Biaya", records and voids expenses, views their proofs and
   downloads the monthly report (Keuangan, owner, super_admin); `customers.view` reads Pelanggan &
   Voucher (CS, owner, super_admin); `customers.manage` records a promo withdrawal (same three);
   `customers.export` downloads the promo contacts (owner, super_admin only); `vouchers.void`

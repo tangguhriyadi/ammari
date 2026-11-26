@@ -128,6 +128,21 @@ const E2E_EXPENSE_SUMMARY_NO_FINANCE_ROLE_KEY = "e2e_expense_summary_no_finance"
 // 50.000, Iklan Meta tanpa kanal 30.000, Endorse/KOL 150.000, Gaji 400.000, Sewa 200.000; plus a
 // voided Sewa 999.000. Total biaya 1.030.000, Laba bersih 1.170.000 - 20.000 - 1.030.000 = 120.000.
 export const E2E_EXPENSE_SUMMARY_MONTH = "2026-02";
+// expenses-production.spec.ts (docs/plans/expense-master-data.md session S6): Biaya "Pengeluaran
+// produksi" and "Arus kas keluar" in the same February 2026. An owner (production.manage: the
+// batch number links) and a Keuangan staff (inventory.view but not production.manage: the batch
+// number is plain text). Seeded straight into supplier_payments: PO-E2E-KAS (fabric Rp 1.000.000
+// + accessories Rp 400.000, ordered) paid DP 300.000 on the 3rd, a voided 100.000 on the 4th and
+// pelunasan 1.100.000 on the 20th (Lunas); BTC-E2E-KAS (posted, receipt closed, two service lines
+// for one tailor: Ongkos jahit 200.000 + Finishing 50.000) paid 250.000 on the 10th (Lunas).
+// Pengeluaran produksi 1.650.000; with Biaya operasional 600.000 and Iklan & endorse 430.000 the
+// month's Total uang keluar is 2.680.000, while Laba bersih stays 120.000. Everything is fully
+// paid, so no "belum dibayar" list or Overview block anywhere picks it up.
+export const E2E_PRODUCTION_OUTFLOW_OWNER_EMAIL = "production-outflow-owner@e2e.ammari.test";
+export const E2E_PRODUCTION_OUTFLOW_FINANCE_EMAIL = "production-outflow-finance@e2e.ammari.test";
+export const E2E_PRODUCTION_OUTFLOW_PO_NO = "PO-E2E-KAS";
+export const E2E_PRODUCTION_OUTFLOW_BATCH_NO = "BTC-E2E-KAS";
+export const E2E_PRODUCTION_OUTFLOW_PAYMENT_NOS = { dp: "BYR-E2E-KAS-1", voided: "BYR-E2E-KAS-2", lunas: "BYR-E2E-KAS-3", batch: "BYR-E2E-KAS-4" } as const;
 // "Biaya bulanan belum dicatat" (owner answer A6): the reminder is switched on for Gaji and Sewa
 // (/settings "Pengingat biaya bulanan", off by default), and a Gaji is dated the 5th of this
 // Jakarta month, inside the 6th-to-5th window, so from the 6th the item names only Sewa. Its own
@@ -422,6 +437,13 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     expenseCategories,
     expenseItems,
     salesGoal,
+    purchases,
+    purchaseItems,
+    accessories,
+    costComponents,
+    productionBatches,
+    productionBatchCosts,
+    supplierPayments,
     customers,
     customerAuthUsers,
     thankYouCards,
@@ -915,6 +937,98 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         proofFileId: fileId,
         recordedByStaffUserId: recorder.id,
         ...(seed.voided ? { voidedAt: orderDay, voidedByStaffUserId: recorder.id, voidReason: "Salah nominal" } : {}),
+      });
+    }
+  });
+
+  // Biaya "Pengeluaran produksi" (see E2E_PRODUCTION_OUTFLOW_OWNER_EMAIL above).
+  await ensureStaffFixture(E2E_PRODUCTION_OUTFLOW_OWNER_EMAIL, "E2E Pengeluaran Produksi (owner)", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_PRODUCTION_OUTFLOW_FINANCE_EMAIL, "E2E Pengeluaran Produksi (Keuangan)", "finance");
+  await db.transaction(async (tx) => {
+    const [owner] = await tx.select({ id: staffUsers.id }).from(staffUsers).where(eq(staffUsers.email, E2E_PRODUCTION_OUTFLOW_OWNER_EMAIL));
+    if (!owner) throw new Error("failed to find the e2e production outflow owner");
+    const [vendor] = await tx.insert(suppliers).values({ name: "E2E Kas Toko Kain" }).returning({ id: suppliers.id, name: suppliers.name });
+    const [tailor] = await tx.insert(suppliers).values({ name: "E2E Kas Penjahit" }).returning({ id: suppliers.id, name: suppliers.name });
+    const [fabric] = await tx.insert(fabrics).values({ name: "E2E Kas Katun" }).returning({ id: fabrics.id });
+    const [accessory] = await tx.insert(accessories).values({ name: "E2E Kas Kancing" }).returning({ id: accessories.id });
+    if (!vendor || !tailor || !fabric || !accessory) throw new Error("failed to seed the e2e production outflow masters");
+
+    const [purchase] = await tx
+      .insert(purchases)
+      .values({ purchaseNo: E2E_PRODUCTION_OUTFLOW_PO_NO, supplierId: vendor.id, orderedAt: "2026-02-01", createdByStaffUserId: owner.id })
+      .returning({ id: purchases.id });
+    if (!purchase) throw new Error("failed to seed the e2e production outflow purchase");
+    await tx.insert(purchaseItems).values([
+      { purchaseId: purchase.id, itemType: "fabric", fabricId: fabric.id, qtyOrdered: 10, totalAmount: 1_000_000 },
+      { purchaseId: purchase.id, itemType: "accessory", accessoryId: accessory.id, qtyOrdered: 100, totalAmount: 400_000 },
+    ]);
+
+    const components = await tx
+      .insert(costComponents)
+      .values([
+        { name: "E2E Kas Ongkos jahit", unit: "pcs", costType: "fixed" },
+        { name: "E2E Kas Finishing", unit: "pcs", costType: "fixed" },
+      ])
+      .returning({ id: costComponents.id, name: costComponents.name });
+    const [batch] = await tx
+      .insert(productionBatches)
+      .values({ fabricId: fabric.id, batchNo: E2E_PRODUCTION_OUTFLOW_BATCH_NO, producedAt: "2026-02-05" })
+      .returning({ id: productionBatches.id });
+    if (!batch || components.length !== 2) throw new Error("failed to seed the e2e production outflow batch");
+    // Lines go in while the batch is a draft (posted lines are frozen), then it is posted and its
+    // receipt closed, as postBatch and "Tutup penerimaan" would leave it.
+    await tx.insert(productionBatchCosts).values(
+      components.map((component, index) => ({
+        productionBatchId: batch.id,
+        costComponentId: component.id,
+        componentName: component.name.replace("E2E Kas ", ""),
+        componentUnit: "pcs" as const,
+        costType: "fixed" as const,
+        quantity: 1,
+        unitPrice: index === 0 ? 200_000 : 50_000,
+        supplierId: tailor.id,
+        supplierName: tailor.name,
+      })),
+    );
+    const postedAt = new Date("2026-02-05T03:00:00Z");
+    await tx
+      .update(productionBatches)
+      .set({ status: "posted", postedAt, postedByStaffUserId: owner.id, receiptStatus: "closed", closedAt: postedAt, closedByStaffUserId: owner.id, closeReason: "E2E" })
+      .where(eq(productionBatches.id, batch.id));
+
+    const paymentSeeds = [
+      { paymentNo: E2E_PRODUCTION_OUTFLOW_PAYMENT_NOS.dp, paidAt: "2026-02-03", amount: 300_000, purchase: true, voided: false },
+      { paymentNo: E2E_PRODUCTION_OUTFLOW_PAYMENT_NOS.voided, paidAt: "2026-02-04", amount: 100_000, purchase: true, voided: true },
+      { paymentNo: E2E_PRODUCTION_OUTFLOW_PAYMENT_NOS.lunas, paidAt: "2026-02-20", amount: 1_100_000, purchase: true, voided: false },
+      { paymentNo: E2E_PRODUCTION_OUTFLOW_PAYMENT_NOS.batch, paidAt: "2026-02-10", amount: 250_000, purchase: false, voided: false },
+    ];
+    for (const [index, seed] of paymentSeeds.entries()) {
+      const fileId = randomUUID();
+      const sha = fileId.replaceAll("-", "").padEnd(64, "1");
+      await tx.insert(privateFiles).values({
+        id: fileId,
+        purpose: "payment_proof",
+        storageKey: `e2e/payment_proof/2026/02/${fileId}.jpg`,
+        contentType: "image/jpeg",
+        byteSize: 1,
+        sha256: sha,
+        originalFilename: `bukti-${index}.jpg`,
+        originalContentType: "image/jpeg",
+        originalByteSize: 1,
+        originalSha256: sha,
+        uploadedByStaffUserId: owner.id,
+      });
+      await tx.insert(supplierPayments).values({
+        paymentNo: seed.paymentNo,
+        ...(seed.purchase
+          ? { targetType: "purchase" as const, purchaseId: purchase.id, supplierId: vendor.id, supplierName: vendor.name }
+          : { targetType: "production_batch" as const, productionBatchId: batch.id, supplierId: tailor.id, supplierName: tailor.name }),
+        paidAt: seed.paidAt,
+        amount: seed.amount,
+        method: "transfer",
+        proofFileId: fileId,
+        recordedByStaffUserId: owner.id,
+        ...(seed.voided ? { voidedAt: postedAt, voidedByStaffUserId: owner.id, voidReason: "Salah nominal" } : {}),
       });
     }
   });

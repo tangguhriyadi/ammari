@@ -1,5 +1,17 @@
 import { describe, expect, test } from "vitest";
-import { expenseListHref, expenseMenuPath, expenseReportHref, expenseSummaryHref, parseAdsTab, parseExpenseListParams, parseExpenseSummaryParams, parseExpensesTab } from "./search-params";
+import {
+  cashSummaryMonth,
+  expenseListHref,
+  expenseMenuPath,
+  expenseReportHref,
+  expenseSummaryHref,
+  parseAdsTab,
+  parseExpenseListParams,
+  parseExpenseSummaryParams,
+  parseExpensesTab,
+  parseProductionOutflowParams,
+  productionOutflowHref,
+} from "./search-params";
 import { DEFAULT_EXPENSE_CATEGORY_INFOS } from "@/lib/expense-categories/default-catalog";
 
 const NOW = new Date("2026-10-27T05:00:00Z");
@@ -93,9 +105,10 @@ describe("parseAdsTab / parseExpensesTab", () => {
     expect(parseAdsTab({ tab: "ringkasan" })).toBe("list");
   });
 
-  test("Biaya: Biaya operasional unless ?tab=pnl", () => {
+  test("Biaya: Biaya operasional unless ?tab=production or ?tab=pnl", () => {
     expect(parseExpensesTab({})).toBe("list");
     expect(parseExpensesTab({ tab: "pnl" })).toBe("pnl");
+    expect(parseExpensesTab({ tab: "production" })).toBe("production");
     expect(parseExpensesTab({ tab: "roas" })).toBe("list");
     expect(parseExpensesTab({ tab: "ringkasan" })).toBe("list");
   });
@@ -171,5 +184,38 @@ describe("expenseReportHref (session S6, on Biaya since S5)", () => {
   test("the shown months as an explicit month or range", () => {
     expect(expenseReportHref({ period: "this_month", fromMonth: "2026-10", toMonth: "2026-10" }, "pdf")).toBe("/expenses/report?format=pdf&period=month&month=2026-10");
     expect(expenseReportHref({ period: "range", fromMonth: "2026-01", toMonth: "2026-03" }, "xlsx")).toBe("/expenses/report?format=xlsx&period=range&from=2026-01&to=2026-03");
+  });
+});
+
+describe("Pengeluaran produksi params and the cash summary month (expense-master-data.md S6)", () => {
+  // 2031-03-15 10:00 WIB.
+  const now = new Date("2031-03-15T03:00:00Z");
+
+  test("month defaults to this Jakarta month; a malformed or future month falls back; source and q are validated", () => {
+    expect(parseProductionOutflowParams({}, now)).toEqual({ month: "2031-03", source: undefined, q: undefined });
+    expect(parseProductionOutflowParams({ month: "2031-02", source: "purchase", q: "  PO-1 " }, now)).toEqual({ month: "2031-02", source: "purchase", q: "PO-1" });
+    expect(parseProductionOutflowParams({ month: "2031-04", source: "production" }, now)).toMatchObject({ month: "2031-03", source: "production" });
+    expect(parseProductionOutflowParams({ month: "2031-13", source: "expense" }, now)).toMatchObject({ month: "2031-03", source: undefined });
+    expect(parseProductionOutflowParams({ month: "0099-01" }, now).month).toBe("2031-03");
+  });
+
+  test("the Jakarta month turns at 00:00 WIB, not UTC", () => {
+    // 2031-03-31 23:30 UTC is already 1 April in Jakarta.
+    expect(parseProductionOutflowParams({ month: "2031-04" }, new Date("2031-03-31T17:30:00Z")).month).toBe("2031-04");
+    expect(parseProductionOutflowParams({ month: "2031-04" }, new Date("2031-03-31T16:59:00Z")).month).toBe("2031-03");
+  });
+
+  test("productionOutflowHref leaves this month out", () => {
+    expect(productionOutflowHref({ month: "2031-03" }, now)).toBe("/expenses?tab=production");
+    expect(productionOutflowHref({ month: "2031-02", source: "production", q: "BTC" }, now)).toBe("/expenses?tab=production&month=2031-02&source=production&q=BTC");
+  });
+
+  test("cashSummaryMonth follows the tab below it", () => {
+    expect(cashSummaryMonth({}, "list", now)).toBe("2031-03");
+    expect(cashSummaryMonth({ month: "2031-01" }, "list", now)).toBe("2031-01");
+    expect(cashSummaryMonth({ from: "2031-02-06", to: "2031-03-05" }, "list", now)).toBe("2031-03");
+    expect(cashSummaryMonth({ tab: "production", month: "2030-12" }, "production", now)).toBe("2030-12");
+    expect(cashSummaryMonth({ tab: "pnl", period: "last_month" }, "pnl", now)).toBe("2031-02");
+    expect(cashSummaryMonth({ tab: "pnl", period: "range", from: "2030-11", to: "2031-01" }, "pnl", now)).toBe("2031-01");
   });
 });

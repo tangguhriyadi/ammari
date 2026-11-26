@@ -7,7 +7,7 @@ export const ACTIVITY_AREAS = {
   orders: "Pesanan",
   shipping: "Pengiriman",
   payments: "Pembayaran",
-  expenses: "Iklan & Biaya",
+  expenses: "Iklan dan Biaya",
   products: "Produk & Diskon",
   stock: "Stok",
   production: "Produksi & Pembelian",
