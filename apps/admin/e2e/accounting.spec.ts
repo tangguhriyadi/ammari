@@ -76,7 +76,8 @@ async function checkJournal(page: Page, layout: Layout): Promise<void> {
   const payment = page.locator(layout.journalRow).filter({ hasText: E2E_ACCOUNTING_PAYMENT_NO });
   await expect(payment).toBeVisible();
   await expect(payment).toContainText(`Pembayaran pembelian ${E2E_ACCOUNTING_PURCHASE_NO} ke ${E2E_ACCOUNTING_SUPPLIER}`);
-  await expect(payment).toContainText("2-1101 Utang usaha pemasok bahan");
+  // Session 7 chain: nothing of the purchase has arrived yet, so the payment is a DP (D-13).
+  await expect(payment).toContainText("1-1601 Uang muka pembelian");
   await expect(payment).toContainText("1-1101 Kas tunai");
   await expect(payment).toContainText("Rp 500.000");
   // The source document links to its purchase.
@@ -91,32 +92,57 @@ async function checkJournal(page: Page, layout: Layout): Promise<void> {
   await expect(page.locator(layout.journalRow).filter({ hasText: E2E_ACCOUNTING_EXPENSE_NO })).toHaveCount(0);
 }
 
+/** Rekonsiliasi (Session 7): the seeded DP reconciles (app: lebih bayar 500.000 on a purchase with
+ * no lines; ledger: an advance of 500.000), on this viewport's rows, the other layout hidden. */
+async function checkReconciliation(page: Page, layout: Layout): Promise<void> {
+  await page.goto("/accounting/reconciliation?date=2026-12-31");
+  await expect(page.getByRole("heading", { name: "Rekonsiliasi", exact: true })).toBeVisible();
+  await expect(page.getByTestId("reconciliation-books-note")).toContainText("Buku uji coba Desember 2026");
+  const materials = page.getByTestId("reconciliation-material");
+  await expect(materials).toHaveCount(2);
+  await expect(materials.filter({ hasText: "1-1501" })).toBeVisible();
+  await expect(materials.filter({ hasText: "1-1502" })).toBeVisible();
+
+  const shown = layout.label === "mobile" ? "reconciliation-payable-card" : "reconciliation-payable-row";
+  const hidden = layout.label === "mobile" ? "reconciliation-payable-row" : "reconciliation-payable-card";
+  const row = page.getByTestId(shown).filter({ hasText: E2E_ACCOUNTING_PURCHASE_NO });
+  await expect(row).toHaveCount(1);
+  await expect(row).toBeVisible();
+  await expect(row).toContainText(E2E_ACCOUNTING_SUPPLIER);
+  await expect(row).toContainText("-Rp 500.000");
+  await expect(row).toContainText("uang muka Rp 500.000");
+  // Exactly "Cocok" (status ok), not "Cocok, ada selisih yang dijelaskan" nor "Tidak cocok".
+  await expect(row.getByText("Cocok", { exact: true })).toBeVisible();
+  await expect(row.getByRole("link", { name: E2E_ACCOUNTING_PURCHASE_NO })).toHaveAttribute("href", /^\/purchases\//);
+  const other = page.getByTestId(hidden).filter({ hasText: E2E_ACCOUNTING_PURCHASE_NO });
+  await expect(other).toHaveCount(1);
+  await expect(other).toBeHidden();
+}
+
 async function checkLedger(page: Page, layout: Layout): Promise<void> {
   await page.goto("/accounting/ledger");
   await expect(page.getByText("Pilih akun dan periode, lalu tekan Tampilkan.")).toBeVisible();
 
   const form = page.getByRole("form", { name: "Filter buku besar" });
-  await form.getByLabel("Akun").selectOption("2-1101");
+  await form.getByLabel("Akun").selectOption("1-1601");
   await form.getByLabel("Dari tanggal").fill("2026-12-01");
   await form.getByLabel("Sampai tanggal").fill("2026-12-31");
   await form.getByLabel("Supplier").selectOption({ label: E2E_ACCOUNTING_SUPPLIER });
   await form.getByRole("button", { name: "Tampilkan" }).click();
-  await expect(page).toHaveURL(/account=2-1101/);
+  await expect(page).toHaveURL(/account=1-1601/);
 
-  await expect(page.getByRole("heading", { name: "Buku Besar 2-1101 Utang usaha pemasok bahan" })).toBeVisible();
-  await expect(page.getByText("Saldo normal: Kredit")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Buku Besar 1-1601 Uang muka pembelian" })).toBeVisible();
+  await expect(page.getByText("Saldo normal: Debit")).toBeVisible();
   await expect(page.getByTestId("ledger-opening")).toHaveText("Rp 0");
   await expect(page.getByTestId("ledger-debit-total")).toHaveText("Rp 500.000");
   await expect(page.getByTestId("ledger-credit-total")).toHaveText("Rp 0");
-  // Without chain (Session 2) the payment clears utang before any receipt is booked, so the
-  // credit-normal account runs against its normal side until Session 7 posts receipts.
-  await expect(page.getByTestId("ledger-closing")).toHaveText("-Rp 500.000");
+  // Paid before anything arrived: an advance to the supplier (Session 7 document chain, D-13).
+  await expect(page.getByTestId("ledger-closing")).toHaveText("Rp 500.000");
 
   const rows = page.locator(layout.ledgerRow);
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText(E2E_ACCOUNTING_PAYMENT_NO);
   await expect(rows.first()).toContainText("Rp 500.000");
-  await expect(rows.first()).toContainText("-Rp 500.000");
   const hiddenRows = page.locator(layout.hiddenLedgerRow);
   await expect(hiddenRows).toHaveCount(1);
   await expect(hiddenRows.first()).toBeHidden();
@@ -138,6 +164,7 @@ test("Jurnal umum and Buku besar after Posting sekarang, at 390px and 1280px", a
       await page.setViewportSize(layout.viewport);
       await checkJournal(page, layout);
       await checkLedger(page, layout);
+      await checkReconciliation(page, layout);
     });
   }
 });

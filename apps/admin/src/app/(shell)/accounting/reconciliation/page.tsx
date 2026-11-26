@@ -1,0 +1,255 @@
+import Link from "next/link";
+import { Badge, Breadcrumb, Button, Card, CardList, EmptyState, Input, Label, PageHeader, TableContainer, TableHead, Td, Th, Tr, type BadgeVariant } from "@ammari/ui";
+import { jakartaDate } from "@ammari/commerce/jakarta-day";
+import { isCalendarDate, OFFICIAL_BOOKS_START, TRIAL_BOOKS_START } from "@ammari/accounting";
+import { requirePermission } from "@/lib/auth/require-permission";
+import { formatBalance, formatDay } from "@/lib/accounting/format";
+import { getReconciliation, type MaterialRow, type PayableRow, type Reconciliation } from "@/lib/accounting/reconciliation";
+import { RECONCILIATION_STATUS_LABELS, type ReconciliationStatus } from "@/lib/accounting/reconciliation-rules";
+import { rootCrumbs } from "@/lib/nav/breadcrumb";
+
+// Rekonsiliasi (docs/plans/accounting.md §6.3, Session 7): check 1 (persediaan bahan vs catatan
+// stok) and check 2 (utang pemasok per dokumen pembelian vs tagihan di aplikasi). accounting.view.
+// One "per tanggal" filter in the URL (a GET form); every figure is summed within the set of books
+// that date belongs to (books.ts).
+
+type RawParams = { date?: string | string[] };
+
+const STATUS_VARIANT: Record<ReconciliationStatus, BadgeVariant> = { ok: "success", explained: "neutral", review: "warning", mismatch: "danger" };
+
+function StatusBadge({ status }: { status: ReconciliationStatus }) {
+  return <Badge variant={STATUS_VARIANT[status]}>{RECONCILIATION_STATUS_LABELS[status]}</Badge>;
+}
+
+function booksNote(report: Reconciliation): string {
+  if (report.segment === "official") return `Buku resmi: dihitung sejak ${formatDay(OFFICIAL_BOOKS_START)}, termasuk saldo awal.`;
+  if (report.segment === "trial") return `Buku uji coba Desember 2026: dihitung sejak ${formatDay(TRIAL_BOOKS_START)}, tanpa saldo awal.`;
+  return `Tanggal ini sebelum pembukuan dimulai (${formatDay(TRIAL_BOOKS_START)}), jadi belum ada jurnal.`;
+}
+
+function Amount({ value }: { value: number }) {
+  return <span className="tabular-nums">{formatBalance(value)}</span>;
+}
+
+function MaterialCard({ row, asOf, segmentStart }: { row: MaterialRow; asOf: string; segmentStart: string }) {
+  const notJournaled = [
+    { label: "Pemakaian produksi (jurnal produksi belum tersedia)", value: row.production },
+    { label: "Pembelian cara lama (tanpa dokumen)", value: row.legacy },
+    { label: "Pembatalan penerimaan dari sebelum pembukuan", value: row.voidsBeforeBooks },
+  ].filter((item) => item.value !== 0);
+  return (
+    <Card className="flex flex-col gap-3" data-testid="reconciliation-material">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <Link href={`/accounting/ledger?account=${row.accountCode}&from=${segmentStart}&to=${asOf}`} className="hover:underline">
+          <span className="tabular-nums text-neutral-600">{row.accountCode}</span> <span className="font-medium text-neutral-900">{row.accountName}</span>
+        </Link>
+        <StatusBadge status={row.status} />
+      </div>
+      <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-base">
+        <dt className="text-neutral-600">Saldo buku besar</dt>
+        <dd className="text-right">
+          <Amount value={row.ledger} />
+        </dd>
+        <dt className="text-neutral-600">Nilai menurut catatan stok</dt>
+        <dd className="text-right">
+          <Amount value={row.stockValue} />
+        </dd>
+        {notJournaled.map((item) => (
+          <div key={item.label} className="contents">
+            <dt className="pl-3 text-sm text-neutral-600">Tidak dijurnal: {item.label}</dt>
+            <dd className="text-right text-sm">
+              <Amount value={item.value} />
+            </dd>
+          </div>
+        ))}
+        <dt className="font-medium text-neutral-900">Selisih</dt>
+        <dd className="text-right font-medium" data-testid="reconciliation-material-difference">
+          <Amount value={row.difference} />
+        </dd>
+      </dl>
+    </Card>
+  );
+}
+
+function payableNote(row: PayableRow): string | null {
+  const notes: string[] = [];
+  if (row.notReceived !== 0) notes.push("selisih karena barang belum diterima (utang diakui saat barang diterima)");
+  if (row.status === "review") notes.push("sebagian kejadian sebelum pembukuan dimulai, cocokkan dengan saldo awal pemasok ini");
+  if (row.status === "mismatch") notes.push("periksa posting yang perlu dicek di Jurnal umum");
+  return notes.length > 0 ? notes.join("; ") : null;
+}
+
+function DocumentLink({ row }: { row: PayableRow }) {
+  return (
+    <Link href={`/purchases/${row.purchaseId}`} className="font-medium text-neutral-900 hover:underline">
+      {row.purchaseNo}
+    </Link>
+  );
+}
+
+function LedgerBreakdown({ row }: { row: PayableRow }) {
+  const parts = [
+    row.ledgerPayable !== 0 ? `utang ${formatBalance(row.ledgerPayable)}` : null,
+    row.ledgerAdvance !== 0 ? `uang muka ${formatBalance(row.ledgerAdvance)}` : null,
+    row.ledgerClaim !== 0 ? `piutang klaim ${formatBalance(row.ledgerClaim)}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? <span className="block text-sm text-neutral-600">{parts.join(", ")}</span> : null;
+}
+
+export default async function ReconciliationPage({ searchParams }: { searchParams: Promise<RawParams> }) {
+  await requirePermission("accounting.view");
+  const raw = await searchParams;
+  const today = jakartaDate();
+  const requested = Array.isArray(raw.date) ? raw.date[0] : raw.date;
+  const asOf = requested && isCalendarDate(requested) ? requested : today;
+  const report = await getReconciliation(asOf);
+
+  return (
+    <>
+      <Breadcrumb items={rootCrumbs("/accounting/reconciliation")} />
+      <PageHeader
+        title="Rekonsiliasi"
+        description={`Mencocokkan buku besar dengan catatan stok bahan dan tagihan pemasok, per ${formatDay(asOf)}.`}
+      />
+      <form method="GET" className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end lg:max-w-2xl" aria-label="Filter rekonsiliasi">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="reconciliation-date">Per tanggal</Label>
+          <Input id="reconciliation-date" name="date" type="date" defaultValue={asOf} />
+        </div>
+        <div>
+          <Button type="submit">Tampilkan</Button>
+        </div>
+      </form>
+      <p className="mb-6 text-sm text-neutral-600" data-testid="reconciliation-books-note">
+        {booksNote(report)}
+      </p>
+
+      <section aria-labelledby="reconciliation-materials" className="mb-8 flex flex-col gap-3">
+        <h2 id="reconciliation-materials" className="text-lg font-semibold text-neutral-900">
+          Persediaan bahan
+        </h2>
+        <p className="text-sm text-neutral-600">
+          Saldo akun persediaan kain dan aksesoris dibandingkan dengan nilai di catatan stok. Pemakaian produksi belum dijurnal sampai jurnal produksi tersedia.
+        </p>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {report.materials.map((row) => (
+            <MaterialCard key={row.accountCode} row={row} asOf={asOf} segmentStart={report.segmentStart} />
+          ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="reconciliation-payables" className="flex flex-col gap-3">
+        <h2 id="reconciliation-payables" className="text-lg font-semibold text-neutral-900">
+          Utang pemasok per dokumen pembelian
+        </h2>
+        <p className="text-sm text-neutral-600">
+          Sisa tagihan di aplikasi dibandingkan dengan saldo buku (utang dikurangi uang muka dan piutang klaim). Tagihan dokumen yang masih terbuka sudah dihitung penuh sejak dipesan, sedangkan utang di buku baru diakui saat barang diterima, jadi selisih sebesar barang yang belum diterima memang wajar. Tagihan mengikuti status dokumen saat ini.
+        </p>
+        <Card className="flex flex-col gap-1 text-base" data-testid="reconciliation-payable-summary">
+          <div className="flex justify-between gap-3">
+            <span className="text-neutral-600">Saldo utang usaha pemasok bahan di buku besar</span>
+            <Amount value={report.payableLedgerTotal} />
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-neutral-600">Di luar dokumen pembelian (jurnal manual, saldo awal)</span>
+            <Amount value={report.payableOutsideDocuments} />
+          </div>
+        </Card>
+
+        {report.payables.length === 0 ? (
+          <EmptyState title="Belum ada dokumen pembelian untuk dicocokkan" description="Dokumen muncul di sini setelah ada pembayaran, penerimaan barang, atau jurnalnya." />
+        ) : (
+          <>
+            <CardList>
+              {report.payables.map((row) => {
+                const note = payableNote(row);
+                return (
+                  <li key={row.purchaseId} data-testid="reconciliation-payable-card">
+                    <Card className="flex flex-col gap-2">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <DocumentLink row={row} />
+                          <span className="block text-sm text-neutral-600">{row.supplierName}</span>
+                        </div>
+                        <StatusBadge status={row.status} />
+                      </div>
+                      <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-base">
+                        <dt className="text-neutral-600">Sisa tagihan (aplikasi)</dt>
+                        <dd className="text-right">
+                          <Amount value={row.appBalance} />
+                        </dd>
+                        <dt className="text-neutral-600">Saldo buku</dt>
+                        <dd className="text-right">
+                          <Amount value={row.ledgerBalance} />
+                        </dd>
+                        <dt className="text-neutral-600">Belum diterima</dt>
+                        <dd className="text-right">
+                          <Amount value={row.notReceived} />
+                        </dd>
+                        <dt className="font-medium text-neutral-900">Selisih</dt>
+                        <dd className="text-right font-medium">
+                          <Amount value={row.difference} />
+                        </dd>
+                      </dl>
+                      <LedgerBreakdown row={row} />
+                      {note && <p className="text-sm text-neutral-600">{note}</p>}
+                    </Card>
+                  </li>
+                );
+              })}
+            </CardList>
+            <TableContainer>
+              <caption className="sr-only">Utang pemasok per dokumen pembelian</caption>
+              <TableHead>
+                <Th scope="col">Dokumen</Th>
+                <Th scope="col" className="text-right">
+                  Sisa tagihan (aplikasi)
+                </Th>
+                <Th scope="col" className="text-right">
+                  Saldo buku
+                </Th>
+                <Th scope="col" className="text-right">
+                  Belum diterima
+                </Th>
+                <Th scope="col" className="text-right">
+                  Selisih
+                </Th>
+                <Th scope="col">Status</Th>
+              </TableHead>
+              <tbody>
+                {report.payables.map((row) => {
+                  const note = payableNote(row);
+                  return (
+                    <Tr key={row.purchaseId} data-testid="reconciliation-payable-row">
+                      <Td>
+                        <DocumentLink row={row} />
+                        <span className="block text-sm text-neutral-600">{row.supplierName}</span>
+                      </Td>
+                      <Td className="whitespace-nowrap text-right">
+                        <Amount value={row.appBalance} />
+                      </Td>
+                      <Td className="whitespace-nowrap text-right">
+                        <Amount value={row.ledgerBalance} />
+                        <LedgerBreakdown row={row} />
+                      </Td>
+                      <Td className="whitespace-nowrap text-right">
+                        <Amount value={row.notReceived} />
+                      </Td>
+                      <Td className="whitespace-nowrap text-right font-medium">
+                        <Amount value={row.difference} />
+                      </Td>
+                      <Td>
+                        <StatusBadge status={row.status} />
+                        {note && <span className="mt-1 block max-w-xs text-sm text-neutral-600">{note}</span>}
+                      </Td>
+                    </Tr>
+                  );
+                })}
+              </tbody>
+            </TableContainer>
+          </>
+        )}
+      </section>
+    </>
+  );
+}

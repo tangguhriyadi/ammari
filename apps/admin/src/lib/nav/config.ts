@@ -31,6 +31,7 @@ import {
   CalendarCheck,
   Landmark,
   Scale,
+  ListChecks,
 } from "lucide-react";
 import type { PermissionKey } from "@ammari/db/rbac";
 
@@ -276,6 +277,15 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Neraca Saldo",
     href: "/accounting/trial-balance",
     icon: Scale,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    // Session 7 (plan §6.3): ledger vs the stock ledgers (bahan) and vs the app's tagihan (utang).
+    label: "Rekonsiliasi",
+    href: "/accounting/reconciliation",
+    icon: ListChecks,
     group: "Akuntansi",
     permissionKeys: ["accounting.view"],
     mobilePrimary: false,

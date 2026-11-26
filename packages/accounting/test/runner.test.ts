@@ -24,6 +24,7 @@ import { insertStaffUser } from "@ammari/db/test-fixtures";
 import { withRollback, type TestTx } from "@ammari/db/test-utils";
 import { expenseRule } from "../src/rules/expenses";
 import { expenseSource, runPosting, supplierPaymentSource, type Database } from "../src/runner";
+import { insertPayment, insertPurchaseFixture, insertReceipt } from "./purchase-fixtures";
 
 // The posting runner against the real 0049 triggers (docs/plans/accounting.md §2, Session 2):
 // idempotent (run twice = no new rows), void → negation journal, changed mapping or rule bump →
@@ -187,7 +188,7 @@ async function closeMonth(tx: TestTx, month: string, staffId: string) {
 }
 
 describe("runPosting", () => {
-  test("posts E1, P3 and R4 as system journals and records the run", async () => {
+  test("posts E1, P3 and R4 as system journals and records the run (a purchase payment before any receipt is a DP, Session 7)", async () => {
     await withRollback(async (tx) => {
       const staff = await insertStaffUser(tx);
       const docs = await insertDocuments(tx, staff.id);
@@ -204,7 +205,7 @@ describe("runPosting", () => {
       expect(expense!.contentHash).toMatch(/^[0-9a-f]{64}$/);
       // D-18: the card is a debit card, paid from Bank utama.
       expect(expense!.sides).toEqual(["Dr 6-2101 2500000", "Cr 1-1201 2500000"]);
-      expect((await journalsFor(tx, "supplier_payment", purchasePaymentId)).map((entry) => entry.sides)).toEqual([["Dr 2-1101 1000000", "Cr 1-1201 1000000"]]);
+      expect((await journalsFor(tx, "supplier_payment", purchasePaymentId)).map((entry) => entry.sides)).toEqual([["Dr 1-1601 1000000", "Cr 1-1201 1000000"]]);
       expect((await journalsFor(tx, "supplier_payment", batchPaymentId)).map((entry) => entry.sides)).toEqual([["Dr 2-1102 300000", "Cr 1-1101 300000"]]);
       expect((await journalsFor(tx, "supplier_payment", noPayeeId)).map((entry) => entry.sides)).toEqual([["Dr 2-1103 300000", "Cr 1-1101 300000"]]);
       expect((await journalsFor(tx, "supplier_payment", purchasePaymentId))[0]!.lines.every((line) => line.supplierId === docs.vendor.id)).toBe(true);
@@ -269,8 +270,8 @@ describe("runPosting", () => {
       await run(tx);
 
       expect((await journalsFor(tx, "supplier_payment", paymentId)).map((entry) => [entry.sourceEvent, entry.entryDate, entry.sides])).toEqual([
-        ["paid", "2026-12-07", ["Dr 2-1101 1000000", "Cr 1-1101 1000000"]],
-        ["void", "2026-12-08", ["Cr 2-1101 1000000", "Dr 1-1101 1000000"]],
+        ["paid", "2026-12-07", ["Dr 1-1601 1000000", "Cr 1-1101 1000000"]],
+        ["void", "2026-12-08", ["Dr 1-1101 1000000", "Cr 1-1601 1000000"]],
       ]);
     });
   });
@@ -515,8 +516,10 @@ describe("runPosting", () => {
     test("a supplier payment whose utang mapping points at an expense is refused: an issue, no journal", async () => {
       await withRollback(async (tx) => {
         const staff = await insertStaffUser(tx);
-        const docs = await insertDocuments(tx, staff.id);
-        const paymentId = await insertPurchasePayment(tx, staff.id, docs, { paidAt: "2026-12-07" });
+        // A receipt first, so the payment clears utang (Session 7 chain) and its journal needs 2-1101.
+        const fixture = await insertPurchaseFixture(tx, staff.id);
+        await insertReceipt(tx, fixture, { receivedAt: "2026-12-03" });
+        const paymentId = await insertPayment(tx, fixture, { paidAt: "2026-12-07", amount: 500_000 });
         // Since migration 0051 the database refuses this re-map itself (a supplier payable maps to
         // a liability only); the engine must still refuse a bad mapping that got in some other way
         // (written before 0051, or with the trigger disabled by the owner), so the trigger is
@@ -550,7 +553,7 @@ describe("runPosting", () => {
       });
     });
 
-    test("every supplier payment journal the runner writes sits on utang or cash/bank only", async () => {
+    test("every supplier payment journal the runner writes sits on utang, advance or cash/bank only", async () => {
       await withRollback(async (tx) => {
         const staff = await insertStaffUser(tx);
         const docs = await insertDocuments(tx, staff.id);
@@ -565,7 +568,8 @@ describe("runPosting", () => {
         for (const id of ids) {
           const journals = await journalsFor(tx, "supplier_payment", id);
           expect(journals.length).toBeGreaterThan(0);
-          for (const line of journals.flatMap((entry) => entry.lines)) expect(line.accountCode).toMatch(/^(2-11|1-1[12])/);
+          // Utang, Uang muka pembelian (a purchase payment before any receipt) or cash/bank.
+        for (const line of journals.flatMap((entry) => entry.lines)) expect(line.accountCode).toMatch(/^(2-11|1-1[126])/);
         }
       });
     });

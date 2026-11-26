@@ -31,6 +31,36 @@ export {
   type PostingRule,
 } from "./rules/types";
 export { EXPENSE_SOURCE_TYPE, expenseRule, expensePaidOutcome, type ExpenseSnapshot } from "./rules/expenses";
+export {
+  DEFECT_MOVEMENT_SOURCE_TYPE,
+  GOODS_RECEIPT_ITEM_SOURCE_TYPE,
+  PURCHASE_CHAIN_RULE_VERSION,
+  PURCHASE_SOURCE_TYPE,
+  isTerminalPurchaseStatus,
+  positionFor,
+  purchaseChainEvents,
+  purchaseChainRule,
+  replayPurchaseChain,
+  stepKey,
+  type ChainResult,
+  type ChainState,
+  type PositionDelta,
+  type StepResult,
+  type PurchaseDefectReturnSnapshot,
+  type PurchaseDocumentSnapshot,
+  type PurchasePaymentSnapshot,
+  type PurchaseReceiptItemSnapshot,
+} from "./rules/purchases";
+export {
+  ACCESSORY_MOVEMENT_SOURCE_TYPE,
+  FABRIC_MOVEMENT_SOURCE_TYPE,
+  adjustmentExpenseKey,
+  markReclassifications,
+  rawMaterialAdjustmentOutcome,
+  rawMaterialAdjustmentRule,
+  type RawMaterialKind,
+  type RawMaterialMovementSnapshot,
+} from "./rules/raw-materials";
 export { SUPPLIER_PAYMENT_SOURCE_TYPE, supplierPaymentRule, supplierPaymentPaidOutcome, type SupplierPaymentSnapshot } from "./rules/supplier-payments";
 export {
   MANUAL_PAYMENT_MISSING_ISSUE,

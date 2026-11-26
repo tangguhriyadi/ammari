@@ -11,12 +11,14 @@ import { mappedAccount, negateOutcome, resolveOrIssue, type PostingContext, type
 //     when the payment has no payee / Cr cash.method.<method>.
 //   P4 (supplier_payment, id, void), dated voided_at (Jakarta): the exact negation of P3/R4.
 //
-// "Without chain": the document chain (§4.4: a payment clears the open utang the receipts built,
-// and only the rest becomes 1-1601 Uang muka pembelian; over-payment on a batch → 1-1601) needs
-// the receipt (P1) and batch (R1) journals, which arrive in Sessions 7 and 8. Until then the whole
-// payment clears utang. Session 7 bumps this rule's version, so every journal it posted is
-// re-derived with the chain split (reverse + repost; a closed month's difference lands in the
-// first open month, D-23). Every line stays on utang or cash/bank, never an expense (D-14 guard).
+// Session 7: purchase payments (P3/P4) moved to the purchase document chain
+// (./purchases.ts, rule purchase_chain v2): a payment clears the open utang the receipts (P1)
+// built and only the rest becomes 1-1601 Uang muka pembelian. That rule's version 2 supersedes
+// this rule's v1 purchase-payment journals, so each is re-derived with the split (reverse +
+// repost; a closed month's difference lands in the first open month, D-23). This rule now posts
+// production batch payments only (R4), still "without chain": the batch's over-payment → 1-1601
+// split needs the batch journals (R1), which arrive in Session 8. Every line stays on utang or
+// cash/bank, never an expense (D-14 guard).
 
 export const SUPPLIER_PAYMENT_SOURCE_TYPE = "supplier_payment";
 
@@ -64,6 +66,8 @@ export const supplierPaymentRule: PostingRule<SupplierPaymentSnapshot> = {
   name: "supplier_payment",
   ruleVersion: 1,
   events(payment, context) {
+    // Purchase payments belong to the purchase chain (./purchases.ts).
+    if (payment.targetType === "purchase") return [];
     const key = (sourceEvent: string) => ({ sourceType: SUPPLIER_PAYMENT_SOURCE_TYPE, sourceId: payment.id, sourceEvent });
     // Cut-over (plan §2): same as expenses. P3/R4 before the start lives in the opening balances;
     // P4 is posted only while P3/R4 has an active journal (the runner checks).

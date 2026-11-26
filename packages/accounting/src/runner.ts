@@ -20,6 +20,9 @@ import { POSTING_START_DATE, postingDateFor } from "./dates";
 import { decideAction, planEvent, type PlannedOutcome } from "./plan";
 import { expenseRule, type ExpenseSnapshot } from "./rules/expenses";
 import { supplierPaymentRule, type SupplierPaymentSnapshot } from "./rules/supplier-payments";
+import { purchaseChainRule, type PurchaseDocumentSnapshot } from "./rules/purchases";
+import { rawMaterialAdjustmentRule, type RawMaterialMovementSnapshot } from "./rules/raw-materials";
+import { loadPurchaseDocumentSnapshots, loadRawMaterialMovementSnapshots } from "./purchase-loaders";
 import type { AccountInfo, PostingContext, PostingEvent, PostingKey, PostingRule } from "./rules/types";
 
 // The posting runner (docs/plans/accounting.md §2, Session 2). Reads source records, asks each
@@ -111,9 +114,20 @@ export function supplierPaymentSource(rule: PostingRule<SupplierPaymentSnapshot>
   return postingSource(rule, loadSupplierPaymentSnapshots);
 }
 
-/** Every rule posting in this session: E1-E2, P3-P4, R4. */
+/** P1, P2, P3/P4 (with the document chain), P5, P6 (Session 7). */
+export function purchaseChainSource(rule: PostingRule<PurchaseDocumentSnapshot> = purchaseChainRule): PostingSource {
+  return postingSource(rule, loadPurchaseDocumentSnapshots);
+}
+
+/** P7 (Session 7). */
+export function rawMaterialAdjustmentSource(rule: PostingRule<RawMaterialMovementSnapshot> = rawMaterialAdjustmentRule): PostingSource {
+  return postingSource(rule, loadRawMaterialMovementSnapshots);
+}
+
+/** Every rule posting so far: E1-E2 (expenses), the purchase chain P1-P6, R4 (batch payments,
+ * without chain until Session 8), P7. Each posting key is emitted by exactly one source. */
 export function defaultPostingSources(): PostingSource[] {
-  return [expenseSource(), supplierPaymentSource()];
+  return [expenseSource(), purchaseChainSource(), supplierPaymentSource(), rawMaterialAdjustmentSource()];
 }
 
 export async function loadPostingContext(db: Database, postingStartDate: string = POSTING_START_DATE): Promise<PostingContext> {

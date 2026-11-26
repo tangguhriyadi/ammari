@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { isBalancedJournal } from "../src/journal";
 import { expenseRule, type ExpenseSnapshot } from "../src/rules/expenses";
-import { supplierPaymentRule, type SupplierPaymentSnapshot } from "../src/rules/supplier-payments";
+import { supplierPaymentPaidOutcome, supplierPaymentRule, type SupplierPaymentSnapshot } from "../src/rules/supplier-payments";
 import type { PostingEvent, PostingOutcome } from "../src/rules/types";
 import { defaultContext } from "./context";
 
@@ -172,7 +172,7 @@ describe("cut-over (plan §2)", () => {
   });
 
   test("a supplier payment before the posting start is not posted; its void waits on P3's active journal (P4)", () => {
-    const events = supplierPaymentRule.events(payment({ paidAt: "2026-11-28", voidedAt: new Date("2026-12-02T03:00:00Z") }), defaultContext());
+    const events = supplierPaymentRule.events(payment({ targetType: "production_batch", paidAt: "2026-11-28", voidedAt: new Date("2026-12-02T03:00:00Z") }), defaultContext());
     expect(events.map((event) => [event.key.sourceEvent, event.outcome.kind])).toEqual([
       ["paid", "none"],
       ["void", "journal"],
@@ -181,20 +181,25 @@ describe("cut-over (plan §2)", () => {
   });
 });
 
-describe("P3 / R4 supplier payment (without chain)", () => {
-  test("a purchase payment clears utang pemasok bahan from the bank (P3)", () => {
-    const [paid] = supplierPaymentRule.events(payment(), defaultContext());
-    expect(paid?.key).toEqual({ sourceType: "supplier_payment", sourceId: payment().id, sourceEvent: "paid" });
-    expect(paid?.sourceDate).toBe("2026-12-07");
-    const journal = journalOf(paid);
+describe("R4 supplier payment, production batch (without chain until Session 8)", () => {
+  test("purchase payments are left to the purchase chain (Session 7, rules/purchases.ts): this rule emits nothing for them", () => {
+    expect(supplierPaymentRule.events(payment(), defaultContext())).toEqual([]);
+    expect(supplierPaymentRule.events(payment({ voidedAt: new Date("2026-12-20T02:00:00Z") }), defaultContext())).toEqual([]);
+  });
+
+  test("supplierPaymentPaidOutcome still describes a purchase payment without the chain (what Session 2 posted)", () => {
+    const journal = supplierPaymentPaidOutcome(payment(), defaultContext());
+    if (journal.kind !== "journal") throw new Error();
     expect(sides(journal)).toEqual(["Dr 2-1101 1000000", "Cr 1-1201 1000000"]);
     expect(journal.lines.every((line) => line.supplierId === payment().supplierId)).toBe(true);
     expect(journal.description).toBe("Pembayaran pembelian PO-202612-001 ke Toko Kain (BYR-202612-001)");
   });
 
-  test("cash payments credit Kas tunai (D-17)", () => {
-    const journal = journalOf(supplierPaymentRule.events(payment({ method: "cash" }), defaultContext())[0]);
-    expect(sides(journal)).toEqual(["Dr 2-1101 1000000", "Cr 1-1101 1000000"]);
+  test("a batch payment is keyed and dated by the payment; cash credits Kas tunai (D-17)", () => {
+    const [paid] = supplierPaymentRule.events(payment({ targetType: "production_batch", documentNo: "BTC-202612-001", method: "cash" }), defaultContext());
+    expect(paid?.key).toEqual({ sourceType: "supplier_payment", sourceId: payment().id, sourceEvent: "paid" });
+    expect(paid?.sourceDate).toBe("2026-12-07");
+    expect(sides(journalOf(paid))).toEqual(["Dr 2-1102 1000000", "Cr 1-1101 1000000"]);
   });
 
   test("a batch payment clears utang jasa produksi (R4)", () => {
@@ -212,17 +217,21 @@ describe("P3 / R4 supplier payment (without chain)", () => {
   });
 
   test("a void posts the exact negation, dated voided_at in Jakarta (P4)", () => {
-    const events = supplierPaymentRule.events(payment({ voidedAt: new Date("2026-12-20T02:00:00Z") }), defaultContext());
+    const events = supplierPaymentRule.events(payment({ targetType: "production_batch", voidedAt: new Date("2026-12-20T02:00:00Z") }), defaultContext());
     const voided = events[1];
     expect(voided?.key.sourceEvent).toBe("void");
     expect(voided?.sourceDate).toBe("2026-12-20");
     expect(voided?.requiresActiveJournalFor).toEqual({ sourceType: "supplier_payment", sourceId: payment().id, sourceEvent: "paid" });
-    expect(sides(journalOf(voided))).toEqual(["Cr 2-1101 1000000", "Dr 1-1201 1000000"]);
+    expect(sides(journalOf(voided))).toEqual(["Cr 2-1102 1000000", "Dr 1-1201 1000000"]);
   });
 
   test("supplier payment journals never touch an expense-like account (D-14)", () => {
     const context = defaultContext();
-    for (const snapshot of [payment(), payment({ targetType: "production_batch", supplierId: null, supplierName: null }), payment({ voidedAt: new Date() })]) {
+    for (const snapshot of [
+      payment({ targetType: "production_batch" }),
+      payment({ targetType: "production_batch", supplierId: null, supplierName: null }),
+      payment({ targetType: "production_batch", voidedAt: new Date() }),
+    ]) {
       for (const event of supplierPaymentRule.events(snapshot, context)) {
         for (const line of journalOf(event).lines) {
           expect(["asset", "liability"]).toContain(context.accounts.get(line.accountCode)?.type);

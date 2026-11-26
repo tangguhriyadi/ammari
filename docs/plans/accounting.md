@@ -398,9 +398,9 @@ document are posted in date order (ties by `created_at`), so DP/uang muka is det
 | # | Event | Date | Journal |
 |---|---|---|---|
 | P1 | Goods receipt item (`goods_receipt_item`,id,`received`) | `received_at` | Dr 1-1501 (fabric) or 1-1502 (accessory) raw-ledger value of that item · Dr 1-1506 Persediaan cacat reject value / Cr 1-1601 Uang muka pembelian up to the document's unapplied advance · Cr 2-1101 Utang usaha – pemasok bahan for the rest. |
-| P2 | Receipt reversal | `received_at` of the reversal | Exact negation of the reversed item's P1 (the advance it consumed returns to 1-1601). |
+| P2 | Receipt reversal | `received_at` of the reversal | The reversed item's stock lines negated + the position change (Session 7 position rule, §8.1): exact negation of P1 unless that would leave a wrong-side balance. |
 | P3 | Supplier payment, purchase (`supplier_payment`,id,`paid`) | `paid_at` | Dr 2-1101 up to the document's open utang at that point · Dr 1-1601 Uang muka pembelian for the rest (DP before receipt, or over-payment) / Cr Kas/Bank by `method` (mapping `cash.method.*`, [D-17]). |
-| P4 | Supplier payment void | `voided_at` (Jakarta date) | Exact negation of P3. |
+| P4 | Supplier payment void | `voided_at` (Jakarta date) | Dr Kas/Bank + the position change (Session 7 position rule, §8.1): exact negation of P3 unless that would leave a wrong-side balance. |
 | P5 | Purchase closed with advance left ("Lebih bayar") (`purchase`,id,`closed_overpaid`) | `closed_at` | Dr 1-1402 Piutang klaim pemasok / Cr 1-1601. A reopen reverses it. |
 | P6 | Defect returned to supplier (`defect_movement`,id,`return_out`, purchase line) | `occurred_at` | Dr 2-1101 (debit note: the supplier owes a replacement) / Cr 1-1506. The replacement receipt (P1) re-credits utang, so net utang = the tagihan. |
 | P7 | Raw-material adjustment (`fabric/accessory_movement`,id) | `created_at` | Dr/Cr 1-1501/1-1502 vs 6-4101 Selisih persediaan (recount/other) or 6-4102 Kerusakan & kehilangan persediaan (damaged/lost) — operating expenses, not COGS [D-16]. Colour reclassification nets to zero inside 1-1501 (no journal, or a zero-sum memo journal). |
@@ -711,6 +711,47 @@ stored on `fiscal_periods.close_override_reason`; PPh final rate end warns, neve
 needs a written reason; December 2026 never closes) and Neraca saldo with PDF/Excel. The trial month
 / official books rule is §5.4. Not yet: the MDR "still an estimate" close warning (D-8) needs fee work
 A's `source` column and lands with Session 11.
+
+**Done in Session 7 (no migration; every account, mapping and guard row already existed):**
+- `packages/accounting/src/rules/purchases.ts`, rule `purchase_chain` (version 2): P1 (`goods_receipt_item`,id,
+  `received`), P2 (`goods_receipt_item`,<reversal item id>,`reversed`), P3/P4 (`supplier_payment`,id,`paid`/`void`),
+  P5 (`purchase`,id,`closed_overpaid`), P6 (`defect_movement`,id,`return_out`; its reversal is keyed on the
+  reversal row with the same event so the D-14 trigger still covers it). One purchase document is replayed in
+  date order, ties by the record's own timestamp; a negation is never ordered before its original. Events
+  dated before the posting start are replayed (so a December payment clears a November receipt's utang)
+  but not posted. A receipt item without a stock-ledger value blocks the rest of its document as
+  `receipt_value_missing` (never guessed).
+- **Session 2 follow-up done:** purchase payments moved from `supplier_payment` v1 to `purchase_chain` v2, so
+  every v1 purchase-payment journal is reversed and re-posted with the utang / Uang muka pembelian split.
+  Batch payments (R4) stay on `supplier_payment` v1, unchanged (no churn); their over-payment → 1-1601 split
+  needs R1 and lands in Session 8.
+- **Position rule (owner, 26 Nov 2026, after the Session 7 review; supersedes "exact negation" for P2/P4 and
+  the P6 reversal where it would leave a wrong-side balance).** Per purchase document, the net position is
+  N = receipt value (accepted + rejected) − returns to the supplier − payments. After EVERY event of the
+  chain the document's balance sits on exactly one account: N > 0 → 2-1101 Utang usaha pemasok bahan;
+  N < 0 while open → 1-1601 Uang muka pembelian; N < 0 after the close (closed or cancelled) → 1-1402
+  Piutang klaim pemasok. Each journal = the event's own side (stock 1-1501/1-1502/1-1506 or Kas/Bank) +
+  only the change of those three balances. Neither 2-1101 nor 1-1601 (nor 1-1402) ever ends with a
+  wrong-side balance for any document. Examples: a DP voided after a receipt used it → Dr Bank / Cr 1-1601
+  (the unused part) + Cr 2-1101 (the used part); a receipt reversed after it was paid → Cr stock / Dr
+  2-1101 (back to 0) + Dr 1-1601 (the payment is now an advance); a payment voided after the close → Cr
+  1-1402. When no wrong side is at stake, P2, P4 and the P6 reversal come out as the exact negation of
+  their original. P5 is the close step itself (1-1601 → 1-1402); a reopen un-posts it and every later event
+  is re-derived on the open side. Tests: `packages/accounting/test/purchase-chain.test.ts` ("position
+  rule", incl. a running-balance check after every journal) and `purchase-chain-db.test.ts`.
+- **P6 (approved deviation, consistent with the position rule):** a return to the supplier lowers N, so it
+  clears open utang first and, on goods already paid, becomes Dr 1-1601; the replacement receipt (P1) uses
+  that advance and the document nets to its tagihan.
+- Rekonsiliasi check 1 shows production consumption as "tidak dijurnal" until Session 8 posts R1 (owner, OK).
+- `rules/raw-materials.ts`, rule `raw_material_adjustment` v1: P7 (`fabric_stock_movement` | `accessory_movement`,
+  id, `adjustment`), dated created_at (Jakarta), recount/other → 6-4101, damaged/lost → 6-4102 [D-16]; a colour
+  reclassification pair (one fabric, same instant, nets to zero) posts nothing; a legacy manual purchase dated
+  on/after the start is the issue `legacy_raw_purchase`.
+- Rekonsiliasi page `/accounting/reconciliation` (accounting.view): check 1 (1-1501/1-1502 vs the stock ledgers,
+  production consumption, legacy rows and voids of pre-books receipts shown as "not journaled") and check 2
+  (per purchase document: app tagihan − paid vs utang − uang muka − piutang klaim + not yet received).
+- Ledger-side D-14 guard test: `packages/accounting/test/purchase-chain.test.ts` (every P1-P6 line is on
+  1-11xx/1-12xx, 1-14xx, 1-15xx, 1-16xx or 2-11xx, and `purchaseGuardViolations` is empty).
 
 **Session 12 (cron, Rekonsiliasi polish, docs and runbook):**
 - **Runbook: revoke TRUNCATE.** Row-level triggers do not fire on `TRUNCATE`, so `TRUNCATE

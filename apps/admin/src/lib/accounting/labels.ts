@@ -7,6 +7,11 @@ import type { AccountNormalBalance, AccountType, CashFlowGroup, JournalEntryKind
 export const JOURNAL_SOURCE_TYPE_LABELS = {
   business_expense: "Biaya",
   supplier_payment: "Pembayaran supplier",
+  goods_receipt_item: "Penerimaan barang",
+  purchase: "Pembelian",
+  defect_movement: "Barang cacat",
+  fabric_stock_movement: "Penyesuaian stok kain",
+  accessory_movement: "Penyesuaian stok aksesoris",
 } as const;
 export type JournalSourceType = keyof typeof JOURNAL_SOURCE_TYPE_LABELS;
 
@@ -18,6 +23,12 @@ export function sourceTypeLabel(sourceType: string | null): string {
 const SOURCE_EVENT_LABELS: Record<string, string> = {
   paid: "Dicatat",
   void: "Dibatalkan",
+  received: "Diterima",
+  reversed: "Penerimaan dibatalkan",
+  closed_overpaid: "Ditutup, lebih bayar",
+  return_out: "Diretur ke supplier",
+  adjustment: "Penyesuaian",
+  legacy_purchase: "Pembelian lama",
 };
 
 export function sourceEventLabel(sourceEvent: string | null): string | null {
@@ -54,7 +65,19 @@ export function postingIssueMessage(issueCode: string, details: Record<string, u
     case "expense_mapped_to_inventory":
       return `Kategori biaya dipetakan ke akun persediaan ${text("accountCode")}. Bahan masuk persediaan hanya lewat penerimaan barang; petakan kategori ini ke akun beban.`;
     case "purchase_guard_violation":
-      return "Pembayaran supplier tidak boleh dibukukan ke akun beban. Periksa pemetaan akun utang supplier.";
+      return "Pembelian dan pembayaran supplier tidak boleh dibukukan ke akun beban. Periksa pemetaan akun utang supplier.";
+    case "receipt_value_missing":
+      return `Nilai penerimaan ${text("receiptNo")} tidak ditemukan di catatan stok, jadi penerimaan ini dan kejadian sesudahnya di dokumen yang sama belum bisa dibukukan.`;
+    case "receipt_value_invalid":
+      return `Nilai penerimaan ${text("receiptNo")} di catatan stok tidak wajar (negatif), jadi dokumen ini belum bisa dibukukan.`;
+    case "receipt_reversal_unmatched":
+      return `Pembatalan penerimaan ${text("receiptNo")} tidak menemukan penerimaan aslinya, jadi dokumen ini belum bisa dibukukan.`;
+    case "purchase_chain_inconsistent":
+      return "Urutan kejadian dokumen pembelian ini tidak konsisten, jadi belum bisa dibukukan. Hubungi pengelola aplikasi.";
+    case "legacy_raw_purchase":
+      return `Pembelian bahan "${text("itemName")}" dicatat dengan cara lama (tanpa dokumen pembelian). Bahan masuk buku hanya lewat penerimaan barang; buat jurnal manual bila perlu.`;
+    case "adjustment_reason_missing":
+      return "Penyesuaian stok tanpa alasan tidak bisa dipilihkan akun bebannya.";
     case "manual_payment_missing":
       return `Pesanan manual ${text("orderNo")} belum dicatat cara bayar dan rekening tujuannya. Isi lewat tombol Isi cara bayar di halaman pesanan.`;
     case "account_not_postable":

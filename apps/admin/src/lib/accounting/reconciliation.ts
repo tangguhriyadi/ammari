@@ -1,0 +1,275 @@
+import "server-only";
+import { sql } from "drizzle-orm";
+import { bookSegmentOf, segmentStartOf, type BookSegment } from "@ammari/accounting";
+import { defaultDb, type Database } from "@/lib/db";
+import {
+  reconcileMaterial,
+  reconcilePayable,
+  type MaterialReconciliation,
+  type PayableReconciliation,
+  type ReconciliationStatus,
+} from "./reconciliation-rules";
+
+// Rekonsiliasi (docs/plans/accounting.md §6.3, Session 7): check 1 for raw materials (1-1501 kain,
+// 1-1502 aksesoris vs the stock ledgers) and check 2 for supplier payables (utang per purchase
+// document vs the app's tagihan). Read-only. The ledger side is summed within one set of books
+// (books.ts): from 1 Dec 2026 for the trial month, from the cut-over 1 Jan 2027 for the official
+// books (the opening journal included), so the stock side uses the same window: in the official
+// books everything before the cut-over is the opening balance; in the trial month nothing before
+// 1 Dec 2026 is booked at all.
+//
+// The stock side dates a movement by its economic date, the same date its journal carries: a
+// receipt's received_at (not when it was typed in), created_at (Jakarta) otherwise.
+
+export interface MaterialRow extends MaterialReconciliation {
+  accountCode: string;
+  accountName: string;
+  material: "fabric" | "accessory";
+}
+
+export interface PayableRow extends PayableReconciliation {
+  purchaseId: string;
+  purchaseNo: string;
+  supplierId: string;
+  supplierName: string;
+}
+
+export interface Reconciliation {
+  asOf: string;
+  segment: BookSegment;
+  segmentStart: string;
+  materials: MaterialRow[];
+  payables: PayableRow[];
+  /** Σ 2-1101 on the ledger and the part no purchase document explains (manual and opening
+   * journals). */
+  payableLedgerTotal: number;
+  payableOutsideDocuments: number;
+}
+
+const STATUS_ORDER: Record<ReconciliationStatus, number> = { mismatch: 0, review: 1, explained: 2, ok: 3 };
+
+const num = (value: string | number | null | undefined) => Number(value ?? 0);
+
+/** The account a system key or mapping points at (null when the chart lost it). */
+async function accountByKey(db: Database): Promise<Map<string, { code: string; name: string }>> {
+  const rows = (await db.execute(sql`
+    select a.system_key as key, a.code, a.name::text as name from accounts a where a.system_key is not null
+    union all
+    select m.mapping_key as key, a.code, a.name::text as name from account_mappings m join accounts a on a.code = m.account_code
+  `)) as unknown as { key: string; code: string; name: string }[];
+  return new Map(rows.map((row) => [row.key, { code: row.code, name: row.name }]));
+}
+
+/** A journal counts on its source's own date: a correction booked in the first open month because
+ * its month was closed (D-23) keeps `source_date`, the date the stock and app side use too, so it
+ * never shows as a mismatch for the month it really belongs to. Manual and opening journals have
+ * no source date and count on their entry date. */
+const EFFECTIVE_DATE = sql.raw("coalesce(e.source_date, e.entry_date)");
+
+async function ledgerBalance(db: Database, accountCode: string, from: string, to: string): Promise<number> {
+  const [row] = (await db.execute(sql`
+    select coalesce(sum(l.debit - l.credit), 0)::bigint as net
+    from journal_lines l join journal_entries e on e.id = l.entry_id
+    where l.account_code = ${accountCode} and ${EFFECTIVE_DATE} >= ${from} and ${EFFECTIVE_DATE} <= ${to}
+  `)) as unknown as { net: string }[];
+  return num(row?.net);
+}
+
+/** Check 1 for one raw-material stock ledger. Table names are fixed literals, never input. */
+async function materialFigures(db: Database, table: "fabric_stock_movements" | "accessory_movements", from: string, to: string, official: boolean) {
+  const movements = sql.identifier(table);
+  const [row] = (await db.execute(sql`
+    with m as (
+      select m.type, m.ref_type, m.value_amount,
+        case when m.ref_type = 'goods_receipt' then gr.received_at else (m.created_at at time zone 'Asia/Jakarta')::date end as d,
+        ogr.received_at as original_d
+      from ${movements} m
+      left join goods_receipt_items gri on m.ref_type = 'goods_receipt' and gri.id::text = m.ref_id
+      left join goods_receipts gr on gr.id = gri.goods_receipt_id
+      left join goods_receipts ogr on ogr.id = gr.reverses_receipt_id
+    )
+    select
+      coalesce(sum(value_amount) filter (where ${official}::boolean and d < ${from}), 0)::bigint as before_books,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and ref_type = 'goods_receipt' and type = 'purchase'), 0)::bigint as receipts,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and ref_type = 'goods_receipt' and type = 'purchase_void' and original_d >= ${from}), 0)::bigint as receipt_reversals,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and ref_type = 'goods_receipt' and type = 'purchase_void' and original_d < ${from}), 0)::bigint as voids_before_books,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and type = 'adjustment'), 0)::bigint as adjustments,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and type = 'production'), 0)::bigint as production,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and ref_type = 'manual' and type in ('purchase', 'purchase_void')), 0)::bigint as legacy
+    from m
+  `)) as unknown as Record<string, string>[];
+  return {
+    beforeBooks: num(row?.before_books),
+    receipts: num(row?.receipts),
+    receiptReversals: num(row?.receipt_reversals),
+    voidsBeforeBooks: num(row?.voids_before_books),
+    adjustments: num(row?.adjustments),
+    production: num(row?.production),
+    legacy: num(row?.legacy),
+  };
+}
+
+interface PayableQueryRow {
+  purchase_id: string;
+  purchase_no: string;
+  supplier_id: string;
+  supplier_name: string;
+  tagihan: string;
+  paid: string;
+  net_received: string;
+  ledger_payable: string;
+  ledger_advance: string;
+  ledger_claim: string;
+  starts_before: boolean;
+}
+
+/** Check 2, one row per purchase document with anything to show. The tagihan mirrors
+ * purchaseLineTagihanSql (lib/supplier-payments/purchase-tagihan-sql.ts) and follows the
+ * document's CURRENT status; payments, receipts and journals are counted up to `to`. */
+async function payableRows(db: Database, keys: { payable: string; advance: string; claim: string }, from: string, to: string): Promise<PayableQueryRow[]> {
+  return (await db.execute(sql`
+    with doc_journal as (
+      select l.account_code, l.debit - l.credit as net,
+        case e.source_type
+          when 'goods_receipt_item' then (select gr.purchase_id from goods_receipt_items gri join goods_receipts gr on gr.id = gri.goods_receipt_id where gri.id = e.source_id::uuid)
+          when 'supplier_payment' then (select sp.purchase_id from supplier_payments sp where sp.id = e.source_id::uuid)
+          when 'purchase' then (select p.id from purchases p where p.id = e.source_id::uuid)
+          when 'defect_movement' then (select pi.purchase_id from defect_movements d join purchase_items pi on pi.id = d.purchase_item_id where d.id = e.source_id::uuid)
+        end as purchase_id
+      from journal_lines l join journal_entries e on e.id = l.entry_id
+      where ${EFFECTIVE_DATE} >= ${from} and ${EFFECTIVE_DATE} <= ${to}
+        and l.account_code in (${keys.payable}, ${keys.advance}, ${keys.claim})
+        and e.source_type in ('goods_receipt_item', 'supplier_payment', 'purchase', 'defect_movement')
+    ),
+    ledger as (
+      select purchase_id,
+        coalesce(-sum(net) filter (where account_code = ${keys.payable}), 0) as payable,
+        coalesce(sum(net) filter (where account_code = ${keys.advance}), 0) as advance,
+        coalesce(sum(net) filter (where account_code = ${keys.claim}), 0) as claim
+      from doc_journal where purchase_id is not null group by purchase_id
+    ),
+    tagihan as (
+      select p.id as purchase_id, coalesce(sum(case
+        when p.status = 'cancelled' then 0
+        when p.status = 'closed' then floor((2 * pi.total_amount::numeric * round(settled.qty * 100) + round(pi.qty_ordered * 100)) / (2 * round(pi.qty_ordered * 100)))
+        else pi.total_amount end), 0) as tagihan
+      from purchases p
+      join purchase_items pi on pi.purchase_id = p.id
+      cross join lateral (
+        select coalesce((select sum(gri.qty_accepted) from goods_receipt_items gri where gri.purchase_item_id = pi.id), 0)
+             + coalesce((select sum(d.qty) from defect_movements d where d.purchase_item_id = pi.id and d.disposal_type is null), 0) as qty
+      ) settled
+      group by p.id
+    ),
+    paid as (
+      select sp.purchase_id, sum(sp.amount) as paid
+      from supplier_payments sp
+      where sp.target_type = 'purchase' and sp.paid_at <= ${to}
+        and (sp.voided_at is null or (sp.voided_at at time zone 'Asia/Jakarta')::date > ${to})
+      group by sp.purchase_id
+    ),
+    received as (
+      select gr.purchase_id,
+        coalesce(sum((select coalesce(sum(m.value_amount), 0) from fabric_stock_movements m where m.ref_type = 'goods_receipt' and m.ref_id = gri.id::text)
+          + (select coalesce(sum(m.value_amount), 0) from accessory_movements m where m.ref_type = 'goods_receipt' and m.ref_id = gri.id::text)
+          + (select coalesce(sum(d.value_amount), 0) from defect_movements d where d.goods_receipt_item_id = gri.id)), 0) as value
+      from goods_receipt_items gri join goods_receipts gr on gr.id = gri.goods_receipt_id
+      where gr.source_type = 'purchase' and gr.received_at <= ${to}
+      group by gr.purchase_id
+    ),
+    returned as (
+      select pi.purchase_id, sum(d.value_amount) as value
+      from defect_movements d
+      join purchase_items pi on pi.id = d.purchase_item_id
+      left join defect_movements o on o.id = d.reverses_movement_id
+      where d.occurred_at <= ${to} and (d.type = 'return_out' or (d.type = 'reversal' and o.type = 'return_out'))
+      group by pi.purchase_id
+    ),
+    first_event as (
+      select purchase_id, min(d) as first_d from (
+        select gr.purchase_id, gr.received_at as d from goods_receipts gr where gr.source_type = 'purchase'
+        union all select sp.purchase_id, sp.paid_at from supplier_payments sp where sp.target_type = 'purchase'
+        union all select pi.purchase_id, d.occurred_at from defect_movements d join purchase_items pi on pi.id = d.purchase_item_id
+      ) events group by purchase_id
+    )
+    select p.id as purchase_id, p.purchase_no, s.id as supplier_id, s.name::text as supplier_name,
+      coalesce(t.tagihan, 0)::bigint as tagihan,
+      coalesce(pd.paid, 0)::bigint as paid,
+      (coalesce(r.value, 0) + coalesce(rt.value, 0))::bigint as net_received,
+      coalesce(l.payable, 0)::bigint as ledger_payable,
+      coalesce(l.advance, 0)::bigint as ledger_advance,
+      coalesce(l.claim, 0)::bigint as ledger_claim,
+      coalesce(fe.first_d < ${from}, false) as starts_before
+    from purchases p
+    join suppliers s on s.id = p.supplier_id
+    left join tagihan t on t.purchase_id = p.id
+    left join paid pd on pd.purchase_id = p.id
+    left join received r on r.purchase_id = p.id
+    left join returned rt on rt.purchase_id = p.id
+    left join ledger l on l.purchase_id = p.id
+    left join first_event fe on fe.purchase_id = p.id
+    order by s.name, p.purchase_no
+  `)) as unknown as PayableQueryRow[];
+}
+
+export async function getReconciliation(asOf: string, db: Database = defaultDb): Promise<Reconciliation> {
+  const segment = bookSegmentOf(asOf);
+  const segmentStart = segmentStartOf(asOf);
+  const official = segment === "official";
+  const keys = await accountByKey(db);
+  const fabricAccount = keys.get("inventory.fabric");
+  const accessoryAccount = keys.get("inventory.accessory");
+  const payable = keys.get("supplier_payable.kind.material");
+  const advance = keys.get("prepaid.purchase_advance");
+  const claim = keys.get("receivable.supplier_claim");
+  if (!fabricAccount || !accessoryAccount || !payable || !advance || !claim) throw new Error("the chart of accounts lost a purchase-side system account or mapping");
+
+  const materials: MaterialRow[] = [];
+  for (const [material, account, table] of [
+    ["fabric", fabricAccount, "fabric_stock_movements"],
+    ["accessory", accessoryAccount, "accessory_movements"],
+  ] as const) {
+    const figures = await materialFigures(db, table, segmentStart, asOf, official);
+    const ledger = await ledgerBalance(db, account.code, segmentStart, asOf);
+    materials.push({
+      ...reconcileMaterial({ ...figures, ledger }),
+      accountCode: account.code,
+      accountName: account.name,
+      material,
+    });
+  }
+
+  const rows = await payableRows(db, { payable: payable.code, advance: advance.code, claim: claim.code }, segmentStart, asOf);
+  const allPayables: PayableRow[] = rows.map((row) => ({
+      purchaseId: row.purchase_id,
+      purchaseNo: row.purchase_no,
+      supplierId: row.supplier_id,
+      supplierName: row.supplier_name,
+      ...reconcilePayable({
+        tagihan: num(row.tagihan),
+        paid: num(row.paid),
+        netReceived: num(row.net_received),
+        ledgerPayable: num(row.ledger_payable),
+        ledgerAdvance: num(row.ledger_advance),
+        ledgerClaim: num(row.ledger_claim),
+        startsBeforeBooks: row.starts_before,
+      }),
+  }));
+  // Mismatches first, then those to review; otherwise by supplier and document number (the query's order, kept by the
+  // stable sort). Documents with nothing to show are left out.
+  const payables = allPayables
+    .filter((row) => row.appBalance !== 0 || row.ledgerPayable !== 0 || row.ledgerAdvance !== 0 || row.ledgerClaim !== 0 || row.notReceived !== 0 || row.difference !== 0)
+    .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
+
+  const payableLedgerTotal = -(await ledgerBalance(db, payable.code, segmentStart, asOf));
+  const documentsPayable = allPayables.reduce((sum, row) => sum + row.ledgerPayable, 0);
+  return {
+    asOf,
+    segment,
+    segmentStart,
+    materials,
+    payables,
+    payableLedgerTotal,
+    payableOutsideDocuments: payableLedgerTotal - documentsPayable,
+  };
+}
