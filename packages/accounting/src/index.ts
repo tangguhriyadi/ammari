@@ -17,5 +17,17 @@ export {
   type PostingOutcome,
   type PostingRule,
 } from "./rules/types";
-export { EXPENSE_SOURCE_TYPE, expenseRule, expensePaidOutcome, isInventoryAccountCode, type ExpenseSnapshot } from "./rules/expenses";
+export { EXPENSE_SOURCE_TYPE, expenseRule, expensePaidOutcome, type ExpenseSnapshot } from "./rules/expenses";
 export { SUPPLIER_PAYMENT_SOURCE_TYPE, supplierPaymentRule, supplierPaymentPaidOutcome, type SupplierPaymentSnapshot } from "./rules/supplier-payments";
+export {
+  accountCodeMatchesType,
+  accountTypesForCode,
+  isAccountCode,
+  isCashBankAccountCode,
+  isInventoryAccountCode,
+  mappingFamily,
+  mappingTargetProblem,
+  type MappingFamily,
+  type MappingTargetAccount,
+  type MappingTargetProblem,
+} from "./mapping-rules";

@@ -278,7 +278,9 @@ NOTHING`), not only in `seed.ts` (CLAUDE.md rule).
 ## 3. Proposed Chart of Accounts (SAK EMKM style)
 
 🔒 = system-locked (`is_system`, referenced by a posting rule through `system_key`: can be renamed
-and get sub-accounts, cannot be deactivated or deleted, type never changes). Everything else is
+and get sibling sub-accounts under its header, cannot be deactivated or deleted, type never changes;
+since Session 3 a parent is always a header, so e.g. a second bank goes under 1-1200 Bank beside
+1-1201, never under 1-1201 itself). Everything else is
 owner-managed in Data Master (**Akun**): add sub-accounts, rename, deactivate; **never delete once
 used**. Codes are proposals; the accountant may renumber before go-live.
 
@@ -611,6 +613,17 @@ validator checks account code and memo like the DB.
 - `bank_name` / `account_no_last4` are not restricted to cash/bank accounts, and an account code's
   leading digit is not tied to its type (a `6-xxxx` asset is allowed). Enforce both in the account
   editor and, if wanted, a CHECK/trigger.
+
+**Done in Session 3 (migration 0051):** `accounts_guard_tree` replaces `accounts_parent_no_cycle`:
+a parent is a header of the same type, a header with sub-accounts stays a header, no cycle, and every
+tree change takes one advisory lock and is refused outside READ COMMITTED; an account a mapping points
+at cannot become a header; `account_mappings_guard_target` leaves an INSERT of an existing key to
+ON CONFLICT (so `seedAccounting` re-runs on an edited database) and checks the target per key family
+(expense category/item never 1-15xx [D-14], methods and the Midtrans payout only Kas & Bank 1-11xx/
+1-12xx, channels only revenue, supplier payables only liability); CHECKs `accounts_code_type_check`
+(leading digit fixes the type) and `accounts_bank_fields_cash_bank_check` (bank fields only on a
+postable Kas & Bank account). The same rules live in `packages/accounting/src/mapping-rules.ts` for
+the editors' messages.
 
 **Session 12 (cron, Rekonsiliasi polish, docs and runbook):**
 - **Runbook: revoke TRUNCATE.** Row-level triggers do not fire on `TRUNCATE`, so `TRUNCATE

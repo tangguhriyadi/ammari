@@ -1,4 +1,4 @@
-import type { JournalEntryKind } from "@ammari/db/schema";
+import type { AccountNormalBalance, AccountType, CashFlowGroup, JournalEntryKind, TaxpayerType } from "@ammari/db/schema";
 
 // Indonesian labels for the ledger pages (docs/plans/accounting.md §6). Keys are the posting
 // sources and issue codes the engine writes (packages/accounting); an unknown value falls back to
@@ -67,3 +67,43 @@ export function postingIssueMessage(issueCode: string, details: Record<string, u
       return "Sumber ini belum bisa dibukukan.";
   }
 }
+
+// ---------- Data Master Akun, Pemetaan akun, Pengaturan pajak (Session 3) ----------
+
+export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
+  asset: "Aset",
+  liability: "Kewajiban",
+  equity: "Ekuitas",
+  revenue: "Pendapatan",
+  contra_revenue: "Pengurang pendapatan",
+  cogs: "HPP",
+  expense: "Beban",
+  other_income: "Pendapatan lain-lain",
+  other_expense: "Beban lain-lain",
+  tax: "Pajak",
+};
+
+export const NORMAL_BALANCE_LABELS: Record<AccountNormalBalance, string> = {
+  debit: "Debit",
+  credit: "Kredit",
+};
+
+export const CASH_FLOW_GROUP_LABELS: Record<CashFlowGroup, string> = {
+  operating: "Operasi",
+  investing: "Investasi",
+  financing: "Pendanaan",
+  cash: "Kas, bank & saldo",
+  none: "Tidak dihitung",
+};
+
+export const TAXPAYER_TYPE_LABELS: Record<TaxpayerType, string> = {
+  individual: "Orang pribadi",
+  company: "Badan (PT)",
+};
+
+export const PAYMENT_METHOD_MAPPING_LABELS: Record<string, string> = {
+  "cash.method.cash": "Tunai",
+  "cash.method.transfer": "Transfer",
+  "cash.method.card": "Kartu (debit)",
+  "cash.midtrans_payout": "Pencairan Midtrans",
+};

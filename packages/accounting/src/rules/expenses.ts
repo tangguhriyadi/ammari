@@ -1,6 +1,11 @@
 import type { BusinessExpenseMethod, ChannelId } from "@ammari/db/schema";
 import { jakartaDateOf } from "../dates";
 import type { JournalLineDraft } from "../journal";
+// An inventory account (1-15xx): expenses never land there, since raw materials reach inventory
+// only through goods receipts (plan §3 guard, D-14) and an expense mapped to one would count the
+// same stock twice. The mapping editor and migration 0051's trigger refuse such a mapping; the
+// engine refuses it too, for a mapping written before 0051.
+import { isInventoryAccountCode } from "../mapping-rules";
 import { mappedAccount, negateOutcome, resolveOrIssue, systemAccount, PostingIssueError, type PostingContext, type PostingEvent, type PostingOutcome, type PostingRule } from "./types";
 
 // Business expenses (docs/plans/accounting.md §4.7):
@@ -27,13 +32,6 @@ export interface ExpenseSnapshot {
   method: BusinessExpenseMethod;
   channelId: ChannelId | null;
   voidedAt: Date | null;
-}
-
-/** An inventory account (1-15xx). Expenses never land there: raw materials reach inventory only
- * through goods receipts (plan §3 guard, D-14), so an expense mapped to one would count the same
- * stock twice. The mapping editor (Session 3) refuses such a mapping; the engine refuses it too. */
-export function isInventoryAccountCode(code: string): boolean {
-  return code.startsWith("1-15");
 }
 
 const PLATFORM_BALANCE_BY_CHANNEL: Partial<Record<ChannelId, string>> = {

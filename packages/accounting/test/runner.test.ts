@@ -454,14 +454,40 @@ describe("runPosting", () => {
   });
 
   describe("fabric-as-inventory guard (D-14)", () => {
+    /** The re-map is refused by account_mappings_guard_target (migration 0051). A savepoint keeps
+     * the failed statement from aborting the test's transaction. */
+    async function expectMappingRefused(tx: TestTx, mappingKey: string, accountCode: string, message: RegExp) {
+      const error = await tx
+        .transaction((savepoint) => savepoint.update(accountMappings).set({ accountCode }).where(eq(accountMappings.mappingKey, mappingKey)))
+        .then(
+          () => null,
+          (caught: unknown) => caught,
+        );
+      // drizzle wraps the Postgres error ("Failed query: ...") and keeps it as the cause.
+      expect(String((error as { cause?: unknown } | null)?.cause)).toMatch(message);
+    }
+
+    /** Runs `write` with migration 0051's mapping trigger off. ALTER TABLE is transactional, so
+     * withRollback's rollback turns it back on. */
+    async function withoutMappingGuard(tx: TestTx, write: () => Promise<unknown>) {
+      await tx.execute(sql`alter table account_mappings disable trigger account_mappings_guard_target`);
+      await write();
+      await tx.execute(sql`alter table account_mappings enable trigger account_mappings_guard_target`);
+    }
+
     test("a supplier payment whose utang mapping points at an expense is refused: an issue, no journal", async () => {
       await withRollback(async (tx) => {
         const staff = await insertStaffUser(tx);
         const docs = await insertDocuments(tx, staff.id);
         const paymentId = await insertPurchasePayment(tx, staff.id, docs, { paidAt: "2026-12-07" });
-        // The mapping table only checks the target is active and postable (Session 3 adds the
-        // editor's own rules), so a bad re-map is possible; the engine must still refuse it.
-        await tx.update(accountMappings).set({ accountCode: "6-3101" }).where(eq(accountMappings.mappingKey, "supplier_payable.kind.material"));
+        // Since migration 0051 the database refuses this re-map itself (a supplier payable maps to
+        // a liability only); the engine must still refuse a bad mapping that got in some other way
+        // (written before 0051, or with the trigger disabled by the owner), so the trigger is
+        // bypassed inside this rolled-back transaction.
+        await expectMappingRefused(tx, "supplier_payable.kind.material", "6-3101", /liability account/);
+        await withoutMappingGuard(tx, () =>
+          tx.update(accountMappings).set({ accountCode: "6-3101" }).where(eq(accountMappings.mappingKey, "supplier_payable.kind.material")),
+        );
 
         await run(tx);
 
@@ -474,7 +500,11 @@ describe("runPosting", () => {
       await withRollback(async (tx) => {
         const staff = await insertStaffUser(tx);
         const expenseId = await insertExpense(tx, staff.id, { date: "2026-12-05", category: "material_shipping" });
-        await tx.update(accountMappings).set({ accountCode: "1-1501" }).where(eq(accountMappings.mappingKey, "expense.category.material_shipping"));
+        // Refused by the database since 0051 (D-14); the engine's own check is the second line.
+        await expectMappingRefused(tx, "expense.category.material_shipping", "1-1501", /never mapped to inventory/);
+        await withoutMappingGuard(tx, () =>
+          tx.update(accountMappings).set({ accountCode: "1-1501" }).where(eq(accountMappings.mappingKey, "expense.category.material_shipping")),
+        );
 
         await run(tx);
 

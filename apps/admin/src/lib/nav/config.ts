@@ -9,16 +9,19 @@ import {
   History,
   Home,
   LayoutDashboard,
+  ListTree,
   Megaphone,
   Package,
   PackageCheck,
   Palette,
+  Percent,
   Receipt,
   Ruler,
   Settings,
   Shapes,
   ShieldCheck,
   ShoppingBag,
+  Shuffle,
   Store,
   Tags,
   Truck,
@@ -159,6 +162,16 @@ export const NAV_ITEMS: readonly NavItem[] = [
     mobilePrimary: false,
   },
   {
+    // docs/plans/accounting.md Session 3 (§5.2 "Data Master → Akun"): the Chart of Accounts.
+    // accounting.view reads it; every write also needs accounting.manage (plan §7).
+    label: "Akun",
+    href: "/accounting/accounts",
+    icon: ListTree,
+    group: "Data Master",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
     // docs/plans/expense-master-data.md §3.6: categories and cost items of "Catat biaya". Same
     // gate as recording an expense (owner answer D5); the page also needs finance.view_profit.
     // The nav gate is any-of, so like "Iklan" and "Biaya" a role holding only ads_expenses.manage sees
@@ -251,6 +264,24 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Buku Besar",
     href: "/accounting/ledger",
     icon: BookText,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    // Session 3 (D-25): which account each expense category/item, payment method and channel posts to.
+    label: "Pemetaan Akun",
+    href: "/accounting/mappings",
+    icon: Shuffle,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    // Session 3 (D-20): the PPh final settings (rate, exemption, end date of the rate).
+    label: "Pengaturan Pajak",
+    href: "/accounting/tax-settings",
+    icon: Percent,
     group: "Akuntansi",
     permissionKeys: ["accounting.view"],
     mobilePrimary: false,

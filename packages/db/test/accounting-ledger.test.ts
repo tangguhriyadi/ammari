@@ -473,9 +473,11 @@ describe("closed periods (D-23) and the trial month (D-22)", () => {
 });
 
 describe("accounts and mappings", () => {
-  test("a system account is renamed and given sub-accounts, but its identity never changes and it is never deactivated or deleted", async () => {
+  test("a system account is renamed and gets sibling sub-accounts, but its identity never changes and it is never deactivated or deleted", async () => {
     await client`update accounts set name = 'Kas kecil toko' where code = '1-1101'`;
-    await client`insert into accounts (code, name, type, normal_balance, parent_code) values ('1-1102', 'Kas gudang', 'asset', 'debit', '1-1101')`;
+    // Since 0051 a parent is always a header (plan §8.1), so a second cash account goes under the
+    // Kas header beside Kas tunai, not under the postable system account itself.
+    await client`insert into accounts (code, name, type, normal_balance, parent_code) values ('1-1102', 'Kas gudang', 'asset', 'debit', '1-1100')`;
     for (const change of [
       client`update accounts set code = '1-1199' where code = '1-1102'`,
       client`update accounts set type = 'expense' where code = '1-1501'`,
@@ -512,7 +514,7 @@ describe("accounts and mappings", () => {
     await expect(insert("1-1408", { account_no_last4: "12a4" })).rejects.toThrow(/accounts_account_no_last4_check/);
     // The cycle trigger (BEFORE INSERT) refuses a self-parent before the CHECK sees it; both refuse.
     await expect(insert("1-1408", { parent_code: "1-1408" })).rejects.toThrow(/would make a cycle/);
-    await expect(client`update accounts set parent_code = '1-1501' where code = '1-1500'`).rejects.toThrow(/would make a cycle/);
+    await expect(client`update accounts set parent_code = '1-1500' where code = '1-1000'`).rejects.toThrow(/would make a cycle/);
     await expect(
       client`insert into accounts (code, name, type, normal_balance) values ('1-1407', 'persediaan BAHAN kain', 'asset', 'debit')`,
     ).rejects.toThrow(/accounts_name_unique/);

@@ -200,6 +200,12 @@ export const E2E_ACCOUNTING_EXPENSE_NO = "BYA-E2E-AKUN";
 export const E2E_ACCOUNTING_PAYMENT_NO = "BYR-E2E-AKUN";
 export const E2E_ACCOUNTING_PURCHASE_NO = "PO-E2E-AKUN";
 export const E2E_ACCOUNTING_SUPPLIER = "E2E Akun Toko Kain";
+// accounting-master.spec.ts (docs/plans/accounting.md Session 3): Data Master Akun, Pemetaan akun,
+// Pengaturan pajak. An owner of its own (fresh OTP throttle), the existing view-only role, and one
+// unmapped expense category the spec maps (D-25). The spec touches only this category and an
+// account it creates itself, never the default mappings accounting.spec.ts posts with.
+export const E2E_ACCOUNTING_MASTER_EMAIL = "accounting-master@e2e.ammari.test";
+export const E2E_ACCOUNTING_MASTER_CATEGORY = { code: "e2e_akun_langganan", name: "E2E Akun Langganan" } as const;
 export const E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL = "production-payments-no-finance@e2e.ammari.test";
 const E2E_PRODUCTION_NO_FINANCE_ROLE_KEY = "e2e_production_no_finance";
 // A dedicated email/role for purchases-receipt.spec.ts (docs/plans/suppliers-goods-receipt.md
@@ -1104,6 +1110,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       recordedByStaffUserId: owner.id,
     });
   });
+
+  // Data Master Akun / Pemetaan akun / Pengaturan pajak (see E2E_ACCOUNTING_MASTER_EMAIL above).
+  await ensureStaffFixture(E2E_ACCOUNTING_MASTER_EMAIL, "E2E Akuntansi master (owner)", OWNER_ROLE_KEY);
+  await db.insert(expenseCategories).values({ ...E2E_ACCOUNTING_MASTER_CATEGORY, kind: "operating", sortOrder: 170 }).onConflictDoNothing();
 
   // Pelanggan & Voucher (see E2E_CUSTOMERS_OWNER_EMAIL above).
   await ensureStaffFixture(E2E_CUSTOMERS_OWNER_EMAIL, "E2E Pelanggan (owner)", OWNER_ROLE_KEY);

@@ -15,6 +15,7 @@ export const ACTIVITY_AREAS = {
   import: "Impor",
   content: "Konten",
   settings: "Pengaturan",
+  accounting: "Akuntansi",
   cards: "Kartu & Pembeli",
   other: "Lainnya",
 } as const;
@@ -316,6 +317,33 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       update: { label: "Item biaya diubah" },
       activate: { label: "Item biaya diaktifkan" },
       deactivate: { label: "Item biaya dinonaktifkan" },
+    },
+  },
+  account: {
+    label: "Akun",
+    area: "accounting",
+    actions: {
+      create: { label: "Akun dibuat" },
+      update: { label: "Akun diubah" },
+      activate: { label: "Akun diaktifkan" },
+      deactivate: { label: "Akun dinonaktifkan" },
+      delete: { label: "Akun dihapus" },
+    },
+  },
+  account_mapping: {
+    label: "Pemetaan akun",
+    area: "accounting",
+    actions: {
+      set: { label: "Pemetaan akun diubah" },
+      clear: { label: "Pemetaan akun item dihapus" },
+    },
+  },
+  tax_setting: {
+    label: "Pengaturan pajak",
+    area: "accounting",
+    actions: {
+      create: { label: "Pengaturan pajak ditambahkan" },
+      update: { label: "Pengaturan pajak diubah" },
     },
   },
   expense_report: {

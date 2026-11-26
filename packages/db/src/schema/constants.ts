@@ -522,6 +522,30 @@ export const ACCOUNT_TYPES = [
 ] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
+/** An account code's leading digit is its class (plan §3: 1 ASET ... 9 PAJAK) and fixes the types
+ * it may have, so a "6-xxxx" asset can't exist (Session 3, plan §8.1). accounts_code_type_check
+ * (migration 0051) is generated from this map. */
+export const ACCOUNT_CODE_CLASS_TYPES = {
+  "1": ["asset"],
+  "2": ["liability"],
+  "3": ["equity"],
+  "4": ["revenue", "contra_revenue"],
+  "5": ["cogs"],
+  "6": ["expense"],
+  "7": ["other_income"],
+  "8": ["other_expense"],
+  "9": ["tax"],
+} as const satisfies Record<string, readonly AccountType[]>;
+
+/** Kas & Bank accounts (D-17): the codes under 1-1100 Kas and 1-1200 Bank. Only they carry bank
+ * fields (accounts_bank_fields_cash_bank_check, migration 0051) and only they are payment-method
+ * targets. Postgres regex syntax, also valid in JavaScript. */
+export const CASH_BANK_ACCOUNT_CODE_PATTERN = "^1-1[12][0-9]{2}$";
+
+/** Inventory accounts (1-15xx). An expense category or item is never mapped to one: raw materials
+ * reach inventory only through goods receipts (plan §3 guard, D-14). */
+export const INVENTORY_ACCOUNT_CODE_PATTERN = "^1-15[0-9]{2}$";
+
 export const ACCOUNT_NORMAL_BALANCES = ["debit", "credit"] as const;
 export type AccountNormalBalance = (typeof ACCOUNT_NORMAL_BALANCES)[number];
 

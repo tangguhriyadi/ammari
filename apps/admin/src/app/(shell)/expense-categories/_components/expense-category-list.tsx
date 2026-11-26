@@ -12,16 +12,18 @@ function itemCountText(itemCount: number): string {
   return itemCount === 0 ? "Belum ada item" : `${itemCount} item`;
 }
 
-function StatusBadges({ row }: { row: ExpenseCategoryListRow }) {
+function StatusBadges({ row, unmapped }: { row: ExpenseCategoryListRow; unmapped: boolean }) {
   return (
     <span className="flex flex-wrap items-center gap-2">
+      {unmapped && <Badge variant="warning">Belum dipetakan</Badge>}
       {row.isSystem && <SystemBadge />}
       {row.isActive ? <Badge variant="success">Aktif</Badge> : <Badge variant="neutral">Nonaktif</Badge>}
     </span>
   );
 }
 
-export function ExpenseCategoryList({ rows, filtered }: { rows: ExpenseCategoryListRow[]; filtered: boolean }) {
+/** `unmappedCodes` is set only for staff with accounting.view (D-25: a category needs an account). */
+export function ExpenseCategoryList({ rows, filtered, unmappedCodes }: { rows: ExpenseCategoryListRow[]; filtered: boolean; unmappedCodes?: ReadonlySet<string> }) {
   if (rows.length === 0) {
     return filtered ? (
       <EmptyState title="Tidak ada kategori" description="Tidak ada kategori biaya dengan status ini." />
@@ -42,7 +44,7 @@ export function ExpenseCategoryList({ rows, filtered }: { rows: ExpenseCategoryL
               <p className="text-sm text-neutral-600">
                 {EXPENSE_CATEGORY_KIND_LABELS[row.kind]} · {itemCountText(row.itemCount)} · {expenseUsageText(row.expenseCount)}
               </p>
-              <StatusBadges row={row} />
+              <StatusBadges row={row} unmapped={unmappedCodes?.has(row.code) ?? false} />
             </Card>
           </li>
         ))}
@@ -70,7 +72,7 @@ export function ExpenseCategoryList({ rows, filtered }: { rows: ExpenseCategoryL
               <Td className="text-neutral-700">{expenseUsageText(row.expenseCount)}</Td>
               <Td className="text-neutral-700 tabular-nums">{row.sortOrder}</Td>
               <Td>
-                <StatusBadges row={row} />
+                <StatusBadges row={row} unmapped={unmappedCodes?.has(row.code) ?? false} />
               </Td>
             </Tr>
           ))}

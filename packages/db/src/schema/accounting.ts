@@ -19,8 +19,10 @@ import {
 import { suppliers } from "./catalog";
 import { checkIn, citext, createdAtOnly, timestamps } from "./columns";
 import {
+  ACCOUNT_CODE_CLASS_TYPES,
   ACCOUNT_NORMAL_BALANCES,
   ACCOUNT_TYPES,
+  CASH_BANK_ACCOUNT_CODE_PATTERN,
   ACCOUNTING_TRIAL_MONTH,
   CASH_FLOW_GROUPS,
   FISCAL_PERIOD_STATUSES,
@@ -62,6 +64,11 @@ import { staffUsers } from "./rbac";
 /** Postgres CHECK regex for an account code: "1-1501". */
 const ACCOUNT_CODE_PATTERN = "^[1-9]-[0-9]{4}$";
 
+/** accounts_code_type_check (0051): the code's leading digit fixes the type (ACCOUNT_CODE_CLASS_TYPES). */
+const ACCOUNT_CODE_TYPE_SQL = Object.entries(ACCOUNT_CODE_CLASS_TYPES)
+  .map(([digit, types]) => `(left(code, 1) = '${digit}' and type in (${types.map((type) => `'${type}'`).join(", ")}))`)
+  .join(" or ");
+
 export const accounts = pgTable(
   "accounts",
   {
@@ -99,6 +106,14 @@ export const accounts = pgTable(
     check("accounts_system_active_check", sql`${table.isActive} or not ${table.isSystem}`),
     check("accounts_bank_name_check", sql`${table.bankName} is null or (btrim(${table.bankName}) <> '' and char_length(${table.bankName}) <= 60)`),
     check("accounts_account_no_last4_check", sql`${table.accountNoLast4} is null or ${table.accountNoLast4} ~ '^[0-9]{4}$'`),
+    // Session 3 (plan §8.1): the leading digit is the class (1 asset ... 9 tax), and only a postable
+    // Kas & Bank account (1-11xx, 1-12xx, D-17) carries bank fields.
+    check("accounts_code_type_check", sql.raw(ACCOUNT_CODE_TYPE_SQL)),
+    check(
+      "accounts_bank_fields_cash_bank_check",
+      sql`(${table.bankName} is null and ${table.accountNoLast4} is null)
+        or (${table.code} ~ ${sql.raw(`'${CASH_BANK_ACCOUNT_CODE_PATTERN}'`)} and not ${table.isHeader})`,
+    ),
   ],
 );
 

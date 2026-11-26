@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Breadcrumb, Button, FilterTabs, PageHeader } from "@ammari/ui";
 import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
+import { getExpenseMappingWarnings } from "@/lib/accounting/mappings";
 import { listExpenseCategories } from "@/lib/expense-categories/queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { ExpenseCategoryList } from "./_components/expense-category-list";
@@ -22,9 +23,12 @@ function parseStatus(raw: string | string[] | undefined): StatusFilter {
 }
 
 export default async function ExpenseCategoriesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  await requireAllPermissions(["ads_expenses.manage", "finance.view_profit"]);
+  const session = await requireAllPermissions(["ads_expenses.manage", "finance.view_profit"]);
   const status = parseStatus((await searchParams).status);
-  const rows = await listExpenseCategories();
+  // D-25 (docs/plans/accounting.md Session 3): a category must be mapped to an account before its
+  // expenses can be posted. Shown only to staff who may see the books (accounting.view).
+  const canSeeBooks = session.permissionKeys.includes("accounting.view");
+  const [rows, mapping] = await Promise.all([listExpenseCategories(), canSeeBooks ? getExpenseMappingWarnings() : null]);
   const shown = status === undefined ? rows : rows.filter((row) => row.isActive === (status === "active"));
 
   return (
@@ -40,7 +44,26 @@ export default async function ExpenseCategoriesPage({ searchParams }: { searchPa
         }
       />
       <FilterTabs basePath="/expense-categories" paramName="status" options={STATUS_OPTIONS} activeValue={status} aria-label="Filter status kategori" />
-      <ExpenseCategoryList rows={shown} filtered={status !== undefined} />
+      {mapping && (mapping.unmapped.length > 0 || mapping.openIssueCount > 0) && (
+        <section aria-label="Pemetaan akun" className="mb-4 rounded-lg border border-warning-700/30 bg-warning-50 p-4 text-base">
+          {mapping.unmapped.length > 0 && (
+            <p className="text-warning-700">
+              Belum dipetakan ke akun: {mapping.unmapped.map((category) => category.name).join(", ")}. Biaya di kategori ini belum bisa dibukukan.
+            </p>
+          )}
+          {mapping.openIssueCount > 0 && (
+            <p className="text-warning-700">{mapping.openIssueCount} biaya menunggu dibukukan karena pemetaan akun kategorinya.</p>
+          )}
+          <Link href="/accounting/mappings" className="mt-1 inline-flex min-h-11 items-center font-medium text-brand hover:underline">
+            Atur pemetaan akun
+          </Link>
+        </section>
+      )}
+      <ExpenseCategoryList
+        rows={shown}
+        filtered={status !== undefined}
+        unmappedCodes={mapping ? new Set(mapping.unmapped.map((category) => category.code)) : undefined}
+      />
     </>
   );
 }
