@@ -1,25 +1,32 @@
 import "server-only";
 import { sql } from "drizzle-orm";
-import { bookSegmentOf, segmentStartOf, type BookSegment } from "@ammari/accounting";
+import { batchWipAsOf, bookSegmentOf, jakartaDateOf, segmentStartOf, type BookSegment } from "@ammari/accounting";
+import { loadProductionBatchSnapshots } from "@ammari/accounting/runner";
 import { defaultDb, type Database } from "@/lib/db";
 import {
   reconcileMaterial,
   reconcilePayable,
+  reconcileStockAccount,
+  reconcileWipBatch,
   type MaterialReconciliation,
   type PayableReconciliation,
   type ReconciliationStatus,
+  type StockAccountReconciliation,
+  type WipBatchReconciliation,
 } from "./reconciliation-rules";
 
-// Rekonsiliasi (docs/plans/accounting.md §6.3, Session 7): check 1 for raw materials (1-1501 kain,
-// 1-1502 aksesoris vs the stock ledgers) and check 2 for supplier payables (utang per purchase
-// document vs the app's tagihan). Read-only. The ledger side is summed within one set of books
+// Rekonsiliasi (docs/plans/accounting.md §6.3, Sessions 7 and 8): check 1 for inventory (1-1501
+// kain, 1-1502 aksesoris vs the raw-material ledgers; 1-1503 barang dalam proses per batch; 1-1504
+// barang jadi vs stock_movements; 1-1506 barang cacat vs defect_movements) and check 2 for supplier
+// payables (utang per purchase document vs the app's tagihan). Read-only. The ledger side is summed within one set of books
 // (books.ts): from 1 Dec 2026 for the trial month, from the cut-over 1 Jan 2027 for the official
 // books (the opening journal included), so the stock side uses the same window: in the official
 // books everything before the cut-over is the opening balance; in the trial month nothing before
 // 1 Dec 2026 is booked at all.
 //
 // The stock side dates a movement by its economic date, the same date its journal carries: a
-// receipt's received_at (not when it was typed in), created_at (Jakarta) otherwise.
+// receipt's received_at (not when it was typed in), a production consumption its batch's posted_at
+// (R1), a defect its occurred_at, created_at (Jakarta) otherwise.
 
 export interface MaterialRow extends MaterialReconciliation {
   accountCode: string;
@@ -34,11 +41,28 @@ export interface PayableRow extends PayableReconciliation {
   supplierName: string;
 }
 
+export type StockAccountKind = "wip" | "finished" | "defect";
+
+export interface StockAccountRow extends StockAccountReconciliation {
+  accountCode: string;
+  accountName: string;
+  kind: StockAccountKind;
+}
+
+export interface WipBatchRow extends WipBatchReconciliation {
+  batchId: string;
+  batchNo: string;
+}
+
 export interface Reconciliation {
   asOf: string;
   segment: BookSegment;
   segmentStart: string;
   materials: MaterialRow[];
+  /** 1-1503, 1-1504 and 1-1506 (Session 8). */
+  stockAccounts: StockAccountRow[];
+  /** Work in progress per production batch, the ones with anything to show. */
+  wipBatches: WipBatchRow[];
   payables: PayableRow[];
   /** Σ 2-1101 on the ledger and the part no purchase document explains (manual and opening
    * journals). */
@@ -81,12 +105,17 @@ async function materialFigures(db: Database, table: "fabric_stock_movements" | "
   const [row] = (await db.execute(sql`
     with m as (
       select m.type, m.ref_type, m.value_amount,
-        case when m.ref_type = 'goods_receipt' then gr.received_at else (m.created_at at time zone 'Asia/Jakarta')::date end as d,
+        case
+          when m.ref_type = 'goods_receipt' then gr.received_at
+          when m.ref_type = 'production_batch' and pb.posted_at is not null then (pb.posted_at at time zone 'Asia/Jakarta')::date
+          else (m.created_at at time zone 'Asia/Jakarta')::date
+        end as d,
         ogr.received_at as original_d
       from ${movements} m
       left join goods_receipt_items gri on m.ref_type = 'goods_receipt' and gri.id::text = m.ref_id
       left join goods_receipts gr on gr.id = gri.goods_receipt_id
       left join goods_receipts ogr on ogr.id = gr.reverses_receipt_id
+      left join production_batches pb on m.ref_type = 'production_batch' and pb.id::text = m.ref_id
     )
     select
       coalesce(sum(value_amount) filter (where ${official}::boolean and d < ${from}), 0)::bigint as before_books,
@@ -107,6 +136,111 @@ async function materialFigures(db: Database, table: "fabric_stock_movements" | "
     production: num(row?.production),
     legacy: num(row?.legacy),
   };
+}
+
+/** The day before a calendar date: "2027-01-01" -> "2026-12-31". */
+function dayBefore(date: string): string {
+  const ms = Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))) - 24 * 60 * 60 * 1000;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/** Check 1 for 1-1504 against stock_movements. A production receipt counts on its received_at (R2),
+ * everything else on created_at (Jakarta). */
+async function finishedFigures(db: Database, from: string, to: string, official: boolean) {
+  const [row] = (await db.execute(sql`
+    with m as (
+      select m.type, m.ref_type, m.value_amount,
+        case when m.ref_type = 'goods_receipt_item' then gr.received_at else (m.created_at at time zone 'Asia/Jakarta')::date end as d,
+        ogr.received_at as original_d
+      from stock_movements m
+      left join goods_receipt_items gri on m.ref_type = 'goods_receipt_item' and gri.id::text = m.ref_id
+      left join goods_receipts gr on gr.id = gri.goods_receipt_id
+      left join goods_receipts ogr on ogr.id = gr.reverses_receipt_id
+    )
+    select
+      coalesce(sum(value_amount) filter (where ${official}::boolean and d < ${from}), 0)::bigint as before_books,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to}), 0)::bigint as in_window,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and ref_type = 'goods_receipt_item' and original_d < ${from}), 0)::bigint as voids_before_books,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and type in ('sale', 'return')), 0)::bigint as sales,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and ref_type = 'production_batch_item'), 0)::bigint as legacy
+    from m
+  `)) as unknown as Record<string, string>[];
+  return {
+    stockValue: num(row?.before_books) + num(row?.in_window),
+    notJournaled: [
+      { label: "Penjualan dan pembatalannya (jurnal penjualan belum tersedia)", value: num(row?.sales) },
+      { label: "Stok produksi cara lama (ditambah saat posting batch)", value: num(row?.legacy) },
+      { label: "Pembatalan penerimaan dari sebelum pembukuan", value: num(row?.voids_before_books) },
+    ],
+  };
+}
+
+/** Check 1 for 1-1506 against defect_movements, each row on its occurred_at. */
+async function defectFigures(db: Database, from: string, to: string, official: boolean) {
+  const [row] = (await db.execute(sql`
+    select
+      coalesce(sum(d.value_amount) filter (where ${official}::boolean and d.occurred_at < ${from}), 0)::bigint as before_books,
+      coalesce(sum(d.value_amount) filter (where d.occurred_at >= ${from} and d.occurred_at <= ${to}), 0)::bigint as in_window,
+      coalesce(sum(d.value_amount) filter (where d.occurred_at >= ${from} and d.occurred_at <= ${to} and o.occurred_at < ${from}), 0)::bigint as voids_before_books
+    from defect_movements d
+    left join defect_movements o on o.id = d.reverses_movement_id
+  `)) as unknown as Record<string, string>[];
+  return {
+    stockValue: num(row?.before_books) + num(row?.in_window),
+    notJournaled: [{ label: "Pembatalan dari sebelum pembukuan", value: num(row?.voids_before_books) }],
+  };
+}
+
+/** The 1-1503 lines of every production batch's own journals (R1, R2, R3, R5) in the window, by batch. */
+async function wipLedgerByBatch(db: Database, wipAccount: string, from: string, to: string): Promise<Map<string, number>> {
+  const rows = (await db.execute(sql`
+    select batch_id, sum(net)::bigint as net from (
+      select l.debit - l.credit as net,
+        case e.source_type
+          when 'production_batch' then e.source_id::uuid
+          when 'goods_receipt_item' then (select gr.production_batch_id from goods_receipt_items gri join goods_receipts gr on gr.id = gri.goods_receipt_id where gri.id = e.source_id::uuid)
+          when 'defect_movement' then (select pbi.production_batch_id from defect_movements d join production_batch_items pbi on pbi.id = d.production_batch_item_id where d.id = e.source_id::uuid)
+        end as batch_id
+      from journal_lines l join journal_entries e on e.id = l.entry_id
+      where l.account_code = ${wipAccount} and ${EFFECTIVE_DATE} >= ${from} and ${EFFECTIVE_DATE} <= ${to}
+        and e.source_type in ('production_batch', 'goods_receipt_item', 'defect_movement')
+    ) x where batch_id is not null group by batch_id
+  `)) as unknown as { batch_id: string; net: string }[];
+  return new Map(rows.map((row) => [row.batch_id, num(row.net)]));
+}
+
+/** Check 1 for 1-1503: per batch (its own records vs its own journals) and in total. */
+async function wipReconciliation(db: Database, wipAccount: string, from: string, to: string, official: boolean) {
+  const [batches, ledgerByBatch, ledgerTotal] = await Promise.all([loadProductionBatchSnapshots(db), wipLedgerByBatch(db, wipAccount, from, to), ledgerBalance(db, wipAccount, from, to)]);
+  const lastDayBefore = dayBefore(from);
+  const rows: WipBatchRow[] = [];
+  let stockValue = 0;
+  let beforeBooksTotal = 0;
+  for (const batch of batches) {
+    if (batch.status !== "posted" || !batch.postedAt || batch.hasLegacyStock) continue;
+    const startsBeforeBooks = jakartaDateOf(batch.postedAt) < from;
+    const appWip = batchWipAsOf(batch, to);
+    const before = startsBeforeBooks ? batchWipAsOf(batch, lastDayBefore) : 0;
+    const row: WipBatchRow = {
+      batchId: batch.id,
+      batchNo: batch.batchNo,
+      ...reconcileWipBatch({
+        appWip: appWip ?? 0,
+        beforeBooks: before ?? 0,
+        ledger: ledgerByBatch.get(batch.id) ?? 0,
+        startsBeforeBooks,
+        valueMissing: appWip === null || before === null,
+      }),
+    };
+    stockValue += row.appWip;
+    beforeBooksTotal += row.beforeBooks;
+    if (row.appWip !== 0 || row.ledger !== 0 || row.difference !== 0 || row.status === "mismatch") rows.push(row);
+  }
+  rows.sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.batchNo.localeCompare(b.batchNo));
+  // Official books: the opening journal (in the ledger total) carries what was in process at the
+  // cut-over. Trial month: no opening, so a batch's pre-December part is in no journal.
+  const notJournaled = official ? [] : [{ label: "Sisa batch dari sebelum pembukuan (bulan uji coba tanpa saldo awal)", value: beforeBooksTotal }];
+  return { rows, account: reconcileStockAccount({ ledger: ledgerTotal, stockValue, notJournaled }) };
 }
 
 interface PayableQueryRow {
@@ -239,6 +373,19 @@ export async function getReconciliation(asOf: string, db: Database = defaultDb):
     });
   }
 
+  const wipAccount = keys.get("inventory.wip");
+  const finishedAccount = keys.get("inventory.finished_goods");
+  const defectAccount = keys.get("inventory.defect");
+  if (!wipAccount || !finishedAccount || !defectAccount) throw new Error("the chart of accounts lost a production-side system account");
+  const wip = await wipReconciliation(db, wipAccount.code, segmentStart, asOf, official);
+  const finished = await finishedFigures(db, segmentStart, asOf, official);
+  const defect = await defectFigures(db, segmentStart, asOf, official);
+  const stockAccounts: StockAccountRow[] = [
+    { ...wip.account, accountCode: wipAccount.code, accountName: wipAccount.name, kind: "wip" },
+    { ...reconcileStockAccount({ ...finished, ledger: await ledgerBalance(db, finishedAccount.code, segmentStart, asOf) }), accountCode: finishedAccount.code, accountName: finishedAccount.name, kind: "finished" },
+    { ...reconcileStockAccount({ ...defect, ledger: await ledgerBalance(db, defectAccount.code, segmentStart, asOf) }), accountCode: defectAccount.code, accountName: defectAccount.name, kind: "defect" },
+  ];
+
   const rows = await payableRows(db, { payable: payable.code, advance: advance.code, claim: claim.code }, segmentStart, asOf);
   const allPayables: PayableRow[] = rows.map((row) => ({
       purchaseId: row.purchase_id,
@@ -268,6 +415,8 @@ export async function getReconciliation(asOf: string, db: Database = defaultDb):
     segment,
     segmentStart,
     materials,
+    stockAccounts,
+    wipBatches: wip.rows,
     payables,
     payableLedgerTotal,
     payableOutsideDocuments: payableLedgerTotal - documentsPayable,

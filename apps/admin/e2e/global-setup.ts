@@ -200,6 +200,9 @@ export const E2E_ACCOUNTING_EXPENSE_NO = "BYA-E2E-AKUN";
 export const E2E_ACCOUNTING_PAYMENT_NO = "BYR-E2E-AKUN";
 export const E2E_ACCOUNTING_PURCHASE_NO = "PO-E2E-AKUN";
 export const E2E_ACCOUNTING_SUPPLIER = "E2E Akun Toko Kain";
+/** A production batch posted on 5 Dec 2026 and still in production (Session 8: R1 and the
+ * Rekonsiliasi "Barang dalam proses per batch" list): fabric 200.000 + a 300.000 service line. */
+export const E2E_ACCOUNTING_BATCH_NO = "BTC-E2E-AKUN";
 // accounting-master.spec.ts (docs/plans/accounting.md Session 3): Data Master Akun, Pemetaan akun,
 // Pengaturan pajak. An owner of its own (fresh OTP throttle), the existing view-only role, and one
 // unmapped expense category the spec maps (D-25). The spec touches only this category and an
@@ -468,6 +471,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     costComponents,
     productionBatches,
     productionBatchCosts,
+    fabricStockMovements,
     supplierPayments,
     customers,
     customerAuthUsers,
@@ -1102,6 +1106,38 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       proofFileId: proofs[0]!.id,
       recordedByStaffUserId: owner.id,
     });
+    // Session 8: a batch posted in the trial month and not received yet, as postBatch leaves it (the
+    // cost line goes in while it is a draft; posted lines are frozen).
+    const [batchFabric] = await tx.insert(fabrics).values({ name: "E2E Akun Kain Produksi" }).returning({ id: fabrics.id });
+    const [sewing] = await tx.insert(costComponents).values({ name: "E2E Akun Ongkos jahit", unit: "pcs", costType: "fixed" }).returning({ id: costComponents.id });
+    if (!batchFabric || !sewing) throw new Error("failed to seed the e2e accounting batch master data");
+    const [batch] = await tx
+      .insert(productionBatches)
+      .values({ fabricId: batchFabric.id, batchNo: E2E_ACCOUNTING_BATCH_NO, producedAt: "2026-12-05", fabricYards: 2, fabricCostAmount: 200_000 })
+      .returning({ id: productionBatches.id });
+    if (!batch) throw new Error("failed to seed the e2e accounting batch");
+    await tx.insert(productionBatchCosts).values({
+      productionBatchId: batch.id,
+      costComponentId: sewing.id,
+      componentName: "Ongkos jahit",
+      componentUnit: "pcs",
+      costType: "fixed",
+      quantity: 1,
+      unitPrice: 300_000,
+    });
+    await tx.insert(fabricStockMovements).values({
+      fabricId: batchFabric.id,
+      qty: -2,
+      valueAmount: -200_000,
+      type: "production",
+      refType: "production_batch",
+      refId: batch.id,
+      createdByStaffUserId: owner.id,
+    });
+    await tx
+      .update(productionBatches)
+      .set({ status: "posted", postedAt: new Date("2026-12-05T03:00:00Z"), postedByStaffUserId: owner.id })
+      .where(eq(productionBatches.id, batch.id));
     await tx.insert(supplierPayments).values({
       paymentNo: E2E_ACCOUNTING_PAYMENT_NO,
       targetType: "purchase",

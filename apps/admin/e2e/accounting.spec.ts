@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { loginAs } from "./helpers/login";
 import {
+  E2E_ACCOUNTING_BATCH_NO,
   E2E_ACCOUNTING_CS_EMAIL,
   E2E_ACCOUNTING_EMAIL,
   E2E_ACCOUNTING_EXPENSE_NO,
@@ -92,16 +93,32 @@ async function checkJournal(page: Page, layout: Layout): Promise<void> {
   await expect(page.locator(layout.journalRow).filter({ hasText: E2E_ACCOUNTING_EXPENSE_NO })).toHaveCount(0);
 }
 
-/** Rekonsiliasi (Session 7): the seeded DP reconciles (app: lebih bayar 500.000 on a purchase with
+/** Rekonsiliasi (Sessions 7 and 8): five inventory accounts and the seeded batch's WIP reconcile;
+ * the seeded DP reconciles (app: lebih bayar 500.000 on a purchase with
  * no lines; ledger: an advance of 500.000), on this viewport's rows, the other layout hidden. */
 async function checkReconciliation(page: Page, layout: Layout): Promise<void> {
   await page.goto("/accounting/reconciliation?date=2026-12-31");
   await expect(page.getByRole("heading", { name: "Rekonsiliasi", exact: true })).toBeVisible();
   await expect(page.getByTestId("reconciliation-books-note")).toContainText("Buku uji coba Desember 2026");
-  const materials = page.getByTestId("reconciliation-material");
-  await expect(materials).toHaveCount(2);
-  await expect(materials.filter({ hasText: "1-1501" })).toBeVisible();
-  await expect(materials.filter({ hasText: "1-1502" })).toBeVisible();
+  const materials = page.getByTestId("reconciliation-inventory");
+  await expect(materials).toHaveCount(5);
+  for (const code of ["1-1501", "1-1502", "1-1503", "1-1504", "1-1506"]) await expect(materials.filter({ hasText: code })).toBeVisible();
+
+  // Session 8: the seeded batch is in process (fabric 200.000 + jahit 300.000), and R1 carries it.
+  const shownWip = layout.label === "mobile" ? "reconciliation-wip-card" : "reconciliation-wip-row";
+  const hiddenWip = layout.label === "mobile" ? "reconciliation-wip-row" : "reconciliation-wip-card";
+  const wip = page.getByTestId(shownWip).filter({ hasText: E2E_ACCOUNTING_BATCH_NO });
+  await expect(wip).toHaveCount(1);
+  await expect(wip).toBeVisible();
+  await expect(wip).toContainText("Rp 500.000");
+  // App side and journals agree: the difference is exactly zero.
+  await expect(wip).toContainText("Rp 0");
+  await expect(wip).not.toContainText("dari sebelum pembukuan");
+  await expect(wip.getByText("Cocok", { exact: true })).toBeVisible();
+  await expect(wip.getByRole("link", { name: E2E_ACCOUNTING_BATCH_NO })).toHaveAttribute("href", /^\/production\//);
+  const otherWip = page.getByTestId(hiddenWip).filter({ hasText: E2E_ACCOUNTING_BATCH_NO });
+  await expect(otherWip).toHaveCount(1);
+  await expect(otherWip).toBeHidden();
 
   const shown = layout.label === "mobile" ? "reconciliation-payable-card" : "reconciliation-payable-row";
   const hidden = layout.label === "mobile" ? "reconciliation-payable-row" : "reconciliation-payable-card";

@@ -61,6 +61,35 @@ export {
   type RawMaterialKind,
   type RawMaterialMovementSnapshot,
 } from "./rules/raw-materials";
+export {
+  PRODUCTION_BATCH_SOURCE_TYPE,
+  PRODUCTION_CHAIN_RULE_VERSION,
+  batchCost,
+  batchEndDate,
+  batchWipAsOf,
+  batchWipBeforeClose,
+  isEndedReceiptStatus,
+  productionChainEvents,
+  productionChainRule,
+  productionStepKey,
+  replayProductionChain,
+  type PositionChange,
+  type ProductionBatchSnapshot,
+  type ProductionChainResult,
+  type ProductionCostLineSnapshot,
+  type ProductionDefectReturnSnapshot,
+  type ProductionPaymentSnapshot,
+  type ProductionReceiptItemSnapshot,
+} from "./rules/production";
+export {
+  STOCK_MOVEMENT_SOURCE_TYPE,
+  defectDisposalOutcome,
+  defectDisposalRule,
+  finishedGoodsAdjustmentOutcome,
+  finishedGoodsAdjustmentRule,
+  type DefectDisposalSnapshot,
+  type FinishedGoodsAdjustmentSnapshot,
+} from "./rules/inventory";
 export { SUPPLIER_PAYMENT_SOURCE_TYPE, supplierPaymentRule, supplierPaymentPaidOutcome, type SupplierPaymentSnapshot } from "./rules/supplier-payments";
 export {
   MANUAL_PAYMENT_MISSING_ISSUE,

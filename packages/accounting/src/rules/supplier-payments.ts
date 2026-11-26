@@ -19,6 +19,10 @@ import { mappedAccount, negateOutcome, resolveOrIssue, type PostingContext, type
 // production batch payments only (R4), still "without chain": the batch's over-payment → 1-1601
 // split needs the batch journals (R1), which arrive in Session 8. Every line stays on utang or
 // cash/bank, never an expense (D-14 guard).
+//
+// Session 8: batch payments (R4) moved to the production batch chain (./production.ts, rule
+// production_chain v2) on the same position rule, so this rule now emits nothing at all; it stays
+// for supplierPaymentPaidOutcome (what Sessions 2-7 posted) and is no longer a default source.
 
 export const SUPPLIER_PAYMENT_SOURCE_TYPE = "supplier_payment";
 
@@ -66,8 +70,9 @@ export const supplierPaymentRule: PostingRule<SupplierPaymentSnapshot> = {
   name: "supplier_payment",
   ruleVersion: 1,
   events(payment, context) {
-    // Purchase payments belong to the purchase chain (./purchases.ts).
-    if (payment.targetType === "purchase") return [];
+    // Purchase payments belong to the purchase chain (./purchases.ts), batch payments to the
+    // production chain (./production.ts, Session 8).
+    if (payment.targetType === "purchase" || payment.targetType === "production_batch") return [];
     const key = (sourceEvent: string) => ({ sourceType: SUPPLIER_PAYMENT_SOURCE_TYPE, sourceId: payment.id, sourceEvent });
     // Cut-over (plan §2): same as expenses. P3/R4 before the start lives in the opening balances;
     // P4 is posted only while P3/R4 has an active journal (the runner checks).

@@ -4,12 +4,13 @@ import { jakartaDate } from "@ammari/commerce/jakarta-day";
 import { isCalendarDate, OFFICIAL_BOOKS_START, TRIAL_BOOKS_START } from "@ammari/accounting";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { formatBalance, formatDay } from "@/lib/accounting/format";
-import { getReconciliation, type MaterialRow, type PayableRow, type Reconciliation } from "@/lib/accounting/reconciliation";
+import { getReconciliation, type MaterialRow, type PayableRow, type Reconciliation, type StockAccountRow, type WipBatchRow } from "@/lib/accounting/reconciliation";
 import { RECONCILIATION_STATUS_LABELS, type ReconciliationStatus } from "@/lib/accounting/reconciliation-rules";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 
-// Rekonsiliasi (docs/plans/accounting.md §6.3, Session 7): check 1 (persediaan bahan vs catatan
-// stok) and check 2 (utang pemasok per dokumen pembelian vs tagihan di aplikasi). accounting.view.
+// Rekonsiliasi (docs/plans/accounting.md §6.3, Sessions 7 and 8): check 1 (persediaan bahan, barang
+// dalam proses per batch, barang jadi and barang cacat vs the app's records) and check 2 (utang
+// pemasok per dokumen pembelian vs tagihan di aplikasi). accounting.view.
 // One "per tanggal" filter in the URL (a GET form); every figure is summed within the set of books
 // that date belongs to (books.ts).
 
@@ -31,14 +32,46 @@ function Amount({ value }: { value: number }) {
   return <span className="tabular-nums">{formatBalance(value)}</span>;
 }
 
-function MaterialCard({ row, asOf, segmentStart }: { row: MaterialRow; asOf: string; segmentStart: string }) {
-  const notJournaled = [
-    { label: "Pemakaian produksi (jurnal produksi belum tersedia)", value: row.production },
-    { label: "Pembelian cara lama (tanpa dokumen)", value: row.legacy },
-    { label: "Pembatalan penerimaan dari sebelum pembukuan", value: row.voidsBeforeBooks },
-  ].filter((item) => item.value !== 0);
+interface InventoryCardData {
+  accountCode: string;
+  accountName: string;
+  ledger: number;
+  stockValue: number;
+  notJournaled: { label: string; value: number }[];
+  difference: number;
+  status: ReconciliationStatus;
+  stockLabel: string;
+}
+
+function materialCardData(row: MaterialRow): InventoryCardData {
+  return {
+    accountCode: row.accountCode,
+    accountName: row.accountName,
+    ledger: row.ledger,
+    stockValue: row.stockValue,
+    notJournaled: [
+      { label: "Pembelian cara lama (tanpa dokumen)", value: row.legacy },
+      { label: "Pembatalan penerimaan dari sebelum pembukuan", value: row.voidsBeforeBooks },
+    ].filter((item) => item.value !== 0),
+    difference: row.difference,
+    status: row.status,
+    stockLabel: "Nilai menurut catatan stok",
+  };
+}
+
+const STOCK_LABEL: Record<StockAccountRow["kind"], string> = {
+  wip: "Sisa biaya batch yang masih berjalan",
+  finished: "Nilai menurut catatan stok barang jadi",
+  defect: "Nilai menurut catatan barang cacat",
+};
+
+function stockAccountCardData(row: StockAccountRow): InventoryCardData {
+  return { ...row, stockLabel: STOCK_LABEL[row.kind] };
+}
+
+function InventoryCard({ row, asOf, segmentStart }: { row: InventoryCardData; asOf: string; segmentStart: string }) {
   return (
-    <Card className="flex flex-col gap-3" data-testid="reconciliation-material">
+    <Card className="flex flex-col gap-3" data-testid="reconciliation-inventory">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <Link href={`/accounting/ledger?account=${row.accountCode}&from=${segmentStart}&to=${asOf}`} className="hover:underline">
           <span className="tabular-nums text-neutral-600">{row.accountCode}</span> <span className="font-medium text-neutral-900">{row.accountName}</span>
@@ -50,11 +83,11 @@ function MaterialCard({ row, asOf, segmentStart }: { row: MaterialRow; asOf: str
         <dd className="text-right">
           <Amount value={row.ledger} />
         </dd>
-        <dt className="text-neutral-600">Nilai menurut catatan stok</dt>
+        <dt className="text-neutral-600">{row.stockLabel}</dt>
         <dd className="text-right">
           <Amount value={row.stockValue} />
         </dd>
-        {notJournaled.map((item) => (
+        {row.notJournaled.map((item) => (
           <div key={item.label} className="contents">
             <dt className="pl-3 text-sm text-neutral-600">Tidak dijurnal: {item.label}</dt>
             <dd className="text-right text-sm">
@@ -68,6 +101,115 @@ function MaterialCard({ row, asOf, segmentStart }: { row: MaterialRow; asOf: str
         </dd>
       </dl>
     </Card>
+  );
+}
+
+function wipNote(row: WipBatchRow): string | null {
+  if (row.status === "mismatch") {
+    return row.valueMissing
+      ? "Nilai stok salah satu penerimaan batch ini tidak ditemukan. Lihat daftar posting yang perlu dicek."
+      : "Jurnal batch ini belum lengkap. Lihat daftar posting yang perlu dicek.";
+  }
+  if (row.status === "review") return "Batch ini mulai sebelum pembukuan. Cocokkan dengan saldo awal barang dalam proses.";
+  if (row.beforeBooks !== 0) return "Sebagian biaya berasal dari sebelum pembukuan. Di buku resmi sudah masuk saldo awal, di bulan uji coba memang tidak dijurnal.";
+  return null;
+}
+
+function BatchLink({ row }: { row: WipBatchRow }) {
+  return (
+    <Link href={`/production/${row.batchId}`} className="font-medium text-neutral-900 hover:underline">
+      {row.batchNo}
+    </Link>
+  );
+}
+
+function WipBatches({ rows }: { rows: WipBatchRow[] }) {
+  if (rows.length === 0) {
+    return <EmptyState title="Tidak ada batch yang masih dalam proses" description="Batch yang sudah selesai atau ditutup tidak ditampilkan lagi." />;
+  }
+  return (
+    <>
+      <CardList>
+        {rows.map((row) => {
+          const note = wipNote(row);
+          return (
+            <li key={row.batchId} data-testid="reconciliation-wip-card">
+              <Card className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <BatchLink row={row} />
+                  <StatusBadge status={row.status} />
+                </div>
+                <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-base">
+                  <dt className="text-neutral-600">Sisa biaya (aplikasi)</dt>
+                  <dd className="text-right">
+                    <Amount value={row.appWip} />
+                  </dd>
+                  <dt className="text-neutral-600">Saldo jurnal batch</dt>
+                  <dd className="text-right">
+                    <Amount value={row.ledger} />
+                  </dd>
+                  {row.beforeBooks !== 0 && (
+                    <>
+                      <dt className="text-neutral-600">Dari sebelum pembukuan</dt>
+                      <dd className="text-right">
+                        <Amount value={row.beforeBooks} />
+                      </dd>
+                    </>
+                  )}
+                  <dt className="font-medium text-neutral-900">Selisih</dt>
+                  <dd className="text-right font-medium">
+                    <Amount value={row.difference} />
+                  </dd>
+                </dl>
+                {note && <p className="text-sm text-neutral-600">{note}</p>}
+              </Card>
+            </li>
+          );
+        })}
+      </CardList>
+      <TableContainer>
+        <caption className="sr-only">Barang dalam proses per batch produksi</caption>
+        <TableHead>
+          <Th scope="col">Batch</Th>
+          <Th scope="col" className="text-right">
+            Sisa biaya (aplikasi)
+          </Th>
+          <Th scope="col" className="text-right">
+            Saldo jurnal batch
+          </Th>
+          <Th scope="col" className="text-right">
+            Selisih
+          </Th>
+          <Th scope="col">Status</Th>
+        </TableHead>
+        <tbody>
+          {rows.map((row) => {
+            const note = wipNote(row);
+            return (
+              <Tr key={row.batchId} data-testid="reconciliation-wip-row">
+                <Td>
+                  <BatchLink row={row} />
+                </Td>
+                <Td className="whitespace-nowrap text-right">
+                  <Amount value={row.appWip} />
+                </Td>
+                <Td className="whitespace-nowrap text-right">
+                  <Amount value={row.ledger} />
+                  {row.beforeBooks !== 0 && <span className="block text-sm text-neutral-600">dari sebelum pembukuan {formatBalance(row.beforeBooks)}</span>}
+                </Td>
+                <Td className="whitespace-nowrap text-right font-medium">
+                  <Amount value={row.difference} />
+                </Td>
+                <Td>
+                  <StatusBadge status={row.status} />
+                  {note && <span className="mt-1 block max-w-xs text-sm text-neutral-600">{note}</span>}
+                </Td>
+              </Tr>
+            );
+          })}
+        </tbody>
+      </TableContainer>
+    </>
   );
 }
 
@@ -109,7 +251,7 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
       <Breadcrumb items={rootCrumbs("/accounting/reconciliation")} />
       <PageHeader
         title="Rekonsiliasi"
-        description={`Mencocokkan buku besar dengan catatan stok bahan dan tagihan pemasok, per ${formatDay(asOf)}.`}
+        description={`Mencocokkan buku besar dengan catatan stok, produksi, dan tagihan pemasok, per ${formatDay(asOf)}.`}
       />
       <form method="GET" className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end lg:max-w-2xl" aria-label="Filter rekonsiliasi">
         <div className="flex flex-col gap-1.5">
@@ -126,16 +268,29 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
 
       <section aria-labelledby="reconciliation-materials" className="mb-8 flex flex-col gap-3">
         <h2 id="reconciliation-materials" className="text-lg font-semibold text-neutral-900">
-          Persediaan bahan
+          Persediaan
         </h2>
         <p className="text-sm text-neutral-600">
-          Saldo akun persediaan kain dan aksesoris dibandingkan dengan nilai di catatan stok. Pemakaian produksi belum dijurnal sampai jurnal produksi tersedia.
+          Saldo akun persediaan dibandingkan dengan catatan di aplikasi: stok kain dan aksesoris (termasuk pemakaian produksi), barang dalam proses, barang jadi, dan barang cacat. Penjualan belum dijurnal sampai jurnal penjualan tersedia.
         </p>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {report.materials.map((row) => (
-            <MaterialCard key={row.accountCode} row={row} asOf={asOf} segmentStart={report.segmentStart} />
+            <InventoryCard key={row.accountCode} row={materialCardData(row)} asOf={asOf} segmentStart={report.segmentStart} />
+          ))}
+          {report.stockAccounts.map((row) => (
+            <InventoryCard key={row.accountCode} row={stockAccountCardData(row)} asOf={asOf} segmentStart={report.segmentStart} />
           ))}
         </div>
+      </section>
+
+      <section aria-labelledby="reconciliation-wip" className="mb-8 flex flex-col gap-3">
+        <h2 id="reconciliation-wip" className="text-lg font-semibold text-neutral-900">
+          Barang dalam proses per batch
+        </h2>
+        <p className="text-sm text-neutral-600">
+          Biaya yang masih tertahan di tiap batch yang belum selesai, dicocokkan dengan jurnalnya. Batch yang sudah selesai atau ditutup tidak ditampilkan lagi.
+        </p>
+        <WipBatches rows={report.wipBatches} />
       </section>
 
       <section aria-labelledby="reconciliation-payables" className="flex flex-col gap-3">

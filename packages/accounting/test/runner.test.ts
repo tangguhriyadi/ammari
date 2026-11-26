@@ -206,8 +206,10 @@ describe("runPosting", () => {
       // D-18: the card is a debit card, paid from Bank utama.
       expect(expense!.sides).toEqual(["Dr 6-2101 2500000", "Cr 1-1201 2500000"]);
       expect((await journalsFor(tx, "supplier_payment", purchasePaymentId)).map((entry) => entry.sides)).toEqual([["Dr 1-1601 1000000", "Cr 1-1201 1000000"]]);
-      expect((await journalsFor(tx, "supplier_payment", batchPaymentId)).map((entry) => entry.sides)).toEqual([["Dr 2-1102 300000", "Cr 1-1101 300000"]]);
-      expect((await journalsFor(tx, "supplier_payment", noPayeeId)).map((entry) => entry.sides)).toEqual([["Dr 2-1103 300000", "Cr 1-1101 300000"]]);
+      // The fixture batch is still a draft: on the production chain's position rule (Session 8) a
+      // payment before the batch is posted is an advance, which R1 uses once it posts.
+      expect((await journalsFor(tx, "supplier_payment", batchPaymentId)).map((entry) => entry.sides)).toEqual([["Dr 1-1601 300000", "Cr 1-1101 300000"]]);
+      expect((await journalsFor(tx, "supplier_payment", noPayeeId)).map((entry) => entry.sides)).toEqual([["Dr 1-1601 300000", "Cr 1-1101 300000"]]);
       expect((await journalsFor(tx, "supplier_payment", purchasePaymentId))[0]!.lines.every((line) => line.supplierId === docs.vendor.id)).toBe(true);
 
       expect(result.insertedCount).toBeGreaterThanOrEqual(4);

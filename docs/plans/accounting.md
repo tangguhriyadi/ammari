@@ -742,7 +742,7 @@ A's `source` column and lands with Session 11.
 - **P6 (approved deviation, consistent with the position rule):** a return to the supplier lowers N, so it
   clears open utang first and, on goods already paid, becomes Dr 1-1601; the replacement receipt (P1) uses
   that advance and the document nets to its tagihan.
-- Rekonsiliasi check 1 shows production consumption as "tidak dijurnal" until Session 8 posts R1 (owner, OK).
+- Rekonsiliasi check 1 shows production consumption as "tidak dijurnal" until Session 8 posts R1 (owner, OK). *Done in Session 8.*
 - `rules/raw-materials.ts`, rule `raw_material_adjustment` v1: P7 (`fabric_stock_movement` | `accessory_movement`,
   id, `adjustment`), dated created_at (Jakarta), recount/other → 6-4101, damaged/lost → 6-4102 [D-16]; a colour
   reclassification pair (one fabric, same instant, nets to zero) posts nothing; a legacy manual purchase dated
@@ -752,6 +752,45 @@ A's `source` column and lands with Session 11.
   (per purchase document: app tagihan − paid vs utang − uang muka − piutang klaim + not yet received).
 - Ledger-side D-14 guard test: `packages/accounting/test/purchase-chain.test.ts` (every P1-P6 line is on
   1-11xx/1-12xx, 1-14xx, 1-15xx, 1-16xx or 2-11xx, and `purchaseGuardViolations` is empty).
+
+**Done in Session 8 (no migration; every account, mapping and guard row already existed):**
+- `packages/accounting/src/rules/production.ts`, rule `production_chain` (version 2), one production batch
+  replayed in date order: R1 (`production_batch`,id,`posted`, dated posted_at: Dr 1-1503 = Σ the batch's
+  fabric + accessory `production` movements + Σ cost lines / Cr 1-1501, 1-1502 + the service lines as a
+  position change per payee), R2 (`goods_receipt_item`,id,`received`; its reversal `reversed`, the
+  reversal item's own negated values), R3 (`production_batch`,id,`wip_close`, D-15), R4 (`supplier_payment`,
+  id,`paid`/`void`), R5 (`defect_movement`,id,`return_out`, Dr 1-1503 / Cr 1-1506; its reversal keyed on
+  the reversal row). A posted batch without fabric consumption rows is the issue `batch_consumption_missing`
+  (it blocks the batch's later chain steps); a legacy batch stocked at posting (pre-0025) posted on/after the
+  start is `legacy_batch_stock`, and gets no R3.
+- **R3** is dated the later of the close and the batch's last receipt or return (so a reversal on a closed
+  batch moves R3 after it). `received` → the rest to 5-1201 (either sign); `closed` → the whole rest to
+  6-4102 (either sign, D-15 (b): no split of the rounding part). A reopen (a return to the tailor reopens a
+  closed batch) makes R3 "none", so the runner reverses it; the next close re-posts. R3 settles the whole
+  batch even when R1 was before the start (the official opening carries the pre-cut-over part).
+- **R4 on the position rule (the Session 7/8 follow-up):** per payee of the batch, N = the payee's cost
+  lines (from R1 on) − its payments; N > 0 → 2-1102 (2-1103 without payee); N < 0 while the batch is in
+  production → 1-1601 (e.g. a payment dated before the posting); N < 0 once production ended (R3's step:
+  received or closed) → 1-1402, so R3 also moves a left-over advance to the claim, and a reopen moves it
+  back. Every R1/R3/R4 journal holds only its step's change; no wrong-side balance (unit test with a running
+  balance). Batch payments left `supplier_payment` v1, which now emits nothing and is no longer a default
+  source; v2 re-derives every v1 batch-payment journal (reverse + repost). Payees are settled in a fixed order
+  (suppliers by id, no payee last), so the lines' order, and the content hash, never follow the database's
+  row order. The opening-balance proposal follows the same rule (an over-paid batch that ended before the
+  cut-over proposes 1-1402, not 1-1601).
+- `rules/inventory.ts`: A1 `finished_goods_adjustment` v1 (`stock_movement`,id,`adjustment`, created_at
+  Jakarta, recount/other → 6-4101, damaged/lost → 6-4102, value 0 → nothing, D-16) and A2 `defect_disposal`
+  v1 (`defect_movement`,id,`dispose`, occurred_at: Dr 6-4103 / Cr 1-1506; auction proceeds Dr
+  `cash.method.cash` (1-1101) / Cr 7-1101, D-7; its reversal keyed on the reversal row, posted only while the
+  original is active). Loaders in `production-loaders.ts`.
+- Rekonsiliasi: production consumption is journaled now (dated by the batch's posted_at, as R1), so it no
+  longer shows as "tidak dijurnal"; new cards for 1-1503 (Σ per-batch WIP from the records; trial month: the
+  part of batches posted before 1 Dec is "not journaled"), 1-1504 (vs stock_movements; sales and returns
+  "not journaled" until Session 9, legacy at-posting stock, voids of pre-books receipts) and 1-1506 (vs
+  defect_movements; voids of pre-books rows); a per-batch list "Barang dalam proses per batch" (the batch's own
+  1-1503 journals vs cost − received − rejected + returned, 0 after R3). Tests: `test/production-chain.test.ts`,
+  `test/inventory.test.ts`, `apps/admin/src/lib/accounting/session8.test.ts` (Haura beige L, reopen and
+  replacement, A1, A2, v1 → v2), e2e `accounting.spec.ts` at 390/1280.
 
 **Session 12 (cron, Rekonsiliasi polish, docs and runbook):**
 - **Runbook: revoke TRUNCATE.** Row-level triggers do not fire on `TRUNCATE`, so `TRUNCATE

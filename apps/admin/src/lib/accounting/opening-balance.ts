@@ -22,7 +22,8 @@ import { insertStaffJournal, loadPostableAccountMap, mapJournalWriteError, OPENI
 //   2-1101 / 1-1601 / 1-1402  per purchase: value received (accepted + rejected, less returned
 //           defects) less what was paid; a rest is utang, an over-payment an advance, or a claim
 //           when the purchase was closed before the cut-over (D-13);
-//   2-1102 / 2-1103 / 1-1601  per posted batch and payee: cost lines less what was paid;
+//   2-1102 / 2-1103 / 1-1601 / 1-1402  per posted batch and payee: cost lines less what was paid;
+//           an over-payment is an advance, or a claim when production ended before the cut-over;
 //   2-1201  paid web orders and manual orders at "to ship" not shipped by the cut-over;
 //   2-1202  paid web orders cancelled before the cut-over whose refund was not recorded by then.
 // Payments voided at any time are left out: the books start from what is known when the opening is
@@ -152,9 +153,16 @@ export async function proposeOpeningBalances(db: Database = defaultDb): Promise<
     sql`with open_batches as (
       select pb.id from production_batches pb
       where pb.status = 'posted' and pb.posted_at < ${CUTOVER_INSTANT}::timestamptz
-        and not (pb.receipt_status = 'closed' and pb.closed_at < ${CUTOVER_INSTANT}::timestamptz)
-        and not (pb.receipt_status = 'received' and not exists (
-          select 1 from goods_receipts gr where gr.production_batch_id = pb.id and gr.received_at >= ${OFFICIAL_BOOKS_START}::date))
+        -- Ended before the cut-over exactly as R3 dates the end (batchEndDate, Session 8): received or
+        -- closed (the close before the cut-over), with no receipt and no return to the tailor on or
+        -- after it. A batch closed in December but still receiving in January is open at the cut-over.
+        and not (pb.receipt_status in ('received', 'closed')
+          and (pb.receipt_status <> 'closed' or pb.closed_at < ${CUTOVER_INSTANT}::timestamptz)
+          and not exists (select 1 from goods_receipts gr where gr.production_batch_id = pb.id and gr.received_at >= ${OFFICIAL_BOOKS_START}::date)
+          and not exists (select 1 from defect_movements dm join production_batch_items pbi on pbi.id = dm.production_batch_item_id
+            left join defect_movements orig on orig.id = dm.reverses_movement_id
+            where pbi.production_batch_id = pb.id and dm.occurred_at >= ${OFFICIAL_BOOKS_START}::date
+              and (dm.type = 'return_out' or (dm.type = 'reversal' and orig.type = 'return_out'))))
         and not exists (
           select 1 from production_batch_items pbi join stock_movements sm on sm.ref_type = 'production_batch_item' and sm.ref_id = pbi.id::text
           where pbi.production_batch_id = pb.id)
@@ -220,9 +228,21 @@ export async function proposeOpeningBalances(db: Database = defaultDb): Promise<
   );
 
   // Production batches: service cost lines less payments, per payee (NULL = no supplier).
-  const batchRows = await rows<{ supplier_id: string | null; supplier_name: string | null; net: string }>(
+  // An over-payment is an advance while the batch is still in production, a claim once production
+  // ended (received or short-closed) before the cut-over: the same position rule R3 applies
+  // (packages/accounting/src/rules/production.ts, Session 8).
+  const batchRows = await rows<{ supplier_id: string | null; supplier_name: string | null; ended_before: boolean; net: string }>(
     db,
-    sql`select x.supplier_id, s.name::text as supplier_name, sum(x.value)::bigint as net from (
+    sql`select x.supplier_id, s.name::text as supplier_name,
+      coalesce(bool_or(pb.receipt_status in ('received', 'closed')
+        and (pb.receipt_status <> 'closed' or pb.closed_at < ${CUTOVER_INSTANT}::timestamptz)
+        and not exists (select 1 from goods_receipts gr where gr.production_batch_id = pb.id and gr.received_at >= ${OFFICIAL_BOOKS_START}::date)
+        and not exists (select 1 from defect_movements dm join production_batch_items pbi on pbi.id = dm.production_batch_item_id
+          left join defect_movements orig on orig.id = dm.reverses_movement_id
+          where pbi.production_batch_id = pb.id and dm.occurred_at >= ${OFFICIAL_BOOKS_START}::date
+            -- Returns to the tailor and their reversals only, as batchEndDate (R3) reads them.
+            and (dm.type = 'return_out' or (dm.type = 'reversal' and orig.type = 'return_out')))), false) as ended_before,
+      sum(x.value)::bigint as net from (
       select c.production_batch_id as batch_id, c.supplier_id, c.total as value
       from production_batch_costs c join production_batches pb on pb.id = c.production_batch_id
       where pb.status = 'posted' and pb.posted_at < ${CUTOVER_INSTANT}::timestamptz
@@ -230,6 +250,7 @@ export async function proposeOpeningBalances(db: Database = defaultDb): Promise<
       select production_batch_id, supplier_id, -amount from supplier_payments
       where production_batch_id is not null and paid_at < ${OFFICIAL_BOOKS_START} and voided_at is null
     ) x
+    join production_batches pb on pb.id = x.batch_id
     left join suppliers s on s.id = x.supplier_id
     group by x.batch_id, x.supplier_id, s.name
     having sum(x.value) <> 0`,
@@ -253,7 +274,7 @@ export async function proposeOpeningBalances(db: Database = defaultDb): Promise<
     const net = num(row.net);
     const name = row.supplier_name ?? "Tanpa pemasok";
     if (net > 0) addSupplier(row.supplier_id ? "payable.production_service" : "payable.no_supplier", row.supplier_id, name, -net);
-    else addSupplier("prepaid.purchase_advance", row.supplier_id, name, -net);
+    else addSupplier(row.ended_before ? "receivable.supplier_claim" : "prepaid.purchase_advance", row.supplier_id, name, -net);
   }
   const supplierLabels: Record<string, string> = {
     "payable.material_supplier": "Utang pemasok bahan",

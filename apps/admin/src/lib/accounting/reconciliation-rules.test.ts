@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { reconcileMaterial, reconcilePayable } from "./reconciliation-rules";
+import { reconcileMaterial, reconcilePayable, reconcileStockAccount, reconcileWipBatch } from "./reconciliation-rules";
 
 // Rekonsiliasi checks 1 and 2 (docs/plans/accounting.md §6.3, Session 7): what a difference means.
 
@@ -15,9 +15,15 @@ describe("check 1: raw materials vs the stock ledger", () => {
     });
   });
 
-  test("production consumption, legacy purchases and voids of pre-books receipts are explained, not a mismatch", () => {
-    const result = reconcileMaterial({ ...material, ledger: 1_000_000, receipts: 1_000_000, production: -400_000, legacy: 30_000, voidsBeforeBooks: -20_000 });
-    expect(result).toMatchObject({ stockValue: 610_000, notJournaled: -390_000, difference: 0, status: "explained" });
+  test("legacy purchases and voids of pre-books receipts are explained, not a mismatch", () => {
+    const result = reconcileMaterial({ ...material, ledger: 1_000_000, receipts: 1_000_000, legacy: 30_000, voidsBeforeBooks: -20_000 });
+    expect(result).toMatchObject({ stockValue: 1_010_000, notJournaled: 10_000, difference: 0, status: "explained" });
+  });
+
+  test("production consumption is journaled by R1 (Session 8): the ledger must carry it", () => {
+    expect(reconcileMaterial({ ...material, ledger: 600_000, receipts: 1_000_000, production: -400_000 })).toMatchObject({ stockValue: 600_000, notJournaled: 0, difference: 0, status: "ok" });
+    // An R1 held by a posting issue shows as a mismatch, never as "not journaled".
+    expect(reconcileMaterial({ ...material, ledger: 1_000_000, receipts: 1_000_000, production: -400_000 })).toMatchObject({ difference: 400_000, status: "mismatch" });
   });
 
   test("an unposted receipt (an open issue) is a mismatch", () => {
@@ -27,6 +33,24 @@ describe("check 1: raw materials vs the stock ledger", () => {
   test("official books: the opening balance must carry the stock value before the cut-over", () => {
     expect(reconcileMaterial({ ...material, ledger: 2_300_000, beforeBooks: 2_000_000, receipts: 300_000 }).status).toBe("ok");
     expect(reconcileMaterial({ ...material, ledger: 2_250_000, beforeBooks: 2_000_000, receipts: 300_000 })).toMatchObject({ difference: -50_000, status: "mismatch" });
+  });
+});
+
+describe("check 1 for 1-1503 / 1-1504 / 1-1506 (Session 8)", () => {
+  test("an account that follows its records is ok; parts not journaled on purpose are explained", () => {
+    expect(reconcileStockAccount({ ledger: 500_000, stockValue: 500_000, notJournaled: [] })).toMatchObject({ difference: 0, status: "ok" });
+    const finished = reconcileStockAccount({ ledger: 500_000, stockValue: 300_000, notJournaled: [{ label: "Penjualan", value: -200_000 }, { label: "Kosong", value: 0 }] });
+    expect(finished).toMatchObject({ notJournaledTotal: -200_000, difference: 0, status: "explained" });
+    expect(finished.notJournaled).toHaveLength(1);
+    expect(reconcileStockAccount({ ledger: 0, stockValue: 85_834, notJournaled: [] })).toMatchObject({ difference: -85_834, status: "mismatch" });
+  });
+
+  test("a batch's WIP: its own journals against its records; the part from before the books is explained", () => {
+    expect(reconcileWipBatch({ appWip: 400_000, beforeBooks: 0, ledger: 400_000, startsBeforeBooks: false, valueMissing: false })).toMatchObject({ difference: 0, status: "ok" });
+    expect(reconcileWipBatch({ appWip: 400_000, beforeBooks: 1_000_000, ledger: -600_000, startsBeforeBooks: true, valueMissing: false })).toMatchObject({ difference: 0, status: "explained" });
+    expect(reconcileWipBatch({ appWip: 400_000, beforeBooks: 1_000_000, ledger: 0, startsBeforeBooks: true, valueMissing: false }).status).toBe("review");
+    expect(reconcileWipBatch({ appWip: 400_000, beforeBooks: 0, ledger: 0, startsBeforeBooks: false, valueMissing: false })).toMatchObject({ difference: -400_000, status: "mismatch" });
+    expect(reconcileWipBatch({ appWip: 0, beforeBooks: 0, ledger: 0, startsBeforeBooks: false, valueMissing: true }).status).toBe("mismatch");
   });
 });
 

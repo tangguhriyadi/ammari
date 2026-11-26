@@ -23,6 +23,9 @@ import { supplierPaymentRule, type SupplierPaymentSnapshot } from "./rules/suppl
 import { purchaseChainRule, type PurchaseDocumentSnapshot } from "./rules/purchases";
 import { rawMaterialAdjustmentRule, type RawMaterialMovementSnapshot } from "./rules/raw-materials";
 import { loadPurchaseDocumentSnapshots, loadRawMaterialMovementSnapshots } from "./purchase-loaders";
+import { productionChainRule, type ProductionBatchSnapshot } from "./rules/production";
+import { defectDisposalRule, finishedGoodsAdjustmentRule, type DefectDisposalSnapshot, type FinishedGoodsAdjustmentSnapshot } from "./rules/inventory";
+import { loadDefectDisposalSnapshots, loadFinishedGoodsAdjustmentSnapshots, loadProductionBatchSnapshots } from "./production-loaders";
 import type { AccountInfo, PostingContext, PostingEvent, PostingKey, PostingRule } from "./rules/types";
 
 // The posting runner (docs/plans/accounting.md §2, Session 2). Reads source records, asks each
@@ -39,6 +42,7 @@ import type { AccountInfo, PostingContext, PostingEvent, PostingKey, PostingRule
 // sekarang" button today, and the cron route in Session 12.
 
 export type { Database } from "./ledger-write";
+export { loadProductionBatchSnapshots } from "./production-loaders";
 
 /** A rule plus the loader for its snapshots. */
 export interface PostingSource {
@@ -124,10 +128,28 @@ export function rawMaterialAdjustmentSource(rule: PostingRule<RawMaterialMovemen
   return postingSource(rule, loadRawMaterialMovementSnapshots);
 }
 
-/** Every rule posting so far: E1-E2 (expenses), the purchase chain P1-P6, R4 (batch payments,
- * without chain until Session 8), P7. Each posting key is emitted by exactly one source. */
+/** R1-R5 with the batch payments on the position rule (Session 8). */
+export function productionChainSource(rule: PostingRule<ProductionBatchSnapshot> = productionChainRule): PostingSource {
+  return postingSource(rule, loadProductionBatchSnapshots);
+}
+
+/** A1 (Session 8). */
+export function finishedGoodsAdjustmentSource(rule: PostingRule<FinishedGoodsAdjustmentSnapshot> = finishedGoodsAdjustmentRule): PostingSource {
+  return postingSource(rule, loadFinishedGoodsAdjustmentSnapshots);
+}
+
+/** A2 (Session 8). */
+export function defectDisposalSource(rule: PostingRule<DefectDisposalSnapshot> = defectDisposalRule): PostingSource {
+  return postingSource(rule, loadDefectDisposalSnapshots);
+}
+
+/** Every rule posting so far: E1-E2 (expenses), the purchase chain P1-P6, P7, the production chain
+ * R1-R5 (batch payments included, Session 8), A1 and A2. Each posting key is emitted by exactly one
+ * source. The production chain runs after the purchase chain, so a batch's consumption (R1) is
+ * booked after the receipts that brought the material in, within the same run. The supplier_payment
+ * rule (Session 2) emits nothing any more and is not listed. */
 export function defaultPostingSources(): PostingSource[] {
-  return [expenseSource(), purchaseChainSource(), supplierPaymentSource(), rawMaterialAdjustmentSource()];
+  return [expenseSource(), purchaseChainSource(), rawMaterialAdjustmentSource(), productionChainSource(), finishedGoodsAdjustmentSource(), defectDisposalSource()];
 }
 
 export async function loadPostingContext(db: Database, postingStartDate: string = POSTING_START_DATE): Promise<PostingContext> {
