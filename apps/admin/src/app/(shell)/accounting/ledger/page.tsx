@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { parseLedgerFilters, toSearchParams, type RawLedgerParams } from "@/lib/accounting/filters";
 import { getLedger, listChannelOptions, listPostableAccounts, listSupplierOptions } from "@/lib/accounting/queries";
+import { trialBalanceNotes } from "@/lib/accounting/trial-balance-content";
 import { LedgerTable } from "../_components/ledger-table";
 
 // Buku besar (docs/plans/accounting.md §6, Session 2): one account at a time, with its opening
@@ -23,6 +24,8 @@ export default async function LedgerPage({ searchParams }: { searchParams: Promi
     listSupplierOptions(),
     listChannelOptions(),
   ]);
+
+  const ledgerNotes = ledger ? trialBalanceNotes(ledger.range) : [];
 
   return (
     <>
@@ -86,12 +89,20 @@ export default async function LedgerPage({ searchParams }: { searchParams: Promi
       </form>
       {ledger ? (
         <>
+          {/* One set of books per view (D-22, books.ts): December 2026 never reaches 2027. */}
+          {ledgerNotes.length > 0 && (
+            <ul className="mb-4 flex flex-col gap-1 text-sm text-neutral-600" data-testid="ledger-notes">
+              {ledgerNotes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          )}
           <LedgerTable ledger={ledger} />
           <Pagination
             pagination={ledger.pagination}
             basePath="/accounting/ledger"
             searchParams={{
-              ...toSearchParams({ account: filters.accountCode, from: filters.from, to: filters.to, supplier: filters.supplierId, channel: filters.channelId }),
+              ...toSearchParams({ account: filters.accountCode, from: ledger.range.from, to: ledger.range.to, supplier: filters.supplierId, channel: filters.channelId }),
               perPage: raw.perPage,
             }}
             itemLabel="baris"

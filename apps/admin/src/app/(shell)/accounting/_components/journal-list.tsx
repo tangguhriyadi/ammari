@@ -3,13 +3,15 @@ import { Badge, Card, CardList, EmptyState } from "@ammari/ui";
 import { formatAmount, formatDay } from "@/lib/accounting/format";
 import { JOURNAL_KIND_LABELS, sourceEventLabel, sourceTypeLabel } from "@/lib/accounting/labels";
 import type { JournalEntryRow, JournalLineRow, SourceRef } from "@/lib/accounting/queries";
+import { ReverseJournalButton } from "../journal/_components/reverse-journal-button";
 
 // Jurnal umum (docs/plans/accounting.md §6): each entry with its lines; reversals linked both ways.
 // Phones get a card per entry, tablet/desktop a table where each entry is its own row group.
 
 function SourceLabel({ entry }: { entry: JournalEntryRow }) {
   const event = sourceEventLabel(entry.sourceEvent);
-  const prefix = `${sourceTypeLabel(entry.sourceType)}${event ? ` (${event.toLowerCase()})` : ""}`;
+  const base = entry.sourceType === null && entry.kind === "opening" ? "Saldo awal" : sourceTypeLabel(entry.sourceType);
+  const prefix = `${base}${event ? ` (${event.toLowerCase()})` : ""}${entry.postedByName ? `, dicatat ${entry.postedByName}` : ""}`;
   return (
     <span className="text-sm text-neutral-600">
       {prefix}
@@ -37,12 +39,35 @@ function EntryNotes({ entry }: { entry: JournalEntryRow }) {
   if (entry.reversesEntryNo) notes.push(`Membalik ${entry.reversesEntryNo}`);
   if (entry.reversedByEntryNo) notes.push(`Dibalik oleh ${entry.reversedByEntryNo}`);
   if (entry.sourceDate && entry.sourceDate !== entry.entryDate) notes.push(`Tanggal sumber ${formatDay(entry.sourceDate)}`);
-  if (notes.length === 0) return null;
-  return <span className="text-sm text-neutral-600">{notes.join(" · ")}</span>;
+  if (notes.length === 0 && !entry.attachmentFileId) return null;
+  return (
+    <span className="text-sm text-neutral-600">
+      {notes.join(" · ")}
+      {entry.attachmentFileId && (
+        <>
+          {notes.length > 0 ? " · " : ""}
+          <a href={`/api/private-files/${entry.attachmentFileId}`} target="_blank" rel="noopener noreferrer" className="font-medium text-brand hover:underline">
+            Lihat lampiran
+          </a>
+        </>
+      )}
+    </span>
+  );
+}
+
+function EntryActions({ entry, canManage }: { entry: JournalEntryRow; canManage: boolean }) {
+  if (!canManage || !entry.canReverse) return null;
+  return <ReverseJournalButton entryId={entry.id} entryNo={entry.entryNo} />;
 }
 
 function KindBadge({ entry }: { entry: JournalEntryRow }) {
-  return <Badge variant={entry.kind === "reversal" ? "warning" : "neutral"}>{JOURNAL_KIND_LABELS[entry.kind]}</Badge>;
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      <Badge variant={entry.kind === "reversal" ? "warning" : "neutral"}>{JOURNAL_KIND_LABELS[entry.kind]}</Badge>
+      {/* D-22: December 2026 is practice books, never part of the official ones (books.ts). */}
+      {entry.isTrial && <Badge variant="neutral">Uji coba</Badge>}
+    </span>
+  );
 }
 
 function AccountName({ line }: { line: JournalLineRow }) {
@@ -54,12 +79,12 @@ function AccountName({ line }: { line: JournalLineRow }) {
   );
 }
 
-export function JournalList({ rows, filtered }: { rows: JournalEntryRow[]; filtered: boolean }) {
+export function JournalList({ rows, filtered, canManage = false }: { rows: JournalEntryRow[]; filtered: boolean; canManage?: boolean }) {
   if (rows.length === 0) {
     return filtered ? (
       <EmptyState title="Tidak ada jurnal yang cocok" description="Ubah tanggal atau filter, lalu terapkan lagi." />
     ) : (
-      <EmptyState title="Belum ada jurnal bulan ini" description="Jurnal dibuat otomatis dari biaya dan pembayaran supplier saat posting dijalankan." />
+      <EmptyState title="Belum ada jurnal bulan ini" description="Jurnal dibuat otomatis dari biaya dan pembayaran supplier saat posting dijalankan, atau dicatat manual." />
     );
   }
 
@@ -81,6 +106,7 @@ export function JournalList({ rows, filtered }: { rows: JournalEntryRow[]; filte
                 <SourceLabel entry={entry} />
                 <EntryNotes entry={entry} />
               </div>
+              <EntryActions entry={entry} canManage={canManage} />
               <ul className="flex flex-col divide-y divide-neutral-100 border-t border-neutral-100">
                 {entry.lines.map((line) => (
                   <li key={line.lineNo} className="flex items-start justify-between gap-3 py-2 text-base">
@@ -124,6 +150,9 @@ export function JournalList({ rows, filtered }: { rows: JournalEntryRow[]; filte
                     <span className="break-words text-neutral-900">{entry.description}</span>
                     <SourceLabel entry={entry} />
                     <EntryNotes entry={entry} />
+                    <span className="mt-1">
+                      <EntryActions entry={entry} canManage={canManage} />
+                    </span>
                   </span>
                 </td>
               </tr>

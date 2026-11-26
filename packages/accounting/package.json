@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./runner": "./src/runner.ts"
+    "./runner": "./src/runner.ts",
+    "./ledger-write": "./src/ledger-write.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

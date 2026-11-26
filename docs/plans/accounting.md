@@ -470,6 +470,28 @@ new migration, additive), audit-logged, corrected only by reversal.
    and **Saldo Biteship (1-1603)** **typed** from the platforms' dashboards (past top-ups were never
    recorded, so the dashboard balance on the cut-over day is the only source); Kas/Bank typed from
    bank statements; fixed assets typed; difference → 3-9001, then closed to 3-1001 once approved.
+   **Trial month and official books (settled in Session 4, 26 Nov 2026).** The ledger holds two
+   separate sets of books, split by `entry_date` (packages/accounting/src/books.ts):
+   - *Trial books*: entries dated 2026-12-01..2026-12-31. The engine posts December so every rule
+     is exercised; the month is never closed and is never part of the official books.
+   - *Official books*: entries dated on or after 2027-01-01, starting from the ONE active
+     `kind='opening'` journal, dated exactly 2027-01-01 (CHECK + partial unique index, migration
+     0052). Its lines come from the source ledgers and the typed balances as of the end of
+     31 Dec 2026, never from December's journals.
+   - Every balance is summed within one set only: a report's opening balance starts at its
+     segment's first day (1 Dec 2026 or 1 Jan 2027). A range crossing the cut-over starts at
+     1 Jan 2027 (December is reported on its own, with a note). In the official books the opening
+     journal (and a reversal of it) counts as the opening balance, never as January's movement.
+     Neraca saldo, Buku besar and the close's balance check all follow this rule.
+   - A void (any event that only negates its original, plan §2) is posted only when its original's
+     active journal is in the same set of books: a December original voided in 2027 posts nothing
+     in 2027 (the opening journal already reflects the correction; the opening proposals ignore
+     voided payments). Reversals of December journals (re-maps, rule bumps) are dated in December,
+     which is never closed, so they never touch 2027 either.
+   - The opening journal is posted only from 1 Jan 2027 (the proposals need complete 2026 data). A
+     wrong one is reversed and re-entered while January 2027 is open; reversing it while January is
+     closed is refused (reopen January first).
+   - Manual journals may be dated in December 2026 even before it starts (practice only).
 5. **Adjusting entries:** accruals, prepaid amortisation, refund reclasses (a manual refund that
    went through Midtrans [D-9]), Midtrans/marketplace withdrawals (M3 [D-11], W5 before fee work B),
    **Biteship top-ups** (template: Dr 1-1603 / Cr 1-1201, one per top-up from the bank statement
@@ -625,6 +647,17 @@ ON CONFLICT (so `seedAccounting` re-runs on an edited database) and checks the t
 postable Kas & Bank account). The same rules live in `packages/accounting/src/mapping-rules.ts` for
 the editors' messages.
 
+**Done in Session 4 (migration 0052):** manual journals (attachment as `private_files` purpose
+`journal_attachment`, only on manual/opening journals; templates Top-up Biteship, penarikan Saldo
+Penjual Shopee/TikTok, koreksi refund lewat Midtrans, and closing Ekuitas saldo awal into Modal
+pemilik; reversal with a written reason), the opening balance wizard (system proposals confirmed one
+by one, typed balances, plug to 3-9001), Tutup buku (close under the month's exclusive lock; months
+close in ascending order from January 2027; open posting issues need a written override reason,
+stored on `fiscal_periods.close_override_reason`; PPh final rate end warns, never blocks; reopen
+needs a written reason; December 2026 never closes) and Neraca saldo with PDF/Excel. The trial month
+/ official books rule is §5.4. Not yet: the MDR "still an estimate" close warning (D-8) needs fee work
+A's `source` column and lands with Session 11.
+
 **Session 12 (cron, Rekonsiliasi polish, docs and runbook):**
 - **Runbook: revoke TRUNCATE.** Row-level triggers do not fire on `TRUNCATE`, so `TRUNCATE
   journal_lines` (or `journal_entries CASCADE`) bypasses every append-only guard; the same holds for
@@ -646,7 +679,7 @@ the editors' messages.
 - Multi-month close (year end): lock months in ascending order, post the closing entries before
   setting `status = 'closed'`; two closers that both already hold a shared lock on the same month
   would deadlock (Postgres resolves it by aborting one). Document in the close code (Session 4
-  builds it; record the rule there).
+  builds it; record the rule there). *Done in Session 4: recorded in apps/admin/src/lib/accounting/periods.ts (one month per transaction today).*
 - Constraint hardening: tie `entry_no`'s `YYYYMM` to `entry_date`; a lower bound on `entry_date`
   (the trial month start); the trial-month CHECK hardcodes `2026-12-01` (fine while D-22 stands).
 - Indexes, once real volume exists: `journal_lines (account_code) INCLUDE (entry_id, debit,

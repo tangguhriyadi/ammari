@@ -410,6 +410,43 @@ describe("runPosting", () => {
     });
   });
 
+  test("a void never crosses the cut-over (Session 4, books.ts): a December original voided in 2027 posts nothing in 2027, a December void still posts in December", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const docs = await insertDocuments(tx, staff.id);
+      // Voided on 2 Jan 2027 WIB: the trial-month journal stays, no 2027 negation, no issue.
+      const crossingExpense = await insertExpense(tx, staff.id, { date: "2026-12-20", voidedAt: new Date("2027-01-02T03:00:00Z") });
+      const crossingPayment = await insertPurchasePayment(tx, staff.id, docs, { paidAt: "2026-12-21", voidedAt: new Date("2027-01-03T03:00:00Z") });
+      // Voided on 22 Dec 2026 WIB: both sides in the trial books, so the void posts as before.
+      const trialExpense = await insertExpense(tx, staff.id, { date: "2026-12-20", voidedAt: new Date("2026-12-22T03:00:00Z") });
+
+      await run(tx);
+      const second = await run(tx);
+
+      expect((await journalsFor(tx, "business_expense", crossingExpense)).map((entry) => [entry.sourceEvent, entry.entryDate])).toEqual([["paid", "2026-12-20"]]);
+      expect((await journalsFor(tx, "supplier_payment", crossingPayment)).map((entry) => [entry.sourceEvent, entry.entryDate])).toEqual([["paid", "2026-12-21"]]);
+      expect(await openIssuesFor(tx, crossingExpense)).toEqual([]);
+      expect(await openIssuesFor(tx, crossingPayment)).toEqual([]);
+      expect((await journalsFor(tx, "business_expense", trialExpense)).map((entry) => [entry.sourceEvent, entry.entryDate])).toEqual([
+        ["paid", "2026-12-20"],
+        ["void", "2026-12-22"],
+      ]);
+      expect(second.insertedCount).toBe(0);
+    });
+  });
+
+  test("a 2027 original voided in 2027 still posts its void (both in the official books)", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const expenseId = await insertExpense(tx, staff.id, { date: "2027-01-05", voidedAt: new Date("2027-01-06T03:00:00Z") });
+      await run(tx);
+      expect((await journalsFor(tx, "business_expense", expenseId)).map((entry) => [entry.sourceEvent, entry.entryDate])).toEqual([
+        ["paid", "2027-01-05"],
+        ["void", "2027-01-06"],
+      ]);
+    });
+  });
+
   test("an unmapped category is queued once as a posting issue, then posts and resolves once mapped (D-25)", async () => {
     await withRollback(async (tx) => {
       const staff = await insertStaffUser(tx);

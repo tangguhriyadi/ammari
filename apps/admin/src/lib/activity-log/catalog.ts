@@ -346,6 +346,30 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       update: { label: "Pengaturan pajak diubah" },
     },
   },
+  journal_entry: {
+    label: "Jurnal",
+    area: "accounting",
+    actions: {
+      create_manual: { label: "Jurnal manual dicatat" },
+      create_opening: { label: "Saldo awal dibukukan" },
+      reverse: { label: "Jurnal dibalik" },
+    },
+  },
+  fiscal_period: {
+    label: "Periode akuntansi",
+    area: "accounting",
+    actions: {
+      close: { label: "Bulan ditutup" },
+      reopen: { label: "Bulan dibuka kembali" },
+    },
+  },
+  trial_balance: {
+    label: "Neraca saldo",
+    area: "accounting",
+    actions: {
+      download: { label: "Neraca saldo diunduh" },
+    },
+  },
   expense_report: {
     label: "Laporan keuangan",
     area: "expenses",

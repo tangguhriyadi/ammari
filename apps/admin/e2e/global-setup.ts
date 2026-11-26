@@ -206,6 +206,11 @@ export const E2E_ACCOUNTING_SUPPLIER = "E2E Akun Toko Kain";
 // account it creates itself, never the default mappings accounting.spec.ts posts with.
 export const E2E_ACCOUNTING_MASTER_EMAIL = "accounting-master@e2e.ammari.test";
 export const E2E_ACCOUNTING_MASTER_CATEGORY = { code: "e2e_akun_langganan", name: "E2E Akun Langganan" } as const;
+// accounting-journals.spec.ts (docs/plans/accounting.md Session 4): manual journals (create and
+// reverse), Neraca saldo, Tutup buku and Saldo awal. An owner of its own (fresh OTP throttle). It
+// posts only to 1-1603 Saldo Biteship and 1-1201 Bank utama, dated in the December 2026 trial month,
+// so it never changes what accounting.spec.ts asserts (its own expense and payment journals).
+export const E2E_ACCOUNTING_JOURNALS_EMAIL = "accounting-journals@e2e.ammari.test";
 export const E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL = "production-payments-no-finance@e2e.ammari.test";
 const E2E_PRODUCTION_NO_FINANCE_ROLE_KEY = "e2e_production_no_finance";
 // A dedicated email/role for purchases-receipt.spec.ts (docs/plans/suppliers-goods-receipt.md
@@ -1114,6 +1119,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // Data Master Akun / Pemetaan akun / Pengaturan pajak (see E2E_ACCOUNTING_MASTER_EMAIL above).
   await ensureStaffFixture(E2E_ACCOUNTING_MASTER_EMAIL, "E2E Akuntansi master (owner)", OWNER_ROLE_KEY);
   await db.insert(expenseCategories).values({ ...E2E_ACCOUNTING_MASTER_CATEGORY, kind: "operating", sortOrder: 170 }).onConflictDoNothing();
+
+  // Jurnal manual / Neraca saldo / Tutup buku / Saldo awal (see E2E_ACCOUNTING_JOURNALS_EMAIL above).
+  await ensureStaffFixture(E2E_ACCOUNTING_JOURNALS_EMAIL, "E2E Akuntansi jurnal (owner)", OWNER_ROLE_KEY);
 
   // Pelanggan & Voucher (see E2E_CUSTOMERS_OWNER_EMAIL above).
   await ensureStaffFixture(E2E_CUSTOMERS_OWNER_EMAIL, "E2E Pelanggan (owner)", OWNER_ROLE_KEY);

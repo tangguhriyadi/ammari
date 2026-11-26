@@ -18,7 +18,7 @@ import { RunPostingButton } from "../_components/run-posting-button";
 
 export default async function JournalPage({ searchParams }: { searchParams: Promise<RawJournalParams & { page?: string; perPage?: string }> }) {
   const session = await requirePermission("accounting.view");
-  const canRunPosting = session.permissionKeys.includes("accounting.manage");
+  const canManage = session.permissionKeys.includes("accounting.manage");
   const raw = await searchParams;
   const today = jakartaDate();
   const filters = parseJournalFilters(raw, today);
@@ -40,10 +40,19 @@ export default async function JournalPage({ searchParams }: { searchParams: Prom
         title="Jurnal Umum"
         description={
           lastRun?.finishedAt
-            ? `Jurnal dibuat otomatis dari biaya dan pembayaran supplier. Posting terakhir ${formatDateTime(lastRun.finishedAt)} WIB.`
-            : "Jurnal dibuat otomatis dari biaya dan pembayaran supplier."
+            ? `Jurnal dibuat otomatis dari biaya dan pembayaran supplier; jurnal manual untuk yang tidak dicatat aplikasi. Posting terakhir ${formatDateTime(lastRun.finishedAt)} WIB.`
+            : "Jurnal dibuat otomatis dari biaya dan pembayaran supplier; jurnal manual untuk yang tidak dicatat aplikasi."
         }
-        actions={canRunPosting ? <RunPostingButton /> : undefined}
+        actions={
+          canManage ? (
+            <div className="flex flex-wrap gap-3">
+              <Link href="/accounting/journal/new">
+                <Button variant="secondary">Catat jurnal manual</Button>
+              </Link>
+              <RunPostingButton />
+            </div>
+          ) : undefined
+        }
       />
       <PostingIssues rows={issues.rows} totalCount={issues.totalCount} />
       <form method="GET" className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6 lg:items-end" aria-label="Filter jurnal">
@@ -99,7 +108,7 @@ export default async function JournalPage({ searchParams }: { searchParams: Prom
           )}
         </div>
       </form>
-      <JournalList rows={rows} filtered={!isDefault} />
+      <JournalList rows={rows} filtered={!isDefault} canManage={canManage} />
       <Pagination
         pagination={pagination}
         basePath="/accounting/journal"

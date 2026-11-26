@@ -9,6 +9,7 @@ import {
   journalLines,
   postingIssues,
   postingRuns,
+  staffUsers,
   supplierPayments,
   suppliers,
   type AccountNormalBalance,
@@ -16,12 +17,17 @@ import {
   type JournalEntryKind,
 } from "@ammari/db/schema";
 import { qualifiedColumn } from "@ammari/db/sql-helpers";
+import { resolveReportRange, bookSegmentOf, type ReportRange } from "@ammari/accounting";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
 import type { JournalFilters, LedgerFilters } from "./filters";
+import { IS_OPENING_SQL } from "./trial-balance";
 
 // Reads for Jurnal umum and Buku besar (docs/plans/accounting.md §6, Session 2). Read-only: the
-// only writer of the journal tables is the posting runner (packages/accounting).
+// journal tables are written by the posting runner (packages/accounting) and, since Session 4, by
+// manual/opening journals and their reversals (manual-journals.ts, opening-balance.ts). Balances are
+// summed within one set of books (books.ts): the December 2026 trial month or the official books
+// from 1 Jan 2027, whose opening journal counts as the opening balance.
 
 export interface SourceRef {
   label: string;
@@ -51,6 +57,12 @@ export interface JournalEntryRow {
   reversedByEntryNo: string | null;
   lines: JournalLineRow[];
   debitTotal: number;
+  /** Dated in the December 2026 trial month (D-22): practice books, not the official ones. */
+  isTrial: boolean;
+  /** A manual or opening journal not yet reversed: staff may reverse it (plan §7). */
+  canReverse: boolean;
+  attachmentFileId: string | null;
+  postedByName: string | null;
 }
 
 /** The document a journal came from, with a link to its page when one exists. */
@@ -108,6 +120,8 @@ export async function listJournalEntries(
       sourceEvent: journalEntries.sourceEvent,
       reversesEntryNo: reverses.entryNo,
       reversedByEntryNo: reversedBy.entryNo,
+      attachmentFileId: journalEntries.attachmentFileId,
+      postedByName: staffUsers.name,
       expenseNo: businessExpenses.expenseNo,
       paymentNo: supplierPayments.paymentNo,
       purchaseId: supplierPayments.purchaseId,
@@ -116,6 +130,7 @@ export async function listJournalEntries(
     .from(journalEntries)
     .leftJoin(reverses, eq(reverses.id, journalEntries.reversesEntryId))
     .leftJoin(reversedBy, eq(reversedBy.id, journalEntries.reversedByEntryId))
+    .leftJoin(staffUsers, eq(staffUsers.id, journalEntries.postedByStaffUserId))
     .leftJoin(businessExpenses, and(eq(journalEntries.sourceType, "business_expense"), sql`${businessExpenses.id}::text = ${journalEntries.sourceId}`))
     .leftJoin(supplierPayments, and(eq(journalEntries.sourceType, "supplier_payment"), sql`${supplierPayments.id}::text = ${journalEntries.sourceId}`))
     .where(where)
@@ -151,6 +166,8 @@ export async function listJournalEntries(
       source: sourceRef({ sourceType: entry.sourceType, expenseNo, paymentNo, purchaseId, productionBatchId }),
       lines,
       debitTotal: lines.reduce((total, line) => total + line.debit, 0),
+      isTrial: bookSegmentOf(entry.entryDate) === "trial",
+      canReverse: (entry.kind === "manual" || entry.kind === "opening") && entry.reversedByEntryNo === null,
     };
   });
   return { rows, pagination };
@@ -243,6 +260,9 @@ export interface LedgerLineRow {
 
 export interface Ledger {
   account: LedgerAccount;
+  /** The range actually shown, kept inside one set of books (books.ts): the opening balance is
+   * summed from `range.segmentStart`, so December's trial journals never reach a 2027 balance. */
+  range: ReportRange;
   openingBalance: number;
   debitTotal: number;
   creditTotal: number;
@@ -258,7 +278,8 @@ function lineFilter(filters: LedgerFilters, accountCode: string): SQL {
   return sql.join(conditions, sql` and `);
 }
 
-/** One account's ledger for a date range (plan §6): opening balance before `from`, every line in
+/** One account's ledger for a date range (plan §6), kept inside one set of books (books.ts):
+ * opening balance from the segment's first day to before `from` plus the opening journal, every line in
  * the range with its running balance, and the closing balance. Optional sub-ledger filters by
  * supplier and channel. Lines are in posting order (date, journal number, line). */
 export async function getLedger(filters: LedgerFilters, rawPage: string | undefined, rawPerPage: string | undefined, db: Database = defaultDb): Promise<Ledger | null> {
@@ -272,16 +293,19 @@ export async function getLedger(filters: LedgerFilters, rawPage: string | undefi
   // Signed in the account's normal direction.
   const signed = account.normalBalance === "debit" ? sql`(l.debit - l.credit)` : sql`(l.credit - l.debit)`;
   const where = lineFilter(filters, account.code);
+  const range = resolveReportRange(filters);
+  const { from, to } = range;
 
   const [totals] = (await db.execute(sql`
     select
-      coalesce(sum(${signed}) filter (where e.entry_date < ${filters.from}), 0)::bigint as opening,
-      coalesce(sum(l.debit) filter (where e.entry_date between ${filters.from} and ${filters.to}), 0)::bigint as debit_total,
-      coalesce(sum(l.credit) filter (where e.entry_date between ${filters.from} and ${filters.to}), 0)::bigint as credit_total,
-      (count(*) filter (where e.entry_date between ${filters.from} and ${filters.to}))::int as line_count
+      coalesce(sum(${signed}) filter (where e.entry_date < ${from} or ${IS_OPENING_SQL}), 0)::bigint as opening,
+      coalesce(sum(l.debit) filter (where e.entry_date between ${from} and ${to} and not ${IS_OPENING_SQL}), 0)::bigint as debit_total,
+      coalesce(sum(l.credit) filter (where e.entry_date between ${from} and ${to} and not ${IS_OPENING_SQL}), 0)::bigint as credit_total,
+      (count(*) filter (where e.entry_date between ${from} and ${to} and not ${IS_OPENING_SQL}))::int as line_count
     from journal_lines l
     join journal_entries e on e.id = l.entry_id
-    where ${where} and e.entry_date <= ${filters.to}
+    left join journal_entries reversed on reversed.id = e.reverses_entry_id
+    where ${where} and e.entry_date >= ${range.segmentStart} and e.entry_date <= ${to}
   `)) as unknown as { opening: string; debit_total: string; credit_total: string; line_count: number }[];
 
   const openingBalance = Number(totals?.opening ?? 0);
@@ -298,7 +322,8 @@ export async function getLedger(filters: LedgerFilters, rawPage: string | undefi
         row_number() over (order by e.entry_date, e.entry_no, l.line_no) as position
       from journal_lines l
       join journal_entries e on e.id = l.entry_id
-      where ${where} and e.entry_date between ${filters.from} and ${filters.to}
+      left join journal_entries reversed on reversed.id = e.reverses_entry_id
+      where ${where} and e.entry_date between ${from} and ${to} and not ${IS_OPENING_SQL}
     ) ledger
     where position > ${pagination.offset} and position <= ${pagination.offset + pagination.limit}
     order by position
@@ -316,6 +341,7 @@ export async function getLedger(filters: LedgerFilters, rawPage: string | undefi
 
   return {
     account: { code: account.code, name: account.name, normalBalance: account.normalBalance },
+    range,
     openingBalance,
     debitTotal,
     creditTotal,

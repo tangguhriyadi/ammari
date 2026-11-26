@@ -28,6 +28,9 @@ import {
   Upload,
   Users,
   Wallet,
+  CalendarCheck,
+  Landmark,
+  Scale,
 } from "lucide-react";
 import type { PermissionKey } from "@ammari/db/rbac";
 
@@ -264,6 +267,33 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Buku Besar",
     href: "/accounting/ledger",
     icon: BookText,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    // Session 4 (plan §6): every account's opening / debit / credit / closing, PDF and Excel.
+    label: "Neraca Saldo",
+    href: "/accounting/trial-balance",
+    icon: Scale,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    // Session 4 (D-22): the opening balances as of 31 Dec 2026 for the official books.
+    label: "Saldo Awal",
+    href: "/accounting/opening-balance",
+    icon: Landmark,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    // Session 4 (D-23): close and reopen months; closing needs accounting.close on the page.
+    label: "Tutup Buku",
+    href: "/accounting/periods",
+    icon: CalendarCheck,
     group: "Akuntansi",
     permissionKeys: ["accounting.view"],
     mobilePrimary: false,

@@ -391,7 +391,9 @@ export const CUTTING_RATIO: Record<CuttingSize, number> = {
 /** What a private (never public) stored file is for (docs/plans/purchase-payments.md §4.1). Each
  * table that points at private_files pins its own purpose through a composite FK, so a nota can
  * never be filed as a payment proof or the other way round. */
-export const PRIVATE_FILE_PURPOSES = ["payment_proof", "purchase_invoice", "expense_proof"] as const;
+/** `journal_attachment` (migration 0052, docs/plans/accounting.md §5): the optional attachment of a
+ * manual or opening journal (bank statement, platform screenshot). */
+export const PRIVATE_FILE_PURPOSES = ["payment_proof", "purchase_invoice", "expense_proof", "journal_attachment"] as const;
 export type PrivateFilePurpose = (typeof PRIVATE_FILE_PURPOSES)[number];
 
 /** The only stored formats (§6): photos are re-encoded to JPEG, PDFs stored as-is. */
@@ -567,8 +569,12 @@ export type FiscalPeriodStatus = (typeof FISCAL_PERIOD_STATUSES)[number];
 /** December 2026 is the trial month (D-22): the engine posts it, and it is never closed. */
 export const ACCOUNTING_TRIAL_MONTH = "2026-12-01";
 
-/** The official books start here (D-22); opening balances are as of the day before. */
+/** The official books start here (D-22); opening balances are as of the day before. The one
+ * active opening journal is dated exactly this day (journal_entries_opening_date_check, 0052). */
 export const ACCOUNTING_CUTOVER_DATE = "2027-01-01";
+
+/** The last day of the trial month (D-22). */
+export const ACCOUNTING_TRIAL_MONTH_END = "2026-12-31";
 
 export const POSTING_RUN_TRIGGERS = ["cron", "manual"] as const;
 export type PostingRunTrigger = (typeof POSTING_RUN_TRIGGERS)[number];

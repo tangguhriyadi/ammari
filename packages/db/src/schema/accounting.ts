@@ -23,6 +23,7 @@ import {
   ACCOUNT_NORMAL_BALANCES,
   ACCOUNT_TYPES,
   CASH_BANK_ACCOUNT_CODE_PATTERN,
+  ACCOUNTING_CUTOVER_DATE,
   ACCOUNTING_TRIAL_MONTH,
   CASH_FLOW_GROUPS,
   FISCAL_PERIOD_STATUSES,
@@ -36,12 +37,14 @@ import {
   type ChannelId,
   type FiscalPeriodStatus,
   type JournalEntryKind,
+  type PrivateFilePurpose,
   type PostingRunStatus,
   type PostingRunTrigger,
   type TaxpayerType,
 } from "./constants";
 import { channels, orders } from "./orders";
 import { staffUsers } from "./rbac";
+import { privateFiles } from "./supplier-payments";
 
 // ---------- Akuntansi: buku besar berpasangan, migration 0049 ----------
 // docs/plans/accounting.md §2.1, Session 1. A derived ledger: a posting service (packages/
@@ -146,6 +149,10 @@ export const fiscalPeriods = pgTable(
     reopenedAt: timestamp("reopened_at", { withTimezone: true, mode: "date" }),
     reopenedByStaffUserId: uuid("reopened_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     reopenedReason: text("reopened_reason"),
+    // Migration 0052 (Session 4, plan §7): the written reason when the month was closed while it
+    // still had open posting issues ("explicit, reasoned override"). Only on a closed month; a
+    // reopen clears it, the next close sets it again if needed. Each close is also in audit_log.
+    closeOverrideReason: text("close_override_reason"),
     ...timestamps(),
   },
   (table) => [
@@ -162,6 +169,11 @@ export const fiscalPeriods = pgTable(
       sql`(${table.reopenedAt} is null and ${table.reopenedByStaffUserId} is null and ${table.reopenedReason} is null)
         or (${table.reopenedAt} is not null and ${table.reopenedByStaffUserId} is not null
             and ${table.reopenedReason} is not null and btrim(${table.reopenedReason}) <> '' and char_length(${table.reopenedReason}) <= 500)`,
+    ),
+    check(
+      "fiscal_periods_close_override_reason_check",
+      sql`${table.closeOverrideReason} is null
+        or (${table.status} = 'closed' and btrim(${table.closeOverrideReason}) <> '' and char_length(${table.closeOverrideReason}) <= 500)`,
     ),
     // D-22: the trial month is posted but never locked.
     check("fiscal_periods_trial_month_open_check", sql`not (${table.month} = ${sql.raw(`'${ACCOUNTING_TRIAL_MONTH}'`)} and ${table.status} = 'closed')`),
@@ -193,6 +205,11 @@ export const journalEntries = pgTable(
     postedByStaffUserId: uuid("posted_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     // sha256 of the normalised lines, so the runner can tell "unchanged" from "changed".
     contentHash: text("content_hash"),
+    // Migration 0052 (Session 4, plan §5): the optional attachment of a manual or opening journal
+    // (bank statement, dashboard screenshot), a private_files row of purpose journal_attachment
+    // pinned by the composite FK. Written with the entry, never changed (append-only).
+    attachmentFileId: uuid("attachment_file_id").unique(),
+    attachmentFilePurpose: text("attachment_file_purpose").$type<PrivateFilePurpose>(),
     // Forced to now() (the transaction start) on insert: lines may only be added in the same
     // transaction that created the entry.
     ...createdAtOnly(),
@@ -204,6 +221,18 @@ export const journalEntries = pgTable(
     foreignKey({ columns: [table.reversedByEntryId], foreignColumns: [table.id], name: "journal_entries_reversed_by_entry_id_fk" })
       .onDelete("restrict")
       .onUpdate("restrict"),
+    foreignKey({
+      columns: [table.attachmentFileId, table.attachmentFilePurpose],
+      foreignColumns: [privateFiles.id, privateFiles.purpose],
+      name: "journal_entries_attachment_file_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    // D-22 (Session 4): the books have exactly one active opening journal, dated the cut-over day.
+    // A wrong one is reversed and entered again (the reversal frees this index).
+    uniqueIndex("journal_entries_one_active_opening")
+      .on(table.kind)
+      .where(sql`${table.kind} = 'opening' and ${table.reversedByEntryId} is null`),
     // At most one active journal per posting key; superseded ones stay with their reversal.
     uniqueIndex("journal_entries_active_source_key")
       .on(table.sourceType, table.sourceId, table.sourceEvent)
@@ -230,6 +259,12 @@ export const journalEntries = pgTable(
     // Manual and opening journals are always someone's.
     check("journal_entries_manual_actor_check", sql`${table.kind} not in ('manual', 'opening') or ${table.postedByStaffUserId} is not null`),
     check("journal_entries_description_check", sql`btrim(${table.description}) <> '' and char_length(${table.description}) <= 500`),
+    check("journal_entries_opening_date_check", sql`${table.kind} <> 'opening' or ${table.entryDate} = ${sql.raw(`'${ACCOUNTING_CUTOVER_DATE}'`)}`),
+    check(
+      "journal_entries_attachment_check",
+      sql`(${table.attachmentFileId} is null) = (${table.attachmentFilePurpose} is null)
+        and (${table.attachmentFilePurpose} is null or (${table.attachmentFilePurpose} = 'journal_attachment' and ${table.kind} in ('manual', 'opening')))`,
+    ),
     check("journal_entries_content_hash_check", sql`${table.contentHash} is null or ${table.contentHash} ~ '^[0-9a-f]{64}$'`),
   ],
 );

@@ -1,16 +1,12 @@
 import "server-only";
 import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
-import { PgTransaction } from "drizzle-orm/pg-core";
-import type { db as defaultDb } from "@ammari/db";
 import {
   accountMappings,
   accounts,
   businessExpenses,
   expenseCategories,
   expenseItems,
-  fiscalPeriods,
   journalEntries,
-  journalLines,
   postingIssues,
   postingRuns,
   productionBatches,
@@ -18,8 +14,9 @@ import {
   supplierPayments,
   type PostingRunTrigger,
 } from "@ammari/db/schema";
+import { crossesCutover } from "./books";
+import { inReadCommitted, insertLines, insertReversal, loadClosedMonths, nextEntryNo, truncateDescription, type Database, type Tx } from "./ledger-write";
 import { POSTING_START_DATE, postingDateFor } from "./dates";
-import type { JournalLineDraft } from "./journal";
 import { decideAction, planEvent, type PlannedOutcome } from "./plan";
 import { expenseRule, type ExpenseSnapshot } from "./rules/expenses";
 import { supplierPaymentRule, type SupplierPaymentSnapshot } from "./rules/supplier-payments";
@@ -38,8 +35,7 @@ import type { AccountInfo, PostingContext, PostingEvent, PostingKey, PostingRule
 // Never called from an existing write path (the ledger is derived, plan §2): only the "Posting
 // sekarang" button today, and the cron route in Session 12.
 
-type Tx = Parameters<Parameters<typeof defaultDb.transaction>[0]>[0];
-export type Database = typeof defaultDb | Tx;
+export type { Database } from "./ledger-write";
 
 /** A rule plus the loader for its snapshots. */
 export interface PostingSource {
@@ -167,19 +163,6 @@ function keyCondition(key: PostingKey) {
   return and(eq(journalEntries.sourceType, key.sourceType), eq(journalEntries.sourceId, key.sourceId), eq(journalEntries.sourceEvent, key.sourceEvent));
 }
 
-const MAX_DESCRIPTION_LENGTH = 500;
-
-function truncateDescription(text: string): string {
-  return text.length <= MAX_DESCRIPTION_LENGTH ? text : `${text.slice(0, MAX_DESCRIPTION_LENGTH - 3)}...`;
-}
-
-/** Runs `fn` in a READ COMMITTED transaction: a real transaction on the top-level client, a
- * savepoint inside an existing transaction (whose level the 0049 trigger checks). */
-async function inReadCommitted<T>(db: Database, fn: (tx: Tx) => Promise<T>): Promise<T> {
-  if (db instanceof PgTransaction) return db.transaction(fn);
-  return (db as typeof defaultDb).transaction(fn, { isolationLevel: "read committed" });
-}
-
 interface ActiveEntry {
   id: string;
   entryNo: string;
@@ -230,80 +213,20 @@ async function loadActiveEntry(tx: Database, key: PostingKey): Promise<ActiveEnt
   return row;
 }
 
-async function loadClosedMonths(tx: Tx): Promise<Set<string>> {
-  const rows = await tx.select({ month: fiscalPeriods.month }).from(fiscalPeriods).where(eq(fiscalPeriods.status, "closed"));
-  return new Set(rows.map((row) => row.month));
-}
-
-/** JU-YYYYMM-NNNN for the month of `entryDate`, under a per-month advisory lock (same idiom as
- * apps/admin lib/documents/document-number.ts); the unique constraint is the backstop. */
-async function nextEntryNo(tx: Tx, entryDate: string): Promise<string> {
-  const monthPrefix = `JU-${entryDate.slice(0, 4)}${entryDate.slice(5, 7)}-`;
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${monthPrefix}))`);
-  const [row] = await tx
-    .select({ maxSeq: sql<number | null>`max(split_part(${journalEntries.entryNo}, '-', 3)::int)` })
-    .from(journalEntries)
-    .where(sql`${journalEntries.entryNo} like ${`${monthPrefix}%`}`);
-  return `${monthPrefix}${String((row?.maxSeq ?? 0) + 1).padStart(4, "0")}`;
-}
-
-async function insertLines(tx: Tx, entryId: string, lines: readonly JournalLineDraft[]): Promise<void> {
-  await tx.insert(journalLines).values(
-    lines.map((line, index) => ({
-      entryId,
-      lineNo: index + 1,
-      accountCode: line.accountCode,
-      debit: line.debit,
-      credit: line.credit,
-      memo: line.memo ?? null,
-      channelId: line.channelId ?? null,
-      supplierId: line.supplierId ?? null,
-      orderId: line.orderId ?? null,
-      cashAccountCode: line.cashAccountCode ?? null,
-    })),
-  );
+/** A void (an event that only negates its original) is posted only while the original has an
+ * active journal (plan §2) AND both sit in the same set of books (books.ts, Session 4): a December
+ * trial-month original voided in 2027 posts nothing, since the opening journal already reflects
+ * the correction. */
+async function originalAllowsVoid(db: Database, original: PostingKey, voidDate: string): Promise<boolean> {
+  const active = await loadActiveEntry(db, original);
+  if (!active) return false;
+  return !crossesCutover(active.sourceDate ?? active.entryDate, voidDate);
 }
 
 /** Reverses `active` with a mirrored reversal entry, dated on the original's date or, when that
  * month is closed, the first day of the first open month after it (D-23). */
-async function reverseEntry(tx: Tx, key: PostingKey, active: ActiveEntry, closedMonths: ReadonlySet<string>): Promise<void> {
-  const lines = await tx
-    .select({
-      accountCode: journalLines.accountCode,
-      debit: journalLines.debit,
-      credit: journalLines.credit,
-      memo: journalLines.memo,
-      channelId: journalLines.channelId,
-      supplierId: journalLines.supplierId,
-      orderId: journalLines.orderId,
-      cashAccountCode: journalLines.cashAccountCode,
-    })
-    .from(journalLines)
-    .where(eq(journalLines.entryId, active.id))
-    .orderBy(asc(journalLines.lineNo));
-  const entryDate = postingDateFor(active.entryDate, closedMonths);
-  const [reversal] = await tx
-    .insert(journalEntries)
-    .values({
-      entryNo: await nextEntryNo(tx, entryDate),
-      entryDate,
-      sourceDate: active.sourceDate,
-      sourceType: key.sourceType,
-      sourceId: key.sourceId,
-      sourceEvent: key.sourceEvent,
-      ruleVersion: active.ruleVersion,
-      kind: "reversal",
-      reversesEntryId: active.id,
-      description: truncateDescription(`Pembalik ${active.entryNo}: ${active.description}`),
-    })
-    .returning({ id: journalEntries.id });
-  if (!reversal) throw new Error(`failed to insert the reversal of ${active.entryNo}`);
-  await insertLines(
-    tx,
-    reversal.id,
-    lines.map((line) => ({ ...line, debit: line.credit, credit: line.debit })),
-  );
-  await tx.update(journalEntries).set({ reversedByEntryId: reversal.id }).where(eq(journalEntries.id, active.id));
+async function reverseEntry(tx: Tx, key: PostingKey, active: ActiveEntry): Promise<void> {
+  await insertReversal(tx, { ...active, ...key }, `Pembalik ${active.entryNo}: ${active.description}`, null);
 }
 
 async function insertEntry(tx: Tx, planned: Extract<PlannedOutcome, { kind: "journal" }>, closedMonths: ReadonlySet<string>): Promise<void> {
@@ -336,14 +259,14 @@ async function applyPlanned(db: Database, planned: PlannedOutcome, requiresActiv
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('ammari.posting'), hashtext(${keyString(planned.key)}))`);
     // Re-checked inside the transaction: the original's own reverse + repost is atomic, so a
     // committed original always has exactly one active journal.
-    if (requiresActiveJournalFor && !(await loadActiveEntry(tx, requiresActiveJournalFor))) return { inserted: 0, reversed: 0, unchanged: 0 };
+    if (requiresActiveJournalFor && !(await originalAllowsVoid(tx, requiresActiveJournalFor, planned.sourceDate))) return { inserted: 0, reversed: 0, unchanged: 0 };
     const active = await loadActiveEntry(tx, planned.key);
     const action = decideAction(planned, active ? active.contentHash : undefined);
     if (action === "unchanged" || action === "skip" || action === "issue") return { inserted: 0, reversed: 0, unchanged: action === "unchanged" ? 1 : 0 };
     const closedMonths = await loadClosedMonths(tx);
     let reversed = 0;
     if ((action === "reverse" || action === "reverse_and_insert") && active) {
-      await reverseEntry(tx, planned.key, active, closedMonths);
+      await reverseEntry(tx, planned.key, active);
       reversed = 1;
     }
     let inserted = 0;
@@ -434,7 +357,7 @@ export async function runPosting(db: Database, options: PostingRunOptions): Prom
         // A void whose original has no active journal (dated before the cut-over, or still held by
         // an issue) does nothing: no journal, no issue (plan §2). Checked against the database, not
         // the pre-read, because the original may have been posted earlier in this same run.
-        if (event.requiresActiveJournalFor && !(await loadActiveEntry(db, event.requiresActiveJournalFor))) {
+        if (event.requiresActiveJournalFor && !(await originalAllowsVoid(db, event.requiresActiveJournalFor, event.sourceDate))) {
           if (keyIssues.length > 0) await resolveIssues(db, event.key, null);
           continue;
         }

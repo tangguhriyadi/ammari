@@ -1,6 +1,6 @@
 import "server-only";
 import { eq } from "drizzle-orm";
-import { businessExpenses, privateFiles, purchaseAttachments, purchases, supplierPayments, type PrivateFileContentType, type PrivateFilePurpose } from "@ammari/db/schema";
+import { businessExpenses, journalEntries, privateFiles, purchaseAttachments, purchases, supplierPayments, type PrivateFileContentType, type PrivateFilePurpose } from "@ammari/db/schema";
 import type { PermissionKey } from "@ammari/db/rbac";
 import type { Database } from "@/lib/db";
 
@@ -13,7 +13,15 @@ export const PRIVATE_FILE_VIEW_PERMISSIONS: Record<PrivateFilePurpose, readonly 
   purchase_invoice: ["inventory.view", "finance.view_profit"],
   // docs/plans/growth.md §5: the same keys that record and void an expense.
   expense_proof: ["ads_expenses.manage", "finance.view_profit"],
+  // docs/plans/accounting.md §5, §7 (Session 4): a manual/opening journal's attachment is part of
+  // the books, read with accounting.view (never finance.view_profit, which gates the management
+  // figures: plan §7).
+  journal_attachment: ["accounting.view"],
 };
+
+/** Every purpose's keys include one of these, so a session holding neither is refused before the
+ * database is touched (the per-purpose check above is the real gate). */
+export const PRIVATE_FILE_ANY_VIEW_PERMISSIONS: readonly PermissionKey[] = ["finance.view_profit", "accounting.view"];
 
 const JAKARTA_YEAR_MONTH = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit" });
 
@@ -50,8 +58,8 @@ function safeDownloadName(stem: string, extension: string): string {
   return `${cleaned === "" ? "file" : cleaned}.${extension}`;
 }
 
-/** The file, only when a payment (proof), a purchase attachment (nota) or a business expense
- * (proof) references it; an orphan row or object is never served. Voided records still count:
+/** The file, only when a payment (proof), a purchase attachment (nota), a business expense
+ * (proof) or a manual/opening journal (attachment) references it; an orphan row or object is never served. Voided records still count:
  * they stay in the history with their proof. `null` for a malformed id, an unknown id, or an orphan. */
 export async function findServablePrivateFile(db: Database, fileId: string): Promise<ServablePrivateFile | null> {
   if (!UUID_PATTERN.test(fileId)) return null;
@@ -66,12 +74,14 @@ export async function findServablePrivateFile(db: Database, fileId: string): Pro
       paymentNo: supplierPayments.paymentNo,
       purchaseNo: purchases.purchaseNo,
       expenseNo: businessExpenses.expenseNo,
+      journalEntryNo: journalEntries.entryNo,
     })
     .from(privateFiles)
     .leftJoin(supplierPayments, eq(supplierPayments.proofFileId, privateFiles.id))
     .leftJoin(purchaseAttachments, eq(purchaseAttachments.fileId, privateFiles.id))
     .leftJoin(purchases, eq(purchases.id, purchaseAttachments.purchaseId))
     .leftJoin(businessExpenses, eq(businessExpenses.proofFileId, privateFiles.id))
+    .leftJoin(journalEntries, eq(journalEntries.attachmentFileId, privateFiles.id))
     .where(eq(privateFiles.id, fileId.toLowerCase()))
     .limit(1);
   if (!row) return null;
@@ -81,6 +91,7 @@ export async function findServablePrivateFile(db: Database, fileId: string): Pro
   if (row.purpose === "payment_proof" && row.paymentNo) downloadName = safeDownloadName(row.paymentNo, extension);
   else if (row.purpose === "purchase_invoice" && row.purchaseNo) downloadName = safeDownloadName(`${row.purchaseNo}-nota`, extension);
   else if (row.purpose === "expense_proof" && row.expenseNo) downloadName = safeDownloadName(row.expenseNo, extension);
+  else if (row.purpose === "journal_attachment" && row.journalEntryNo) downloadName = safeDownloadName(`${row.journalEntryNo}-lampiran`, extension);
   else return null;
 
   return {

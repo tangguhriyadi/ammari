@@ -3,7 +3,7 @@ import { PrivateStorageConfigError } from "@ammari/storage";
 import { getStaffSession } from "@/lib/auth/staff-session";
 import { defaultDb } from "@/lib/db";
 import { getPrivateStorageClient } from "@/lib/private-storage";
-import { findServablePrivateFile, PRIVATE_FILE_VIEW_PERMISSIONS } from "@/lib/supplier-payments/private-files";
+import { findServablePrivateFile, PRIVATE_FILE_ANY_VIEW_PERMISSIONS, PRIVATE_FILE_VIEW_PERMISSIONS } from "@/lib/supplier-payments/private-files";
 
 // The ONLY way a private file (payment proof, supplier nota) leaves storage
 // (docs/plans/purchase-payments.md §5.4, A6): no presigned link, no redirect to the bucket. Every
@@ -32,8 +32,9 @@ const CSP_BY_TYPE = {
 export async function GET(_request: Request, ctx: RouteContext<"/api/private-files/[fileId]">): Promise<Response> {
   const session = await getStaffSession();
   if (!session) return plain(401, "Unauthorized");
-  // Common to every purpose: refuse before touching the database.
-  if (!session.permissionKeys.includes("finance.view_profit")) return plain(403, "Forbidden");
+  // Every purpose needs finance.view_profit or (journal attachments) accounting.view: refuse a
+  // session holding neither before touching the database.
+  if (!PRIVATE_FILE_ANY_VIEW_PERMISSIONS.some((key) => session.permissionKeys.includes(key))) return plain(403, "Forbidden");
 
   const { fileId } = await ctx.params;
   const file = await findServablePrivateFile(defaultDb, fileId);

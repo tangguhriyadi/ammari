@@ -6,6 +6,17 @@
 
 export { isBalancedJournal, journalLinesProblems, MAX_JOURNAL_MEMO_LENGTH, type JournalLineDraft, type JournalLinesProblem } from "./journal";
 export { isExpenseLikeAccountType, isPurchaseSideSource, purchaseGuardViolations, type JournalSourceKey } from "./purchase-guard";
+export {
+  OFFICIAL_BOOKS_START,
+  TRIAL_BOOKS_END,
+  TRIAL_BOOKS_START,
+  bookSegmentOf,
+  crossesCutover,
+  resolveReportRange,
+  segmentStartOf,
+  type BookSegment,
+  type ReportRange,
+} from "./books";
 export { POSTING_START_DATE, isCalendarDate, jakartaDateOf, monthEndOf, monthStartOf, nextMonthStart, postingDateFor } from "./dates";
 export { decideAction, journalContentHash, planEvent, type KeyAction, type PlannedOutcome } from "./plan";
 export {

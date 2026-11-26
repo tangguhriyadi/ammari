@@ -66,7 +66,7 @@ describe("GET /api/private-files/[fileId]: access", () => {
     expect(findServablePrivateFile).not.toHaveBeenCalled();
   });
 
-  test("403 without finance.view_profit, before any lookup", async () => {
+  test("403 without finance.view_profit or accounting.view, before any lookup", async () => {
     getStaffSession.mockResolvedValue(session(["supplier_payments.manage", "inventory.view"]));
     const response = await get();
     expect(response.status).toBe(403);
@@ -154,6 +154,24 @@ describe("GET /api/private-files/[fileId]: serving", () => {
     const response = await get();
     expect(response.status).toBe(200);
     expect(response.headers.get("content-disposition")).toBe('inline; filename="BYA-202610-001.jpg"');
+  });
+
+  test("a journal attachment is served with accounting.view alone (the books, plan §7), never with finance.view_profit alone", async () => {
+    findServablePrivateFile.mockResolvedValue(proof({ purpose: "journal_attachment", downloadName: "JU-202701-0001-lampiran.jpg" }));
+    getStaffSession.mockResolvedValue(session(["finance.view_profit", "ads_expenses.manage", "supplier_payments.manage"]));
+    expect((await get()).status).toBe(403);
+    getStaffSession.mockResolvedValue(session(["accounting.view"]));
+    const response = await get();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toBe('inline; filename="JU-202701-0001-lampiran.jpg"');
+  });
+
+  test("accounting.view alone never opens a payment proof, nota or expense proof", async () => {
+    getStaffSession.mockResolvedValue(session(["accounting.view", "accounting.manage", "accounting.close"]));
+    for (const purpose of ["payment_proof", "purchase_invoice", "expense_proof"] as const) {
+      findServablePrivateFile.mockResolvedValue(proof({ purpose }));
+      expect((await get()).status).toBe(403);
+    }
   });
 
   test("500 (logged) when a referenced object is missing from storage", async () => {
