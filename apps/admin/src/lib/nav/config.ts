@@ -1,5 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  BookOpen,
+  BookText,
   Boxes,
   ClipboardCheck,
   Factory,
@@ -233,6 +235,24 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: Users,
     group: "Pertumbuhan",
     permissionKeys: ["customers.view"],
+    mobilePrimary: false,
+  },
+  {
+    // docs/plans/accounting.md §6 (Session 2): the double-entry books. accounting.view only, never
+    // finance.view_profit (plan §7: owner capital, prive and bank balances are more sensitive).
+    label: "Jurnal Umum",
+    href: "/accounting/journal",
+    icon: BookOpen,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    label: "Buku Besar",
+    href: "/accounting/ledger",
+    icon: BookText,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
     mobilePrimary: false,
   },
   {

@@ -351,6 +351,13 @@
       "when": 1795686236703,
       "tag": "0049_accounting_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1795689327564,
+      "tag": "0050_accounting_reversal_inactive_account",
+      "breakpoints": true
     }
   ]
 }

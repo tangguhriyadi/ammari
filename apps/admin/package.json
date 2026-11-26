@@ -13,6 +13,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@ammari/accounting": "workspace:*",
     "@ammari/auth": "workspace:*",
     "@ammari/commerce": "workspace:*",
     "@ammari/content-sanitize": "workspace:*",

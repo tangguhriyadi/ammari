@@ -242,8 +242,17 @@ source records (unchanged)  ──read──►  posting rules (pure functions) 
 - **Unpostable sources** (unmapped expense category, unknown supplier, missing fee data) go to a
   `posting_issues` queue shown on the accounting home, never silently skipped.
 - **Cut-over:** nothing dated before the cut-over date is posted; it lives in opening balances
-  (§5.4). Events after cut-over on older records (a void, a return, a refund) are posted normally —
-  each event's journal is independent, so this needs no special case.
+  (§5.4). Events after cut-over on older records that are real economic events of their own (a
+  return, a refund) are posted normally; each such event's journal is independent.
+- **Voids (decided 26 Nov 2026, owner):** a void (E2, P4, and any later "exact negation of the
+  original" event) is posted **only if its original has an active journal**. Otherwise it does
+  nothing: no journal and **no posting issue**. A void negates a record, and an original dated
+  before the cut-over was never posted, so its effect (or its absence) is already in the opening
+  balances; posting the void alone would book money that never moved. The same rule holds a void
+  back while its original is itself blocked by a posting issue (e.g. an unmapped category): the
+  issue is shown once, on the original, and once it posts, the void follows in the same run. The
+  rule emits the void with the key of its original (`requiresActiveJournalFor`); the runner checks
+  it against the database, again under the key's lock.
 
 ### 2.1 New tables (one migration, nothing existing altered)
 

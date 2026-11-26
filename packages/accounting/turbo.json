@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // Same reason as packages/commerce/turbo.json: the runner tests read and write the shared
+      // `ammari_test` database, and @ammari/accounting's only package dependency is @ammari/db, so
+      // the root `^test` alone would let it run beside @ammari/auth and @ammari/commerce. This edge
+      // keeps the DB-backed chain serial: db -> auth -> commerce -> accounting -> admin -> web
+      // (admin depends on accounting, so `^test` orders that edge).
+      "dependsOn": ["$TURBO_EXTENDS$", "@ammari/commerce#test"]
+    }
+  }
+}

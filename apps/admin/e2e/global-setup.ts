@@ -186,6 +186,20 @@ export function E2E_CUSTOMER_EMAIL(layout: (typeof E2E_CUSTOMER_LAYOUTS)[number]
   return `pelanggan-${layout.toLowerCase()}@e2e.ammari.test`;
 }
 export const E2E_CUSTOMER_PHONE: Record<(typeof E2E_CUSTOMER_LAYOUTS)[number], string> = { M: "+6281299004567", D: "+6281299007654" };
+// accounting.spec.ts (docs/plans/accounting.md Session 2): Jurnal umum and Buku besar. An owner
+// (accounting.view + accounting.manage, granted by migration 0049) runs "Posting sekarang" over a
+// Gaji expense and a supplier payment dated in December 2026, the ledger's trial month (D-22, the
+// first month the engine posts); a CS staff (no accounting.* key) gets "Akses ditolak". Fresh
+// emails, clean OTP throttle.
+export const E2E_ACCOUNTING_EMAIL = "accounting@e2e.ammari.test";
+export const E2E_ACCOUNTING_CS_EMAIL = "accounting-cs@e2e.ammari.test";
+// A role with accounting.view only: reads the books, never runs posting (no button).
+export const E2E_ACCOUNTING_VIEW_ONLY_EMAIL = "accounting-view-only@e2e.ammari.test";
+const E2E_ACCOUNTING_VIEW_ONLY_ROLE_KEY = "e2e_accounting_view_only";
+export const E2E_ACCOUNTING_EXPENSE_NO = "BYA-E2E-AKUN";
+export const E2E_ACCOUNTING_PAYMENT_NO = "BYR-E2E-AKUN";
+export const E2E_ACCOUNTING_PURCHASE_NO = "PO-E2E-AKUN";
+export const E2E_ACCOUNTING_SUPPLIER = "E2E Akun Toko Kain";
 export const E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL = "production-payments-no-finance@e2e.ammari.test";
 const E2E_PRODUCTION_NO_FINANCE_ROLE_KEY = "e2e_production_no_finance";
 // A dedicated email/role for purchases-receipt.spec.ts (docs/plans/suppliers-goods-receipt.md
@@ -1031,6 +1045,64 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         ...(seed.voided ? { voidedAt: postedAt, voidedByStaffUserId: owner.id, voidReason: "Salah nominal" } : {}),
       });
     }
+  });
+
+  // Jurnal umum and Buku besar (see E2E_ACCOUNTING_EMAIL above). Seeded straight into the source
+  // tables, as "Catat biaya" and "Catat pembayaran" would leave them; nothing is posted here, the
+  // spec's own "Posting sekarang" does that.
+  await ensureStaffFixture(E2E_ACCOUNTING_EMAIL, "E2E Akuntansi (owner)", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_ACCOUNTING_CS_EMAIL, "E2E Akuntansi (CS)", "customer_service");
+  await ensureLimitedRole(E2E_ACCOUNTING_VIEW_ONLY_ROLE_KEY, ["accounting.view"]);
+  await ensureStaffFixture(E2E_ACCOUNTING_VIEW_ONLY_EMAIL, "E2E Akuntansi (lihat saja)", E2E_ACCOUNTING_VIEW_ONLY_ROLE_KEY);
+  await db.transaction(async (tx) => {
+    const [owner] = await tx.select({ id: staffUsers.id }).from(staffUsers).where(eq(staffUsers.email, E2E_ACCOUNTING_EMAIL));
+    if (!owner) throw new Error("failed to find the e2e accounting owner");
+    const [vendor] = await tx.insert(suppliers).values({ name: E2E_ACCOUNTING_SUPPLIER }).returning({ id: suppliers.id, name: suppliers.name });
+    if (!vendor) throw new Error("failed to seed the e2e accounting supplier");
+    const [purchase] = await tx
+      .insert(purchases)
+      .values({ purchaseNo: E2E_ACCOUNTING_PURCHASE_NO, supplierId: vendor.id, orderedAt: "2026-12-01", createdByStaffUserId: owner.id })
+      .returning({ id: purchases.id });
+    if (!purchase) throw new Error("failed to seed the e2e accounting purchase");
+    const proofs = (["expense_proof", "payment_proof"] as const).map((purpose) => {
+      const fileId = randomUUID();
+      const sha = fileId.replaceAll("-", "").padEnd(64, "2");
+      return {
+        id: fileId,
+        purpose,
+        storageKey: `e2e/${purpose}/2026/12/${fileId}.jpg`,
+        contentType: "image/jpeg" as const,
+        byteSize: 1,
+        sha256: sha,
+        originalFilename: "bukti.jpg",
+        originalContentType: "image/jpeg",
+        originalByteSize: 1,
+        originalSha256: sha,
+        uploadedByStaffUserId: owner.id,
+      };
+    });
+    await tx.insert(privateFiles).values(proofs);
+    await tx.insert(businessExpenses).values({
+      expenseNo: E2E_ACCOUNTING_EXPENSE_NO,
+      expenseDate: "2026-12-03",
+      category: "salary",
+      amount: 1_234_000,
+      method: "transfer",
+      proofFileId: proofs[0]!.id,
+      recordedByStaffUserId: owner.id,
+    });
+    await tx.insert(supplierPayments).values({
+      paymentNo: E2E_ACCOUNTING_PAYMENT_NO,
+      targetType: "purchase",
+      purchaseId: purchase.id,
+      supplierId: vendor.id,
+      supplierName: vendor.name,
+      paidAt: "2026-12-04",
+      amount: 500_000,
+      method: "cash",
+      proofFileId: proofs[1]!.id,
+      recordedByStaffUserId: owner.id,
+    });
   });
 
   // Pelanggan & Voucher (see E2E_CUSTOMERS_OWNER_EMAIL above).

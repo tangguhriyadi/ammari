@@ -175,6 +175,9 @@ importers:
 
   apps/admin:
     dependencies:
+      '@ammari/accounting':
+        specifier: workspace:*
+        version: link:../../packages/accounting
       '@ammari/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -414,6 +417,12 @@ importers:
       '@ammari/db':
         specifier: workspace:*
         version: link:../db
+      drizzle-orm:
+        specifier: 0.45.3
+        version: 0.45.3(kysely@0.29.6)(postgres@3.4.9)
+      server-only:
+        specifier: 0.0.1
+        version: 0.0.1
     devDependencies:
       '@types/node':
         specifier: 26.6.3

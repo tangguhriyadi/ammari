@@ -4,13 +4,15 @@
 // database error. The database enforces the same rules again (migration 0049 triggers) as the
 // backstop.
 
+import type { ChannelId } from "@ammari/db/schema";
+
 export interface JournalLineDraft {
   accountCode: string;
   /** Whole rupiah. Exactly one of debit/credit is positive; the other is 0. */
   debit: number;
   credit: number;
   memo?: string | null;
-  channelId?: string | null;
+  channelId?: ChannelId | null;
   supplierId?: string | null;
   orderId?: string | null;
   cashAccountCode?: string | null;
