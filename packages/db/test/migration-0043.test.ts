@@ -64,11 +64,13 @@ describe("migration 0043 (monthly bills reminder categories)", () => {
     await recreateDatabase();
     const client = postgres(urlFor(SCRATCH_DATABASE), { max: 1, onnotice: () => {} });
     const upTo0042 = migrationsUpTo(42);
+    // Pinned to 0043: migration 0048 replaces constraints asserted here by name.
+    const upTo0043 = migrationsUpTo(43);
     try {
       await migrate(drizzle(client), { migrationsFolder: upTo0042 });
       await client`update sales_goal set revenue_target_amount = 1200000000 where id = 1`;
 
-      await migrate(drizzle(client), { migrationsFolder });
+      await migrate(drizzle(client), { migrationsFolder: upTo0043 });
 
       const [row] = await client`select revenue_target_amount::text as target, monthly_bill_categories from sales_goal where id = 1`;
       expect(row).toEqual({ target: "1200000000", monthly_bill_categories: [] });
@@ -88,11 +90,12 @@ describe("migration 0043 (monthly bills reminder categories)", () => {
 
       // Re-running the migrator applies nothing.
       const before = await client`select count(*)::int as count from drizzle.__drizzle_migrations`;
-      await migrate(drizzle(client), { migrationsFolder });
+      await migrate(drizzle(client), { migrationsFolder: upTo0043 });
       expect(await client`select count(*)::int as count from drizzle.__drizzle_migrations`).toEqual(before);
     } finally {
       await client.end();
       rmSync(upTo0042, { recursive: true, force: true });
+      rmSync(upTo0043, { recursive: true, force: true });
     }
   });
 });

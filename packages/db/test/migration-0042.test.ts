@@ -81,6 +81,8 @@ describe("migration 0042 (Pertumbuhan: expenses, voucher adjustments, customer p
     await recreateDatabase();
     const client = postgres(urlFor(SCRATCH_DATABASE), { max: 1, onnotice: () => {} });
     const upTo0041 = migrationsUpTo(41);
+    // Pinned to 0042: migration 0048 replaces constraints asserted here by name.
+    const upTo0042 = migrationsUpTo(42);
     try {
       await migrate(drizzle(client), { migrationsFolder: upTo0041 });
 
@@ -105,7 +107,7 @@ describe("migration 0042 (Pertumbuhan: expenses, voucher adjustments, customer p
       const [voucher] = await client`
         insert into vouchers (card_id, customer_id, expires_at) values (${card!.id}, ${customer!.id}, now() + interval '90 days') returning id, expires_at`;
 
-      await migrate(drizzle(client), { migrationsFolder });
+      await migrate(drizzle(client), { migrationsFolder: upTo0042 });
 
       // ---- Reference data. ----
       expect(await grantsOf(client, "super_admin")).toEqual(expect.arrayContaining(["customers.manage", "customers.export"]));
@@ -224,13 +226,14 @@ describe("migration 0042 (Pertumbuhan: expenses, voucher adjustments, customer p
 
       // ---- Re-running the migrator applies nothing and changes nothing. ----
       const before = await client`select count(*)::int as count from drizzle.__drizzle_migrations`;
-      await migrate(drizzle(client), { migrationsFolder });
+      await migrate(drizzle(client), { migrationsFolder: upTo0042 });
       const after = await client`select count(*)::int as count from drizzle.__drizzle_migrations`;
       expect(after).toEqual(before);
       expect(await grantsOf(client, "customer_service")).toEqual(csGrants);
     } finally {
       await client.end();
       rmSync(upTo0041, { recursive: true, force: true });
+      rmSync(upTo0042, { recursive: true, force: true });
     }
   });
 
@@ -238,6 +241,8 @@ describe("migration 0042 (Pertumbuhan: expenses, voucher adjustments, customer p
     await recreateDatabase();
     const client = postgres(urlFor(SCRATCH_DATABASE), { max: 1, onnotice: () => {} });
     const upTo0041 = migrationsUpTo(41);
+    // Pinned to 0042: migration 0048 replaces constraints asserted here by name.
+    const upTo0042 = migrationsUpTo(42);
     try {
       await migrate(drizzle(client), { migrationsFolder: upTo0041 });
       await client`
@@ -246,12 +251,13 @@ describe("migration 0042 (Pertumbuhan: expenses, voucher adjustments, customer p
           and permission_id = (select id from permissions where key = 'customers.view')`;
       const edited = await grantsOf(client, "customer_service");
 
-      await migrate(drizzle(client), { migrationsFolder });
+      await migrate(drizzle(client), { migrationsFolder: upTo0042 });
 
       expect(await grantsOf(client, "customer_service")).toEqual(edited);
     } finally {
       await client.end();
       rmSync(upTo0041, { recursive: true, force: true });
+      rmSync(upTo0042, { recursive: true, force: true });
     }
   });
 });

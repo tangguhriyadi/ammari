@@ -337,6 +337,13 @@
       "when": 1795416391861,
       "tag": "0047_batch_cost_product_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1795668557771,
+      "tag": "0048_expense_master_data",
+      "breakpoints": true
     }
   ]
 }

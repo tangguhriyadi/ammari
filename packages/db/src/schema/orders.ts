@@ -17,7 +17,6 @@ import {
 } from "drizzle-orm/pg-core";
 import { checkArraySubset, checkIn, citext, timestamps, createdAtOnly } from "./columns";
 import {
-  BUSINESS_EXPENSE_CATEGORIES,
   CHANNEL_FEE_COMPONENTS,
   CHANNEL_IDS,
   EXPENSE_CATEGORIES,
@@ -511,14 +510,16 @@ export const salesGoal = pgTable(
     startDate: date("start_date", { mode: "string" }),
     // Expense categories that must be recorded every month (docs/plans/growth.md §6, owner answer
     // A6, 2026-10-27): "Perlu tindakan" reminds about each one without a non-voided expense paid
-    // from the 6th of last month to the 5th of this one. Empty (the default) = reminder off.
+    // from the 6th of last month to the 5th of this one. Empty (the default) = reminder off. Since
+    // 0048 any expense_categories code (owner answer D3 of docs/plans/expense-master-data.md).
     monthlyBillCategories: text("monthly_bill_categories").array().$type<BusinessExpenseCategory[]>().notNull().default(sql`'{}'::text[]`),
     ...timestamps(),
   },
   (table) => [
     check("sales_goal_id_check", sql`${table.id} = 1`),
     check("sales_goal_revenue_target_amount_check", sql`${table.revenueTargetAmount} > 0`),
-    check("sales_goal_monthly_bill_categories_allowed_check", checkArraySubset(table.monthlyBillCategories, BUSINESS_EXPENSE_CATEGORIES)),
+    // Every element must be an expense_categories code: the sales_goal_monthly_bill_categories
+    // trigger (0048) replaced the CHECK over the fixed list (an array element cannot carry an FK).
     check("sales_goal_monthly_bill_categories_no_duplicates_check", sql`not text_array_has_duplicates(${table.monthlyBillCategories})`),
   ],
 );

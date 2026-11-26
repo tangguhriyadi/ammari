@@ -4,7 +4,9 @@ import {
   channels,
   costAssumptions,
   costComponents,
+  DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_PRODUCT_TYPE_CODE,
+  expenseCategories,
   HOMEPAGE_SECTION_KEYS,
   infoPages,
   permissions,
@@ -260,6 +262,18 @@ async function seedDefaultProductType(db: Database) {
   await db.insert(productTypes).values({ code: DEFAULT_PRODUCT_TYPE_CODE, name: "Gamis", sortOrder: 0 }).onConflictDoNothing();
 }
 
+// Same dual mechanism: migration 0048 inserts the ten pre-0048 expense categories for dev/prod
+// (business_expenses.category references them, and the app matches the system codes by literal),
+// and this restores them after e2e-db.ts's TRUNCATE. Insert-only, no conflict target (same as
+// seedDefaultProductType): an existing row may carry the owner's rename or re-order, and another
+// category that already took one of these names must not make the seed fail.
+async function seedDefaultExpenseCategories(db: Database) {
+  await db
+    .insert(expenseCategories)
+    .values(DEFAULT_EXPENSE_CATEGORIES.map((category) => ({ ...category })))
+    .onConflictDoNothing();
+}
+
 // Same dual mechanism again: migration 0039 inserts the one sales_goal row for dev/prod (the
 // Ringkasan target tracker reads it), and this restores it after e2e-db.ts's TRUNCATE. Values match
 // migration 0039 exactly (keep the two in sync by hand). Insert-only: an existing row may hold the
@@ -303,6 +317,7 @@ export async function seed(db: Database = defaultDb) {
   await seedInitialCostAssumptions(db);
   await seedCostComponentDefaults(db);
   await seedDefaultProductType(db);
+  await seedDefaultExpenseCategories(db);
   await seedSalesGoal(db);
   await seedStaffUsers(db);
 }

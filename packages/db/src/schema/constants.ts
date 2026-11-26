@@ -437,9 +437,52 @@ export type AdExpenseCategory = (typeof AD_EXPENSE_CATEGORIES)[number];
 export const MARKETING_EXPENSE_CATEGORIES = [...AD_EXPENSE_CATEGORIES, "endorsement"] as const satisfies readonly BusinessExpenseCategory[];
 export type MarketingExpenseCategory = (typeof MARKETING_EXPENSE_CATEGORIES)[number];
 
-/** Ad categories tied to exactly one channel (business_expenses_channel_check). Every other
+/** Ad categories tied to exactly one channel (business_expense_channel_rule trigger since 0048). Every other
  * marketing category takes an optional channel; non-marketing categories never have one. */
 export const FIXED_EXPENSE_CHANNELS = { ads_shopee: "shopee", ads_tiktok: "tiktok" } as const satisfies Partial<Record<BusinessExpenseCategory, ChannelId>>;
+
+// ---------- Kategori Biaya master data (docs/plans/expense-master-data.md, migration 0048) ----------
+// Since 0048 the categories live in `expense_categories` (owner-managed under Data Master), and
+// the three CHECKs that listed the codes above are gone: an FK, the business_expense_channel_rule
+// trigger and the sales_goal monthly-bill trigger replace them. The constants above stay as the
+// typed set of SYSTEM/seeded codes until the app reads the catalog (plan session S2).
+
+/** What a category does in the figures. ad: biaya iklan, counted in ROAS, channel optional or
+ * fixed. endorsement: marketing, optional channel, never in ROAS. operating: no channel. Fixed per
+ * category at creation (prevent_expense_category_identity_change). */
+export const EXPENSE_CATEGORY_KINDS = ["ad", "endorsement", "operating"] as const;
+export type ExpenseCategoryKind = (typeof EXPENSE_CATEGORY_KINDS)[number];
+
+/** "Pengeluaran produksi" (plan §3.9, §3.11) shows supplier payments under this DISPLAY label; it
+ * is never a real category, so no category may take its code or name (CHECKs in 0048). */
+export const RESERVED_EXPENSE_CATEGORY_CODE = "biaya_produksi";
+export const RESERVED_EXPENSE_CATEGORY_NAME = "Biaya produksi";
+
+export interface DefaultExpenseCategory {
+  code: BusinessExpenseCategory;
+  name: string;
+  kind: ExpenseCategoryKind;
+  fixedChannelId: ChannelId | null;
+  isSystem: boolean;
+  sortOrder: number;
+}
+
+/** The ten categories that existed before 0048, with today's labels. Inserted by migration 0048
+ * (ON CONFLICT DO NOTHING) and, insert-only, by seed.ts; migration-0048.test.ts asserts the two
+ * agree. System = the app logic matches the code (ROAS, fixed channels, "Lainnya" needs a note):
+ * never deactivated, code/kind/fixed channel never change. */
+export const DEFAULT_EXPENSE_CATEGORIES = [
+  { code: "ads_meta", name: "Iklan Meta", kind: "ad", fixedChannelId: null, isSystem: true, sortOrder: 10 },
+  { code: "ads_tiktok", name: "Iklan TikTok", kind: "ad", fixedChannelId: "tiktok", isSystem: true, sortOrder: 20 },
+  { code: "ads_shopee", name: "Iklan Shopee", kind: "ad", fixedChannelId: "shopee", isSystem: true, sortOrder: 30 },
+  { code: "endorsement", name: "Endorse/KOL", kind: "endorsement", fixedChannelId: null, isSystem: true, sortOrder: 40 },
+  { code: "material_shipping", name: "Ongkir bahan", kind: "operating", fixedChannelId: null, isSystem: false, sortOrder: 110 },
+  { code: "packaging", name: "Packaging", kind: "operating", fixedChannelId: null, isSystem: false, sortOrder: 120 },
+  { code: "salary", name: "Gaji", kind: "operating", fixedChannelId: null, isSystem: false, sortOrder: 130 },
+  { code: "rent", name: "Sewa", kind: "operating", fixedChannelId: null, isSystem: false, sortOrder: 140 },
+  { code: "utilities", name: "Utilitas", kind: "operating", fixedChannelId: null, isSystem: false, sortOrder: 150 },
+  { code: "other", name: "Lainnya", kind: "operating", fixedChannelId: null, isSystem: true, sortOrder: 990 },
+] as const satisfies readonly DefaultExpenseCategory[];
 
 /** Tunai, Transfer, Kartu (debit/kredit, e.g. Meta billing), Saldo platform (Saldo Penjual
  * Shopee/TikTok). Labels live in apps/admin. */

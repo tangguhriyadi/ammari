@@ -11,7 +11,7 @@ import { MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, type MarketingChan
 // rupiah (integers); no floats anywhere a result is compared or stored. Dates are Asia/Jakarta
 // calendar dates ("YYYY-MM-DD"), the same strings business_expenses.expense_date holds.
 
-// ---------- Channel rules (mirror business_expenses_channel_check) ----------
+// ---------- Channel rules (mirror the business_expense_channel_rule trigger, migration 0048) ----------
 
 export type ExpenseChannelRule = { kind: "fixed"; channelId: ChannelId } | { kind: "optional" } | { kind: "none" };
 
