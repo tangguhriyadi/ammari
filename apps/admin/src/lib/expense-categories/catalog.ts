@@ -5,6 +5,13 @@ import { EXPENSE_CATEGORY_GROUPS, type ExpenseCategoryGroup } from "@/lib/expens
 // `server-only`: the server reads the rows (queries.ts getExpenseCategoryCatalog) and passes them
 // to client components as props, which use these helpers. Nothing here reads the database.
 
+/** "Jenis" on the Data Master pages (plan §3.1): the owner picks it in these words. */
+export const EXPENSE_CATEGORY_KIND_LABELS: Record<ExpenseCategoryKind, string> = {
+  ad: "Iklan",
+  endorsement: "Endorse",
+  operating: "Operasional",
+};
+
 export interface ExpenseCategoryInfo {
   code: string;
   name: string;

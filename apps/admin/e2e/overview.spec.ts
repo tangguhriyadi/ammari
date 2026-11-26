@@ -215,7 +215,9 @@ for (const layout of LAYOUTS) {
 
       // An invalid range falls back to Kemarin and says so; a repeated key takes its first value.
       await page.goto(`/?period=custom&from=${jakartaDay(-1)}&to=${jakartaDay(-5)}`);
-      await expect(page.getByRole("alert")).toContainText("Sekarang menampilkan Kemarin");
+      // Not a bare getByRole("alert"): Next.js's route announcer (#__next-route-announcer__) also
+      // carries role="alert" and is sometimes still in the DOM, which makes the lookup ambiguous.
+      await expect(page.locator('[role="alert"]', { hasText: "Sekarang menampilkan Kemarin" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Penjualan kemarin" })).toBeVisible();
       await page.goto("/?period=7d&period=today");
       await expect(page.getByRole("heading", { name: "Penjualan 7 hari terakhir" })).toBeVisible();

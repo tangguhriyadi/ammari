@@ -22,6 +22,7 @@ import {
   Truck,
   Upload,
   Users,
+  Wallet,
 } from "lucide-react";
 import type { PermissionKey } from "@ammari/db/rbac";
 
@@ -153,6 +154,18 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: Truck,
     group: "Data Master",
     permissionKeys: ["inventory.view", "inventory.manage"],
+    mobilePrimary: false,
+  },
+  {
+    // docs/plans/expense-master-data.md §3.6: categories and cost items of "Catat biaya". Same
+    // gate as recording an expense (owner answer D5); the page also needs finance.view_profit.
+    // The nav gate is any-of, so like "Iklan & Biaya" a role holding only ads_expenses.manage sees
+    // the entry and gets "Akses ditolak"; no predefined role has that combination.
+    label: "Kategori Biaya",
+    href: "/expense-categories",
+    icon: Wallet,
+    group: "Data Master",
+    permissionKeys: ["ads_expenses.manage"],
     mobilePrimary: false,
   },
   {

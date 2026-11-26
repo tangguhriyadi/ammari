@@ -100,6 +100,11 @@ export const E2E_SCOPED_COSTS_EMAIL = "scoped-costs@e2e.ammari.test";
 // predefined CS role, which must get "Akses ditolak" on /ads-expenses and a 403 on a proof.
 export const E2E_EXPENSES_EMAIL = "expenses@e2e.ammari.test";
 export const E2E_EXPENSES_CS_EMAIL = "expenses-cs@e2e.ammari.test";
+// expense-categories.spec.ts (docs/plans/expense-master-data.md session S3): "Kategori Biaya" on
+// the predefined Keuangan role (ads_expenses.manage + finance.view_profit, owner answer D5), and a
+// CS staff who must get "Akses ditolak" and no nav entry. Fresh emails, clean OTP throttle.
+export const E2E_EXPENSE_CATEGORIES_EMAIL = "expense-categories@e2e.ammari.test";
+export const E2E_EXPENSE_CATEGORIES_CS_EMAIL = "expense-categories-cs@e2e.ammari.test";
 // ads-expenses-summary.spec.ts (docs/plans/growth.md session S3): Iklan & Biaya "Ringkasan", the
 // Laba bersih tile and the "Gaji/Sewa belum dicatat" item. An owner, a Keuangan (`finance`) staff,
 // and a role with overview.view + orders.view + ads_expenses.manage but NOT finance.view_profit,
@@ -525,6 +530,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_PRODUCTION_PAYMENTS_NO_FINANCE_EMAIL, "E2E Production Payments (no finance)", E2E_PRODUCTION_NO_FINANCE_ROLE_KEY);
   await ensureStaffFixture(E2E_EXPENSES_EMAIL, "E2E Keuangan", "finance");
   await ensureStaffFixture(E2E_EXPENSES_CS_EMAIL, "E2E CS", "customer_service");
+  await ensureStaffFixture(E2E_EXPENSE_CATEGORIES_EMAIL, "E2E Kategori Biaya", "finance");
+  await ensureStaffFixture(E2E_EXPENSE_CATEGORIES_CS_EMAIL, "E2E CS Kategori Biaya", "customer_service");
 
   await ensureLimitedRole(E2E_PURCHASES_ROLE_KEY, [
     "products.manage",
@@ -1209,6 +1216,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_FRESH_AFTER_SAVE_EMAIL,
         E2E_PRODUCT_DISCOUNT_EMAIL,
         E2E_PRODUCT_TYPES_EMAIL,
+        E2E_EXPENSE_CATEGORIES_EMAIL,
+        E2E_EXPENSE_CATEGORIES_CS_EMAIL,
         E2E_IMPORT_EMAIL,
         E2E_IMPORT_NO_FINANCE_EMAIL,
         E2E_LANDING_PACKING_EMAIL,

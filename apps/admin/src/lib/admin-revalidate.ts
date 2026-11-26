@@ -21,6 +21,7 @@ export type AdminSection =
   | "/ads-expenses"
   | "/content"
   | "/customers"
+  | "/expense-categories"
   | "/fabrics"
   | "/import"
   | "/orders"
