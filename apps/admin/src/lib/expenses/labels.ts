@@ -1,35 +1,30 @@
-import type { BusinessExpenseCategory, BusinessExpenseMethod, ChannelId } from "@ammari/db/schema";
+import type { BusinessExpenseMethod, ChannelId, DefaultExpenseCategoryCode, ExpenseCategoryKind } from "@ammari/db/schema";
 
 // Indonesian labels for "Iklan & Biaya" (docs/plans/growth.md §3.1). No server dependency, so the
-// record dialog and the list share them. The keys live in @ammari/db's constants (CHECK-backed).
+// record dialog and the list share them. Category NAMES are not here: since migration 0048 they
+// are expense_categories rows (lib/expense-categories), so a rename shows everywhere.
 
-export const EXPENSE_CATEGORY_LABELS: Record<BusinessExpenseCategory, string> = {
-  ads_meta: "Iklan Meta",
-  ads_tiktok: "Iklan TikTok",
-  ads_shopee: "Iklan Shopee",
-  endorsement: "Endorse/KOL",
-  material_shipping: "Ongkir bahan",
-  packaging: "Packaging",
-  salary: "Gaji",
-  rent: "Sewa",
-  utilities: "Utilitas",
-  other: "Lainnya",
-};
-
-/** The two groups of the category picker and the list filter, in display order. */
+/** The two groups of the category picker and the list filter, in display order. A category's
+ * group follows from its kind (docs/plans/expense-master-data.md §3.1), so a new ad category the
+ * owner creates lands under "Iklan" without a code change. */
 export const EXPENSE_CATEGORY_GROUPS = [
-  { key: "marketing", label: "Iklan", categories: ["ads_meta", "ads_tiktok", "ads_shopee", "endorsement"] },
-  { key: "operational", label: "Operasional", categories: ["material_shipping", "packaging", "salary", "rent", "utilities", "other"] },
-] as const satisfies readonly { key: string; label: string; categories: readonly BusinessExpenseCategory[] }[];
+  { key: "marketing", label: "Iklan", kinds: ["ad", "endorsement"] },
+  { key: "operational", label: "Operasional", kinds: ["operating"] },
+] as const satisfies readonly { key: string; label: string; kinds: readonly ExpenseCategoryKind[] }[];
 
 export type ExpenseCategoryGroup = (typeof EXPENSE_CATEGORY_GROUPS)[number]["key"];
 
-/** Field hints that keep a cost from being counted twice (plan §4.3). */
-export const EXPENSE_CATEGORY_HINTS: Partial<Record<BusinessExpenseCategory, string>> = {
+/** Field hints that keep a cost from being counted twice (plan §4.3). Keyed by the seeded codes
+ * (expense-master-data.md §3.2); any other category simply has no hint. */
+export const EXPENSE_CATEGORY_HINTS: Partial<Record<DefaultExpenseCategoryCode, string>> = {
   material_shipping: "Hanya ongkir yang tidak tercatat di dokumen pembelian. Ongkir di pembelian sudah masuk HPP.",
   endorsement: "Komisi affiliate Shopee/TikTok sudah masuk dari impor sebagai biaya platform. Jangan dicatat lagi di sini.",
   other: "Tulis di catatan biaya apa ini.",
 };
+
+export function expenseCategoryHint(code: string): string | undefined {
+  return Object.hasOwn(EXPENSE_CATEGORY_HINTS, code) ? EXPENSE_CATEGORY_HINTS[code as DefaultExpenseCategoryCode] : undefined;
+}
 
 export const EXPENSE_METHOD_LABELS: Record<BusinessExpenseMethod, string> = {
   transfer: "Transfer",
@@ -50,15 +45,8 @@ export const MARKETING_CHANNEL_LABELS: Record<MarketingChannelId, string> = {
   whatsapp: "WhatsApp",
 };
 
-/** "Pengingat biaya bulanan" (docs/plans/growth.md §6, owner answer A6): the categories /settings
- * offers as "must be recorded every month", in display order. Any fixed category may be added
- * here later (the DB CHECK allows the whole list); none is chosen by default (reminder off). */
-export const MONTHLY_BILL_CATEGORY_OPTIONS = ["salary", "rent", "utilities"] as const satisfies readonly BusinessExpenseCategory[];
-export type MonthlyBillCategory = (typeof MONTHLY_BILL_CATEGORY_OPTIONS)[number];
-
-/** "Gaji", "Gaji dan Sewa", "Gaji, Sewa, dan Utilitas". */
-export function joinCategoryLabels(categories: readonly BusinessExpenseCategory[]): string {
-  const labels = categories.map((category) => EXPENSE_CATEGORY_LABELS[category]);
+/** "Gaji", "Gaji dan Sewa", "Gaji, Sewa, dan Utilitas": category names as an Indonesian list. */
+export function joinCategoryLabels(labels: readonly string[]): string {
   if (labels.length <= 2) return labels.join(" dan ");
   return `${labels.slice(0, -1).join(", ")}, dan ${labels.at(-1)}`;
 }

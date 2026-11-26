@@ -348,7 +348,7 @@ export const CHANNEL_FEE_COMPONENTS = [
 export type ChannelFeeComponent = (typeof CHANNEL_FEE_COMPONENTS)[number];
 
 /** Backs only the CHECK of the never-used `expenses` table (migration 0000). Not the "Iklan &
- * Biaya" categories: those are BUSINESS_EXPENSE_CATEGORIES below. Kept until a contract migration
+ * Biaya" categories: those are expense_categories rows (migration 0048). Kept until a contract migration
  * drops that table (docs/plans/growth.md Q2, awaiting owner confirmation). */
 export const EXPENSE_CATEGORIES = [
   "packaging",
@@ -412,9 +412,11 @@ export type PurchaseAttachmentKind = (typeof PURCHASE_ATTACHMENT_KINDS)[number];
 
 // ---------- Iklan & Biaya (docs/plans/growth.md §3, migration 0042) ----------
 
-/** A FIXED set (owner answer Q1): ads, endorse and operating costs. Indonesian labels live in
- * apps/admin (lib/expenses/labels.ts), never in the DB. "other" (Lainnya) requires a note
- * (business_expenses_other_note_check). Adding one is a CHECK widen in a migration. */
+/** The ten category codes that existed before migration 0048, in their original order. Since
+ * 0048 (plan session S2) these are NOT the list of categories: `expense_categories` is, and the
+ * app reads codes, names, kinds and fixed channels from it (apps/admin lib/expense-categories).
+ * Kept as the typed seed set (DEFAULT_EXPENSE_CATEGORIES) and for the migration tests. "other"
+ * (Lainnya) requires a note (business_expenses_other_note_check). */
 export const BUSINESS_EXPENSE_CATEGORIES = [
   "ads_meta",
   "ads_tiktok",
@@ -427,25 +429,33 @@ export const BUSINESS_EXPENSE_CATEGORIES = [
   "utilities",
   "other",
 ] as const;
-export type BusinessExpenseCategory = (typeof BUSINESS_EXPENSE_CATEGORIES)[number];
+export type DefaultExpenseCategoryCode = (typeof BUSINESS_EXPENSE_CATEGORIES)[number];
 
-/** "Biaya iklan": what ROAS divides by (plan §4.1). Endorse/KOL is marketing but not in ROAS. */
-export const AD_EXPENSE_CATEGORIES = ["ads_meta", "ads_tiktok", "ads_shopee"] as const satisfies readonly BusinessExpenseCategory[];
-export type AdExpenseCategory = (typeof AD_EXPENSE_CATEGORIES)[number];
+/** An expense_categories.code. Owner-created categories have codes generated from their name, so
+ * this is any string; the FK on business_expenses.category is what keeps it real. */
+export type BusinessExpenseCategory = string;
 
-/** Categories that may name the sales channel they are for (business_expenses.channel_id). */
-export const MARKETING_EXPENSE_CATEGORIES = [...AD_EXPENSE_CATEGORIES, "endorsement"] as const satisfies readonly BusinessExpenseCategory[];
-export type MarketingExpenseCategory = (typeof MARKETING_EXPENSE_CATEGORIES)[number];
+/** The pre-0048 kind = 'ad' codes. Reference only (migration tests): ROAS reads `kind`. */
+export const AD_EXPENSE_CATEGORIES = ["ads_meta", "ads_tiktok", "ads_shopee"] as const satisfies readonly DefaultExpenseCategoryCode[];
 
-/** Ad categories tied to exactly one channel (business_expense_channel_rule trigger since 0048). Every other
- * marketing category takes an optional channel; non-marketing categories never have one. */
-export const FIXED_EXPENSE_CHANNELS = { ads_shopee: "shopee", ads_tiktok: "tiktok" } as const satisfies Partial<Record<BusinessExpenseCategory, ChannelId>>;
+/** The pre-0048 marketing codes (kind 'ad' or 'endorsement'). Reference only: the app reads `kind`. */
+export const MARKETING_EXPENSE_CATEGORIES = [...AD_EXPENSE_CATEGORIES, "endorsement"] as const satisfies readonly DefaultExpenseCategoryCode[];
+
+/** The seeded fixed-channel rule (expense_categories.fixed_channel_id). Reference only: the app and
+ * the business_expense_channel_rule trigger read the column. */
+export const FIXED_EXPENSE_CHANNELS = { ads_shopee: "shopee", ads_tiktok: "tiktok" } as const satisfies Partial<Record<DefaultExpenseCategoryCode, ChannelId>>;
+
+/** The category codes app logic names by literal. "other" (Lainnya) needs a note
+ * (business_expenses_other_note_check); the rest are system rows the seed pins (kind, fixed
+ * channel). Every one is is_system in DEFAULT_EXPENSE_CATEGORIES. */
+export const SYSTEM_EXPENSE_CATEGORY_CODES = ["ads_meta", "ads_tiktok", "ads_shopee", "endorsement", "other"] as const satisfies readonly DefaultExpenseCategoryCode[];
+export type SystemExpenseCategoryCode = (typeof SYSTEM_EXPENSE_CATEGORY_CODES)[number];
 
 // ---------- Kategori Biaya master data (docs/plans/expense-master-data.md, migration 0048) ----------
 // Since 0048 the categories live in `expense_categories` (owner-managed under Data Master), and
 // the three CHECKs that listed the codes above are gone: an FK, the business_expense_channel_rule
-// trigger and the sales_goal monthly-bill trigger replace them. The constants above stay as the
-// typed set of SYSTEM/seeded codes until the app reads the catalog (plan session S2).
+// trigger and the sales_goal monthly-bill trigger replace them. Since S2 the app reads the catalog;
+// the constants above are the typed seed set.
 
 /** What a category does in the figures. ad: biaya iklan, counted in ROAS, channel optional or
  * fixed. endorsement: marketing, optional channel, never in ROAS. operating: no channel. Fixed per
@@ -459,7 +469,7 @@ export const RESERVED_EXPENSE_CATEGORY_CODE = "biaya_produksi";
 export const RESERVED_EXPENSE_CATEGORY_NAME = "Biaya produksi";
 
 export interface DefaultExpenseCategory {
-  code: BusinessExpenseCategory;
+  code: DefaultExpenseCategoryCode;
   name: string;
   kind: ExpenseCategoryKind;
   fixedChannelId: ChannelId | null;

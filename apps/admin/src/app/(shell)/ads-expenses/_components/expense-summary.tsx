@@ -3,7 +3,8 @@ import Link from "next/link";
 import { Badge, Button, Card, CardList, EmptyState, Input, Label, TableContainer, TableHead, Tabs, Td, Th, Tr } from "@ammari/ui";
 import { formatNumber, formatRupiah } from "@ammari/ui/lib";
 import type { BreakEvenRoas, RoasRow } from "@/lib/expenses/figures";
-import { EXPENSE_CATEGORY_LABELS } from "@/lib/expenses/labels";
+import { expenseCategoryLabel } from "@/lib/expense-categories/catalog";
+import { loadExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
 import { BREAK_EVEN_EXPLANATION, breakEvenText, reportPeriodLabel, roasStatusText, roasText } from "@/lib/expenses/report-content";
 import { expenseListHref, expenseReportHref, expenseSummaryHref, MAX_SUMMARY_MONTHS, type ExpenseSummaryParams, type ExpenseSummaryPeriod } from "@/lib/expenses/search-params";
 import { getExpenseSummary } from "@/lib/expenses/summary";
@@ -142,7 +143,7 @@ function percentOfOmzet(amount: number, omzet: number): string {
 }
 
 export async function ExpenseSummary({ params, today, now }: { params: ExpenseSummaryParams; today: string; now: Date }) {
-  const { totals, money, expenses, net, incomplete, breakEven, roasRows } = await getExpenseSummary(params.range, now);
+  const [{ totals, money, expenses, net, incomplete, breakEven, roasRows }, { categories }] = await Promise.all([getExpenseSummary(params.range, now), loadExpenseCategoryCatalog()]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -201,7 +202,7 @@ export async function ExpenseSummary({ params, today, now }: { params: ExpenseSu
               {expenses.byCategory.map((entry) => (
                 <li key={entry.category} data-testid="summary-category-card">
                   <Card className="flex items-center justify-between gap-3">
-                    <span className="text-base font-medium text-neutral-900">{EXPENSE_CATEGORY_LABELS[entry.category]}</span>
+                    <span className="text-base font-medium text-neutral-900">{expenseCategoryLabel(categories, entry.category)}</span>
                     <span className="flex flex-col items-end">
                       <span className="text-base font-semibold tabular-nums text-neutral-900">{formatRupiah(entry.amount)}</span>
                       <span className="text-sm text-neutral-600 tabular-nums">{percentOfOmzet(entry.amount, money.omzet)} dari omzet</span>
@@ -219,7 +220,7 @@ export async function ExpenseSummary({ params, today, now }: { params: ExpenseSu
               <tbody>
                 {expenses.byCategory.map((entry) => (
                   <Tr key={entry.category} data-testid="summary-category-row">
-                    <Td>{EXPENSE_CATEGORY_LABELS[entry.category]}</Td>
+                    <Td>{expenseCategoryLabel(categories, entry.category)}</Td>
                     <Td className="text-right tabular-nums">{formatRupiah(entry.amount)}</Td>
                     <Td className="text-right tabular-nums">{percentOfOmzet(entry.amount, money.omzet)}</Td>
                   </Tr>

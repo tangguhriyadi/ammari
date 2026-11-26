@@ -123,7 +123,7 @@ function drawProfitAndLoss(cursor: Cursor, report: MonthlyReport): void {
   sectionHeading(cursor, "Laba rugi (manajemen)");
   const amountWidth = 160;
   const amountX = PAGE_WIDTH - MARGIN_X - amountWidth;
-  for (const line of profitAndLossLines(report.summary)) {
+  for (const line of profitAndLossLines(report.summary, report.categories)) {
     const rowHeight = line.kind === "result" ? 20 : 16;
     cursor.ensure(rowHeight);
     if (line.kind === "result") {

@@ -6,7 +6,9 @@ import { formatNumber, formatRupiah, formatShortDate } from "@ammari/ui/lib";
 import { jakartaMidnight } from "@ammari/commerce/jakarta-day";
 import { expenseListHref } from "@/lib/expenses/search-params";
 import { getMonthlyBillsReminder } from "@/lib/expenses/summary";
-import { EXPENSE_CATEGORY_GROUPS, joinCategoryLabels } from "@/lib/expenses/labels";
+import { expenseCategoryLabel, expenseGroupOfKind, findExpenseCategory } from "@/lib/expense-categories/catalog";
+import { loadExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
+import { joinCategoryLabels } from "@/lib/expenses/labels";
 import { formatCompactRupiah, formatDateRange, formatMonthYear } from "@/lib/overview/format";
 import {
   CHECKOUT_EXPIRY_SOON_MINUTES,
@@ -320,10 +322,15 @@ async function UnpaidProductionBlock({ profit }: { profit: boolean }) {
 async function MonthlyBillsBlock({ now }: { now: Date }) {
   const reminder = await getMonthlyBillsReminder(now);
   if (reminder.state === "off") return null;
+  const catalog = await loadExpenseCategoryCatalog();
   const missing = reminder.state === "missing" ? reminder : null;
-  // The "Operasional" tab when every missing category is in it (Gaji, Sewa, Utilitas), else "Semua".
-  const operational: readonly string[] = EXPENSE_CATEGORY_GROUPS.find((group) => group.key === "operational")?.categories ?? [];
-  const group = missing?.missing.every((category) => operational.includes(category)) ? ("operational" as const) : undefined;
+  // The "Operasional" tab when every missing category has kind operating (Gaji, Sewa, Utilitas),
+  // else "Semua" (any active category may be a monthly bill, owner answer D3).
+  const isOperational = (code: string) => {
+    const category = findExpenseCategory(catalog.categories, code);
+    return category !== undefined && expenseGroupOfKind(category.kind) === "operational";
+  };
+  const group = missing?.missing.every(isOperational) ? ("operational" as const) : undefined;
   return (
     <Block
       title="Biaya bulanan belum dicatat"
@@ -339,7 +346,7 @@ async function MonthlyBillsBlock({ now }: { now: Date }) {
       detail={
         missing && (
           <span>
-            Belum ada biaya {joinCategoryLabels(missing.missing)} untuk {formatMonthYear(missing.month)} yang dibayar {formatDateRange(missing.from, missing.to)}, jadi
+            Belum ada biaya {joinCategoryLabels(missing.missing.map((code) => expenseCategoryLabel(catalog.categories, code)))} untuk {formatMonthYear(missing.month)} yang dibayar {formatDateRange(missing.from, missing.to)}, jadi
             Laba bersih bulan itu belum lengkap.
           </span>
         )

@@ -4,15 +4,9 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Dialog, Input, Label, Select, Textarea, useToast } from "@ammari/ui";
 import type { BusinessExpenseCategory, BusinessExpenseMethod } from "@ammari/db/schema";
+import { expenseCategoriesInGroup, findExpenseCategory, type ExpenseCategoryInfo } from "@/lib/expense-categories/catalog";
 import { expenseChannelRule } from "@/lib/expenses/figures";
-import {
-  EXPENSE_CATEGORY_GROUPS,
-  EXPENSE_CATEGORY_HINTS,
-  EXPENSE_CATEGORY_LABELS,
-  EXPENSE_METHOD_LABELS,
-  MARKETING_CHANNEL_LABELS,
-  MARKETING_CHANNEL_OPTIONS,
-} from "@/lib/expenses/labels";
+import { EXPENSE_CATEGORY_GROUPS, EXPENSE_METHOD_LABELS, MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, expenseCategoryHint } from "@/lib/expenses/labels";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { parseRupiah } from "@/lib/products/money";
 import { PROOF_MESSAGES } from "@/lib/supplier-payments/messages";
@@ -22,7 +16,8 @@ import { findExpenseProofDuplicatesAction, recordBusinessExpenseAction } from ".
 // "Catat biaya" (docs/plans/growth.md §6): date (default today), category, amount, method, the
 // channel for an ad or endorse (fixed for Iklan Shopee/TikTok), an optional campaign, a note
 // (required for Lainnya) and a REQUIRED proof. The server re-checks every rule; this form only
-// gives early feedback.
+// gives early feedback. The categories are the catalog's ACTIVE ones (expense_categories), passed
+// in by the server page; the client never queries.
 
 const NOTE_MAX = 500;
 const CAMPAIGN_MAX = 120;
@@ -31,7 +26,9 @@ const METHODS = Object.keys(EXPENSE_METHOD_LABELS) as BusinessExpenseMethod[];
 
 type FieldErrors = Partial<Record<(typeof FIELDS)[number], string>>;
 
-export function RecordExpenseButton() {
+export type RecordExpenseCategoryOption = Pick<ExpenseCategoryInfo, "code" | "name" | "kind" | "fixedChannelId">;
+
+export function RecordExpenseButton({ categories }: { categories: readonly RecordExpenseCategoryOption[] }) {
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -51,8 +48,9 @@ export function RecordExpenseButton() {
   // The file whose duplicate lookup may still apply; a late answer for a replaced file is dropped.
   const latestSha = useRef<string | null>(null);
 
-  const rule = category === "" ? null : expenseChannelRule(category);
-  const hint = category === "" ? undefined : EXPENSE_CATEGORY_HINTS[category];
+  const selected = category === "" ? undefined : findExpenseCategory(categories, category);
+  const rule = selected ? expenseChannelRule(selected) : null;
+  const hint = category === "" ? undefined : expenseCategoryHint(category);
 
   function reset() {
     setExpenseDate(todayInJakarta());
@@ -71,13 +69,14 @@ export function RecordExpenseButton() {
 
   function handleCategory(next: BusinessExpenseCategory | "") {
     setCategory(next);
-    const nextRule = next === "" ? null : expenseChannelRule(next);
+    const nextCategory = next === "" ? undefined : findExpenseCategory(categories, next);
+    const nextRule = nextCategory ? expenseChannelRule(nextCategory) : null;
     // A fixed ad shows its own channel; an operating cost has none and no campaign.
     setChannelId(nextRule?.kind === "fixed" ? nextRule.channelId : "");
     if (nextRule?.kind === "none" || nextRule === null) setCampaign("");
-    // Marketplace ads are usually paid from the seller balance; leaving them restores the default
-    // unless the user picked a method themselves.
-    const marketplaceAd = next === "ads_shopee" || next === "ads_tiktok";
+    // Marketplace ads (the fixed-channel ones: Iklan Shopee/TikTok) are usually paid from the seller
+    // balance; leaving them restores the default unless the user picked a method themselves.
+    const marketplaceAd = nextRule?.kind === "fixed";
     setMethod((current) => (marketplaceAd && current === "transfer" ? "platform_balance" : !marketplaceAd && current === "platform_balance" ? "transfer" : current));
     setFieldErrors((current) => ({ ...current, category: undefined, channelId: undefined, campaign: undefined, note: undefined }));
   }
@@ -195,15 +194,19 @@ export function RecordExpenseButton() {
               aria-describedby={hint ? "expense-category-hint" : undefined}
             >
               <option value="">Pilih kategori</option>
-              {EXPENSE_CATEGORY_GROUPS.map((group) => (
-                <optgroup key={group.key} label={group.label}>
-                  {group.categories.map((key) => (
-                    <option key={key} value={key}>
-                      {EXPENSE_CATEGORY_LABELS[key]}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
+              {EXPENSE_CATEGORY_GROUPS.map((group) => {
+                const inGroup = expenseCategoriesInGroup(categories, group.key);
+                if (inGroup.length === 0) return null;
+                return (
+                  <optgroup key={group.key} label={group.label}>
+                    {inGroup.map((option) => (
+                      <option key={option.code} value={option.code}>
+                        {option.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
             </Select>
             {hint && (
               <p id="expense-category-hint" className="text-sm text-neutral-600">

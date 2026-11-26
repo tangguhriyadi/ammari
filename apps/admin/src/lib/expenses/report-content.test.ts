@@ -3,6 +3,7 @@ import { breakEvenRoas, buildRoasRows, summarizeMarketing } from "./figures";
 import { breakEvenText, channelReportRows, formatSignedRupiah, profitAndLossLines, reportFileName, reportNotes, reportTitle } from "./report-content";
 import type { ExpenseSummaryParams } from "./search-params";
 import type { ExpenseSummary } from "./summary";
+import { DEFAULT_EXPENSE_CATEGORY_INFOS } from "@/lib/expense-categories/default-catalog";
 
 // docs/plans/growth.md session S6 (owner addition A): what the monthly report says, from the
 // Ringkasan's own figures.
@@ -12,10 +13,10 @@ const Q1: ExpenseSummaryParams = { period: "range", fromMonth: "2026-01", toMont
 
 function fixture(overrides: { linesWithoutCost?: number; ordersWithoutFees?: number } = {}): ExpenseSummary {
   const marketing = summarizeMarketing([
-    { category: "ads_shopee", channelId: "shopee", amount: 100_000, voided: false },
-    { category: "ads_meta", channelId: "instagram", amount: 40_000, voided: false },
-    { category: "ads_meta", channelId: null, amount: 30_000, voided: false },
-    { category: "salary", channelId: null, amount: 400_000, voided: false },
+    { kind: "ad", channelId: "shopee", amount: 100_000, voided: false },
+    { kind: "ad", channelId: "instagram", amount: 40_000, voided: false },
+    { kind: "ad", channelId: null, amount: 30_000, voided: false },
+    { kind: "operating", channelId: null, amount: 400_000, voided: false },
   ]);
   const money = {
     omzet: 2_000_000,
@@ -61,7 +62,7 @@ describe("titles and file names", () => {
 describe("profitAndLossLines", () => {
   test("costs negative, each result line is the sum of the lines above it, categories under the expense line", () => {
     const summary = fixture();
-    const lines = profitAndLossLines(summary);
+    const lines = profitAndLossLines(summary, DEFAULT_EXPENSE_CATEGORY_INFOS);
     expect(lines.map((line) => line.label)).toEqual([
       "Omzet",
       "HPP",
@@ -85,7 +86,7 @@ describe("profitAndLossLines", () => {
     expect(formatSignedRupiah(1_500)).toBe("Rp 1.500");
     expect(formatSignedRupiah(-0)).toBe("Rp 0");
     const empty = { ...summary, money: { ...summary.money, hpp: 0 } };
-    expect(Object.is(profitAndLossLines(empty).find((line) => line.label === "HPP")!.amount, -0)).toBe(false);
+    expect(Object.is(profitAndLossLines(empty, DEFAULT_EXPENSE_CATEGORY_INFOS).find((line) => line.label === "HPP")!.amount, -0)).toBe(false);
   });
 });
 

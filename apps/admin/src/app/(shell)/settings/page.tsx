@@ -3,6 +3,8 @@ import { jakartaDate } from "@ammari/commerce/jakarta-day";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { getSalesGoal } from "@/lib/overview/queries";
+import { selectableExpenseCategories } from "@/lib/expense-categories/catalog";
+import { loadExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
 import { getMonthlyBillCategories } from "@/lib/settings/monthly-bills";
 import { canManageSalesGoal } from "@/lib/settings/sales-goal-permissions";
 import { MonthlyBillsForm } from "./_components/monthly-bills-form";
@@ -23,7 +25,9 @@ export default async function PengaturanPage() {
     );
   }
 
-  const [goal, monthlyBillCategories] = await Promise.all([getSalesGoal(), getMonthlyBillCategories()]);
+  const [goal, monthlyBillCategories, catalog] = await Promise.all([getSalesGoal(), getMonthlyBillCategories(), loadExpenseCategoryCatalog()]);
+  // Every active category may be a monthly bill (owner answer D3), in display order.
+  const monthlyBillOptions = selectableExpenseCategories(catalog.categories).map(({ code, name }) => ({ code, name }));
   const startDate = goal?.startDate ?? "";
 
   return (
@@ -35,7 +39,7 @@ export default async function PengaturanPage() {
           initialValues={{ revenueTargetDigits: goal ? String(goal.revenueTargetAmount) : "", startDate }}
           today={jakartaDate()}
         />
-        <MonthlyBillsForm initialCategories={monthlyBillCategories} />
+        <MonthlyBillsForm options={monthlyBillOptions} initialCategories={monthlyBillCategories} />
       </div>
     </>
   );

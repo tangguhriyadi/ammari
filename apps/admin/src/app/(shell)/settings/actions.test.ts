@@ -14,6 +14,15 @@ vi.mock("@/lib/settings/monthly-bills", async (importOriginal) => ({
   saveMonthlyBillCategories: saveMonthlyBillCategoriesMock,
 }));
 
+// The offered categories come from expense_categories (owner answer D3: every active one). The
+// catalog read is covered against the database in lib/expense-categories/queries.test.ts; here it
+// is the seed with "packaging" deactivated, so an inactive category's refusal is exercised too.
+vi.mock("@/lib/expense-categories/queries", async () => {
+  const { DEFAULT_EXPENSE_CATEGORY_INFOS } = await import("@/lib/expense-categories/default-catalog");
+  const categories = DEFAULT_EXPENSE_CATEGORY_INFOS.map((category) => (category.code === "packaging" ? { ...category, isActive: false } : category));
+  return { getExpenseCategoryCatalog: vi.fn(async () => ({ categories, items: [] })) };
+});
+
 const { saveMonthlyBillsReminderAction, saveSalesGoalAction } = await import("./actions");
 
 function sessionWithPermissions(permissionKeys: string[]) {
@@ -102,7 +111,15 @@ describe("saveMonthlyBillsReminderAction (docs/plans/growth.md §6, owner answer
 
   test("refuses a category that is not offered, in Indonesian, and never writes", async () => {
     getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage", "finance.view_profit"]));
-    expect(await saveMonthlyBillsReminderAction({ categories: ["salary", "ads_meta"] })).toEqual({
+    // "packaging" is inactive, "gift" does not exist. (Since owner answer D3 an active ad category
+    // such as ads_meta IS offered, so it no longer serves as the refused example.)
+    expect(await saveMonthlyBillsReminderAction({ categories: ["salary", "packaging"] })).toEqual({
+      ok: false,
+      error: "Pilih kategori dari daftar.",
+      fieldErrors: { categories: "Pilih kategori dari daftar." },
+    });
+    getStaffSessionMock.mockResolvedValueOnce(sessionWithPermissions(["settings.manage", "finance.view_profit"]));
+    expect(await saveMonthlyBillsReminderAction({ categories: ["gift"] })).toEqual({
       ok: false,
       error: "Pilih kategori dari daftar.",
       fieldErrors: { categories: "Pilih kategori dari daftar." },

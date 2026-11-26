@@ -3,9 +3,24 @@ import { eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { insertOrder, insertProductVariant, insertStaffUser, shippingQuoteValues } from "@ammari/db/test-fixtures";
-import { businessExpenses, orderItems, privateFiles, salesGoal, type BusinessExpenseCategory, type ChannelId } from "@ammari/db/schema";
+import {
+  businessExpenses,
+  costComponents,
+  orderItems,
+  privateFiles,
+  purchases,
+  salesGoal,
+  supplierPayments,
+  suppliers,
+  type BusinessExpenseCategory,
+  type ChannelId,
+} from "@ammari/db/schema";
 import { jakartaMidnight } from "@ammari/commerce/jakarta-day";
+import { createExpenseCategory, getExpenseCategoryCatalog, setExpenseCategoryActive } from "@/lib/expense-categories/queries";
+import { recordFabricPurchase } from "@/lib/inventory/fabric-stock";
 import { getChannelBreakdown, getPeriodTotals } from "@/lib/overview/queries";
+import { createDraft, postBatch } from "@/lib/production/queries";
+import { profitAndLossLines } from "./report-content";
 import { buildRoasRows, labaBersih, monthRange } from "./figures";
 import { dateRangeToTimeRange, getExpenseBreakdown, getExpenseSummary, getExpenseTotal, getMonthlyBillsReminder } from "./summary";
 
@@ -236,6 +251,189 @@ describe("getMonthlyBillsReminder (owner answer A6: the categories chosen on /se
       await insertExpense(tx, staff.id, { expenseDate: "2031-04-06", category: "salary", amount: 1 });
       await insertExpense(tx, staff.id, { expenseDate: "2031-04-01", category: "rent", amount: 1, voided: true });
       expect(await getMonthlyBillsReminder(ON_THE_6TH, tx)).toEqual({ state: "missing", ...WINDOW, missing: ["salary", "rent"] });
+    });
+  });
+});
+
+/** Three counted orders in March 2031 (omzet 1.500.000, laba setelah biaya platform 920.000,
+ * subsidy 20.000), the same as the Laba bersih fixture above. */
+async function ordersFixture(tx: TestDatabase) {
+  const { variant } = await insertProductVariant(tx);
+  const inMonth = new Date("2031-03-10T05:00:00Z");
+  const order = async (values: Parameters<typeof insertOrder>[1], unitPrice: number, unitCost: number) => {
+    const row = await insertOrder(tx, { orderDate: inMonth, subtotalAmount: unitPrice, ...values });
+    await tx.insert(orderItems).values({ orderId: row.id, sku: variant.sku, qty: 1, unitPrice, unitCost });
+  };
+  await order({ status: "completed", channelId: "shopee", channelOrderNo: `TEST-${randomUUID().slice(0, 8)}`, shippingAmount: 0 }, 1_000_000, 400_000);
+  await order({ status: "completed", channelId: "web", channelOrderNo: null, ...shippingQuoteValues(35_000, 20_000) }, 300_000, 100_000);
+  await order({ status: "shipped", channelId: "whatsapp", channelOrderNo: null }, 200_000, 80_000);
+}
+
+describe("categories come from expense_categories (docs/plans/expense-master-data.md S2)", () => {
+  test("an owner-made ad category counts in biaya iklan and ROAS; an owner-made operating one is its own P&L line and lowers Laba bersih", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      await ordersFixture(tx);
+      const suffix = randomUUID().slice(0, 6);
+      const google = await createExpenseCategory({ name: `Iklan Google ${suffix}`, kind: "ad", sortOrder: 50 }, null, tx);
+      const langganan = await createExpenseCategory({ name: `Langganan ${suffix}`, kind: "operating", sortOrder: 160 }, null, tx);
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-02", category: "salary", amount: 400_000 });
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-03", category: langganan.code, amount: 200_000 });
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-04", category: google.code, amount: 70_000, channelId: "web" });
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-05", category: google.code, amount: 30_000 });
+
+      const now = new Date("2032-01-01T00:00:00Z");
+      const summary = await getExpenseSummary(MONTH, now, tx);
+      expect(summary.expenses.total).toBe(700_000);
+      expect(summary.expenses.byCategory).toEqual([
+        { category: "salary", amount: 400_000 },
+        { category: langganan.code, amount: 200_000 },
+        { category: google.code, amount: 100_000 },
+      ]);
+      // kind = ad: tagged spend per channel, untagged only in the total; nothing in Endorse.
+      expect(summary.expenses.marketing).toEqual({ adSpendByChannel: { web: 70_000 }, untaggedAdSpend: 30_000, adSpendTotal: 100_000, endorsement: 0, marketingTotal: 100_000 });
+      const byKey = Object.fromEntries(summary.roasRows.map((row) => [row.key, row]));
+      expect(byKey.web).toMatchObject({ adSpend: 70_000, omzet: 300_000, roasTenths: 43 });
+      expect(byKey.untagged).toMatchObject({ adSpend: 30_000 });
+      expect(byKey.total).toMatchObject({ adSpend: 100_000, omzet: 1_500_000, roasTenths: 150 });
+      // Laba bersih = 920.000 - 20.000 - 700.000.
+      expect(summary.net).toBe(200_000);
+
+      const { categories } = await getExpenseCategoryCatalog(tx);
+      const lines = profitAndLossLines(summary, categories);
+      expect(lines.filter((line) => line.kind === "detail")).toEqual([
+        { label: "Gaji", amount: -400_000, kind: "detail" },
+        { label: `Langganan ${suffix}`, amount: -200_000, kind: "detail" },
+        { label: `Iklan Google ${suffix}`, amount: -100_000, kind: "detail" },
+      ]);
+      expect(lines.at(-1)).toEqual({ label: "Laba bersih", amount: 200_000, kind: "result" });
+    });
+  });
+
+  test("a deactivated category still counts in the figures of the months it was paid in", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const category = await createExpenseCategory({ name: `Sewa Gudang ${randomUUID().slice(0, 6)}`, kind: "operating", sortOrder: 145 }, null, tx);
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-02", category: category.code, amount: 123_000 });
+      await setExpenseCategoryActive(category.code, false, null, tx);
+      expect((await getExpenseBreakdown(MONTH, tx)).byCategory).toEqual([{ category: category.code, amount: 123_000 }]);
+      expect(await getExpenseTotal(MONTH, tx)).toBe(123_000);
+    });
+  });
+});
+
+describe("getMonthlyBillsReminder with the catalog (owner answer D3)", () => {
+  const ON_THE_6TH = new Date("2031-04-06T02:00:00Z");
+
+  test("any category may be a monthly bill; a deactivated one drops out, and only deactivated ones is off", async () => {
+    await withRollback(async (tx) => {
+      const category = await createExpenseCategory({ name: `Langganan ${randomUUID().slice(0, 6)}`, kind: "operating", sortOrder: 160 }, null, tx);
+      await tx.update(salesGoal).set({ monthlyBillCategories: ["salary", category.code, "ads_meta"] }).where(eq(salesGoal.id, 1));
+      expect(await getMonthlyBillsReminder(ON_THE_6TH, tx)).toMatchObject({ state: "missing", missing: ["salary", category.code, "ads_meta"] });
+
+      await setExpenseCategoryActive(category.code, false, null, tx);
+      expect(await getMonthlyBillsReminder(ON_THE_6TH, tx)).toMatchObject({ state: "missing", missing: ["salary", "ads_meta"] });
+      expect(await getMonthlyBillsReminder(new Date("2031-04-05T10:00:00Z"), tx)).toEqual({ state: "ok", categories: ["salary", "ads_meta"] });
+
+      await tx.update(salesGoal).set({ monthlyBillCategories: [category.code] }).where(eq(salesGoal.id, 1));
+      expect(await getMonthlyBillsReminder(ON_THE_6TH, tx)).toEqual({ state: "off" });
+    });
+  });
+});
+
+function proofFileValues(staffId: string, purpose: "expense_proof" | "payment_proof") {
+  const id = randomUUID();
+  const sha = createHash("sha256").update(id).digest("hex");
+  return {
+    id,
+    purpose,
+    storageKey: `test/${purpose}/2031/03/${id}.jpg`,
+    contentType: "image/jpeg",
+    byteSize: 1,
+    sha256: sha,
+    originalFilename: "bukti.jpg",
+    originalContentType: "image/jpeg",
+    originalByteSize: 1,
+    originalSha256: sha,
+    uploadedByStaffUserId: staffId,
+  } as const;
+}
+
+describe("accounting guard (expense-master-data.md §3.11): supplier payments never reach the expense figures", () => {
+  test("purchase and production batch payments in the month change no Laba bersih, expense total, P&L line, ROAS, break-even or Overview tile", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      await ordersFixture(tx);
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-02", category: "salary", amount: 400_000 });
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-03", category: "ads_shopee", amount: 100_000, channelId: "shopee" });
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-04", category: "ads_meta", amount: 50_000, channelId: "web" });
+      await insertExpense(tx, staff.id, { expenseDate: "2031-03-04", category: "endorsement", amount: 150_000 });
+
+      // A purchase and a posted production batch with a service line, both payable.
+      const [supplier] = await tx.insert(suppliers).values({ name: `Pemasok Uji ${randomUUID().slice(0, 8)}` }).returning();
+      const [purchase] = await tx
+        .insert(purchases)
+        .values({ purchaseNo: `PO-203103-${randomUUID().slice(0, 4)}`, supplierId: supplier!.id, orderedAt: "2031-03-01", createdByStaffUserId: staff.id })
+        .returning();
+      const { fabric, variant } = await insertProductVariant(tx);
+      const [sewing] = await tx.insert(costComponents).values({ name: `Ongkos jahit ${randomUUID().slice(0, 8)}`, unit: "pcs", costType: "variable" }).returning();
+      await recordFabricPurchase({ fabricId: fabric!.id, qty: 10, totalAmountPaid: 1_000_000, purchasedAt: "2026-09-01" }, null, tx);
+      const batch = await createDraft(
+        {
+          fabricId: fabric!.id,
+          producedAt: "2026-10-01",
+          fabricYards: 10,
+          fabricUsages: [{ fabricColorId: null, yards: 10 }],
+          lines: [{ sku: variant!.sku, qty: 10 }],
+          extraCosts: [{ costComponentId: sewing!.id, unitPrice: 20_000, supplierId: supplier!.id }],
+        },
+        staff.id,
+        tx,
+      );
+      await postBatch(batch.id, staff.id, tx);
+
+      const now = new Date("2032-01-01T00:00:00Z");
+      const snapshot = async () => {
+        const summary = await getExpenseSummary(MONTH, now, tx);
+        const { categories } = await getExpenseCategoryCatalog(tx);
+        return {
+          net: summary.net,
+          expenses: summary.expenses,
+          roasRows: summary.roasRows,
+          breakEven: summary.breakEven,
+          lines: profitAndLossLines(summary, categories),
+          overviewTile: await getExpenseTotal(MONTH, tx),
+        };
+      };
+      const before = await snapshot();
+      expect(before.net).toBe(200_000);
+      expect(before.expenses.total).toBe(700_000);
+
+      // Non-voided payments paid inside the month: a purchase (DP and the rest) and the batch.
+      let seq = 0;
+      const payment = async (values: Partial<typeof supplierPayments.$inferInsert>, amount: number) => {
+        const file = proofFileValues(staff.id, "payment_proof");
+        await tx.insert(privateFiles).values(file);
+        seq += 1;
+        await tx.insert(supplierPayments).values({
+          paymentNo: `BYR-TEST-${randomUUID().slice(0, 8)}-${seq}`,
+          paidAt: "2031-03-15",
+          amount,
+          method: "transfer",
+          proofFileId: file.id,
+          recordedByStaffUserId: staff.id,
+          supplierId: supplier!.id,
+          supplierName: supplier!.name,
+          ...values,
+        } as typeof supplierPayments.$inferInsert);
+      };
+      await payment({ targetType: "purchase", purchaseId: purchase!.id }, 3_000_000);
+      await payment({ targetType: "purchase", purchaseId: purchase!.id }, 2_000_000);
+      await payment({ targetType: "production_batch", productionBatchId: batch.id }, 200_000);
+
+      const after = await snapshot();
+      expect(after).toEqual(before);
+      expect(after.lines.map((line) => line.label)).not.toContain("Biaya produksi");
     });
   });
 });

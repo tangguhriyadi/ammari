@@ -4,7 +4,9 @@ import { formatRupiah } from "@ammari/ui/lib";
 import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
 import { monthToDate } from "@/lib/expenses/figures";
 import { listBusinessExpenses } from "@/lib/expenses/records";
-import { EXPENSE_CATEGORY_GROUPS, EXPENSE_CATEGORY_LABELS } from "@/lib/expenses/labels";
+import { EXPENSE_CATEGORY_GROUPS } from "@/lib/expenses/labels";
+import { expenseCategoriesInGroup, selectableExpenseCategories } from "@/lib/expense-categories/catalog";
+import { loadExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
 import { expenseListHref, expenseSummaryHref, parseExpenseListParams, parseExpenseSummaryParams, parseExpenseTab } from "@/lib/expenses/search-params";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { formatDateRange } from "@/lib/overview/format";
@@ -27,13 +29,16 @@ export default async function AdsExpensesPage({ searchParams }: { searchParams: 
   await requireAllPermissions(["ads_expenses.manage", "finance.view_profit"]);
   const raw = await searchParams;
   const tab = parseExpenseTab(raw);
+  const { categories } = await loadExpenseCategoryCatalog();
+  // Only active categories can take a NEW expense (expense-master-data.md §3.5).
+  const recordOptions = selectableExpenseCategories(categories).map(({ code, name, kind, fixedChannelId }) => ({ code, name, kind, fixedChannelId }));
   const header = (
     <>
       <Breadcrumb items={rootCrumbs("/ads-expenses")} />
       <PageHeader
         title="Iklan & Biaya"
         description="Biaya iklan dan operasional yang sudah dibayar, dengan buktinya. Biaya dihitung pada tanggal dibayar."
-        actions={<RecordExpenseButton />}
+        actions={<RecordExpenseButton categories={recordOptions} />}
       />
       <div className="mb-6 border-b border-neutral-200 pb-4">
         <Tabs
@@ -57,11 +62,12 @@ export default async function AdsExpensesPage({ searchParams }: { searchParams: 
     );
   }
 
-  const params = parseExpenseListParams(raw);
+  const params = parseExpenseListParams(raw, categories);
   const page = typeof raw.page === "string" ? raw.page : undefined;
   const perPage = typeof raw.perPage === "string" ? raw.perPage : undefined;
   const { rows, pagination, total } = await listBusinessExpenses(params, page, perPage);
-  const categoryOptions = params.group ? EXPENSE_CATEGORY_GROUPS.filter((group) => group.key === params.group) : EXPENSE_CATEGORY_GROUPS;
+  // Every category of the group, inactive ones too (marked), so past expenses stay filterable.
+  const categoryOptions = expenseCategoriesInGroup(categories, params.group);
 
   return (
     <>
@@ -98,13 +104,11 @@ export default async function AdsExpensesPage({ searchParams }: { searchParams: 
             <Label htmlFor="expense-filter-category">Kategori</Label>
             <Select id="expense-filter-category" name="category" defaultValue={params.category ?? ""}>
               <option value="">Semua kategori</option>
-              {categoryOptions.flatMap((group) =>
-                group.categories.map((key) => (
-                  <option key={key} value={key}>
-                    {EXPENSE_CATEGORY_LABELS[key]}
-                  </option>
-                )),
-              )}
+              {categoryOptions.map((category) => (
+                <option key={category.code} value={category.code}>
+                  {category.isActive ? category.name : `${category.name} (nonaktif)`}
+                </option>
+              ))}
             </Select>
           </div>
           <div className="flex flex-col gap-1.5">
@@ -123,7 +127,7 @@ export default async function AdsExpensesPage({ searchParams }: { searchParams: 
           Total {params.range ? formatDateRange(params.range.from, params.range.to) : monthLabel(params.month)}: <span className="font-semibold tabular-nums">{formatRupiah(total)}</span>
           {params.showVoided && <span className="text-sm text-neutral-600"> (tanpa yang dibatalkan)</span>}
         </p>
-        <ExpenseList rows={rows} />
+        <ExpenseList rows={rows} categories={categories} />
       </div>
       <Pagination
         pagination={pagination}

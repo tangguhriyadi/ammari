@@ -2,6 +2,8 @@ import "server-only";
 import { and, asc, eq, gte, isNull, lte } from "drizzle-orm";
 import { businessExpenses, staffUsers, type BusinessExpenseCategory, type BusinessExpenseMethod, type ChannelId } from "@ammari/db/schema";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
+import type { ExpenseCategoryInfo } from "@/lib/expense-categories/catalog";
+import { getExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
 import { listCountedOrders, type CountedOrderRow } from "@/lib/overview/queries";
 import type { ExpenseSummaryParams } from "./search-params";
 import { dateRangeToTimeRange, getExpenseSummary, type ExpenseSummary } from "./summary";
@@ -32,6 +34,8 @@ export interface MonthlyReport {
   params: ExpenseSummaryParams;
   generatedAt: Date;
   summary: ExpenseSummary;
+  /** The category catalog the labels come from (inactive included: a past expense keeps its name). */
+  categories: ExpenseCategoryInfo[];
   /** Non-voided expenses of the range, by payment date (they add up to summary.expenses.total). */
   expenseRows: ReportExpenseRow[];
   orderRows: CountedOrderRow[];
@@ -60,12 +64,13 @@ async function listReportExpenses(params: ExpenseSummaryParams, db: Database): P
 }
 
 export async function getMonthlyReport(params: ExpenseSummaryParams, now: Date = new Date(), db: Database = defaultDb): Promise<MonthlyReport> {
-  const [summary, expenseRows, orders] = await Promise.all([
+  const [summary, expenseRows, orders, catalog] = await Promise.all([
     getExpenseSummary(params.range, now, db),
     listReportExpenses(params, db),
     listCountedOrders(dateRangeToTimeRange(params.range, now), REPORT_ORDER_ROW_CAP, db),
+    getExpenseCategoryCatalog(db),
   ]);
-  return { params, generatedAt: now, summary, expenseRows, orderRows: orders.rows, ordersTruncated: orders.truncated };
+  return { params, generatedAt: now, summary, categories: catalog.categories, expenseRows, orderRows: orders.rows, ordersTruncated: orders.truncated };
 }
 
 export type ReportFormat = "pdf" | "xlsx";

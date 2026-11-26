@@ -1,7 +1,8 @@
 import { formatNumber, formatRupiah } from "@ammari/ui/lib";
 import { formatCalendarDate, formatMonthYear, formatPercentBps } from "@/lib/overview/format";
 import { formatRoasTenths, type BreakEvenRoas, type RoasRow } from "./figures";
-import { EXPENSE_CATEGORY_LABELS, MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, type MarketingChannelId } from "./labels";
+import { expenseCategoryLabel, type ExpenseCategoryInfo } from "@/lib/expense-categories/catalog";
+import { MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, type MarketingChannelId } from "./labels";
 import type { ExpenseSummaryParams } from "./search-params";
 import type { ExpenseSummary } from "./summary";
 
@@ -39,10 +40,11 @@ export interface ProfitLossLine {
   kind: "line" | "result" | "detail";
 }
 
-/** The management P&L (owner addition A), top to bottom. Costs are negative so the column adds up:
+/** The management P&L (owner addition A), top to bottom. One detail line per category with spend,
+ * named from the catalog (`categories`), so an owner-made category gets its own line. Costs are negative so the column adds up:
  * Omzet - HPP = Laba kotor; - Biaya platform = Laba setelah biaya platform; - Subsidi ongkir situs
  * - Biaya operasional & iklan = Laba bersih. */
-export function profitAndLossLines(summary: ExpenseSummary): ProfitLossLine[] {
+export function profitAndLossLines(summary: ExpenseSummary, categories: readonly Pick<ExpenseCategoryInfo, "code" | "name">[]): ProfitLossLine[] {
   const { money, expenses } = summary;
   // 0 - x, not -x: a cost of 0 stays 0, never -0 ("Rp -0").
   const cost = (amount: number) => 0 - amount;
@@ -54,7 +56,7 @@ export function profitAndLossLines(summary: ExpenseSummary): ProfitLossLine[] {
     { label: "Laba setelah biaya platform", amount: money.labaSetelahBiayaPlatform, kind: "result" },
     { label: "Subsidi ongkir situs", amount: cost(money.webShippingSubsidy), kind: "line" },
     { label: "Biaya operasional & iklan", amount: cost(expenses.total), kind: "line" },
-    ...expenses.byCategory.map((entry): ProfitLossLine => ({ label: EXPENSE_CATEGORY_LABELS[entry.category], amount: cost(entry.amount), kind: "detail" })),
+    ...expenses.byCategory.map((entry): ProfitLossLine => ({ label: expenseCategoryLabel(categories, entry.category), amount: cost(entry.amount), kind: "detail" })),
     { label: "Laba bersih", amount: summary.net, kind: "result" },
   ];
 }

@@ -6,6 +6,23 @@ vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMoc
 // instead of writing to a real bucket.
 vi.mock("@/lib/supplier-payments/store-upload", () => ({ storePrivateUpload: storePrivateUploadMock }));
 
+// The category read (expense_categories) is covered against the database in
+// lib/expense-categories/queries.test.ts and lib/expenses/records.test.ts; here it answers from the
+// seed with the same refusal the real one gives for an unknown code.
+vi.mock("@/lib/expense-categories/queries", async () => {
+  const { defaultExpenseCategory } = await import("@/lib/expense-categories/default-catalog");
+  const { FieldError } = await import("@/lib/errors");
+  return {
+    getSelectableExpenseCategory: vi.fn(async (code: string) => {
+      try {
+        return defaultExpenseCategory(code);
+      } catch {
+        throw new FieldError("category", "Pilih kategori.");
+      }
+    }),
+  };
+});
+
 const { findExpenseProofDuplicatesAction, recordBusinessExpenseAction, voidBusinessExpenseAction } = await import("./actions");
 
 // docs/plans/growth.md §7: every expense action re-checks ads_expenses.manage + finance.view_profit

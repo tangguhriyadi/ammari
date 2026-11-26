@@ -1,7 +1,8 @@
 import { Badge, Card, CardList, EmptyState, TableContainer, TableHead, Td, Th, Tr } from "@ammari/ui";
 import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import type { BusinessExpenseRow } from "@/lib/expenses/records";
-import { EXPENSE_CATEGORY_LABELS, EXPENSE_METHOD_LABELS, MARKETING_CHANNEL_LABELS, type MarketingChannelId } from "@/lib/expenses/labels";
+import { expenseCategoryLabel, type ExpenseCategoryInfo } from "@/lib/expense-categories/catalog";
+import { EXPENSE_METHOD_LABELS, MARKETING_CHANNEL_LABELS, type MarketingChannelId } from "@/lib/expenses/labels";
 import { PrivateFileLink } from "@/components/supplier-payments/private-file-link";
 import { Struck, voidedLine } from "@/components/supplier-payments/payment-history";
 import { VoidRecordButton } from "@/components/supplier-payments/void-record-button";
@@ -23,7 +24,9 @@ function marketingLine(row: BusinessExpenseRow): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-export function ExpenseList({ rows }: { rows: BusinessExpenseRow[] }) {
+/** `categories` is the whole catalog (inactive included), so a past expense keeps its category's
+ * current name. */
+export function ExpenseList({ rows, categories }: { rows: BusinessExpenseRow[]; categories: readonly Pick<ExpenseCategoryInfo, "code" | "name">[] }) {
   if (rows.length === 0) {
     return <EmptyState title="Belum ada biaya" description="Belum ada biaya yang cocok dengan filter ini. Catat biaya dengan tombol Catat biaya." />;
   }
@@ -44,7 +47,7 @@ export function ExpenseList({ rows }: { rows: BusinessExpenseRow[] }) {
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-base font-medium text-neutral-900">
-                      <Struck voided={voided}>{EXPENSE_CATEGORY_LABELS[row.category]}</Struck>
+                      <Struck voided={voided}>{expenseCategoryLabel(categories, row.category)}</Struck>
                     </p>
                     <p className="text-sm text-neutral-600">
                       {row.expenseNo} · {formatDate(new Date(row.expenseDate))} · {EXPENSE_METHOD_LABELS[row.method]}
@@ -98,7 +101,7 @@ export function ExpenseList({ rows }: { rows: BusinessExpenseRow[] }) {
                   </div>
                 </Td>
                 <Td className="text-neutral-700">{formatDate(new Date(row.expenseDate))}</Td>
-                <Td className="text-neutral-700">{EXPENSE_CATEGORY_LABELS[row.category]}</Td>
+                <Td className="text-neutral-700">{expenseCategoryLabel(categories, row.category)}</Td>
                 <Td className="text-neutral-700">{marketingLine(row) ?? "-"}</Td>
                 <Td className="tabular-nums text-neutral-900">
                   <Struck voided={voided}>{formatRupiah(row.amount)}</Struck>

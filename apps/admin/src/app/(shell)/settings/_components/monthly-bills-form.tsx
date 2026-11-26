@@ -3,14 +3,21 @@
 import { useState, useTransition, type FormEvent } from "react";
 import { Button, Checkbox, useToast } from "@ammari/ui";
 import type { BusinessExpenseCategory } from "@ammari/db/schema";
-import { EXPENSE_CATEGORY_LABELS, MONTHLY_BILL_CATEGORY_OPTIONS } from "@/lib/expenses/labels";
 import { saveMonthlyBillsReminderAction } from "../actions";
 
 /** "Pengingat biaya bulanan" (docs/plans/growth.md §6, owner answer A6): which categories must be
  * recorded every month. From the 6th, Ringkasan's "Perlu tindakan" names each chosen one that has
  * no expense paid from the 6th of last month to the 5th of this month. Nothing chosen = off.
- * Validation is the server's (parseMonthlyBillCategories). */
-export function MonthlyBillsForm({ initialCategories }: { initialCategories: readonly BusinessExpenseCategory[] }) {
+ * `options` are the active categories (owner answer D3), in display order; a chosen category that
+ * was deactivated since is not offered and drops out on the next save. Validation is the server's
+ * (parseMonthlyBillCategories). */
+export function MonthlyBillsForm({
+  options,
+  initialCategories,
+}: {
+  options: readonly { code: BusinessExpenseCategory; name: string }[];
+  initialCategories: readonly BusinessExpenseCategory[];
+}) {
   const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(initialCategories));
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -19,7 +26,7 @@ export function MonthlyBillsForm({ initialCategories }: { initialCategories: rea
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    const categories = MONTHLY_BILL_CATEGORY_OPTIONS.filter((category) => chosen.has(category));
+    const categories = options.filter((option) => chosen.has(option.code)).map((option) => option.code);
     startTransition(async () => {
       let result: Awaited<ReturnType<typeof saveMonthlyBillsReminderAction>>;
       try {
@@ -49,12 +56,12 @@ export function MonthlyBillsForm({ initialCategories }: { initialCategories: rea
       </div>
       <fieldset className="flex flex-col" aria-describedby={error ? "monthly-bills-error" : undefined}>
         <legend className="sr-only">Kategori yang wajib dicatat tiap bulan</legend>
-        {MONTHLY_BILL_CATEGORY_OPTIONS.map((category) => (
+        {options.map(({ code: category, name }) => (
           <Checkbox
             key={category}
             name="categories"
             value={category}
-            label={EXPENSE_CATEGORY_LABELS[category]}
+            label={name}
             disabled={pending}
             checked={chosen.has(category)}
             onChange={(event) => {

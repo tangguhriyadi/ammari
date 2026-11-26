@@ -16,6 +16,8 @@ import {
   voidBusinessExpense,
   type BusinessExpenseInput,
 } from "./records";
+import { defaultExpenseCategory as cat } from "@/lib/expense-categories/default-catalog";
+import { createExpenseCategory, createExpenseItem, listExpenseCategories, listExpenseItems, setExpenseCategoryActive } from "@/lib/expense-categories/queries";
 
 // docs/plans/growth.md §5, session S2: the expense write paths and the list read.
 
@@ -49,6 +51,11 @@ function expense(overrides: Partial<BusinessExpenseInput> = {}): BusinessExpense
   return { expenseDate: "2026-10-05", category: "ads_shopee", amount: 500_000, method: "platform_balance", channelId: null, ...overrides };
 }
 
+/** normalizeExpenseInput against the seeded category row, as the action passes the catalog's. */
+function normalize(input: BusinessExpenseInput) {
+  return normalizeExpenseInput(input, cat(input.category));
+}
+
 function fieldOf(fn: () => unknown): string | null {
   try {
     fn();
@@ -61,7 +68,7 @@ function fieldOf(fn: () => unknown): string | null {
 
 describe("normalizeExpenseInput", () => {
   test("fills the fixed channel of Iklan Shopee/TikTok and trims text", () => {
-    expect(normalizeExpenseInput(expense({ campaign: "  11.11  ", note: "  " }))).toEqual({
+    expect(normalize(expense({ campaign: "  11.11  ", note: "  " }))).toEqual({
       expenseDate: "2026-10-05",
       category: "ads_shopee",
       amount: 500_000,
@@ -70,37 +77,37 @@ describe("normalizeExpenseInput", () => {
       campaign: "11.11",
       note: null,
     });
-    expect(normalizeExpenseInput(expense({ category: "ads_tiktok" })).channelId).toBe("tiktok");
+    expect(normalize(expense({ category: "ads_tiktok" })).channelId).toBe("tiktok");
   });
 
   test("refuses a future date, a bad date, a non-positive or huge amount", () => {
     const tomorrow = new Date(Date.now() + 2 * 86_400_000);
-    expect(fieldOf(() => normalizeExpenseInput(expense({ expenseDate: todayInJakarta(tomorrow) })))).toBe("expenseDate");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ expenseDate: "2026-02-30" })))).toBe("expenseDate");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ expenseDate: "0026-10-05" })))).toBe("expenseDate");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ expenseDate: "1999-12-31" })))).toBe("expenseDate");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ amount: 0 })))).toBe("amount");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ amount: 1.5 })))).toBe("amount");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ amount: 1_000_000_001 })))).toBe("amount");
+    expect(fieldOf(() => normalize(expense({ expenseDate: todayInJakarta(tomorrow) })))).toBe("expenseDate");
+    expect(fieldOf(() => normalize(expense({ expenseDate: "2026-02-30" })))).toBe("expenseDate");
+    expect(fieldOf(() => normalize(expense({ expenseDate: "0026-10-05" })))).toBe("expenseDate");
+    expect(fieldOf(() => normalize(expense({ expenseDate: "1999-12-31" })))).toBe("expenseDate");
+    expect(fieldOf(() => normalize(expense({ amount: 0 })))).toBe("amount");
+    expect(fieldOf(() => normalize(expense({ amount: 1.5 })))).toBe("amount");
+    expect(fieldOf(() => normalize(expense({ amount: 1_000_000_001 })))).toBe("amount");
     // Today and the far past are fine (no lower bound).
-    expect(normalizeExpenseInput(expense({ expenseDate: todayInJakarta() })).expenseDate).toBe(todayInJakarta());
-    expect(normalizeExpenseInput(expense({ expenseDate: "2000-01-01" })).expenseDate).toBe("2000-01-01");
+    expect(normalize(expense({ expenseDate: todayInJakarta() })).expenseDate).toBe(todayInJakarta());
+    expect(normalize(expense({ expenseDate: "2000-01-01" })).expenseDate).toBe("2000-01-01");
   });
 
   test("channel rules: wrong channel on a fixed ad, any channel on an operating cost, odd channel on Meta", () => {
-    expect(fieldOf(() => normalizeExpenseInput(expense({ channelId: "tiktok" })))).toBe("channelId");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ category: "salary", method: "transfer", channelId: "web" })))).toBe("channelId");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ category: "ads_meta", method: "card", channelId: "offline" })))).toBe("channelId");
-    expect(normalizeExpenseInput(expense({ category: "ads_meta", method: "card", channelId: null })).channelId).toBeNull();
-    expect(normalizeExpenseInput(expense({ category: "endorsement", method: "transfer", channelId: "instagram" })).channelId).toBe("instagram");
+    expect(fieldOf(() => normalize(expense({ channelId: "tiktok" })))).toBe("channelId");
+    expect(fieldOf(() => normalize(expense({ category: "salary", method: "transfer", channelId: "web" })))).toBe("channelId");
+    expect(fieldOf(() => normalize(expense({ category: "ads_meta", method: "card", channelId: "offline" })))).toBe("channelId");
+    expect(normalize(expense({ category: "ads_meta", method: "card", channelId: null })).channelId).toBeNull();
+    expect(normalize(expense({ category: "endorsement", method: "transfer", channelId: "instagram" })).channelId).toBe("instagram");
   });
 
   test("Lainnya needs a note; campaign only on marketing; lengths", () => {
-    expect(fieldOf(() => normalizeExpenseInput(expense({ category: "other", method: "cash" })))).toBe("note");
-    expect(normalizeExpenseInput(expense({ category: "other", method: "cash", note: "Servis mesin" })).note).toBe("Servis mesin");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ category: "rent", method: "transfer", campaign: "x" })))).toBe("campaign");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ campaign: "x".repeat(121) })))).toBe("campaign");
-    expect(fieldOf(() => normalizeExpenseInput(expense({ note: "x".repeat(501) })))).toBe("note");
+    expect(fieldOf(() => normalize(expense({ category: "other", method: "cash" })))).toBe("note");
+    expect(normalize(expense({ category: "other", method: "cash", note: "Servis mesin" })).note).toBe("Servis mesin");
+    expect(fieldOf(() => normalize(expense({ category: "rent", method: "transfer", campaign: "x" })))).toBe("campaign");
+    expect(fieldOf(() => normalize(expense({ campaign: "x".repeat(121) })))).toBe("campaign");
+    expect(fieldOf(() => normalize(expense({ note: "x".repeat(501) })))).toBe("note");
   });
 });
 
@@ -270,3 +277,63 @@ describe("listBusinessExpenses", () => {
     });
   });
 });
+
+describe("categories from expense_categories (docs/plans/expense-master-data.md S2)", () => {
+  test("an owner-made category records with its kind's rules; once deactivated it takes no NEW expense, and past ones still list", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const google = await createExpenseCategory({ name: `Iklan Google ${randomUUID().slice(0, 6)}`, kind: "ad", sortOrder: 50 }, null, tx);
+      const langganan = await createExpenseCategory({ name: `Langganan ${randomUUID().slice(0, 6)}`, kind: "operating", sortOrder: 160 }, null, tx);
+
+      // kind ad: an optional channel and a campaign; kind operating: neither.
+      const ad = await recordBusinessExpense(expense({ category: google.code, method: "card", channelId: "web", campaign: "Search" }), storedFile(), staff.id, tx);
+      expect(ad).toMatchObject({ category: google.code, channelId: "web", campaign: "Search", itemId: null });
+      expect(await fieldOfAsync(recordBusinessExpense(expense({ category: langganan.code, method: "transfer", channelId: "web" }), storedFile(), staff.id, tx))).toBe("channelId");
+      const past = await recordBusinessExpense(expense({ category: langganan.code, method: "transfer" }), storedFile(), staff.id, tx);
+
+      await setExpenseCategoryActive(langganan.code, false, null, tx);
+      expect(await fieldOfAsync(recordBusinessExpense(expense({ category: langganan.code, method: "transfer" }), storedFile(), staff.id, tx))).toBe("category");
+      expect(await fieldOfAsync(recordBusinessExpense(expense({ category: "tidak_ada", method: "transfer" }), storedFile(), staff.id, tx))).toBe("category");
+
+      const listed = await listBusinessExpenses({ month: "2026-10", category: langganan.code }, undefined, undefined, tx);
+      expect(listed.rows.map((row) => row.id)).toEqual([past.id]);
+      // The group tab follows the kind: the owner-made ad category is under "Iklan".
+      const marketing = await listBusinessExpenses({ month: "2026-10", group: "marketing", q: ad.expenseNo }, undefined, undefined, tx);
+      expect(marketing.rows.map((row) => row.id)).toEqual([ad.id]);
+      const operational = await listBusinessExpenses({ month: "2026-10", group: "operational", q: ad.expenseNo }, undefined, undefined, tx);
+      expect(operational.rows).toEqual([]);
+
+      // The master list's counts are per category / per item, never the whole table.
+      const vps = await createExpenseItem(google.code, { name: "VPS", sortOrder: 1 }, null, tx);
+      await createExpenseItem(google.code, { name: "Unused", sortOrder: 2 }, null, tx);
+      const [file] = await tx.insert(privateFiles).values(privateFileValues(storedFile(), staff.id)).returning();
+      await tx.insert(businessExpenses).values({
+        expenseNo: `BYA-TEST-${randomUUID().slice(0, 8)}`,
+        expenseDate: "2026-10-06",
+        category: google.code,
+        itemId: vps.id,
+        amount: 1_000,
+        method: "card",
+        proofFileId: file!.id,
+        recordedByStaffUserId: staff.id,
+      });
+      const counts = Object.fromEntries((await listExpenseCategories(tx)).map((row) => [row.code, { items: row.itemCount, expenses: row.expenseCount }]));
+      expect(counts[google.code]).toEqual({ items: 2, expenses: 2 });
+      expect(counts[langganan.code]).toEqual({ items: 0, expenses: 1 });
+      expect((await listExpenseItems(google.code, tx)).map((item) => [item.name, item.expenseCount])).toEqual([
+        ["VPS", 1],
+        ["Unused", 0],
+      ]);
+    });
+  });
+});
+
+async function fieldOfAsync(promise: Promise<unknown>): Promise<string | null> {
+  try {
+    await promise;
+    return null;
+  } catch (error) {
+    if (error instanceof FieldError) return error.field;
+    throw error;
+  }
+}

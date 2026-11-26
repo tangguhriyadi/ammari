@@ -1,5 +1,6 @@
-import { BUSINESS_EXPENSE_CATEGORIES, type BusinessExpenseCategory } from "@ammari/db/schema";
+import type { BusinessExpenseCategory } from "@ammari/db/schema";
 import { calendarDaysBetween, isCalendarDate } from "@ammari/commerce/jakarta-day";
+import { expenseGroupOfKind, findExpenseCategory, type ExpenseCategoryInfo } from "@/lib/expense-categories/catalog";
 import { monthRange, monthToDate, shiftMonth, type DateRange } from "./figures";
 import { EXPENSE_CATEGORY_GROUPS, type ExpenseCategoryGroup } from "./labels";
 
@@ -23,16 +24,18 @@ function single(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-/** Month defaults to this Jakarta month; a malformed or future month does too. A category that
- * is not in the chosen group is dropped, so the two filters can never contradict each other. */
-export function parseExpenseListParams(raw: Raw, now: Date = new Date()): ExpenseListParams {
+/** Month defaults to this Jakarta month; a malformed or future month does too. `categories` is the
+ * catalog (inactive included: past expenses can still be filtered by one). An unknown category, or
+ * one whose kind is not in the chosen group, is dropped, so the two filters can never contradict
+ * each other. */
+export function parseExpenseListParams(raw: Raw, categories: readonly Pick<ExpenseCategoryInfo, "code" | "kind">[], now: Date = new Date()): ExpenseListParams {
   const current = monthToDate(now).month;
   const rawMonth = single(raw.month);
   const month = rawMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(rawMonth) && rawMonth <= current ? rawMonth : current;
   const group = EXPENSE_CATEGORY_GROUPS.find((entry) => entry.key === single(raw.group))?.key;
   const rawCategory = single(raw.category);
-  let category = BUSINESS_EXPENSE_CATEGORIES.find((key) => key === rawCategory);
-  if (category && group && !(EXPENSE_CATEGORY_GROUPS.find((entry) => entry.key === group)!.categories as readonly string[]).includes(category)) category = undefined;
+  const found = rawCategory === undefined ? undefined : findExpenseCategory(categories, rawCategory);
+  const category = found && (!group || expenseGroupOfKind(found.kind) === group) ? found.code : undefined;
   const q = single(raw.q)?.trim().slice(0, 100) || undefined;
   return { month, range: parseListRange(raw, now), group, category, showVoided: single(raw.voided) === "1", q };
 }

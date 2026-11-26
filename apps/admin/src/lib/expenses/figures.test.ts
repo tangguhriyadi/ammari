@@ -16,35 +16,36 @@ import {
   shiftMonth,
   type ExpenseFigureRow,
 } from "./figures";
+import { defaultExpenseCategory as cat } from "@/lib/expense-categories/default-catalog";
 
 // docs/plans/growth.md §4 (session S1): the pure parts of Laba bersih and ROAS.
 
 describe("expenseChannelRule / expenseChannelError", () => {
   test("Iklan Shopee and Iklan TikTok are tied to their own channel", () => {
-    expect(expenseChannelRule("ads_shopee")).toEqual({ kind: "fixed", channelId: "shopee" });
-    expect(expenseChannelRule("ads_tiktok")).toEqual({ kind: "fixed", channelId: "tiktok" });
-    expect(expenseChannelError("ads_shopee", "shopee")).toBeNull();
-    expect(expenseChannelError("ads_shopee", null)).toMatch(/Shopee/);
-    expect(expenseChannelError("ads_tiktok", "shopee")).toMatch(/TikTok/);
+    expect(expenseChannelRule(cat("ads_shopee"))).toEqual({ kind: "fixed", channelId: "shopee" });
+    expect(expenseChannelRule(cat("ads_tiktok"))).toEqual({ kind: "fixed", channelId: "tiktok" });
+    expect(expenseChannelError(cat("ads_shopee"), "shopee")).toBeNull();
+    expect(expenseChannelError(cat("ads_shopee"), null)).toMatch(/Shopee/);
+    expect(expenseChannelError(cat("ads_tiktok"), "shopee")).toMatch(/TikTok/);
   });
 
   test("Meta and Endorse/KOL may name a channel or none", () => {
     for (const category of ["ads_meta", "endorsement"] as const) {
-      expect(expenseChannelRule(category).kind).toBe("optional");
-      expect(expenseChannelError(category, null)).toBeNull();
-      expect(expenseChannelError(category, "instagram")).toBeNull();
-      expect(expenseChannelError(category, "web")).toBeNull();
+      expect(expenseChannelRule(cat(category)).kind).toBe("optional");
+      expect(expenseChannelError(cat(category), null)).toBeNull();
+      expect(expenseChannelError(cat(category), "instagram")).toBeNull();
+      expect(expenseChannelError(cat(category), "web")).toBeNull();
     }
     // Only channels an ad can actually drive buyers to.
-    expect(expenseChannelError("ads_meta", "offline")).not.toBeNull();
-    expect(expenseChannelError("ads_meta", "reseller")).not.toBeNull();
+    expect(expenseChannelError(cat("ads_meta"), "offline")).not.toBeNull();
+    expect(expenseChannelError(cat("ads_meta"), "reseller")).not.toBeNull();
   });
 
   test("operating costs never name a channel", () => {
     for (const category of ["material_shipping", "packaging", "salary", "rent", "utilities", "other"] as const) {
-      expect(expenseChannelRule(category)).toEqual({ kind: "none" });
-      expect(expenseChannelError(category, null)).toBeNull();
-      expect(expenseChannelError(category, "web")).not.toBeNull();
+      expect(expenseChannelRule(cat(category))).toEqual({ kind: "none" });
+      expect(expenseChannelError(cat(category), null)).toBeNull();
+      expect(expenseChannelError(cat(category), "web")).not.toBeNull();
     }
   });
 });
@@ -71,6 +72,7 @@ describe("monthRange / monthToDate (Jakarta calendar dates, owner answer Q3)", (
   });
 });
 
+// The kind follows the seeded category, as getExpenseBreakdown reads it from expense_categories.
 const row = (overrides: Partial<ExpenseFigureRow>): ExpenseFigureRow => ({
   expenseDate: "2026-10-05",
   category: "salary",
@@ -78,6 +80,7 @@ const row = (overrides: Partial<ExpenseFigureRow>): ExpenseFigureRow => ({
   amount: 1_000_000,
   voided: false,
   ...overrides,
+  kind: overrides.kind ?? cat(overrides.category ?? "salary").kind,
 });
 
 describe("sumExpensesInRange (cash basis: the payment date decides, voided rows never count)", () => {

@@ -1,24 +1,34 @@
 import { and, desc, eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
-import { auditLog, salesGoal } from "@ammari/db/schema";
+import { DEFAULT_EXPENSE_CATEGORIES, auditLog, salesGoal } from "@ammari/db/schema";
 import { getSalesGoal } from "@/lib/overview/queries";
 import { getMonthlyBillCategories, parseMonthlyBillCategories, saveMonthlyBillCategories } from "./monthly-bills";
 
 // docs/plans/growth.md §6, owner answer A6: "Pengingat biaya bulanan" on the sales_goal row
 // (migration 0043), saved from /settings.
 
+/** The /settings options: every active category in display order (owner answer D3), here the seed. */
+const OPTIONS = DEFAULT_EXPENSE_CATEGORIES.map((category) => category.code);
+
 describe("parseMonthlyBillCategories (server-side validation)", () => {
   test("only offered categories; duplicates collapse; stored in display order; [] is off", () => {
-    expect(parseMonthlyBillCategories([])).toEqual([]);
-    expect(parseMonthlyBillCategories(["utilities", "salary", "salary"])).toEqual(["salary", "utilities"]);
-    expect(parseMonthlyBillCategories(["rent", "salary", "utilities"])).toEqual(["salary", "rent", "utilities"]);
+    expect(parseMonthlyBillCategories([], OPTIONS)).toEqual([]);
+    expect(parseMonthlyBillCategories(["utilities", "salary", "salary"], OPTIONS)).toEqual(["salary", "utilities"]);
+    expect(parseMonthlyBillCategories(["rent", "salary", "utilities"], OPTIONS)).toEqual(["salary", "rent", "utilities"]);
   });
 
-  test("anything else is refused", () => {
-    for (const bad of [undefined, null, "salary", {}, ["gift"], ["salary", 1], ["ads_meta"], ["packaging"], Array(7).fill("salary")]) {
-      expect(parseMonthlyBillCategories(bad)).toBeNull();
+  test("any active category may be chosen (owner answer D3), not only Gaji/Sewa/Utilitas", () => {
+    expect(parseMonthlyBillCategories(["packaging", "ads_meta"], OPTIONS)).toEqual(["ads_meta", "packaging"]);
+    // An owner-made category is offered once it exists and is active.
+    expect(parseMonthlyBillCategories(["langganan"], [...OPTIONS, "langganan"])).toEqual(["langganan"]);
+  });
+
+  test("anything else is refused, including a category that is not offered (unknown or inactive)", () => {
+    for (const bad of [undefined, null, "salary", {}, ["gift"], ["salary", 1], Array(OPTIONS.length * 2 + 1).fill("salary")]) {
+      expect(parseMonthlyBillCategories(bad, OPTIONS)).toBeNull();
     }
+    expect(parseMonthlyBillCategories(["rent"], ["salary", "utilities"])).toBeNull();
   });
 });
 

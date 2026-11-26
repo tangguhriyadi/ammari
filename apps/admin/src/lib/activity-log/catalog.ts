@@ -298,6 +298,26 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       void: { label: "Biaya dibatalkan" },
     },
   },
+  expense_category: {
+    label: "Kategori biaya",
+    area: "expenses",
+    actions: {
+      create: { label: "Kategori biaya dibuat" },
+      update: { label: "Kategori biaya diubah" },
+      activate: { label: "Kategori biaya diaktifkan" },
+      deactivate: { label: "Kategori biaya dinonaktifkan" },
+    },
+  },
+  expense_item: {
+    label: "Item biaya",
+    area: "expenses",
+    actions: {
+      create: { label: "Item biaya dibuat" },
+      update: { label: "Item biaya diubah" },
+      activate: { label: "Item biaya diaktifkan" },
+      deactivate: { label: "Item biaya dinonaktifkan" },
+    },
+  },
   expense_report: {
     label: "Laporan keuangan",
     area: "expenses",

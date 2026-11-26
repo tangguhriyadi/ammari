@@ -3,6 +3,7 @@ import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql, t
 import { alias, unionAll } from "drizzle-orm/pg-core";
 import {
   businessExpenses,
+  expenseCategories,
   privateFiles,
   staffUsers,
   supplierPayments,
@@ -17,6 +18,8 @@ import { nextDocumentNumber } from "@/lib/documents/document-number";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { privateFileValues, type PrivateFileRef } from "@/lib/supplier-payments/payment-records";
 import type { StoredPrivateFile } from "@/lib/supplier-payments/store-upload";
+import type { ExpenseCategoryRule } from "@/lib/expense-categories/catalog";
+import { lockSelectableExpenseCategoryAndItem } from "@/lib/expense-categories/queries";
 import { expenseChannelError, expenseChannelRule, monthRange, type DateRange } from "./figures";
 import { EXPENSE_CATEGORY_GROUPS, type ExpenseCategoryGroup } from "./labels";
 
@@ -66,10 +69,12 @@ function optionalText(value: string | null | undefined): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-/** Every input rule, mirroring the CHECKs of business_expenses (plus the stricter channel list),
- * as a FieldError naming the form field. Runs before the file is stored, so a refused form never
- * leaves an object behind. */
-export function normalizeExpenseInput(input: BusinessExpenseInput): NormalizedExpenseInput {
+/** Every input rule, mirroring the CHECKs of business_expenses and the channel trigger (plus the
+ * stricter channel list), as a FieldError naming the form field. `category` is the chosen
+ * category's row (kind and fixed channel decide the channel and campaign rules). Runs before the
+ * file is stored, so a refused form never leaves an object behind, and again inside the write
+ * transaction against the locked row. */
+export function normalizeExpenseInput(input: BusinessExpenseInput, category: ExpenseCategoryRule): NormalizedExpenseInput {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expenseDate) || new Date(`${input.expenseDate}T00:00:00Z`).toISOString().slice(0, 10) !== input.expenseDate) {
     throw new FieldError("expenseDate", EXPENSE_MESSAGES.invalidDate);
   }
@@ -80,9 +85,9 @@ export function normalizeExpenseInput(input: BusinessExpenseInput): NormalizedEx
     throw new FieldError("amount", EXPENSE_MESSAGES.amount);
   }
 
-  const rule = expenseChannelRule(input.category);
+  const rule = expenseChannelRule(category);
   const channelId = rule.kind === "fixed" && input.channelId === null ? rule.channelId : input.channelId;
-  const channelError = expenseChannelError(input.category, channelId);
+  const channelError = expenseChannelError(category, channelId);
   if (channelError) throw new FieldError("channelId", channelError);
 
   const campaign = optionalText(input.campaign);
@@ -105,12 +110,15 @@ export function normalizeVoidReason(reason: string): string {
 // ---------- Writes ----------
 
 /** Plan §5 step 3: number (advisory lock), private_files row, expense row, audit `record`, in one
- * transaction. The file must already be in private storage (storePrivateUpload). */
+ * transaction. The file must already be in private storage (storePrivateUpload). The category is
+ * locked FOR SHARE and must be active (expense-master-data.md §3.5): an inactive one is refused
+ * for a NEW expense, while its past expenses stay as they are. */
 export async function recordBusinessExpense(input: BusinessExpenseInput, file: StoredPrivateFile, actorStaffUserId: string, db: Database = defaultDb) {
   if (file.purpose !== "expense_proof") throw new Error(`expected an expense_proof file, got ${file.purpose}`);
-  const values = normalizeExpenseInput(input);
 
   return db.transaction(async (tx) => {
+    const { category } = await lockSelectableExpenseCategoryAndItem(tx, input.category, null);
+    const values = normalizeExpenseInput(input, category);
     const expenseNo = await nextDocumentNumber(tx, "BYA", businessExpenses.expenseNo);
     const [fileRow] = await tx.insert(privateFiles).values(privateFileValues(file, actorStaffUserId)).returning();
     if (!fileRow) throw new Error("failed to insert private file");
@@ -212,13 +220,16 @@ export async function listBusinessExpenses(
   db: Database = defaultDb,
 ): Promise<{ rows: BusinessExpenseRow[]; pagination: Pagination; total: number }> {
   const range = filters.range ?? monthRange(filters.month);
-  const groupCategories = filters.group ? EXPENSE_CATEGORY_GROUPS.find((group) => group.key === filters.group)?.categories : undefined;
+  // The group is a set of kinds (labels.ts), so an owner-made category lands in its tab.
+  const groupKinds = filters.group ? EXPENSE_CATEGORY_GROUPS.find((group) => group.key === filters.group)?.kinds : undefined;
   const q = filters.q?.trim();
   const pattern = q ? `%${escapeLike(q)}%` : null;
   const base: (SQL | undefined)[] = [
     gte(businessExpenses.expenseDate, range.from),
     lte(businessExpenses.expenseDate, range.to),
-    groupCategories ? inArray(businessExpenses.category, [...groupCategories]) : undefined,
+    groupKinds
+      ? inArray(businessExpenses.category, db.select({ code: expenseCategories.code }).from(expenseCategories).where(inArray(expenseCategories.kind, [...groupKinds])))
+      : undefined,
     filters.category ? eq(businessExpenses.category, filters.category) : undefined,
     pattern ? or(ilike(businessExpenses.expenseNo, pattern), ilike(businessExpenses.campaign, pattern), ilike(businessExpenses.note, pattern)) : undefined,
   ];

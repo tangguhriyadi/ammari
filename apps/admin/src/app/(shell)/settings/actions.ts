@@ -4,6 +4,8 @@ import { jakartaDate } from "@ammari/commerce/jakarta-day";
 import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin, revalidateOverview } from "@/lib/admin-revalidate";
+import { selectableExpenseCategories } from "@/lib/expense-categories/catalog";
+import { getExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
 import { MONTHLY_BILLS_MESSAGES, parseMonthlyBillCategories, saveMonthlyBillCategories } from "@/lib/settings/monthly-bills";
 import { saveSalesGoal } from "@/lib/settings/sales-goal";
 import { SALES_GOAL_PERMISSIONS } from "@/lib/settings/sales-goal-permissions";
@@ -33,11 +35,12 @@ export async function saveSalesGoalAction(input: SalesGoalFormInput): Promise<Ac
 }
 
 /** "Pengingat biaya bulanan" (docs/plans/growth.md §6, owner answer A6): the same gate as Target
- * penjualan (settings.manage AND finance.view_profit, on the server). Only offered categories are
- * accepted; an empty list turns the reminder off. */
+ * penjualan (settings.manage AND finance.view_profit, on the server). Only offered categories (every
+ * ACTIVE one, owner answer D3) are accepted; an empty list turns the reminder off. */
 export async function saveMonthlyBillsReminderAction(input: { categories: unknown }): Promise<ActionResult> {
   const session = await requireAllPermissions(SALES_GOAL_PERMISSIONS);
-  const categories = parseMonthlyBillCategories(input?.categories);
+  const options = selectableExpenseCategories((await getExpenseCategoryCatalog()).categories).map((category) => category.code);
+  const categories = parseMonthlyBillCategories(input?.categories, options);
   if (!categories) return { ok: false, error: MONTHLY_BILLS_MESSAGES.invalid, fieldErrors: { categories: MONTHLY_BILLS_MESSAGES.invalid } };
   return runAction(async () => {
     await saveMonthlyBillCategories(categories, session.staffUser.id);

@@ -3,7 +3,8 @@ import * as XLSX from "xlsx";
 import { jakartaDate } from "@ammari/commerce/jakarta-day";
 import { formatDateTime } from "@ammari/ui/lib";
 import { neutralizeFormula } from "@/lib/csv";
-import { EXPENSE_CATEGORY_LABELS, EXPENSE_METHOD_LABELS, MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, type MarketingChannelId } from "./labels";
+import { expenseCategoryLabel } from "@/lib/expense-categories/catalog";
+import { EXPENSE_METHOD_LABELS, MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, type MarketingChannelId } from "./labels";
 import { REPORT_ORDER_ROW_CAP, type MonthlyReport } from "./report";
 import { REPORT_DISCLAIMER, breakEvenText, channelReportRows, profitAndLossLines, reportNotes, reportTitle } from "./report-content";
 
@@ -52,7 +53,7 @@ function summarySheet(report: MonthlyReport, today: string): XLSX.WorkSheet {
     [REPORT_DISCLAIMER],
     [],
     ["Pos", "Jumlah (Rp)"],
-    ...profitAndLossLines(report.summary).map((line): Cell[] => [line.kind === "detail" ? `   ${line.label}` : line.label, line.amount]),
+    ...profitAndLossLines(report.summary, report.categories).map((line): Cell[] => [line.kind === "detail" ? `   ${line.label}` : line.label, line.amount]),
     [],
     ["Pesanan dihitung", report.summary.totals.orders],
     ["Titik impas ROAS", breakEvenText(report.summary.breakEven)],
@@ -80,7 +81,7 @@ function expenseSheet(report: MonthlyReport): XLSX.WorkSheet {
     ...report.expenseRows.map((row): Cell[] => [
       row.expenseDate,
       row.expenseNo,
-      EXPENSE_CATEGORY_LABELS[row.category],
+      expenseCategoryLabel(report.categories, row.category),
       channelLabel(row.channelId),
       row.campaign,
       row.amount,

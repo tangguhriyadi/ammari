@@ -1,15 +1,17 @@
 import { describe, expect, test } from "vitest";
 import { expenseListHref, expenseReportHref, expenseSummaryHref, parseExpenseListParams, parseExpenseSummaryParams, parseExpenseTab } from "./search-params";
+import { DEFAULT_EXPENSE_CATEGORY_INFOS } from "@/lib/expense-categories/default-catalog";
 
 const NOW = new Date("2026-10-27T05:00:00Z");
+const CATEGORIES = DEFAULT_EXPENSE_CATEGORY_INFOS;
 
 describe("parseExpenseListParams", () => {
   test("defaults to this Jakarta month, nothing filtered", () => {
-    expect(parseExpenseListParams({}, NOW)).toEqual({ month: "2026-10", range: undefined, group: undefined, category: undefined, showVoided: false, q: undefined });
+    expect(parseExpenseListParams({}, CATEGORIES, NOW)).toEqual({ month: "2026-10", range: undefined, group: undefined, category: undefined, showVoided: false, q: undefined });
   });
 
   test("keeps valid values and drops unknown, malformed or future ones", () => {
-    expect(parseExpenseListParams({ month: "2026-09", group: "marketing", category: "ads_meta", voided: "1", q: "  BYA-1 " }, NOW)).toEqual({
+    expect(parseExpenseListParams({ month: "2026-09", group: "marketing", category: "ads_meta", voided: "1", q: "  BYA-1 " }, CATEGORIES, NOW)).toEqual({
       month: "2026-09",
       range: undefined,
       group: "marketing",
@@ -17,19 +19,19 @@ describe("parseExpenseListParams", () => {
       showVoided: true,
       q: "BYA-1",
     });
-    expect(parseExpenseListParams({ month: "2026-11" }, NOW).month).toBe("2026-10");
-    expect(parseExpenseListParams({ month: "2026-13" }, NOW).month).toBe("2026-10");
-    expect(parseExpenseListParams({ group: "x", category: "gift" }, NOW)).toMatchObject({ group: undefined, category: undefined });
+    expect(parseExpenseListParams({ month: "2026-11" }, CATEGORIES, NOW).month).toBe("2026-10");
+    expect(parseExpenseListParams({ month: "2026-13" }, CATEGORIES, NOW).month).toBe("2026-10");
+    expect(parseExpenseListParams({ group: "x", category: "gift" }, CATEGORIES, NOW)).toMatchObject({ group: undefined, category: undefined });
   });
 
   test("a category outside the chosen group is dropped", () => {
-    expect(parseExpenseListParams({ group: "operational", category: "ads_meta" }, NOW)).toMatchObject({ group: "operational", category: undefined });
+    expect(parseExpenseListParams({ group: "operational", category: "ads_meta" }, CATEGORIES, NOW)).toMatchObject({ group: "operational", category: undefined });
   });
 });
 
 describe("parseExpenseListParams: a from/to window (the Gaji/Sewa reminder link)", () => {
   test("a valid window is kept, across a month end", () => {
-    expect(parseExpenseListParams({ from: "2026-09-06", to: "2026-10-05" }, NOW).range).toEqual({ from: "2026-09-06", to: "2026-10-05" });
+    expect(parseExpenseListParams({ from: "2026-09-06", to: "2026-10-05" }, CATEGORIES, NOW).range).toEqual({ from: "2026-09-06", to: "2026-10-05" });
   });
 
   test("reversed, future, malformed, too long, too early or half a window is no window", () => {
@@ -41,14 +43,14 @@ describe("parseExpenseListParams: a from/to window (the Gaji/Sewa reminder link)
       { from: "0050-01-01", to: "0050-01-05" },
       { from: "2026-09-06" },
     ]) {
-      expect(parseExpenseListParams(bad, NOW).range).toBeUndefined();
+      expect(parseExpenseListParams(bad, CATEGORIES, NOW).range).toBeUndefined();
     }
   });
 });
 
 describe("expenseListHref", () => {
   test("leaves defaults out", () => {
-    expect(expenseListHref(parseExpenseListParams({}, NOW), NOW)).toBe("/ads-expenses");
+    expect(expenseListHref(parseExpenseListParams({}, CATEGORIES, NOW), NOW)).toBe("/ads-expenses");
     expect(expenseListHref({ month: "2026-09", group: "marketing", showVoided: true }, NOW)).toBe("/ads-expenses?month=2026-09&group=marketing&voided=1");
     // A window replaces the month.
     expect(expenseListHref({ month: "2026-09", range: { from: "2026-09-06", to: "2026-10-05" }, group: "operational", showVoided: false }, NOW)).toBe(

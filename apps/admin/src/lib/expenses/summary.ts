@@ -1,6 +1,6 @@
 import "server-only";
-import { and, gte, inArray, isNull, lte, sql } from "drizzle-orm";
-import { BUSINESS_EXPENSE_CATEGORIES, businessExpenses, type BusinessExpenseCategory, type ChannelId } from "@ammari/db/schema";
+import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { businessExpenses, expenseCategories, type BusinessExpenseCategory, type ChannelId } from "@ammari/db/schema";
 import { addCalendarDays, jakartaMidnight } from "@ammari/commerce/jakarta-day";
 import { defaultDb, type Database } from "@/lib/db";
 import { getMonthlyBillCategories } from "@/lib/settings/monthly-bills";
@@ -48,30 +48,40 @@ export interface ExpenseCategoryTotal {
 export interface ExpenseBreakdown {
   /** Every non-voided expense paid in the range (plan §4.1 `expenses(range)`). */
   total: number;
-  /** Only categories with spend, biggest first (ties in the fixed category order). */
+  /** Only categories with spend, biggest first (ties in the categories' sort_order, then code). */
   byCategory: ExpenseCategoryTotal[];
   marketing: MarketingSummary;
 }
 
 /** Non-voided expenses by payment date (cash basis, owner answer A3), grouped by category and
- * channel: one small aggregate over business_expenses_expense_date_created_at_idx. */
+ * channel: one small aggregate over business_expenses_expense_date_created_at_idx, joined to
+ * expense_categories for each category's kind (what ROAS and the Endorse line read) and its
+ * sort_order (the tie-break). Reads business_expenses ONLY: supplier payments (purchases,
+ * production) reach Laba bersih solely as HPP of sold orders (expense-master-data.md §3.11). */
 export async function getExpenseBreakdown(range: DateRange, db: Database = defaultDb): Promise<ExpenseBreakdown> {
   const rows = await db
     .select({
       category: businessExpenses.category,
+      kind: expenseCategories.kind,
+      sortOrder: expenseCategories.sortOrder,
       channelId: businessExpenses.channelId,
       amount: sql<string>`sum(${businessExpenses.amount})::text`,
     })
     .from(businessExpenses)
+    .innerJoin(expenseCategories, eq(expenseCategories.code, businessExpenses.category))
     .where(and(isNull(businessExpenses.voidedAt), gte(businessExpenses.expenseDate, range.from), lte(businessExpenses.expenseDate, range.to)))
-    .groupBy(businessExpenses.category, businessExpenses.channelId);
+    .groupBy(businessExpenses.category, expenseCategories.kind, expenseCategories.sortOrder, businessExpenses.channelId);
 
-  const figures = rows.map((row) => ({ category: row.category, channelId: row.channelId as ChannelId | null, amount: toAmount(row.amount), voided: false }));
-  const perCategory = new Map<BusinessExpenseCategory, number>();
-  for (const row of figures) perCategory.set(row.category, (perCategory.get(row.category) ?? 0) + row.amount);
+  const figures = rows.map((row) => ({ kind: row.kind, channelId: row.channelId as ChannelId | null, amount: toAmount(row.amount), voided: false }));
+  const perCategory = new Map<BusinessExpenseCategory, { amount: number; sortOrder: number }>();
+  rows.forEach((row, index) => {
+    const entry = perCategory.get(row.category) ?? { amount: 0, sortOrder: row.sortOrder };
+    entry.amount += figures[index]!.amount;
+    perCategory.set(row.category, entry);
+  });
   const byCategory = [...perCategory.entries()]
-    .map(([category, amount]) => ({ category, amount }))
-    .sort((a, b) => b.amount - a.amount || BUSINESS_EXPENSE_CATEGORIES.indexOf(a.category) - BUSINESS_EXPENSE_CATEGORIES.indexOf(b.category));
+    .sort(([codeA, a], [codeB, b]) => b.amount - a.amount || a.sortOrder - b.sortOrder || (codeA < codeB ? -1 : codeA > codeB ? 1 : 0))
+    .map(([category, { amount }]) => ({ category, amount }));
   return {
     total: byCategory.reduce((sum, entry) => sum + entry.amount, 0),
     byCategory,
@@ -79,7 +89,8 @@ export async function getExpenseBreakdown(range: DateRange, db: Database = defau
   };
 }
 
-/** Just the total of getExpenseBreakdown, for the Ringkasan tile. */
+/** Just the total of getExpenseBreakdown, for the Ringkasan tile. Category-agnostic, and like it
+ * never reads supplier_payments. */
 export async function getExpenseTotal(range: DateRange, db: Database = defaultDb): Promise<number> {
   const [row] = await db
     .select({ total: sql<string>`coalesce(sum(${businessExpenses.amount}), 0)::text` })
@@ -142,7 +153,19 @@ export type MonthlyBillsReminder =
  * one per category chosen on /settings ("Pengingat biaya bulanan"), each needing its own
  * non-voided expense paid (Jakarta date) between the 6th of last month and the 5th of this one. */
 export async function getMonthlyBillsReminder(now: Date = new Date(), db: Database = defaultDb): Promise<MonthlyBillsReminder> {
-  const categories = await getMonthlyBillCategories(db);
+  const chosen = await getMonthlyBillCategories(db);
+  if (chosen.length === 0) return { state: "off" };
+  // A category deactivated after it was chosen can no longer be recorded, so it is never asked
+  // for (expense-master-data.md §3.5). All of them inactive: the reminder is off.
+  const active = new Set(
+    (
+      await db
+        .select({ code: expenseCategories.code })
+        .from(expenseCategories)
+        .where(and(inArray(expenseCategories.code, chosen), eq(expenseCategories.isActive, true)))
+    ).map((row) => row.code),
+  );
+  const categories = chosen.filter((category) => active.has(category));
   if (categories.length === 0) return { state: "off" };
   const window = monthlyBillsReminderWindow(now);
   if (!window) return { state: "ok", categories };

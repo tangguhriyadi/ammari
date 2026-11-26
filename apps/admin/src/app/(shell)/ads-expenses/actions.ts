@@ -1,10 +1,11 @@
 "use server";
 
 import { z } from "zod";
-import { BUSINESS_EXPENSE_CATEGORIES, BUSINESS_EXPENSE_METHODS, CHANNEL_IDS } from "@ammari/db/schema";
+import { BUSINESS_EXPENSE_METHODS, CHANNEL_IDS } from "@ammari/db/schema";
 import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
+import { getSelectableExpenseCategory } from "@/lib/expense-categories/queries";
 import { EXPENSE_MESSAGES, MAX_VOID_REASON_LENGTH, findProofHashUses, normalizeExpenseInput, recordBusinessExpense, voidBusinessExpense } from "@/lib/expenses/records";
 import { parseRupiah } from "@/lib/products/money";
 import { fieldErrorsOf, firstIssue, text, uploadedFile } from "@/lib/supplier-payments/form-input";
@@ -19,7 +20,9 @@ const EXPENSE_KEYS = ["ads_expenses.manage", "finance.view_profit"] as const;
 
 const recordSchema = z.object({
   expenseDate: z.string().date(EXPENSE_MESSAGES.invalidDate),
-  category: z.enum(BUSINESS_EXPENSE_CATEGORIES, { message: "Pilih kategori." }),
+  // An expense_categories code; whether it exists and is active is checked against the table
+  // (getSelectableExpenseCategory here, the FOR SHARE lock in the write, the FK as backstop).
+  category: z.string({ message: "Pilih kategori." }).trim().min(1, "Pilih kategori.").max(40, "Pilih kategori."),
   amount: z.string().transform((value, ctx) => {
     const parsed = parseRupiah(value);
     if (parsed === null) {
@@ -53,8 +56,12 @@ export async function recordBusinessExpenseAction(formData: FormData): Promise<A
   if ("error" in upload) return { ok: false, error: upload.error, fieldErrors: { proof: upload.error } };
 
   return runAction(async () => {
-    // Every rule before storing anything, so a refused form leaves no unreferenced object.
-    const input = normalizeExpenseInput(parsed.data);
+    // Every rule before storing anything, so a refused form leaves no unreferenced object. An
+    // unknown or inactive category is refused here; the write re-checks it under a lock, so a
+    // category deactivated in the moment between the two leaves the stored proof unreferenced
+    // (as any failed write after storePrivateUpload does today).
+    const category = await getSelectableExpenseCategory(parsed.data.category);
+    const input = normalizeExpenseInput(parsed.data, category);
     const processed = await processPrivateUpload(Buffer.from(await upload.file.arrayBuffer()), upload.file.name);
     const stored = await storePrivateUpload(processed, "expense_proof");
     const row = await recordBusinessExpense(input, stored, session.staffUser.id);

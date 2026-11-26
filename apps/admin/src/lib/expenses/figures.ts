@@ -1,10 +1,5 @@
-import {
-  AD_EXPENSE_CATEGORIES,
-  FIXED_EXPENSE_CHANNELS,
-  MARKETING_EXPENSE_CATEGORIES,
-  type BusinessExpenseCategory,
-  type ChannelId,
-} from "@ammari/db/schema";
+import type { BusinessExpenseCategory, ChannelId, ExpenseCategoryKind } from "@ammari/db/schema";
+import type { ExpenseCategoryRule } from "@/lib/expense-categories/catalog";
 import { MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, type MarketingChannelId } from "./labels";
 
 // The pure parts of "Iklan & Biaya" figures (docs/plans/growth.md §4, session S1). Money is whole
@@ -15,10 +10,11 @@ import { MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, type MarketingChan
 
 export type ExpenseChannelRule = { kind: "fixed"; channelId: ChannelId } | { kind: "optional" } | { kind: "none" };
 
-export function expenseChannelRule(category: BusinessExpenseCategory): ExpenseChannelRule {
-  const fixed = (FIXED_EXPENSE_CHANNELS as Partial<Record<BusinessExpenseCategory, ChannelId>>)[category];
-  if (fixed) return { kind: "fixed", channelId: fixed };
-  if ((MARKETING_EXPENSE_CATEGORIES as readonly BusinessExpenseCategory[]).includes(category)) return { kind: "optional" };
+/** From the category row (expense_categories.kind / fixed_channel_id), exactly as the trigger
+ * decides: a fixed channel names it, ad and endorse may name one, operating never does. */
+export function expenseChannelRule(category: ExpenseCategoryRule): ExpenseChannelRule {
+  if (category.fixedChannelId !== null) return { kind: "fixed", channelId: category.fixedChannelId };
+  if (category.kind === "ad" || category.kind === "endorsement") return { kind: "optional" };
   return { kind: "none" };
 }
 
@@ -28,11 +24,12 @@ function isMarketingChannel(channelId: string): channelId is MarketingChannelId 
 
 /** The Indonesian refusal for a category/channel pair, or null when it is allowed. Stricter than
  * the DB CHECK for optional channels: only channels an ad can drive buyers to. */
-export function expenseChannelError(category: BusinessExpenseCategory, channelId: string | null): string | null {
+export function expenseChannelError(category: ExpenseCategoryRule, channelId: string | null): string | null {
   const rule = expenseChannelRule(category);
   if (rule.kind === "fixed") {
     if (channelId === rule.channelId) return null;
-    return `Iklan ini selalu untuk kanal ${MARKETING_CHANNEL_LABELS[rule.channelId as MarketingChannelId]}.`;
+    const label = isMarketingChannel(rule.channelId) ? MARKETING_CHANNEL_LABELS[rule.channelId] : rule.channelId;
+    return `Iklan ini selalu untuk kanal ${label}.`;
   }
   if (rule.kind === "none") return channelId === null ? null : "Biaya operasional tidak memakai kanal.";
   return channelId === null || isMarketingChannel(channelId) ? null : "Pilih kanal Shopee, TikTok Shop, Situs, Instagram, atau WhatsApp.";
@@ -103,6 +100,8 @@ export function monthlyBillsReminderWindow(now: Date = new Date()): MonthlyBills
 export interface ExpenseFigureRow {
   expenseDate: string;
   category: BusinessExpenseCategory;
+  /** The category's kind (expense_categories.kind): what decides ROAS and the Endorse line. */
+  kind: ExpenseCategoryKind;
   channelId: ChannelId | null;
   amount: number;
   voided: boolean;
@@ -125,7 +124,7 @@ export function labaBersih(input: { labaSetelahBiayaPlatform: number; webShippin
 export interface MarketingSummary {
   /** Biaya iklan per tagged channel (only channels with spend). */
   adSpendByChannel: Partial<Record<ChannelId, number>>;
-  /** Meta ads with no channel: only in the total ROAS (owner answer Q14). */
+  /** Ads with no channel (Meta, or an owner-made ad category): only in the total ROAS (owner answer Q14). */
   untaggedAdSpend: number;
   adSpendTotal: number;
   /** Endorse/KOL: shown apart, never in ROAS. */
@@ -134,16 +133,18 @@ export interface MarketingSummary {
   marketingTotal: number;
 }
 
-/** Rows already limited to the period by the caller; voided and operating rows are ignored. */
-export function summarizeMarketing(rows: readonly Omit<ExpenseFigureRow, "expenseDate">[]): MarketingSummary {
+/** Rows already limited to the period by the caller; voided and operating rows are ignored. By
+ * kind, never by code: every `ad` category (an owner-made "Iklan Google" too) is biaya iklan and
+ * counts in ROAS; every `endorsement` one is the Endorse line, outside ROAS. */
+export function summarizeMarketing(rows: readonly Pick<ExpenseFigureRow, "kind" | "channelId" | "amount" | "voided">[]): MarketingSummary {
   const adSpendByChannel: Partial<Record<ChannelId, number>> = {};
   let untaggedAdSpend = 0;
   let endorsement = 0;
   for (const row of rows) {
     if (row.voided) continue;
-    if (row.category === "endorsement") {
+    if (row.kind === "endorsement") {
       endorsement += row.amount;
-    } else if ((AD_EXPENSE_CATEGORIES as readonly BusinessExpenseCategory[]).includes(row.category)) {
+    } else if (row.kind === "ad") {
       if (row.channelId === null) untaggedAdSpend += row.amount;
       else adSpendByChannel[row.channelId] = (adSpendByChannel[row.channelId] ?? 0) + row.amount;
     }
