@@ -10,9 +10,8 @@ export default function Loading() {
         <FilterTabsSkeleton count={2} />
       </div>
       <div className="flex flex-col gap-3">
-        <FilterTabsSkeleton count={4} />
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5 lg:items-end">
-          {Array.from({ length: 3 }, (_, index) => (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6 lg:items-end">
+          {Array.from({ length: 4 }, (_, index) => (
             <div key={index} className="flex flex-col gap-1.5">
               <Skeleton className="h-5 w-20" />
               <Skeleton className="h-11 w-full" />

@@ -2,13 +2,15 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import sharp from "sharp";
 import * as XLSX from "xlsx";
 import { loginAs } from "./helpers/login";
-import { E2E_EXPENSES_CS_EMAIL, E2E_EXPENSES_EMAIL, E2E_ITEM_CATEGORY } from "./global-setup";
+import { E2E_EXPENSES_CS_EMAIL, E2E_EXPENSES_EMAIL, E2E_EXPENSE_SUMMARY_MONTH, E2E_ITEM_CATEGORY } from "./global-setup";
 
-// docs/plans/growth.md session S2: "Iklan & Biaya", Pengeluaran. The whole flow runs at 390px AND
-// 1280px (CLAUDE.md's rule): the list renders a CardList on phones and a TableContainer on
-// tablet/desktop, so each pass asserts its own layout's rows and that the other layout's are
-// hidden. Proofs go to the in-memory private storage (PRIVATE_STORAGE_DRIVER=memory); nothing
-// leaves the machine. Every pass searches by its own marker, so rows from other runs never match.
+// docs/plans/growth.md session S2, on the "Biaya" menu since the menu split
+// (docs/plans/expense-master-data.md session S5): operating expenses only, recorded with "Catat
+// biaya". The whole flow runs at 390px AND 1280px (CLAUDE.md's rule): the list renders a CardList
+// on phones and a TableContainer on tablet/desktop, so each pass asserts its own layout's rows and
+// that the other layout's are hidden. Proofs go to the in-memory private storage
+// (PRIVATE_STORAGE_DRIVER=memory); nothing leaves the machine. Every pass searches by its own
+// marker, so rows from other runs never match. Iklan's own flow is ads.spec.ts.
 
 interface Layout {
   label: string;
@@ -40,50 +42,69 @@ async function openRecordDialog(page: Page): Promise<Locator> {
 }
 
 async function search(page: Page, marker: string, extra = ""): Promise<void> {
-  await page.goto(`/ads-expenses?q=${encodeURIComponent(marker)}${extra}`);
-  await expect(page.getByRole("heading", { name: "Iklan & Biaya" })).toBeVisible();
+  await page.goto(`/expenses?q=${encodeURIComponent(marker)}${extra}`);
+  await expect(page.getByRole("heading", { level: 1, name: "Biaya" })).toBeVisible();
 }
 
 async function runExpenseFlow(page: Page, layout: Layout): Promise<void> {
+  // 0. Scoping: the seeded month on Biaya lists only its operating rows (Gaji 400.000 and Sewa
+  // 200.000; the voided Sewa and every ad and endorse stay out), and both pickers offer only
+  // operating categories. Iklan has no "Kanal" filter here.
+  await page.goto(`/expenses?month=${E2E_EXPENSE_SUMMARY_MONTH}`);
+  await expect(page.getByRole("heading", { level: 1, name: "Biaya" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Bagian Biaya" }).getByRole("link", { name: "Biaya operasional" })).toHaveAttribute("aria-current", "true");
+  await expect(page.locator(layout.row)).toHaveCount(2);
+  await expect(page.locator(layout.row).filter({ hasText: "Gaji" })).toContainText("Rp 400.000");
+  await expect(page.locator(layout.row).filter({ hasText: "Sewa" })).toContainText("Rp 200.000");
+  await expect(page.locator(layout.row).filter({ hasText: /Iklan|Endorse/ })).toHaveCount(0);
+  await expect(page.locator(layout.hiddenRow).first()).toBeHidden();
+  await expect(page.getByTestId("expense-total")).toContainText("Rp 600.000");
+  const filterOptions = page.locator("#expense-filter-category option");
+  await expect(filterOptions.filter({ hasText: "Gaji" })).toHaveCount(1);
+  await expect(filterOptions.filter({ hasText: /Iklan|Endorse/ })).toHaveCount(0);
+  await expect(page.getByLabel("Kanal")).toHaveCount(0);
+
   const marker = `E2E-${layout.label}-${Date.now()}`;
   await search(page, marker);
   await expect(page.getByText("Belum ada biaya", { exact: true })).toBeVisible();
 
-  // 1. Category and proof are required.
+  // 1. Category and proof are required; only operating categories are offered.
   let dialog = await openRecordDialog(page);
   await expect(dialog.getByLabel("Tanggal bayar")).toHaveValue(jakartaDate(0));
+  const categoryOptions = dialog.getByLabel("Kategori").locator("option");
+  await expect(categoryOptions.filter({ hasText: "Gaji" })).toHaveCount(1);
+  await expect(categoryOptions.filter({ hasText: "Lainnya" })).toHaveCount(1);
+  await expect(categoryOptions.filter({ hasText: /Iklan|Endorse/ })).toHaveCount(0);
   await dialog.getByRole("button", { name: "Simpan biaya" }).click();
   await expect(dialog.getByText("Pilih kategori.")).toBeVisible();
   await expect(dialog.getByText("Bukti bayar wajib diunggah.")).toBeVisible();
 
-  // 2. Iklan Shopee is always for the Shopee channel; the hint for affiliate is not shown here.
-  await dialog.getByLabel("Kategori").selectOption("ads_shopee");
-  await expect(dialog.getByLabel("Kanal")).toBeDisabled();
-  await expect(dialog.getByLabel("Kanal")).toHaveValue("shopee");
-  await expect(dialog.getByLabel("Metode")).toHaveValue("platform_balance");
+  // 2. Packaging: an operating cost, no channel and no campaign.
+  await dialog.getByLabel("Kategori").selectOption("packaging");
+  await expect(dialog.getByLabel("Kanal")).toHaveCount(0);
+  await expect(dialog.getByLabel("Kampanye")).toHaveCount(0);
   await dialog.getByLabel("Jumlah").fill("750.000");
-  await dialog.getByLabel("Kampanye").fill(marker);
-  await dialog.locator('input[type="file"]').setInputFiles({ name: `iklan-${marker}.jpg`, mimeType: "image/jpeg", buffer: await receiptPhoto(1) });
-  await expect(dialog.getByTestId("private-file-selected")).toContainText(`iklan-${marker}.jpg`);
+  await dialog.getByLabel("Metode").selectOption("cash");
+  await dialog.getByLabel("Catatan").fill(`Kardus ${marker}`);
+  await dialog.locator('input[type="file"]').setInputFiles({ name: `kardus-${marker}.jpg`, mimeType: "image/jpeg", buffer: await receiptPhoto(1) });
+  await expect(dialog.getByTestId("private-file-selected")).toContainText(`kardus-${marker}.jpg`);
   await dialog.getByRole("button", { name: "Simpan biaya" }).click();
   await expect(page.getByRole("status")).toContainText(/Biaya BYA-\d{6}-\d{3} dicatat\./, { timeout: 15_000 });
   await expect(dialog).toBeHidden();
 
   const row = page.locator(layout.row).filter({ hasText: marker });
   await expect(row).toBeVisible();
-  await expect(row).toContainText("Iklan Shopee");
-  await expect(row).toContainText("Shopee");
+  await expect(row).toContainText("Packaging");
   await expect(row).toContainText("Rp 750.000");
-  await expect(row).toContainText("Saldo platform");
+  await expect(row).toContainText("Tunai");
   await expect(page.locator(layout.hiddenRow).filter({ hasText: marker }).first()).toBeHidden();
   await expect(page.getByTestId("expense-total")).toContainText("Rp 750.000");
   const expenseNo = (await row.textContent())?.match(/BYA-\d{6}-\d{3}/)?.[0];
   expect(expenseNo).toBeTruthy();
 
-  // 3. Lainnya needs a note; with one it saves, as an operating cost without a channel.
+  // 3. Lainnya needs a note; with one it saves.
   dialog = await openRecordDialog(page);
   await dialog.getByLabel("Kategori").selectOption("other");
-  await expect(dialog.getByLabel("Kanal")).toHaveCount(0);
   await dialog.getByLabel("Jumlah").fill("120.000");
   await dialog.getByLabel("Metode").selectOption("cash");
   await dialog.locator('input[type="file"]').setInputFiles({ name: `servis-${marker}.jpg`, mimeType: "image/jpeg", buffer: await receiptPhoto(2) });
@@ -95,16 +116,16 @@ async function runExpenseFlow(page: Page, layout: Layout): Promise<void> {
   await expect(page.locator(layout.row).filter({ hasText: marker })).toHaveCount(2);
   await expect(page.getByTestId("expense-total")).toContainText("Rp 870.000");
 
-  // 4. The group tabs: "Iklan" shows the ad only.
-  await page.getByRole("navigation", { name: "Filter jenis biaya" }).getByRole("link", { name: "Iklan", exact: true }).click();
-  await expect(page).toHaveURL(/group=marketing/);
-  await expect(page.locator(layout.row).filter({ hasText: marker })).toHaveCount(1);
-  await expect(page.getByTestId("expense-total")).toContainText("Rp 750.000");
+  // 4. Neither operating expense shows on Iklan.
+  await page.goto(`/ads?q=${encodeURIComponent(marker)}`);
+  await expect(page.getByRole("heading", { level: 1, name: "Iklan" })).toBeVisible();
+  await expect(page.getByText("Belum ada biaya iklan", { exact: true })).toBeVisible();
+  await expect(page.locator(layout.row).filter({ hasText: marker })).toHaveCount(0);
 
   // 5. The proof opens through the permission-checked route only.
   await search(page, marker);
-  const adRow = page.locator(layout.row).filter({ hasText: expenseNo! });
-  await adRow.getByRole("button", { name: /Lihat bukti/ }).click();
+  const packagingRow = page.locator(layout.row).filter({ hasText: expenseNo! });
+  await packagingRow.getByRole("button", { name: /Lihat bukti/ }).click();
   const viewer = page.getByRole("dialog", { name: `Bukti ${expenseNo}` });
   const image = viewer.getByRole("img", { name: `Bukti ${expenseNo}` });
   await expect(image).toBeVisible();
@@ -117,7 +138,7 @@ async function runExpenseFlow(page: Page, layout: Layout): Promise<void> {
   await viewer.getByRole("button", { name: "Tutup" }).click();
 
   // 6. Void with a reason: gone from the default list and the total, struck under "Tampilkan yang dibatalkan".
-  await adRow.getByRole("button", { name: `Batalkan biaya ${expenseNo}` }).click();
+  await packagingRow.getByRole("button", { name: `Batalkan biaya ${expenseNo}` }).click();
   const voidDialog = page.getByRole("dialog", { name: `Batalkan biaya ${expenseNo}?` });
   await voidDialog.getByRole("button", { name: "Batalkan biaya" }).click();
   await expect(voidDialog.getByText("Alasan pembatalan wajib diisi.")).toBeVisible();
@@ -135,11 +156,13 @@ async function runExpenseFlow(page: Page, layout: Layout): Promise<void> {
   await expect(voidedRow.getByRole("button", { name: `Batalkan biaya ${expenseNo}` })).toHaveCount(0);
   await expect(page.getByTestId("expense-total")).toContainText("Rp 120.000");
 
-  // 7. CS (no ads_expenses.manage, no finance.view_profit): the page and the proof are refused.
+  // 7. CS (no ads_expenses.manage, no finance.view_profit): both menus and the proof are refused.
   await page.context().clearCookies();
   await loginAs(page, E2E_EXPENSES_CS_EMAIL);
-  await page.goto("/ads-expenses");
-  await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();
+  for (const path of ["/expenses", "/ads"]) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();
+  }
   expect((await page.request.get(proofSrc!)).status()).toBe(403);
 }
 
@@ -207,7 +230,7 @@ async function runItemFlow(page: Page, layout: Layout): Promise<void> {
   await expect(gaji).not.toContainText("Gaji ·");
 
   // The monthly Excel file has the Item column, with this expense's item.
-  const response = await page.request.get("/ads-expenses/report?format=xlsx");
+  const response = await page.request.get("/expenses/report?format=xlsx");
   expect(response.status()).toBe(200);
   const workbook = XLSX.read(await response.body(), { type: "buffer" });
   const rows = XLSX.utils.sheet_to_json<(string | number)[]>(workbook.Sheets.Biaya!, { header: 1 });
@@ -217,7 +240,7 @@ async function runItemFlow(page: Page, layout: Layout): Promise<void> {
   expect(exported?.[6]).toBe(150_000);
 }
 
-test.describe("Iklan & Biaya: item biaya", () => {
+test.describe("Biaya: item biaya", () => {
   for (const layout of [MOBILE, DESKTOP]) {
     test(`Langganan with Biteship Grow: default amount, edit, list and Excel at ${layout.label === "mobile" ? "390px" : "1280px"}`, async ({ page }) => {
       test.setTimeout(120_000);
@@ -228,9 +251,9 @@ test.describe("Iklan & Biaya: item biaya", () => {
   }
 });
 
-test.describe("Iklan & Biaya: pengeluaran", () => {
+test.describe("Biaya: biaya operasional", () => {
   for (const layout of [MOBILE, DESKTOP]) {
-    test(`record with proof, Lainnya note, group filter, proof viewer, void, CS refused at ${layout.label === "mobile" ? "390px" : "1280px"}`, async ({ page }) => {
+    test(`operating rows only, record with proof, Lainnya note, not on Iklan, proof viewer, void, CS refused at ${layout.label === "mobile" ? "390px" : "1280px"}`, async ({ page }) => {
       test.setTimeout(180_000);
       await page.setViewportSize(layout.viewport);
       await loginAs(page, E2E_EXPENSES_EMAIL);

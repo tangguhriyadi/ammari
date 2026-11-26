@@ -1,6 +1,6 @@
 import type { BusinessExpenseMethod, ChannelId, DefaultExpenseCategoryCode, ExpenseCategoryKind } from "@ammari/db/schema";
 
-// Indonesian labels for "Iklan & Biaya" (docs/plans/growth.md §3.1). No server dependency, so the
+// Indonesian labels for the "Iklan" and "Biaya" menus (docs/plans/growth.md §3.1). No server dependency, so the
 // record dialog and the list share them. Category NAMES are not here: since migration 0048 they
 // are expense_categories rows (lib/expense-categories), so a rename shows everywhere.
 
@@ -13,6 +13,15 @@ export const EXPENSE_CATEGORY_GROUPS = [
 ] as const satisfies readonly { key: string; label: string; kinds: readonly ExpenseCategoryKind[] }[];
 
 export type ExpenseCategoryGroup = (typeof EXPENSE_CATEGORY_GROUPS)[number]["key"];
+
+/** The group keys, for a zod enum (the record form posts its menu's group). */
+export const EXPENSE_CATEGORY_GROUP_KEYS = ["marketing", "operational"] as const satisfies readonly ExpenseCategoryGroup[];
+
+/** A category posted from the wrong menu (a stale page, or a hand-made request). */
+export const EXPENSE_SCOPE_MESSAGES: Record<ExpenseCategoryGroup, string> = {
+  marketing: "Kategori ini bukan iklan atau endorse. Catat di menu Biaya.",
+  operational: "Kategori ini termasuk iklan atau endorse. Catat di menu Iklan.",
+};
 
 /** Field hints that keep a cost from being counted twice (plan §4.3). Keyed by the seeded codes
  * (expense-master-data.md §3.2); any other category simply has no hint. */

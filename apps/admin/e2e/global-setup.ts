@@ -94,21 +94,27 @@ export const E2E_FABRIC_COLOUR_EMAIL = "fabric-colour@e2e.ammari.test";
 // "fresh email, clean OTP throttle" reasoning. Owner role: builds its own fabric, products,
 // purchase, supplier, cost component and batch, posts it and reads its supplier bill.
 export const E2E_SCOPED_COSTS_EMAIL = "scoped-costs@e2e.ammari.test";
-// Dedicated emails for ads-expenses.spec.ts (docs/plans/growth.md session S2), same "fresh email,
-// clean OTP throttle" reasoning. The first sits on the predefined Keuangan role (`finance`:
-// ads_expenses.manage + finance.view_profit, as shipped by migration 0041); the second on the
-// predefined CS role, which must get "Akses ditolak" on /ads-expenses and a 403 on a proof.
+// Dedicated emails for expenses.spec.ts (docs/plans/growth.md session S2; the "Biaya" menu since
+// expense-master-data.md S5), same "fresh email, clean OTP throttle" reasoning. The first sits on
+// the predefined Keuangan role (`finance`: ads_expenses.manage + finance.view_profit, as shipped
+// by migration 0041); the second on the predefined CS role, which must get "Akses ditolak" on
+// /expenses and /ads and a 403 on a proof.
 export const E2E_EXPENSES_EMAIL = "expenses@e2e.ammari.test";
 export const E2E_EXPENSES_CS_EMAIL = "expenses-cs@e2e.ammari.test";
+// ads.spec.ts and ads-expenses-redirects.spec.ts (docs/plans/expense-master-data.md session S5):
+// the "Iklan" menu and the old /ads-expenses URLs, each on the predefined Keuangan role. Fresh
+// emails, clean OTP throttle.
+export const E2E_ADS_EMAIL = "ads@e2e.ammari.test";
+export const E2E_EXPENSE_REDIRECTS_EMAIL = "expense-redirects@e2e.ammari.test";
 // expense-categories.spec.ts (docs/plans/expense-master-data.md session S3): "Kategori Biaya" on
 // the predefined Keuangan role (ads_expenses.manage + finance.view_profit, owner answer D5), and a
 // CS staff who must get "Akses ditolak" and no nav entry. Fresh emails, clean OTP throttle.
 export const E2E_EXPENSE_CATEGORIES_EMAIL = "expense-categories@e2e.ammari.test";
 export const E2E_EXPENSE_CATEGORIES_CS_EMAIL = "expense-categories-cs@e2e.ammari.test";
-// ads-expenses-summary.spec.ts (docs/plans/growth.md session S3): Iklan & Biaya "Ringkasan", the
+// expenses.spec.ts (docs/plans/growth.md session S3): Biaya "Laba rugi" (the old Ringkasan), the
 // Laba bersih tile and the "Gaji/Sewa belum dicatat" item. An owner, a Keuangan (`finance`) staff,
 // and a role with overview.view + orders.view + ads_expenses.manage but NOT finance.view_profit,
-// which must never receive a Laba bersih, an expense or the item (and is refused /ads-expenses).
+// which must never receive a Laba bersih, an expense or the item (and is refused /expenses, /ads).
 export const E2E_EXPENSE_SUMMARY_OWNER_EMAIL = "expense-summary-owner@e2e.ammari.test";
 export const E2E_EXPENSE_SUMMARY_FINANCE_EMAIL = "expense-summary-finance@e2e.ammari.test";
 export const E2E_EXPENSE_SUMMARY_NO_FINANCE_EMAIL = "expense-summary-no-finance@e2e.ammari.test";
@@ -129,7 +135,7 @@ export const E2E_EXPENSE_SUMMARY_MONTH = "2026-02";
 // settings test changes the categories and puts these two back.
 export const E2E_MONTHLY_BILL_CATEGORIES = ["salary", "rent"] as const;
 export const E2E_MONTHLY_BILLS_EXPENSE_NO = "BYA-E2E-GAJI";
-// ads-expenses.spec.ts (docs/plans/expense-master-data.md session S4): an owner-made operating
+// expenses.spec.ts (docs/plans/expense-master-data.md session S4): an owner-made operating
 // category "Langganan" with items, as the owner would set it up in Data Master. Biteship Grow
 // carries a default amount, Claude has none, VPS Lama is deactivated (never offered). The
 // system categories keep no items, so the other expense specs record exactly as before.
@@ -544,6 +550,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_EXPENSES_CS_EMAIL, "E2E CS", "customer_service");
   await ensureStaffFixture(E2E_EXPENSE_CATEGORIES_EMAIL, "E2E Kategori Biaya", "finance");
   await ensureStaffFixture(E2E_EXPENSE_CATEGORIES_CS_EMAIL, "E2E CS Kategori Biaya", "customer_service");
+  await ensureStaffFixture(E2E_ADS_EMAIL, "E2E Iklan", "finance");
+  await ensureStaffFixture(E2E_EXPENSE_REDIRECTS_EMAIL, "E2E Pengalihan Biaya", "finance");
 
   await ensureLimitedRole(E2E_PURCHASES_ROLE_KEY, [
     "products.manage",
@@ -807,7 +815,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     }
   });
 
-  // Iklan & Biaya "Ringkasan" (see E2E_EXPENSE_SUMMARY_MONTH above).
+  // Biaya "Laba rugi" and Iklan "ROAS" (see E2E_EXPENSE_SUMMARY_MONTH above).
   await ensureStaffFixture(E2E_EXPENSE_SUMMARY_OWNER_EMAIL, "E2E Ringkasan Biaya (owner)", OWNER_ROLE_KEY);
   await ensureStaffFixture(E2E_EXPENSE_SUMMARY_FINANCE_EMAIL, "E2E Ringkasan Biaya (Keuangan)", "finance");
   await ensureLimitedRole(E2E_EXPENSE_SUMMARY_NO_FINANCE_ROLE_KEY, ["overview.view", "orders.view", "ads_expenses.manage"]);
@@ -1235,6 +1243,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         E2E_PRODUCT_TYPES_EMAIL,
         E2E_EXPENSE_CATEGORIES_EMAIL,
         E2E_EXPENSE_CATEGORIES_CS_EMAIL,
+        E2E_ADS_EMAIL,
+        E2E_EXPENSE_REDIRECTS_EMAIL,
         E2E_IMPORT_EMAIL,
         E2E_IMPORT_NO_FINANCE_EMAIL,
         E2E_LANDING_PACKING_EMAIL,

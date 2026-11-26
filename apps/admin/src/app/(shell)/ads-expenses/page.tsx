@@ -1,155 +1,19 @@
-import Link from "next/link";
-import { Breadcrumb, Button, Checkbox, Input, Label, PageHeader, Pagination, Select, Tabs } from "@ammari/ui";
-import { formatRupiah } from "@ammari/ui/lib";
+import { permanentRedirect } from "next/navigation";
 import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
-import { monthToDate } from "@/lib/expenses/figures";
-import { listBusinessExpenses } from "@/lib/expenses/records";
-import { EXPENSE_CATEGORY_GROUPS } from "@/lib/expenses/labels";
-import { expenseCategoriesInGroup, selectableExpenseCategories } from "@/lib/expense-categories/catalog";
 import { loadExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
-import { expenseListHref, expenseSummaryHref, parseExpenseListParams, parseExpenseSummaryParams, parseExpenseTab } from "@/lib/expenses/search-params";
-import { rootCrumbs } from "@/lib/nav/breadcrumb";
-import { formatDateRange } from "@/lib/overview/format";
-import { ExpenseList } from "./_components/expense-list";
-import { ExpenseSummary } from "./_components/expense-summary";
-import { RecordExpenseButton } from "./_components/record-expense-button";
+import { legacyAdsExpensesHref, legacyExpenseNoQuery } from "@/lib/expenses/legacy-redirect";
+import { findExpenseByNo } from "@/lib/expenses/records";
 
-// Iklan & Biaya, "Pengeluaran" (docs/plans/growth.md §6, session S2): every ad and operating
-// expense with its proof, per month. Gated by ads_expenses.manage + finance.view_profit (§7): every
-// row is a cost figure and the proofs are private. "Ringkasan" (`?tab=ringkasan`, session S3): Laba
-// bersih and ad spend vs omzet for whole months (expense-summary.tsx).
+// The old "Iklan & Biaya" page, now redirect-only (docs/plans/expense-master-data.md §3.8, session
+// S5): bookmarks, the old Overview links and older activity-log entries land on "Iklan" (/ads) or
+// "Biaya" (/expenses). The target depends on query values (a category's or an expense's kind),
+// which next.config.ts redirects() cannot map, hence a page. The permission check runs first, the
+// same pair as the targets, so the lookup never runs for a viewer who could not see the answer.
 
-const MONTH_LABEL = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "UTC" });
-
-function monthLabel(month: string): string {
-  return MONTH_LABEL.format(new Date(`${month}-01T00:00:00Z`));
-}
-
-export default async function AdsExpensesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+export default async function AdsExpensesRedirectPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   await requireAllPermissions(["ads_expenses.manage", "finance.view_profit"]);
   const raw = await searchParams;
-  const tab = parseExpenseTab(raw);
-  const { categories, items } = await loadExpenseCategoryCatalog();
-  // Only active categories can take a NEW expense (expense-master-data.md §3.5), with their active
-  // items (the catalog's items are the active ones already).
-  const recordOptions = selectableExpenseCategories(categories).map(({ code, name, kind, fixedChannelId }) => ({ code, name, kind, fixedChannelId }));
-  const recordCodes = new Set(recordOptions.map((category) => category.code));
-  const recordItems = items
-    .filter((item) => recordCodes.has(item.categoryCode))
-    .map(({ id, categoryCode, name, note, defaultAmount }) => ({ id, categoryCode, name, note, defaultAmount }));
-  const header = (
-    <>
-      <Breadcrumb items={rootCrumbs("/ads-expenses")} />
-      <PageHeader
-        title="Iklan & Biaya"
-        description="Biaya iklan dan operasional yang sudah dibayar, dengan buktinya. Biaya dihitung pada tanggal dibayar."
-        actions={<RecordExpenseButton categories={recordOptions} items={recordItems} />}
-      />
-      <div className="mb-6 border-b border-neutral-200 pb-4">
-        <Tabs
-          aria-label="Bagian Iklan & Biaya"
-          items={[
-            { label: "Pengeluaran", href: "/ads-expenses", isActive: tab === "expenses" },
-            { label: "Ringkasan", href: expenseSummaryHref({ period: "this_month" }), isActive: tab === "summary" },
-          ]}
-        />
-      </div>
-    </>
-  );
-
-  if (tab === "summary") {
-    const now = new Date();
-    return (
-      <>
-        {header}
-        <ExpenseSummary params={parseExpenseSummaryParams(raw, now)} today={monthToDate(now).to} now={now} />
-      </>
-    );
-  }
-
-  const params = parseExpenseListParams(raw, categories);
-  const page = typeof raw.page === "string" ? raw.page : undefined;
-  const perPage = typeof raw.perPage === "string" ? raw.perPage : undefined;
-  const { rows, pagination, total } = await listBusinessExpenses(params, page, perPage);
-  // Every category of the group, inactive ones too (marked), so past expenses stay filterable.
-  const categoryOptions = expenseCategoriesInGroup(categories, params.group);
-
-  return (
-    <>
-      {header}
-      <div className="flex flex-col gap-3">
-        <Tabs
-          aria-label="Filter jenis biaya"
-          items={[{ key: undefined, label: "Semua" }, ...EXPENSE_CATEGORY_GROUPS].map((group) => ({
-            label: group.label,
-            // Changing the group drops a category from another group (parseExpenseListParams).
-            href: expenseListHref({ ...params, group: group.key, category: undefined }),
-            isActive: group.key === params.group,
-          }))}
-        />
-        <form method="GET" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5 lg:items-end" aria-label="Filter biaya">
-          {params.group && <input type="hidden" name="group" value={params.group} />}
-          {params.range ? (
-            <div className="flex flex-col gap-1.5" data-testid="expense-range">
-              <input type="hidden" name="from" value={params.range.from} />
-              <input type="hidden" name="to" value={params.range.to} />
-              <span className="text-sm font-medium text-neutral-700">Rentang tanggal</span>
-              <span className="text-base text-neutral-900">{formatDateRange(params.range.from, params.range.to)}</span>
-              <Link href={expenseListHref({ ...params, range: undefined, month: params.range.to.slice(0, 7) })} className="text-sm font-medium text-brand hover:underline">
-                Lihat per bulan
-              </Link>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="expense-month">Bulan</Label>
-              <Input id="expense-month" name="month" type="month" defaultValue={params.month} />
-            </div>
-          )}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="expense-filter-category">Kategori</Label>
-            <Select id="expense-filter-category" name="category" defaultValue={params.category ?? ""}>
-              <option value="">Semua kategori</option>
-              {categoryOptions.map((category) => (
-                <option key={category.code} value={category.code}>
-                  {category.isActive ? category.name : `${category.name} (nonaktif)`}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="expense-q">Cari</Label>
-            <Input id="expense-q" name="q" defaultValue={params.q ?? ""} placeholder="No. biaya, item, kampanye, catatan" />
-          </div>
-          <Checkbox name="voided" value="1" defaultChecked={params.showVoided} label="Tampilkan yang dibatalkan" />
-          <div className="flex items-center gap-3">
-            <Button type="submit">Terapkan</Button>
-            <Link href="/ads-expenses" className="text-base font-medium text-brand hover:underline">
-              Reset
-            </Link>
-          </div>
-        </form>
-        <p className="text-base text-neutral-800" data-testid="expense-total">
-          Total {params.range ? formatDateRange(params.range.from, params.range.to) : monthLabel(params.month)}: <span className="font-semibold tabular-nums">{formatRupiah(total)}</span>
-          {params.showVoided && <span className="text-sm text-neutral-600"> (tanpa yang dibatalkan)</span>}
-        </p>
-        <ExpenseList rows={rows} categories={categories} />
-      </div>
-      <Pagination
-        pagination={pagination}
-        basePath="/ads-expenses"
-        searchParams={{
-          // The validated month, left out when it is the default (same rule as expenseListHref).
-          month: params.range || params.month === monthToDate().month ? undefined : params.month,
-          from: params.range?.from,
-          to: params.range?.to,
-          group: params.group,
-          category: params.category,
-          voided: params.showVoided ? "1" : undefined,
-          q: params.q,
-          perPage,
-        }}
-        itemLabel="biaya"
-      />
-    </>
-  );
+  const expenseNo = legacyExpenseNoQuery(raw);
+  const [{ categories }, expense] = await Promise.all([loadExpenseCategoryCatalog(), expenseNo ? findExpenseByNo(expenseNo) : null]);
+  permanentRedirect(legacyAdsExpensesHref(raw, { categories, expense }));
 }

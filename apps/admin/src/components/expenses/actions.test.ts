@@ -49,6 +49,7 @@ const EXPENSE_KEYS = ["ads_expenses.manage", "finance.view_profit"];
 
 function recordForm(overrides: Record<string, string | File | null> = {}): FormData {
   const values: Record<string, string | File | null> = {
+    scope: "marketing",
     expenseDate: "2026-10-02",
     category: "ads_shopee",
     amount: "500.000",
@@ -104,7 +105,7 @@ describe("input validation, before any storage call", () => {
     expect(await recordBusinessExpenseAction(recordForm({ amount: "0" }))).toMatchObject({ ok: false, fieldErrors: { amount: expect.any(String) } });
     expect(await recordBusinessExpenseAction(recordForm({ amount: "1,5" }))).toMatchObject({ ok: false, fieldErrors: { amount: expect.any(String) } });
     expect(await recordBusinessExpenseAction(recordForm({ channelId: "tiktok" }))).toMatchObject({ ok: false, fieldErrors: { channelId: expect.stringMatching(/Shopee/) } });
-    expect(await recordBusinessExpenseAction(recordForm({ category: "other", channelId: "", method: "cash" }))).toMatchObject({
+    expect(await recordBusinessExpenseAction(recordForm({ scope: "operational", category: "other", channelId: "", method: "cash" }))).toMatchObject({
       ok: false,
       fieldErrors: { note: "Untuk kategori Lainnya, tulis di catatan biaya apa ini." },
     });
@@ -114,7 +115,7 @@ describe("input validation, before any storage call", () => {
 
   test("the item: a malformed id, another category's item, and a missing required item are refused before storage", async () => {
     getStaffSessionMock.mockResolvedValue(sessionWithPermissions(EXPENSE_KEYS));
-    const packaging = { category: "packaging", channelId: "", method: "cash" };
+    const packaging = { scope: "operational", category: "packaging", channelId: "", method: "cash" };
     expect(await recordBusinessExpenseAction(recordForm({ ...packaging, itemId: "kardus" }))).toMatchObject({ ok: false, fieldErrors: { itemId: "Item biaya tidak ditemukan." } });
     expect(await recordBusinessExpenseAction(recordForm({ itemId: ITEM_ID }))).toMatchObject({ ok: false, fieldErrors: { itemId: "Item biaya tidak ditemukan." } });
     expect(selectMock).toHaveBeenLastCalledWith("ads_shopee", ITEM_ID);
@@ -122,6 +123,29 @@ describe("input validation, before any storage call", () => {
     expect(selectMock).toHaveBeenLastCalledWith("packaging", null);
     // No itemId field at all (an older form) is "no item".
     expect(await recordBusinessExpenseAction(recordForm(packaging))).toMatchObject({ ok: false, fieldErrors: { itemId: "Pilih item biaya." } });
+    expect(storePrivateUploadMock).not.toHaveBeenCalled();
+  });
+
+  test("menu scope (expense-master-data.md §3.8): an operating category from Iklan and an ad or endorse one from Biaya are refused before storage", async () => {
+    getStaffSessionMock.mockResolvedValue(sessionWithPermissions(EXPENSE_KEYS));
+    expect(await recordBusinessExpenseAction(recordForm({ scope: "marketing", category: "salary", channelId: "", method: "transfer" }))).toEqual({
+      ok: false,
+      error: "Kategori ini bukan iklan atau endorse. Catat di menu Biaya.",
+      fieldErrors: { category: "Kategori ini bukan iklan atau endorse. Catat di menu Biaya." },
+    });
+    expect(await recordBusinessExpenseAction(recordForm({ scope: "operational" }))).toMatchObject({
+      ok: false,
+      fieldErrors: { category: "Kategori ini termasuk iklan atau endorse. Catat di menu Iklan." },
+    });
+    // Endorse/KOL belongs to Iklan (D7).
+    expect(await recordBusinessExpenseAction(recordForm({ scope: "operational", category: "endorsement", channelId: "" }))).toMatchObject({
+      ok: false,
+      fieldErrors: { category: "Kategori ini termasuk iklan atau endorse. Catat di menu Iklan." },
+    });
+    // A missing or unknown scope is refused too (an older open form).
+    for (const scope of [null, "all", ""]) {
+      expect(await recordBusinessExpenseAction(recordForm({ scope }))).toMatchObject({ ok: false, fieldErrors: { scope: "Menu tidak dikenal. Muat ulang halaman." } });
+    }
     expect(storePrivateUploadMock).not.toHaveBeenCalled();
   });
 

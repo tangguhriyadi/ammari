@@ -4,7 +4,7 @@ import { ChevronRight } from "lucide-react";
 import { Badge, Card, Skeleton } from "@ammari/ui";
 import { formatNumber, formatRupiah, formatShortDate } from "@ammari/ui/lib";
 import { jakartaMidnight } from "@ammari/commerce/jakarta-day";
-import { expenseListHref } from "@/lib/expenses/search-params";
+import { expenseListHref, expenseMenuPath } from "@/lib/expenses/search-params";
 import { getMonthlyBillsReminder } from "@/lib/expenses/summary";
 import { expenseCategoryLabel, expenseGroupOfKind, findExpenseCategory } from "@/lib/expense-categories/catalog";
 import { loadExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
@@ -324,13 +324,15 @@ async function MonthlyBillsBlock({ now }: { now: Date }) {
   if (reminder.state === "off") return null;
   const catalog = await loadExpenseCategoryCatalog();
   const missing = reminder.state === "missing" ? reminder : null;
-  // The "Operasional" tab when every missing category has kind operating (Gaji, Sewa, Utilitas),
-  // else "Semua" (any active category may be a monthly bill, owner answer D3).
-  const isOperational = (code: string) => {
+  // The menu (expense-master-data.md §3.8): Iklan when every missing category is an ad or endorse
+  // category, else Biaya (Gaji, Sewa, Utilitas; any active category may be a monthly bill, owner
+  // answer D3).
+  const isMarketing = (code: string) => {
     const category = findExpenseCategory(catalog.categories, code);
-    return category !== undefined && expenseGroupOfKind(category.kind) === "operational";
+    return category !== undefined && expenseGroupOfKind(category.kind) === "marketing";
   };
-  const group = missing?.missing.every(isOperational) ? ("operational" as const) : undefined;
+  const group = missing && missing.missing.length > 0 && missing.missing.every(isMarketing) ? ("marketing" as const) : ("operational" as const);
+  const menuLabel = group === "marketing" ? "Iklan" : "Biaya";
   return (
     <Block
       title="Biaya bulanan belum dicatat"
@@ -339,9 +341,9 @@ async function MonthlyBillsBlock({ now }: { now: Date }) {
       href={
         missing
           ? expenseListHref({ month: missing.to.slice(0, 7), range: { from: missing.from, to: missing.to }, group, showVoided: false })
-          : "/ads-expenses"
+          : expenseMenuPath(group)
       }
-      hrefLabel="Catat di Iklan & Biaya"
+      hrefLabel={`Catat di ${menuLabel}`}
       testId="action-monthly-bills"
       detail={
         missing && (

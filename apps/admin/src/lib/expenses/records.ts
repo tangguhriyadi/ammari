@@ -11,6 +11,7 @@ import {
   type BusinessExpenseCategory,
   type BusinessExpenseMethod,
   type ChannelId,
+  type ExpenseCategoryKind,
 } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { ActionError, FieldError } from "@/lib/errors";
@@ -162,6 +163,19 @@ export async function voidBusinessExpense(expenseId: string, reason: string, act
 
 // ---------- Reads ----------
 
+/** The menu kind and month of the expense with this number (the old `/ads-expenses?q=BYA-...` links
+ * pick their menu by the kind and open the expense's own month, expense-master-data.md §3.8), or
+ * null when there is none. Voided ones too: an activity-log entry may name one. */
+export async function findExpenseByNo(expenseNo: string, db: Database = defaultDb): Promise<{ kind: ExpenseCategoryKind; month: string } | null> {
+  const [row] = await db
+    .select({ kind: expenseCategories.kind, expenseDate: businessExpenses.expenseDate })
+    .from(businessExpenses)
+    .innerJoin(expenseCategories, eq(expenseCategories.code, businessExpenses.category))
+    .where(eq(businessExpenses.expenseNo, expenseNo))
+    .limit(1);
+  return row ? { kind: row.kind, month: row.expenseDate.slice(0, 7) } : null;
+}
+
 /** The soft duplicate-proof warning (plan §5 step 4): document numbers whose non-voided record
  * was uploaded with exactly these bytes. Supplier payments only for a viewer who may see them
  * (supplier_payments.manage). Advisory; never blocks. */
@@ -192,6 +206,8 @@ export interface BusinessExpenseFilters {
   range?: DateRange;
   group?: ExpenseCategoryGroup;
   category?: BusinessExpenseCategory;
+  /** Iklan's "Kanal" filter (expense-master-data.md §3.8): only expenses tagged with it. */
+  channelId?: ChannelId;
   showVoided?: boolean;
   q?: string;
 }
@@ -241,6 +257,7 @@ export async function listBusinessExpenses(
       ? inArray(businessExpenses.category, db.select({ code: expenseCategories.code }).from(expenseCategories).where(inArray(expenseCategories.kind, [...groupKinds])))
       : undefined,
     filters.category ? eq(businessExpenses.category, filters.category) : undefined,
+    filters.channelId ? eq(businessExpenses.channelId, filters.channelId) : undefined,
     pattern
       ? or(
           ilike(businessExpenses.expenseNo, pattern),

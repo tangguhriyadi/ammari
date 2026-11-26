@@ -17,7 +17,7 @@ import { parseRupiah } from "@/lib/products/money";
 const EXPENSE_KEYS = ["ads_expenses.manage", "finance.view_profit"] as const;
 
 // Category names show on the expense list, its filters, the reports and the monthly-bill options.
-const SECTIONS = ["/expense-categories", "/ads-expenses", "/settings"] as const;
+const SECTIONS = ["/expense-categories", "/ads", "/expenses", "/settings"] as const;
 
 const INVALID_INPUT = "Input tidak valid.";
 

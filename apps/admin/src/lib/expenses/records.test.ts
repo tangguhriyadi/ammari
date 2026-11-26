@@ -9,6 +9,7 @@ import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { privateFileValues } from "@/lib/supplier-payments/payment-records";
 import type { StoredPrivateFile } from "@/lib/supplier-payments/store-upload";
 import {
+  findExpenseByNo,
   findProofHashUses,
   listBusinessExpenses,
   normalizeExpenseInput,
@@ -272,9 +273,28 @@ describe("listBusinessExpenses", () => {
       expect((await listBusinessExpenses({ month: "2026-09", category: "salary" }, undefined, undefined, tx)).total).toBe(3_000_000);
       expect((await listBusinessExpenses({ month: "2026-09", q: "unik uji" }, undefined, undefined, tx)).rows.map((row) => row.id)).toEqual([ad.id]);
       expect((await listBusinessExpenses({ month: "2026-09", q: salary.expenseNo }, undefined, undefined, tx)).rows.map((row) => row.id)).toEqual([salary.id]);
+      // Iklan's "Kanal" filter (expense-master-data.md §3.8).
+      expect((await listBusinessExpenses({ month: "2026-09", group: "marketing", channelId: "shopee" }, undefined, undefined, tx)).rows.map((row) => row.id)).toEqual([ad.id]);
+      expect((await listBusinessExpenses({ month: "2026-09", group: "marketing", channelId: "tiktok" }, undefined, undefined, tx)).total).toBe(0);
       // Rows of other tests never leak in: month is required.
       const ids = (await listBusinessExpenses({ month: "2026-08" }, undefined, undefined, tx)).rows.map((row) => row.id);
       expect(ids).not.toEqual(expect.arrayContaining([ad.id]));
+    });
+  });
+});
+
+describe("findExpenseByNo (the old /ads-expenses?q=BYA-... links, expense-master-data.md §3.8)", () => {
+  test("the kind of the expense's category and its month, voided ones too; null for an unknown number", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const ad = await recordBusinessExpense(expense({ expenseDate: "2026-09-30" }), storedFile(), staff.id, tx);
+      const endorse = await recordBusinessExpense(expense({ expenseDate: "2026-09-30", category: "endorsement", channelId: null, method: "transfer" }), storedFile(), staff.id, tx);
+      const salary = await recordBusinessExpense(expense({ expenseDate: "2026-09-01", category: "salary", channelId: null, method: "transfer" }), storedFile(), staff.id, tx);
+      await voidBusinessExpense(salary.id, "salah", staff.id, tx);
+      expect(await findExpenseByNo(ad.expenseNo, tx)).toEqual({ kind: "ad", month: "2026-09" });
+      expect(await findExpenseByNo(endorse.expenseNo, tx)).toEqual({ kind: "endorsement", month: "2026-09" });
+      expect(await findExpenseByNo(salary.expenseNo, tx)).toEqual({ kind: "operating", month: "2026-09" });
+      expect(await findExpenseByNo("BYA-209901-999", tx)).toBeNull();
     });
   });
 });

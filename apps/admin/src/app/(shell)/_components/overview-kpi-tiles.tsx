@@ -145,7 +145,7 @@ export async function OverviewKpiTiles({
   canViewStock: boolean;
   /** orders.import: the "belum lengkap" note links to /import. */
   canViewImports?: boolean;
-  /** ads_expenses.manage: Laba bersih links to the Iklan & Biaya summary. */
+  /** ads_expenses.manage: Laba bersih links to Biaya, tab Laba rugi. */
   canViewExpenses?: boolean;
 }) {
   // Expenses are cost figures: never queried without finance.view_profit (showsLabaBersih). They
@@ -232,7 +232,7 @@ export async function OverviewKpiTiles({
                 )}
                 {canViewExpenses && (
                   <Link href={expenseSummaryHref({ period: "this_month" })} className="text-sm font-medium text-brand underline-offset-2 hover:underline" data-testid="kpi-laba-bersih-link">
-                    Rincian di Iklan & Biaya
+                    Rincian di Biaya, tab Laba rugi
                   </Link>
                 )}
               </KpiTile>

@@ -412,7 +412,7 @@ for (const layout of LAYOUTS) {
       await expect(bills).toBeVisible();
       if (Number(jakartaDay(0).slice(8, 10)) >= 6) {
         await expect(bills).toContainText("Belum ada biaya Sewa dan Utilitas untuk");
-        await expect(bills.getByTestId("action-monthly-bills-all")).toHaveAttribute("href", /^\/ads-expenses\?from=\d{4}-\d{2}-06&to=\d{4}-\d{2}-05&group=operational$/);
+        await expect(bills.getByTestId("action-monthly-bills-all")).toHaveAttribute("href", /^\/expenses\?from=\d{4}-\d{2}-06&to=\d{4}-\d{2}-05$/);
       } else {
         await expect(bills.getByTestId("action-monthly-bills-count")).toHaveText("Tidak ada");
       }

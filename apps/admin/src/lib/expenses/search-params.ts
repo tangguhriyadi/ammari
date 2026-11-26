@@ -2,18 +2,35 @@ import type { BusinessExpenseCategory } from "@ammari/db/schema";
 import { calendarDaysBetween, isCalendarDate } from "@ammari/commerce/jakarta-day";
 import { expenseGroupOfKind, findExpenseCategory, type ExpenseCategoryInfo } from "@/lib/expense-categories/catalog";
 import { monthRange, monthToDate, shiftMonth, type DateRange } from "./figures";
-import { EXPENSE_CATEGORY_GROUPS, type ExpenseCategoryGroup } from "./labels";
+import { MARKETING_CHANNEL_OPTIONS, type ExpenseCategoryGroup, type MarketingChannelId } from "./labels";
 
-// The /ads-expenses list's URL (docs/plans/growth.md §6). Anything unknown falls back to the
-// default instead of erroring: a hand-edited or stale link still shows a sensible page.
+// The URLs of the two expense menus (docs/plans/expense-master-data.md §3.8): "Iklan" (/ads, kinds
+// ad + endorsement) and "Biaya" (/expenses, kind operating). The menu IS the group: a list is
+// always scoped to one. Anything unknown falls back to the default instead of erroring, so a
+// hand-edited or stale link still shows a sensible page.
+
+/** The menu of each group. */
+export const EXPENSE_MENU_PATHS = {
+  marketing: "/ads",
+  operational: "/expenses",
+} as const satisfies Record<ExpenseCategoryGroup, string>;
+
+export type ExpenseMenuPath = (typeof EXPENSE_MENU_PATHS)[ExpenseCategoryGroup];
+
+export function expenseMenuPath(group: ExpenseCategoryGroup): ExpenseMenuPath {
+  return EXPENSE_MENU_PATHS[group];
+}
 
 export interface ExpenseListParams {
   month: string;
   /** A date window instead of the month (`from`/`to`, e.g. the Gaji/Sewa reminder's 6th to 5th);
    * when set, `month` is ignored by the list. */
   range?: DateRange;
-  group?: ExpenseCategoryGroup;
+  /** The menu: Iklan ("marketing") or Biaya ("operational"). */
+  group: ExpenseCategoryGroup;
   category?: BusinessExpenseCategory;
+  /** Iklan only: "Kanal". */
+  channelId?: MarketingChannelId;
   showVoided: boolean;
   q?: string;
 }
@@ -26,18 +43,24 @@ function single(value: string | string[] | undefined): string | undefined {
 
 /** Month defaults to this Jakarta month; a malformed or future month does too. `categories` is the
  * catalog (inactive included: past expenses can still be filtered by one). An unknown category, or
- * one whose kind is not in the chosen group, is dropped, so the two filters can never contradict
- * each other. */
-export function parseExpenseListParams(raw: Raw, categories: readonly Pick<ExpenseCategoryInfo, "code" | "kind">[], now: Date = new Date()): ExpenseListParams {
+ * one whose kind belongs to the other menu, is dropped, so the menu and the filter can never
+ * contradict each other. A channel only exists on Iklan. */
+export function parseExpenseListParams(
+  raw: Raw,
+  categories: readonly Pick<ExpenseCategoryInfo, "code" | "kind">[],
+  group: ExpenseCategoryGroup,
+  now: Date = new Date(),
+): ExpenseListParams {
   const current = monthToDate(now).month;
   const rawMonth = single(raw.month);
   const month = rawMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(rawMonth) && rawMonth <= current ? rawMonth : current;
-  const group = EXPENSE_CATEGORY_GROUPS.find((entry) => entry.key === single(raw.group))?.key;
   const rawCategory = single(raw.category);
   const found = rawCategory === undefined ? undefined : findExpenseCategory(categories, rawCategory);
-  const category = found && (!group || expenseGroupOfKind(found.kind) === group) ? found.code : undefined;
+  const category = found && expenseGroupOfKind(found.kind) === group ? found.code : undefined;
+  const rawChannel = single(raw.channel);
+  const channelId = group === "marketing" ? MARKETING_CHANNEL_OPTIONS.find((key) => key === rawChannel) : undefined;
   const q = single(raw.q)?.trim().slice(0, 100) || undefined;
-  return { month, range: parseListRange(raw, now), group, category, showVoided: single(raw.voided) === "1", q };
+  return { month, range: parseListRange(raw, now), group, category, channelId, showVoided: single(raw.voided) === "1", q };
 }
 
 /** Longest `from`/`to` window the list accepts, both ends included. */
@@ -54,7 +77,8 @@ function parseListRange(raw: Raw, now: Date): DateRange | undefined {
   return { from, to };
 }
 
-/** The list URL for these params; defaults are left out so the plain URL stays /ads-expenses. */
+/** The list URL for these params, on the group's menu; defaults are left out so the plain URL
+ * stays /ads or /expenses. */
 export function expenseListHref(params: ExpenseListParams, now: Date = new Date()): string {
   const search = new URLSearchParams();
   if (params.range) {
@@ -63,21 +87,36 @@ export function expenseListHref(params: ExpenseListParams, now: Date = new Date(
   } else if (params.month !== monthToDate(now).month) {
     search.set("month", params.month);
   }
-  if (params.group) search.set("group", params.group);
   if (params.category) search.set("category", params.category);
+  if (params.channelId && params.group === "marketing") search.set("channel", params.channelId);
   if (params.showVoided) search.set("voided", "1");
   if (params.q) search.set("q", params.q);
   const query = search.toString();
-  return query ? `/ads-expenses?${query}` : "/ads-expenses";
+  const path = expenseMenuPath(params.group);
+  return query ? `${path}?${query}` : path;
 }
 
-// ---------- Tabs and the "Ringkasan" period (plan §4.2, §6) ----------
+// ---------- Tabs and the summary period (plan §4.2, §6; expense-master-data.md §3.8) ----------
 
-export type ExpenseTab = "expenses" | "summary";
+/** Iklan: "Catatan iklan" (default) or "ROAS" (`?tab=roas`). */
+export type AdsTab = "list" | "roas";
+/** Biaya: "Biaya operasional" (default) or "Laba rugi" (`?tab=pnl`). Session S6 adds
+ * "Pengeluaran produksi" (`?tab=production`) here. */
+export type ExpensesTab = "list" | "pnl";
+/** The two tabs that show getExpenseSummary for a whole-month period. */
+export type ExpenseSummaryView = "roas" | "pnl";
 
-/** "Pengeluaran" is the default; `?tab=ringkasan` is the summary. */
-export function parseExpenseTab(raw: Raw): ExpenseTab {
-  return single(raw.tab) === "ringkasan" ? "summary" : "expenses";
+export function parseAdsTab(raw: Raw): AdsTab {
+  return single(raw.tab) === "roas" ? "roas" : "list";
+}
+
+export function parseExpensesTab(raw: Raw): ExpensesTab {
+  return single(raw.tab) === "pnl" ? "pnl" : "list";
+}
+
+/** The menu that hosts a summary view: ROAS on Iklan, Laba rugi on Biaya (owner answer D8). */
+export function expenseSummaryPath(view: ExpenseSummaryView): ExpenseMenuPath {
+  return view === "roas" ? EXPENSE_MENU_PATHS.marketing : EXPENSE_MENU_PATHS.operational;
 }
 
 /** Whole months only (owner answer A3): a 7-day or one-day Laba bersih swings on the day Gaji or
@@ -144,17 +183,24 @@ export function parseExpenseSummaryParams(raw: Raw, now: Date = new Date()): Exp
   }
 }
 
-/** The summary URL for a period; only the params that period needs. */
-export function expenseSummaryHref({ period, fromMonth, toMonth }: { period: ExpenseSummaryPeriod; fromMonth?: string; toMonth?: string }): string {
-  const search = new URLSearchParams({ tab: "ringkasan" });
+/** The summary URL for a period, on Biaya's "Laba rugi" (default) or Iklan's "ROAS"; only the
+ * params that period needs. */
+export function expenseSummaryHref(
+  { period, fromMonth, toMonth }: { period: ExpenseSummaryPeriod; fromMonth?: string; toMonth?: string },
+  view: ExpenseSummaryView = "pnl",
+): string {
+  const search = new URLSearchParams({ tab: view });
   if (period !== "this_month") search.set("period", period);
   if (period === "month" && fromMonth) search.set("month", fromMonth);
   if (period === "range" && fromMonth && toMonth) {
     search.set("from", fromMonth);
     search.set("to", toMonth);
   }
-  return `/ads-expenses?${search.toString()}`;
+  return `${expenseSummaryPath(view)}?${search.toString()}`;
 }
+
+/** The monthly report route (Biaya, owner answer D8). `/ads-expenses/report` redirects here. */
+export const EXPENSE_REPORT_PATH = "/expenses/report";
 
 /** "Unduh laporan bulanan" (session S6): the report route for exactly the period shown, so the
  * file and the screen read the same params through the same parser. */
@@ -170,5 +216,5 @@ export function expenseReportHref(params: Pick<ExpenseSummaryParams, "period" | 
     search.set("from", params.fromMonth);
     search.set("to", params.toMonth);
   }
-  return `/ads-expenses/report?${search.toString()}`;
+  return `${EXPENSE_REPORT_PATH}?${search.toString()}`;
 }

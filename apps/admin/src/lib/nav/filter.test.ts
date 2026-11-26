@@ -31,7 +31,9 @@ describe("filterNavByPermissions", () => {
     expect(labels).not.toContain("Peran & Staf");
     expect(labels).not.toContain("Log Aktivitas");
     expect(labels).toContain("Ringkasan");
-    expect(labels).toContain("Iklan & Biaya");
+    expect(labels).toContain("Iklan");
+    expect(labels).toContain("Biaya");
+    expect(labels).not.toContain("Iklan & Biaya");
     expect(labels).toContain("Bahan");
   });
 

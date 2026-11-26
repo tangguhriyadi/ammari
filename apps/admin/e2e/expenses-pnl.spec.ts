@@ -11,16 +11,16 @@ import {
   E2E_MONTHLY_BILLS_EXPENSE_NO,
 } from "./global-setup";
 
-// docs/plans/growth.md session S3: Iklan & Biaya "Ringkasan" (Laba bersih, biaya per kategori,
-// iklan vs omzet), the Laba bersih tile on Ringkasan ("Bulan ini" only) and "Gaji/Sewa belum
-// dicatat" in Perlu tindakan. Every test runs at 390px AND 1280px (CLAUDE.md): the two tables
+// docs/plans/growth.md session S3: the old Iklan & Biaya "Ringkasan", now Biaya's "Laba rugi"
+// tab (docs/plans/expense-master-data.md session S5, owner answer D8: Laba bersih, biaya per
+// kategori and the monthly report; ROAS moved to Iklan, ads.spec.ts), the Laba bersih tile on
+// Ringkasan ("Bulan ini" only) and "Gaji/Sewa belum dicatat" in Perlu tindakan. Every test runs at 390px AND 1280px (CLAUDE.md): the two tables
 // render a CardList on phones and a TableContainer from md up, so each pass asserts its own
 // layout's rows and that the other layout's are hidden. The exact figures come from the month
-// global-setup.ts seeds (E2E_EXPENSE_SUMMARY_MONTH); "Bulan ini" moves with other specs, so only
-// its presence and gating are asserted. Session S6: ROAS is judged against the month's own
-// "Titik impas ROAS" (2.000.000 / (1.170.000 - 20.000) = 1,7), and "Unduh laporan bulanan" gives a
+// global-setup.ts seeds (E2E_EXPENSE_SUMMARY_MONTH) and are the old Ringkasan's; "Bulan ini" moves
+// with other specs, so only its presence and gating are asserted. "Unduh laporan bulanan" gives a
 // PDF and an Excel file with the screen's figures, for ads_expenses.manage + finance.view_profit
-// only (a CS staff and the role without finance get 403 from the route itself).
+// only (a CS staff and the role without finance get 403 from the route itself, old URL too).
 
 interface Layout {
   label: string;
@@ -68,7 +68,8 @@ function lastMonthLabel(): string {
   return `${MONTH_NAMES[index % 12]} ${Math.floor(index / 12)}`;
 }
 
-const SEEDED_MONTH_URL = `/ads-expenses?tab=ringkasan&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`;
+const SEEDED_MONTH_URL = `/expenses?tab=pnl&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`;
+const SEEDED_ROAS_URL = `/ads?tab=roas&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`;
 
 /** Clicks a download link and returns the file's name and bytes. */
 async function download(page: Page, testId: string): Promise<{ name: string; bytes: Buffer }> {
@@ -81,29 +82,29 @@ async function expectNoHorizontalScroll(page: Page) {
 }
 
 for (const layout of LAYOUTS) {
-  test.describe(`Iklan & Biaya Ringkasan at ${layout.label}`, () => {
+  test.describe(`Biaya Laba rugi at ${layout.label}`, () => {
     test.use({ viewport: layout.viewport });
 
     test("Keuangan: seeded month figures, period picker, Laba bersih tile on Bulan ini, Gaji/Sewa item", async ({ page }) => {
       await loginAs(page, E2E_EXPENSE_SUMMARY_FINANCE_EMAIL);
 
-      // The tab bar: Pengeluaran is the default, Ringkasan opens this month.
-      await page.goto("/ads-expenses");
-      const sections = page.getByRole("navigation", { name: "Bagian Iklan & Biaya" });
-      await expect(sections.getByRole("link", { name: "Pengeluaran" })).toHaveAttribute("aria-current", "true");
-      await sections.getByRole("link", { name: "Ringkasan" }).click();
-      await expect(page).toHaveURL(/\/ads-expenses\?tab=ringkasan$/);
+      // The tab bar: Biaya operasional is the default, Laba rugi opens this month.
+      await page.goto("/expenses");
+      const sections = page.getByRole("navigation", { name: "Bagian Biaya" });
+      await expect(sections.getByRole("link", { name: "Biaya operasional" })).toHaveAttribute("aria-current", "true");
+      await sections.getByRole("link", { name: "Laba rugi" }).click();
+      await expect(page).toHaveURL(/\/expenses\?tab=pnl$/);
       await expect(page.getByRole("navigation", { name: "Pilih periode" }).getByRole("link", { name: "Bulan ini" })).toHaveAttribute("aria-current", "true");
       await expect(page.getByTestId("summary-period")).toContainText("(s.d. ");
 
       // Pilih bulan: a future month is refused, the seeded month shows its fixed figures.
       await page.getByRole("navigation", { name: "Pilih periode" }).getByRole("link", { name: "Pilih bulan" }).click();
-      await expect(page).toHaveURL(/period=month$/);
-      await page.goto("/ads-expenses?tab=ringkasan&period=month&month=2999-01");
+      await expect(page).toHaveURL(/\/expenses\?tab=pnl&period=month$/);
+      await page.goto("/expenses?tab=pnl&period=month&month=2999-01");
       await expect(page.getByRole("main").getByRole("alert")).toContainText("Sekarang menampilkan bulan ini.");
       await page.getByLabel("Bulan", { exact: true }).fill(E2E_EXPENSE_SUMMARY_MONTH);
       await page.getByRole("button", { name: "Tampilkan" }).click();
-      await expect(page).toHaveURL(new RegExp(`period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`));
+      await expect(page).toHaveURL(new RegExp(`/expenses\\?tab=pnl&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`));
       await expect(page.getByTestId("summary-period")).toHaveText("Februari 2026");
 
       await expect(page.getByTestId("summary-omzet-value")).toHaveText("Rp 2.000.000");
@@ -133,37 +134,14 @@ for (const layout of LAYOUTS) {
       }
       await expect(page.getByTestId(layout.hiddenCategory).first()).toBeHidden();
 
-      // Iklan vs omzet against the month's own break-even (1,7, HPP/fees incomplete so flagged);
-      // Endorse/KOL apart.
-      await expect(page.getByTestId("summary-break-even-value")).toHaveText("1,7 (margin kontribusi 57,5%)");
-      await expect(page.getByTestId("summary-break-even")).toContainText("titik impas sebenarnya lebih tinggi");
-      await expect(page.getByTestId("summary-break-even")).toContainText("1 dibagi 12%");
-      const roas = (key: string) => page.locator(`[data-testid="${layout.roas}"][data-channel="${key}"]`);
-      await expect(page.getByTestId(layout.roas)).toHaveCount(7);
-      await expect(roas("shopee")).toContainText("Rp 100.000");
-      await expect(roas("shopee")).toContainText("Rp 1.000.000");
-      await expect(roas("shopee")).toContainText("10,0");
-      await expect(roas("shopee")).toContainText("Di atas titik impas");
-      await expect(roas("tiktok")).toContainText("5,0");
-      await expect(roas("tiktok")).toContainText("Di atas titik impas");
-      await expect(roas("web")).toContainText("Situs");
-      await expect(roas("web")).toContainText("6,0 (perkiraan)");
-      await expect(roas("instagram")).toContainText("Belum ada iklan");
-      await expect(roas("whatsapp")).toContainText("Rp 200.000");
-      await expect(roas("whatsapp")).toContainText("Belum ada iklan");
-      await expect(roas("untagged")).toContainText("Tanpa kanal");
-      await expect(roas("untagged")).toContainText("Rp 30.000");
-      await expect(roas("total")).toContainText("Rp 280.000");
-      await expect(roas("total")).toContainText("Rp 2.000.000");
-      await expect(roas("total")).toContainText("7,1 (perkiraan)");
-      await expect(roas("total")).toContainText("Di atas titik impas");
-      await expect(page.getByTestId(layout.hiddenRoas).first()).toBeHidden();
-      await expect(page.getByTestId("summary-endorsement")).toContainText("Biaya endorse Rp 150.000");
-      await expect(page.getByTestId("summary-marketing-total")).toContainText("Biaya pemasaran Rp 430.000");
+      // ROAS is on Iklan now (ads.spec.ts asserts its figures); this tab links there and shows none.
+      await expect(page.getByTestId(layout.roas)).toHaveCount(0);
+      await expect(page.getByTestId("summary-break-even")).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "Iklan, tab ROAS" })).toHaveAttribute("href", SEEDED_ROAS_URL);
       await expectNoHorizontalScroll(page);
 
       // Unduh laporan bulanan: both files carry exactly the screen's figures.
-      await expect(page.getByTestId("summary-download-pdf")).toHaveAttribute("href", `/ads-expenses/report?format=pdf&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`);
+      await expect(page.getByTestId("summary-download-pdf")).toHaveAttribute("href", `/expenses/report?format=pdf&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`);
       const pdf = await download(page, "summary-download-pdf");
       expect(pdf.name).toBe(`laporan-keuangan-${E2E_EXPENSE_SUMMARY_MONTH}.pdf`);
       expect(pdf.bytes.subarray(0, 5).toString()).toBe("%PDF-");
@@ -188,7 +166,7 @@ for (const layout of LAYOUTS) {
       expect(sheetRows("Per kanal").find((row) => row[0] === "Shopee")).toEqual(["Shopee", 1_000_000, 1, 100_000, "10,0", "Di atas titik impas"]);
 
       // Rentang bulan: more than 12 months is refused; a one-month range equals Pilih bulan.
-      await page.goto("/ads-expenses?tab=ringkasan&period=range&from=2025-01&to=2026-02");
+      await page.goto("/expenses?tab=pnl&period=range&from=2025-01&to=2026-02");
       await expect(page.getByRole("main").getByRole("alert")).toContainText("paling lama 12 bulan");
       await page.getByLabel("Dari bulan").fill("2026-02");
       await page.getByLabel("Sampai bulan").fill("2026-02");
@@ -201,7 +179,8 @@ for (const layout of LAYOUTS) {
       await expect(tile).toBeVisible();
       await expect(tile.getByTestId("kpi-laba-bersih-value")).toContainText("Rp");
       await expect(tile.getByTestId("kpi-laba-bersih-costs")).toContainText("Dikurangi subsidi ongkir situs Rp");
-      await expect(tile.getByTestId("kpi-laba-bersih-link")).toHaveAttribute("href", "/ads-expenses?tab=ringkasan");
+      await expect(tile.getByTestId("kpi-laba-bersih-link")).toHaveAttribute("href", "/expenses?tab=pnl");
+      await expect(tile.getByTestId("kpi-laba-bersih-link")).toHaveText("Rincian di Biaya, tab Laba rugi");
       await expect(page.getByTestId("kpi-laba-bersih-help")).toContainText("Biaya dihitung pada tanggal dibayar.");
       await page.goto("/");
       await expect(page.getByTestId("kpi-net-profit")).toBeVisible();
@@ -220,9 +199,10 @@ for (const layout of LAYOUTS) {
         await expect(bills).toContainText(`Belum ada biaya Sewa untuk ${lastMonthLabel()} yang dibayar`);
         await expect(bills).not.toContainText("Gaji dan Sewa");
         const link = bills.getByTestId("action-monthly-bills-all");
-        await expect(link).toHaveAttribute("href", `/ads-expenses?from=${window.from}&to=${window.to}&group=operational`);
+        await expect(link).toHaveAttribute("href", `/expenses?from=${window.from}&to=${window.to}`);
+        await expect(link).toHaveText("Catat di Biaya");
         await link.click();
-        await expect(page).toHaveURL(new RegExp(`from=${window.from}&to=${window.to}&group=operational`));
+        await expect(page).toHaveURL(new RegExp(`/expenses\\?from=${window.from}&to=${window.to}$`));
         await expect(page.getByTestId("expense-range")).toBeVisible();
         const seeded = page.locator(`[data-testid="${layout.label === "390px" ? "expense-card" : "expense-row"}"]`).filter({ hasText: E2E_MONTHLY_BILLS_EXPENSE_NO });
         await expect(seeded).toBeVisible();
@@ -235,7 +215,7 @@ for (const layout of LAYOUTS) {
       await expectNoHorizontalScroll(page);
     });
 
-    test("owner: Laba bersih tile only on Bulan ini, and the seeded month on the Ringkasan tab", async ({ page }) => {
+    test("owner: Laba bersih tile only on Bulan ini, and the seeded month on Laba rugi and ROAS", async ({ page }) => {
       await loginAs(page, E2E_EXPENSE_SUMMARY_OWNER_EMAIL);
       await page.goto("/");
       await page.getByRole("navigation", { name: "Pilih periode" }).getByRole("link", { name: "Bulan ini" }).click();
@@ -249,16 +229,18 @@ for (const layout of LAYOUTS) {
         await expect(page.getByTestId("kpi-laba-bersih")).toHaveCount(0);
         await expect(page.getByTestId("kpi-laba-bersih-help")).toHaveCount(0);
       }
+      await page.goto(SEEDED_ROAS_URL);
+      await expect(page.getByTestId(layout.roas)).toHaveCount(7);
+      await expectNoHorizontalScroll(page);
       await page.goto(SEEDED_MONTH_URL);
       await expect(page.getByTestId("summary-net-value")).toHaveText("Rp 120.000");
-      await expect(page.getByTestId(layout.roas)).toHaveCount(7);
       await expectNoHorizontalScroll(page);
       const pdf = await download(page, "summary-download-pdf");
       expect(pdf.name).toBe(`laporan-keuangan-${E2E_EXPENSE_SUMMARY_MONTH}.pdf`);
       expect(pdf.bytes.subarray(0, 5).toString()).toBe("%PDF-");
     });
 
-    test("staff without finance.view_profit: no Laba bersih, no item, no expense figure sent; Iklan & Biaya refused", async ({ page }) => {
+    test("staff without finance.view_profit: no Laba bersih, no item, no expense figure sent; Iklan and Biaya refused", async ({ page }) => {
       await loginAs(page, E2E_EXPENSE_SUMMARY_NO_FINANCE_EMAIL);
       await page.goto("/?period=month");
       await expect(page.getByRole("heading", { level: 1, name: "Ringkasan" })).toBeVisible();
@@ -273,22 +255,28 @@ for (const layout of LAYOUTS) {
       expect(html).not.toMatch(NO_RUPIAH);
       expect(html).not.toMatch(/Laba bersih|Gaji\/Sewa|Subsidi ongkir|webShippingSubsidy|kpi-laba-bersih|action-monthly-bills/);
 
-      for (const path of ["/ads-expenses", SEEDED_MONTH_URL]) {
+      // The old URL too: its redirect checks the same pair before looking anything up.
+      for (const path of ["/expenses", "/ads", SEEDED_MONTH_URL, SEEDED_ROAS_URL, "/ads-expenses?q=BYA-202602-902"]) {
         await page.goto(path);
         await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();
         await expect(page.getByTestId("summary-net-value")).toHaveCount(0);
+        await expect(page.getByTestId(layout.roas)).toHaveCount(0);
       }
-      const refused = await (await page.request.get(SEEDED_MONTH_URL)).text();
-      expect(refused).not.toMatch(/120\.000|1\.030\.000|Laba bersih/);
+      for (const url of [SEEDED_MONTH_URL, SEEDED_ROAS_URL]) {
+        const refused = await (await page.request.get(url)).text();
+        expect(refused).not.toMatch(/120\.000|1\.030\.000|430\.000|Laba bersih/);
+      }
       for (const format of ["pdf", "xlsx"]) {
-        expect((await page.request.get(`/ads-expenses/report?format=${format}&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`)).status()).toBe(403);
+        for (const base of ["/expenses/report", "/ads-expenses/report"]) {
+          expect((await page.request.get(`${base}?format=${format}&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`)).status()).toBe(403);
+        }
       }
     });
 
     test("CS: the monthly report route is refused", async ({ page }) => {
       await loginAs(page, E2E_EXPENSES_CS_EMAIL);
       for (const format of ["pdf", "xlsx"]) {
-        const response = await page.request.get(`/ads-expenses/report?format=${format}&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`);
+        const response = await page.request.get(`/expenses/report?format=${format}&period=month&month=${E2E_EXPENSE_SUMMARY_MONTH}`);
         expect(response.status()).toBe(403);
         expect(await response.text()).not.toMatch(/120|Laba/);
       }

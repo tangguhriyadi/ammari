@@ -17,12 +17,19 @@ import {
   type ExpenseItemInfo,
 } from "@/lib/expense-categories/catalog";
 import { expenseChannelRule } from "@/lib/expenses/figures";
-import { EXPENSE_CATEGORY_GROUPS, EXPENSE_METHOD_LABELS, MARKETING_CHANNEL_LABELS, MARKETING_CHANNEL_OPTIONS, expenseCategoryHint } from "@/lib/expenses/labels";
+import {
+  EXPENSE_CATEGORY_GROUPS,
+  EXPENSE_METHOD_LABELS,
+  MARKETING_CHANNEL_LABELS,
+  MARKETING_CHANNEL_OPTIONS,
+  expenseCategoryHint,
+  type ExpenseCategoryGroup,
+} from "@/lib/expenses/labels";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
 import { parseRupiah } from "@/lib/products/money";
 import { PROOF_MESSAGES } from "@/lib/supplier-payments/messages";
 import { PrivateFileField, type PreparedUpload } from "@/components/supplier-payments/private-file-field";
-import { findExpenseProofDuplicatesAction, recordBusinessExpenseAction } from "../actions";
+import { findExpenseProofDuplicatesAction, recordBusinessExpenseAction } from "./actions";
 
 // "Catat biaya" (docs/plans/growth.md §6): date (default today), category, amount, method, the
 // channel for an ad or endorse (fixed for Iklan Shopee/TikTok), an optional campaign, a note
@@ -34,6 +41,11 @@ import { findExpenseProofDuplicatesAction, recordBusinessExpenseAction } from ".
 // lists that category's active items. It is required when there are any and hidden when there are
 // none (owner answer D1: no free-text item; details go in Catatan). An item's default amount fills
 // Jumlah unless the user typed their own (amountAfterItemChange, D4).
+//
+// Menu split (expense-master-data.md §3.8, session S5): mounted on "Iklan" as "Catat iklan"
+// (scope "marketing": ad and endorse categories, under an "Iklan" heading, D2/D7) and on "Biaya"
+// as "Catat biaya" (scope "operational"). The scope is posted with the form and the server
+// re-checks the category's kind against it.
 
 const NOTE_MAX = 500;
 const CAMPAIGN_MAX = 120;
@@ -45,7 +57,24 @@ type FieldErrors = Partial<Record<(typeof FIELDS)[number], string>>;
 export type RecordExpenseCategoryOption = Pick<ExpenseCategoryInfo, "code" | "name" | "kind" | "fixedChannelId">;
 export type RecordExpenseItemOption = Pick<ExpenseItemInfo, "id" | "categoryCode" | "name" | "note" | "defaultAmount">;
 
-export function RecordExpenseButton({ categories, items }: { categories: readonly RecordExpenseCategoryOption[]; items: readonly RecordExpenseItemOption[] }) {
+const SCOPE_TEXT: Record<ExpenseCategoryGroup, { title: string; description: string; confirm: string }> = {
+  marketing: { title: "Catat iklan", description: "Biaya iklan atau endorse yang sudah dibayar, dengan bukti.", confirm: "Simpan iklan" },
+  operational: { title: "Catat biaya", description: "Biaya operasional yang sudah dibayar, dengan bukti.", confirm: "Simpan biaya" },
+};
+
+export function RecordExpenseButton({
+  scope,
+  categories: allCategories,
+  items,
+}: {
+  scope: ExpenseCategoryGroup;
+  categories: readonly RecordExpenseCategoryOption[];
+  items: readonly RecordExpenseItemOption[];
+}) {
+  // The page passes this menu's categories already; filtered again so a wrong prop can never
+  // offer a category the server would refuse.
+  const categories = expenseCategoriesInGroup(allCategories, scope);
+  const text = SCOPE_TEXT[scope];
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -149,6 +178,7 @@ export function RecordExpenseButton({ categories, items }: { categories: readonl
     }
     setFieldErrors({});
     const formData = new FormData();
+    formData.set("scope", scope);
     formData.set("expenseDate", expenseDate);
     formData.set("category", category);
     formData.set("itemId", itemId);
@@ -192,16 +222,16 @@ export function RecordExpenseButton({ categories, items }: { categories: readonl
           setOpen(true);
         }}
       >
-        Catat biaya
+        {text.title}
       </Button>
       <Dialog
         open={open}
         onOpenChange={(next) => {
           if (!busy) setOpen(next);
         }}
-        title="Catat biaya"
-        description="Biaya iklan atau operasional yang sudah dibayar, dengan bukti."
-        confirmLabel="Simpan biaya"
+        title={text.title}
+        description={text.description}
+        confirmLabel={text.confirm}
         onConfirm={handleConfirm}
         // `busy`, not just `pending`: the dialog must not be dismissed while a photo is being prepared.
         loading={busy}
@@ -234,7 +264,7 @@ export function RecordExpenseButton({ categories, items }: { categories: readonl
               aria-describedby={hint ? "expense-category-hint" : undefined}
             >
               <option value="">Pilih kategori</option>
-              {EXPENSE_CATEGORY_GROUPS.map((group) => {
+              {EXPENSE_CATEGORY_GROUPS.filter((group) => group.key === scope).map((group) => {
                 const inGroup = expenseCategoriesInGroup(categories, group.key);
                 if (inGroup.length === 0) return null;
                 return (

@@ -159,7 +159,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   {
     // docs/plans/expense-master-data.md §3.6: categories and cost items of "Catat biaya". Same
     // gate as recording an expense (owner answer D5); the page also needs finance.view_profit.
-    // The nav gate is any-of, so like "Iklan & Biaya" a role holding only ads_expenses.manage sees
+    // The nav gate is any-of, so like "Iklan" and "Biaya" a role holding only ads_expenses.manage sees
     // the entry and gets "Akses ditolak"; no predefined role has that combination.
     label: "Kategori Biaya",
     href: "/expense-categories",
@@ -207,9 +207,22 @@ export const NAV_ITEMS: readonly NavItem[] = [
     mobilePrimary: false,
   },
   {
-    label: "Iklan & Biaya",
-    href: "/ads-expenses",
+    // docs/plans/expense-master-data.md §3.8 (owner answers D7, D11): "Iklan & Biaya" split in
+    // two. Iklan: ad and endorse expenses and ROAS. Biaya: operating expenses and Laba rugi. Both
+    // pages need ads_expenses.manage AND finance.view_profit (D5); the nav gate is any-of, so a
+    // role with only ads_expenses.manage sees the entries and gets "Akses ditolak" (no predefined
+    // role has that combination).
+    label: "Iklan",
+    href: "/ads",
     icon: Megaphone,
+    group: "Pertumbuhan",
+    permissionKeys: ["ads_expenses.manage"],
+    mobilePrimary: false,
+  },
+  {
+    label: "Biaya",
+    href: "/expenses",
+    icon: Receipt,
     group: "Pertumbuhan",
     permissionKeys: ["ads_expenses.manage"],
     mobilePrimary: false,

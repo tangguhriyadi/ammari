@@ -8,7 +8,7 @@ import { listCountedOrders, type CountedOrderRow } from "@/lib/overview/queries"
 import type { ExpenseSummaryParams } from "./search-params";
 import { dateRangeToTimeRange, getExpenseSummary, type ExpenseSummary } from "./summary";
 
-// "Unduh laporan bulanan" on the Iklan & Biaya Ringkasan tab (docs/plans/growth.md session S6,
+// "Unduh laporan bulanan" on Biaya, tab Laba rugi (docs/plans/growth.md session S6,
 // owner addition A): the tab's own figures (getExpenseSummary, so the file and the screen can
 // never disagree) plus the rows behind them, for the PDF (report-pdf.ts) and the Excel file
 // (report-xlsx.ts). Every figure is a cost figure: the route checks ads_expenses.manage +

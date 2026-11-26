@@ -2,13 +2,13 @@ import { Badge, Card, CardList, EmptyState, TableContainer, TableHead, Td, Th, T
 import { formatDate, formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import type { BusinessExpenseRow } from "@/lib/expenses/records";
 import { expenseCategoryLabel, type ExpenseCategoryInfo } from "@/lib/expense-categories/catalog";
-import { EXPENSE_METHOD_LABELS, MARKETING_CHANNEL_LABELS, type MarketingChannelId } from "@/lib/expenses/labels";
+import { EXPENSE_METHOD_LABELS, MARKETING_CHANNEL_LABELS, type ExpenseCategoryGroup, type MarketingChannelId } from "@/lib/expenses/labels";
 import { PrivateFileLink } from "@/components/supplier-payments/private-file-link";
 import { Struck, voidedLine } from "@/components/supplier-payments/payment-history";
 import { VoidRecordButton } from "@/components/supplier-payments/void-record-button";
-import { voidBusinessExpenseAction } from "../actions";
+import { voidBusinessExpenseAction } from "./actions";
 
-// The "Pengeluaran" list (docs/plans/growth.md §6): a card per expense on phones, a table on
+// The expense list of "Iklan" and "Biaya" (docs/plans/growth.md §6; expense-master-data.md §3.8): a card per expense on phones, a table on
 // tablet/desktop. Voided rows (shown only on request) stay struck through with "Dibatalkan" and
 // the reason. The page is gated by ads_expenses.manage + finance.view_profit, which is also what
 // opening a proof and voiding need, so every row gets both.
@@ -33,9 +33,21 @@ function categoryAndItem(categories: readonly Pick<ExpenseCategoryInfo, "code" |
 
 /** `categories` is the whole catalog (inactive included), so a past expense keeps its category's
  * current name. */
-export function ExpenseList({ rows, categories }: { rows: BusinessExpenseRow[]; categories: readonly Pick<ExpenseCategoryInfo, "code" | "name">[] }) {
+export function ExpenseList({
+  rows,
+  categories,
+  scope,
+}: {
+  rows: BusinessExpenseRow[];
+  categories: readonly Pick<ExpenseCategoryInfo, "code" | "name">[];
+  scope: ExpenseCategoryGroup;
+}) {
   if (rows.length === 0) {
-    return <EmptyState title="Belum ada biaya" description="Belum ada biaya yang cocok dengan filter ini. Catat biaya dengan tombol Catat biaya." />;
+    return scope === "marketing" ? (
+      <EmptyState title="Belum ada biaya iklan" description="Belum ada biaya iklan atau endorse yang cocok dengan filter ini. Catat dengan tombol Catat iklan." />
+    ) : (
+      <EmptyState title="Belum ada biaya" description="Belum ada biaya operasional yang cocok dengan filter ini. Catat dengan tombol Catat biaya." />
+    );
   }
 
   const proofCell = (row: BusinessExpenseRow) => <PrivateFileLink file={row.proof} label="Lihat bukti" title={`Bukti ${row.expenseNo}`} />;

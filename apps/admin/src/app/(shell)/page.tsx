@@ -62,7 +62,7 @@ export default async function RingkasanPage({ searchParams }: { searchParams: Pr
     supplierDebt: has("inventory.view") && canViewProfit,
     production: has("production.manage"),
     profit: canViewProfit,
-    // Iklan & Biaya needs both keys (docs/plans/growth.md §7); the item links there.
+    // Iklan and Biaya need both keys (docs/plans/growth.md §7); the item links there.
     expenses: has("ads_expenses.manage") && canViewProfit,
   };
   const showActions = hasAnyNeedsAction(access);

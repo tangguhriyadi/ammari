@@ -8,6 +8,7 @@ import {
   accessoryMovements,
   auditLog,
   businessExpenses,
+  expenseCategories,
   costComponents,
   customers,
   defectMovements,
@@ -37,6 +38,8 @@ import {
 } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
+import { expenseGroupOfKind } from "@/lib/expense-categories/catalog";
+import { expenseMenuPath } from "@/lib/expenses/search-params";
 import { ACTIVITY_AREAS, NON_STAFF_ACTOR_LABELS, areaMembership, describeAction, type ActivityArea } from "./catalog";
 import { type ActivityLogFilters, NON_STAFF_ACTOR_FILTER, isUuid } from "./filters";
 
@@ -479,8 +482,17 @@ const LOOKUPS: Record<string, Lookup> = {
     }));
   },
   business_expense: async (db, ids) => {
-    const rows = await db.select({ id: businessExpenses.id, expenseNo: businessExpenses.expenseNo }).from(businessExpenses).where(inArray(businessExpenses.id, uuids(ids)));
-    return byId(rows, (row) => ({ label: row.expenseNo, href: `/ads-expenses?q=${encodeURIComponent(row.expenseNo)}` }));
+    // The menu follows the category's kind (expense-master-data.md §3.8): Iklan for ad and
+    // endorse, Biaya for operating; on the expense's own month, since the list is per month.
+    const rows = await db
+      .select({ id: businessExpenses.id, expenseNo: businessExpenses.expenseNo, expenseDate: businessExpenses.expenseDate, kind: expenseCategories.kind })
+      .from(businessExpenses)
+      .innerJoin(expenseCategories, eq(expenseCategories.code, businessExpenses.category))
+      .where(inArray(businessExpenses.id, uuids(ids)));
+    return byId(rows, (row) => ({
+      label: row.expenseNo,
+      href: `${expenseMenuPath(expenseGroupOfKind(row.kind))}?${new URLSearchParams({ month: row.expenseDate.slice(0, 7), q: row.expenseNo }).toString()}`,
+    }));
   },
   production_batch: async (db, ids) => {
     const rows = await db.select({ id: productionBatches.id, batchNo: productionBatches.batchNo }).from(productionBatches).where(inArray(productionBatches.id, uuids(ids)));

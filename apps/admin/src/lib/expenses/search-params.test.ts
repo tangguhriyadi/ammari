@@ -1,37 +1,55 @@
 import { describe, expect, test } from "vitest";
-import { expenseListHref, expenseReportHref, expenseSummaryHref, parseExpenseListParams, parseExpenseSummaryParams, parseExpenseTab } from "./search-params";
+import { expenseListHref, expenseMenuPath, expenseReportHref, expenseSummaryHref, parseAdsTab, parseExpenseListParams, parseExpenseSummaryParams, parseExpensesTab } from "./search-params";
 import { DEFAULT_EXPENSE_CATEGORY_INFOS } from "@/lib/expense-categories/default-catalog";
 
 const NOW = new Date("2026-10-27T05:00:00Z");
 const CATEGORIES = DEFAULT_EXPENSE_CATEGORY_INFOS;
 
 describe("parseExpenseListParams", () => {
-  test("defaults to this Jakarta month, nothing filtered", () => {
-    expect(parseExpenseListParams({}, CATEGORIES, NOW)).toEqual({ month: "2026-10", range: undefined, group: undefined, category: undefined, showVoided: false, q: undefined });
+  test("defaults to this Jakarta month, nothing filtered, on the given menu", () => {
+    expect(parseExpenseListParams({}, CATEGORIES, "operational", NOW)).toEqual({
+      month: "2026-10",
+      range: undefined,
+      group: "operational",
+      category: undefined,
+      channelId: undefined,
+      showVoided: false,
+      q: undefined,
+    });
   });
 
   test("keeps valid values and drops unknown, malformed or future ones", () => {
-    expect(parseExpenseListParams({ month: "2026-09", group: "marketing", category: "ads_meta", voided: "1", q: "  BYA-1 " }, CATEGORIES, NOW)).toEqual({
+    expect(parseExpenseListParams({ month: "2026-09", category: "ads_meta", channel: "web", voided: "1", q: "  BYA-1 " }, CATEGORIES, "marketing", NOW)).toEqual({
       month: "2026-09",
       range: undefined,
       group: "marketing",
       category: "ads_meta",
+      channelId: "web",
       showVoided: true,
       q: "BYA-1",
     });
-    expect(parseExpenseListParams({ month: "2026-11" }, CATEGORIES, NOW).month).toBe("2026-10");
-    expect(parseExpenseListParams({ month: "2026-13" }, CATEGORIES, NOW).month).toBe("2026-10");
-    expect(parseExpenseListParams({ group: "x", category: "gift" }, CATEGORIES, NOW)).toMatchObject({ group: undefined, category: undefined });
+    expect(parseExpenseListParams({ month: "2026-11" }, CATEGORIES, "operational", NOW).month).toBe("2026-10");
+    expect(parseExpenseListParams({ month: "2026-13" }, CATEGORIES, "operational", NOW).month).toBe("2026-10");
+    expect(parseExpenseListParams({ category: "gift", channel: "fax" }, CATEGORIES, "marketing", NOW)).toMatchObject({ category: undefined, channelId: undefined });
   });
 
-  test("a category outside the chosen group is dropped", () => {
-    expect(parseExpenseListParams({ group: "operational", category: "ads_meta" }, CATEGORIES, NOW)).toMatchObject({ group: "operational", category: undefined });
+  test("kind-scoped: a category of the other menu is dropped (Endorse/KOL belongs to Iklan, D7)", () => {
+    expect(parseExpenseListParams({ category: "ads_meta" }, CATEGORIES, "operational", NOW).category).toBeUndefined();
+    expect(parseExpenseListParams({ category: "endorsement" }, CATEGORIES, "operational", NOW).category).toBeUndefined();
+    expect(parseExpenseListParams({ category: "endorsement" }, CATEGORIES, "marketing", NOW).category).toBe("endorsement");
+    expect(parseExpenseListParams({ category: "salary" }, CATEGORIES, "marketing", NOW).category).toBeUndefined();
+    expect(parseExpenseListParams({ category: "salary" }, CATEGORIES, "operational", NOW).category).toBe("salary");
+  });
+
+  test("a channel only exists on Iklan", () => {
+    expect(parseExpenseListParams({ channel: "shopee" }, CATEGORIES, "operational", NOW).channelId).toBeUndefined();
+    expect(parseExpenseListParams({ channel: "shopee" }, CATEGORIES, "marketing", NOW).channelId).toBe("shopee");
   });
 });
 
 describe("parseExpenseListParams: a from/to window (the Gaji/Sewa reminder link)", () => {
   test("a valid window is kept, across a month end", () => {
-    expect(parseExpenseListParams({ from: "2026-09-06", to: "2026-10-05" }, CATEGORIES, NOW).range).toEqual({ from: "2026-09-06", to: "2026-10-05" });
+    expect(parseExpenseListParams({ from: "2026-09-06", to: "2026-10-05" }, CATEGORIES, "operational", NOW).range).toEqual({ from: "2026-09-06", to: "2026-10-05" });
   });
 
   test("reversed, future, malformed, too long, too early or half a window is no window", () => {
@@ -43,28 +61,43 @@ describe("parseExpenseListParams: a from/to window (the Gaji/Sewa reminder link)
       { from: "0050-01-01", to: "0050-01-05" },
       { from: "2026-09-06" },
     ]) {
-      expect(parseExpenseListParams(bad, CATEGORIES, NOW).range).toBeUndefined();
+      expect(parseExpenseListParams(bad, CATEGORIES, "operational", NOW).range).toBeUndefined();
     }
   });
 });
 
 describe("expenseListHref", () => {
-  test("leaves defaults out", () => {
-    expect(expenseListHref(parseExpenseListParams({}, CATEGORIES, NOW), NOW)).toBe("/ads-expenses");
-    expect(expenseListHref({ month: "2026-09", group: "marketing", showVoided: true }, NOW)).toBe("/ads-expenses?month=2026-09&group=marketing&voided=1");
-    // A window replaces the month.
-    expect(expenseListHref({ month: "2026-09", range: { from: "2026-09-06", to: "2026-10-05" }, group: "operational", showVoided: false }, NOW)).toBe(
-      "/ads-expenses?from=2026-09-06&to=2026-10-05&group=operational",
+  test("the menu of the group, defaults left out", () => {
+    expect(expenseListHref(parseExpenseListParams({}, CATEGORIES, "operational", NOW), NOW)).toBe("/expenses");
+    expect(expenseListHref(parseExpenseListParams({}, CATEGORIES, "marketing", NOW), NOW)).toBe("/ads");
+    expect(expenseListHref({ month: "2026-09", group: "marketing", channelId: "tiktok", showVoided: true }, NOW)).toBe("/ads?month=2026-09&channel=tiktok&voided=1");
+    // A window replaces the month; a channel never goes on Biaya.
+    expect(expenseListHref({ month: "2026-09", range: { from: "2026-09-06", to: "2026-10-05" }, group: "operational", channelId: "tiktok", showVoided: false }, NOW)).toBe(
+      "/expenses?from=2026-09-06&to=2026-10-05",
     );
+    expect(expenseListHref({ month: "2026-10", group: "operational", category: "salary", q: "BYA-1", showVoided: false }, NOW)).toBe("/expenses?category=salary&q=BYA-1");
+  });
+
+  test("expenseMenuPath", () => {
+    expect(expenseMenuPath("marketing")).toBe("/ads");
+    expect(expenseMenuPath("operational")).toBe("/expenses");
   });
 });
 
-describe("parseExpenseTab", () => {
-  test("Pengeluaran unless ?tab=ringkasan", () => {
-    expect(parseExpenseTab({})).toBe("expenses");
-    expect(parseExpenseTab({ tab: "ringkasan" })).toBe("summary");
-    expect(parseExpenseTab({ tab: ["ringkasan", "x"] })).toBe("summary");
-    expect(parseExpenseTab({ tab: "other" })).toBe("expenses");
+describe("parseAdsTab / parseExpensesTab", () => {
+  test("Iklan: Catatan iklan unless ?tab=roas", () => {
+    expect(parseAdsTab({})).toBe("list");
+    expect(parseAdsTab({ tab: "roas" })).toBe("roas");
+    expect(parseAdsTab({ tab: ["roas", "x"] })).toBe("roas");
+    expect(parseAdsTab({ tab: "pnl" })).toBe("list");
+    expect(parseAdsTab({ tab: "ringkasan" })).toBe("list");
+  });
+
+  test("Biaya: Biaya operasional unless ?tab=pnl", () => {
+    expect(parseExpensesTab({})).toBe("list");
+    expect(parseExpensesTab({ tab: "pnl" })).toBe("pnl");
+    expect(parseExpensesTab({ tab: "roas" })).toBe("list");
+    expect(parseExpensesTab({ tab: "ringkasan" })).toBe("list");
   });
 });
 
@@ -120,18 +153,23 @@ describe("parseExpenseSummaryParams (plan §4.2: whole months only)", () => {
 });
 
 describe("expenseSummaryHref", () => {
-  test("only the params the period needs", () => {
-    expect(expenseSummaryHref({ period: "this_month" })).toBe("/ads-expenses?tab=ringkasan");
-    expect(expenseSummaryHref({ period: "last_month" })).toBe("/ads-expenses?tab=ringkasan&period=last_month");
-    expect(expenseSummaryHref({ period: "month", fromMonth: "2026-02" })).toBe("/ads-expenses?tab=ringkasan&period=month&month=2026-02");
-    expect(expenseSummaryHref({ period: "range", fromMonth: "2026-01", toMonth: "2026-03" })).toBe("/ads-expenses?tab=ringkasan&period=range&from=2026-01&to=2026-03");
-    expect(expenseSummaryHref({ period: "month" })).toBe("/ads-expenses?tab=ringkasan&period=month");
+  test("Laba rugi on Biaya by default; only the params the period needs", () => {
+    expect(expenseSummaryHref({ period: "this_month" })).toBe("/expenses?tab=pnl");
+    expect(expenseSummaryHref({ period: "last_month" })).toBe("/expenses?tab=pnl&period=last_month");
+    expect(expenseSummaryHref({ period: "month", fromMonth: "2026-02" })).toBe("/expenses?tab=pnl&period=month&month=2026-02");
+    expect(expenseSummaryHref({ period: "range", fromMonth: "2026-01", toMonth: "2026-03" })).toBe("/expenses?tab=pnl&period=range&from=2026-01&to=2026-03");
+    expect(expenseSummaryHref({ period: "month" })).toBe("/expenses?tab=pnl&period=month");
+  });
+
+  test("ROAS on Iklan", () => {
+    expect(expenseSummaryHref({ period: "this_month" }, "roas")).toBe("/ads?tab=roas");
+    expect(expenseSummaryHref({ period: "month", fromMonth: "2026-02" }, "roas")).toBe("/ads?tab=roas&period=month&month=2026-02");
   });
 });
 
-describe("expenseReportHref (session S6)", () => {
+describe("expenseReportHref (session S6, on Biaya since S5)", () => {
   test("the shown months as an explicit month or range", () => {
-    expect(expenseReportHref({ period: "this_month", fromMonth: "2026-10", toMonth: "2026-10" }, "pdf")).toBe("/ads-expenses/report?format=pdf&period=month&month=2026-10");
-    expect(expenseReportHref({ period: "range", fromMonth: "2026-01", toMonth: "2026-03" }, "xlsx")).toBe("/ads-expenses/report?format=xlsx&period=range&from=2026-01&to=2026-03");
+    expect(expenseReportHref({ period: "this_month", fromMonth: "2026-10", toMonth: "2026-10" }, "pdf")).toBe("/expenses/report?format=pdf&period=month&month=2026-10");
+    expect(expenseReportHref({ period: "range", fromMonth: "2026-01", toMonth: "2026-03" }, "xlsx")).toBe("/expenses/report?format=xlsx&period=range&from=2026-01&to=2026-03");
   });
 });

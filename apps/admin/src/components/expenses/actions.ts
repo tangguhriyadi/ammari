@@ -5,20 +5,30 @@ import { BUSINESS_EXPENSE_METHODS, CHANNEL_IDS } from "@ammari/db/schema";
 import { requireAllPermissions } from "@/lib/auth/require-all-permissions";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
+import { FieldError } from "@/lib/errors";
+import { expenseGroupOfKind } from "@/lib/expense-categories/catalog";
 import { getSelectableExpenseCategoryAndItem } from "@/lib/expense-categories/queries";
+import { EXPENSE_CATEGORY_GROUP_KEYS, EXPENSE_SCOPE_MESSAGES } from "@/lib/expenses/labels";
 import { EXPENSE_MESSAGES, MAX_VOID_REASON_LENGTH, findProofHashUses, normalizeExpenseInput, recordBusinessExpense, voidBusinessExpense } from "@/lib/expenses/records";
 import { parseRupiah } from "@/lib/products/money";
 import { fieldErrorsOf, firstIssue, text, uploadedFile } from "@/lib/supplier-payments/form-input";
 import { PROOF_MESSAGES, processPrivateUpload } from "@/lib/supplier-payments/proof-processing";
 import { storePrivateUpload } from "@/lib/supplier-payments/store-upload";
 
-// "Iklan & Biaya" actions (docs/plans/growth.md §5, §7, session S2). Every action re-checks
+// Expense actions shared by "Iklan" (/ads) and "Biaya" (/expenses) (docs/plans/growth.md §5, §7,
+// session S2; menu split: docs/plans/expense-master-data.md §3.8). Every action re-checks
 // ads_expenses.manage + finance.view_profit on the server: an expense is a cost figure, and the
-// proof is private.
+// proof is private. A new expense also carries the menu it was posted from, and its category's
+// kind must belong to that menu.
 
 const EXPENSE_KEYS = ["ads_expenses.manage", "finance.view_profit"] as const;
 
+/** Both menus show Laba rugi / ROAS figures that every expense feeds, so both are refreshed. */
+const EXPENSE_SECTIONS = ["/ads", "/expenses"] as const;
+
 const recordSchema = z.object({
+  // The menu the form was opened from: "marketing" (Iklan) or "operational" (Biaya).
+  scope: z.enum(EXPENSE_CATEGORY_GROUP_KEYS, { message: "Menu tidak dikenal. Muat ulang halaman." }),
   expenseDate: z.string().date(EXPENSE_MESSAGES.invalidDate),
   // An expense_categories code; whether it exists and is active is checked against the table
   // (getSelectableExpenseCategoryAndItem here, the FOR SHARE lock in the write, the FK as backstop).
@@ -48,6 +58,7 @@ const recordSchema = z.object({
 export async function recordBusinessExpenseAction(formData: FormData): Promise<ActionResult<{ expenseNo: string }>> {
   const session = await requireAllPermissions(EXPENSE_KEYS);
   const parsed = recordSchema.safeParse({
+    scope: text(formData, "scope"),
     expenseDate: text(formData, "expenseDate"),
     category: text(formData, "category"),
     itemId: text(formData, "itemId") ?? "",
@@ -68,11 +79,13 @@ export async function recordBusinessExpenseAction(formData: FormData): Promise<A
     // in the moment between the two leaves the stored proof unreferenced (as any failed write
     // after storePrivateUpload does today).
     const { category } = await getSelectableExpenseCategoryAndItem(parsed.data.category, parsed.data.itemId);
+    // kind never changes (prevent_expense_category_identity_change), so this holds for the write.
+    if (expenseGroupOfKind(category.kind) !== parsed.data.scope) throw new FieldError("category", EXPENSE_SCOPE_MESSAGES[parsed.data.scope]);
     const input = normalizeExpenseInput(parsed.data, category);
     const processed = await processPrivateUpload(Buffer.from(await upload.file.arrayBuffer()), upload.file.name);
     const stored = await storePrivateUpload(processed, "expense_proof");
     const row = await recordBusinessExpense(input, stored, session.staffUser.id);
-    revalidateAdmin("/ads-expenses");
+    revalidateAdmin(...EXPENSE_SECTIONS);
     return { expenseNo: row.expenseNo };
   });
 }
@@ -89,7 +102,7 @@ export async function voidBusinessExpenseAction(input: z.input<typeof voidSchema
   if (!parsed.success) return { ok: false, error: firstIssue(parsed.error) };
   return runAction(async () => {
     await voidBusinessExpense(parsed.data.id, parsed.data.reason, session.staffUser.id);
-    revalidateAdmin("/ads-expenses");
+    revalidateAdmin(...EXPENSE_SECTIONS);
     return undefined;
   });
 }

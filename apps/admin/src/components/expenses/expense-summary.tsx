@@ -6,16 +6,28 @@ import type { BreakEvenRoas, RoasRow } from "@/lib/expenses/figures";
 import { expenseCategoryLabel } from "@/lib/expense-categories/catalog";
 import { loadExpenseCategoryCatalog } from "@/lib/expense-categories/queries";
 import { BREAK_EVEN_EXPLANATION, breakEvenText, reportPeriodLabel, roasStatusText, roasText } from "@/lib/expenses/report-content";
-import { expenseListHref, expenseReportHref, expenseSummaryHref, MAX_SUMMARY_MONTHS, type ExpenseSummaryParams, type ExpenseSummaryPeriod } from "@/lib/expenses/search-params";
+import {
+  expenseListHref,
+  expenseReportHref,
+  expenseSummaryHref,
+  expenseSummaryPath,
+  MAX_SUMMARY_MONTHS,
+  type ExpenseSummaryParams,
+  type ExpenseSummaryPeriod,
+  type ExpenseSummaryView,
+} from "@/lib/expenses/search-params";
 import { getExpenseSummary } from "@/lib/expenses/summary";
 import { formatPercentBps } from "@/lib/overview/format";
 
-// Iklan & Biaya, "Ringkasan" (docs/plans/growth.md §4, §6, session S3): Laba bersih and ad spend
-// vs omzet for whole months. The page already required ads_expenses.manage + finance.view_profit,
-// so every query here runs with canViewProfit: true. Omzet, laba and the web shipping subsidy come
-// from the Ringkasan queries (one definition); expenses count on their payment date. Session S6:
-// the figures come from getExpenseSummary, the same call "Unduh laporan bulanan" makes, and ROAS
-// is judged against the period's own "Titik impas ROAS" instead of the fixed 8.3.
+// The whole-month expense summaries (docs/plans/growth.md §4, §6, session S3), split by the menu
+// split (docs/plans/expense-master-data.md §3.8, owner answers D7/D8) into Biaya's "Laba rugi"
+// (ProfitAndLossSummary: Laba bersih, biaya per kategori, "Unduh laporan bulanan") and Iklan's
+// "ROAS" (RoasSummary: biaya pemasaran, ROAS per kanal, Titik impas ROAS). Both call
+// getExpenseSummary, the same call the report makes, so every number is the old Ringkasan's.
+// The pages already required ads_expenses.manage + finance.view_profit, so every query here runs
+// with canViewProfit: true. Omzet, laba and the web shipping subsidy come from the Ringkasan
+// queries (one definition); expenses count on their payment date. ROAS is judged against the
+// period's own "Titik impas ROAS" instead of the fixed 8.3.
 
 const PERIOD_LABELS: Record<ExpenseSummaryPeriod, string> = {
   this_month: "Bulan ini",
@@ -24,20 +36,20 @@ const PERIOD_LABELS: Record<ExpenseSummaryPeriod, string> = {
   range: "Rentang bulan",
 };
 
-function PeriodPicker({ params }: { params: ExpenseSummaryParams }) {
+function PeriodPicker({ params, view }: { params: ExpenseSummaryParams; view: ExpenseSummaryView }) {
   return (
     <div className="flex flex-col gap-3">
       <Tabs
         aria-label="Pilih periode"
         items={(Object.keys(PERIOD_LABELS) as ExpenseSummaryPeriod[]).map((period) => ({
           label: PERIOD_LABELS[period],
-          href: expenseSummaryHref({ period }),
+          href: expenseSummaryHref({ period }, view),
           isActive: period === params.period,
         }))}
       />
       {(params.period === "month" || params.period === "range") && (
-        <form method="get" action="/ads-expenses" className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4 sm:flex-row sm:items-end">
-          <input type="hidden" name="tab" value="ringkasan" />
+        <form method="get" action={expenseSummaryPath(view)} className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4 sm:flex-row sm:items-end">
+          <input type="hidden" name="tab" value={view} />
           <input type="hidden" name="period" value={params.period} />
           {params.period === "month" ? (
             <div className="flex flex-col gap-1.5">
@@ -142,17 +154,28 @@ function percentOfOmzet(amount: number, omzet: number): string {
   return omzet > 0 ? formatPercentBps(Math.round((amount * 10_000) / omzet)) : "-";
 }
 
-export async function ExpenseSummary({ params, today, now }: { params: ExpenseSummaryParams; today: string; now: Date }) {
-  const [{ totals, money, expenses, net, incomplete, breakEven, roasRows }, { categories }] = await Promise.all([getExpenseSummary(params.range, now), loadExpenseCategoryCatalog()]);
+function PeriodHeading({ params, today }: { params: ExpenseSummaryParams; today: string }) {
+  return (
+    <h2 id="summary-heading" className="text-lg font-semibold text-neutral-900" data-testid="summary-period">
+      {reportPeriodLabel(params, today)}
+    </h2>
+  );
+}
+
+const LINK_CLASS = "font-medium text-brand underline-offset-2 hover:underline";
+
+/** Biaya, "Laba rugi" (owner answer D8): Laba bersih down from omzet, the cost per category, and
+ * the monthly PDF/Excel. */
+export async function ProfitAndLossSummary({ params, today, now }: { params: ExpenseSummaryParams; today: string; now: Date }) {
+  const [{ totals, money, expenses, net, incomplete }, { categories }] = await Promise.all([getExpenseSummary(params.range, now), loadExpenseCategoryCatalog()]);
+  const listMonth = { month: params.toMonth, showVoided: false };
 
   return (
     <div className="flex flex-col gap-6">
-      <PeriodPicker params={params} />
+      <PeriodPicker params={params} view="pnl" />
       <DownloadLinks params={params} />
       <section aria-labelledby="summary-heading" className="flex flex-col gap-3">
-        <h2 id="summary-heading" className="text-lg font-semibold text-neutral-900" data-testid="summary-period">
-          {reportPeriodLabel(params, today)}
-        </h2>
+        <PeriodHeading params={params} today={today} />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Tile label="Omzet" value={money.omzet} testId="summary-omzet">
             <p className="text-sm text-neutral-600 tabular-nums">{formatNumber(totals.orders)} pesanan</p>
@@ -230,11 +253,51 @@ export async function ExpenseSummary({ params, today, now }: { params: ExpenseSu
           </>
         )}
       </section>
+      <p className="text-sm text-neutral-600 text-pretty">
+        Rincian per biaya ada di tab{" "}
+        <Link href={expenseListHref({ ...listMonth, group: "operational" })} className={LINK_CLASS}>
+          Biaya operasional
+        </Link>{" "}
+        dan di menu{" "}
+        <Link href={expenseListHref({ ...listMonth, group: "marketing" })} className={LINK_CLASS}>
+          Iklan
+        </Link>
+        . ROAS per kanal ada di{" "}
+        <Link href={expenseSummaryHref(params, "roas")} className={LINK_CLASS}>
+          Iklan, tab ROAS
+        </Link>
+        .
+      </p>
+    </div>
+  );
+}
+
+/** Iklan, "ROAS" (owner answer D7): biaya pemasaran (iklan + endorse), ROAS per kanal against the
+ * period's Titik impas ROAS. Endorse stays outside ROAS. */
+export async function RoasSummary({ params, today, now }: { params: ExpenseSummaryParams; today: string; now: Date }) {
+  const { expenses, incomplete, breakEven, roasRows } = await getExpenseSummary(params.range, now);
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PeriodPicker params={params} view="roas" />
+      <section aria-labelledby="summary-heading" className="flex flex-col gap-3">
+        <PeriodHeading params={params} today={today} />
+        <div className="flex flex-col gap-1 text-base text-neutral-800">
+          <p data-testid="summary-marketing-total">
+            Biaya pemasaran <span className="font-semibold tabular-nums">{formatRupiah(expenses.marketing.marketingTotal)}</span>
+            <span className="text-sm text-neutral-600"> (iklan + endorse)</span>
+          </p>
+          <p data-testid="summary-endorsement">
+            Biaya endorse <span className="font-semibold tabular-nums">{formatRupiah(expenses.marketing.endorsement)}</span>
+            <span className="text-sm text-neutral-600"> (tidak masuk ROAS)</span>
+          </p>
+        </div>
+      </section>
 
       <section aria-labelledby="summary-roas-heading" className="flex flex-col gap-3">
         <div className="flex flex-col gap-0.5">
           <h2 id="summary-roas-heading" className="text-lg font-semibold text-neutral-900">
-            Iklan vs omzet
+            ROAS per kanal
           </h2>
           <p className="text-sm text-neutral-600 text-pretty">
             ROAS = omzet dibagi biaya iklan. Iklan Meta mendorong pembeli ke beberapa kanal, jadi ROAS Situs, Instagram, WhatsApp dan Total adalah perkiraan.
@@ -289,21 +352,15 @@ export async function ExpenseSummary({ params, today, now }: { params: ExpenseSu
             ))}
           </tbody>
         </TableContainer>
-        <div className="flex flex-col gap-1 text-base text-neutral-800">
-          <p data-testid="summary-endorsement">
-            Biaya endorse <span className="font-semibold tabular-nums">{formatRupiah(expenses.marketing.endorsement)}</span>
-            <span className="text-sm text-neutral-600"> (tidak masuk ROAS)</span>
-          </p>
-          <p data-testid="summary-marketing-total">
-            Biaya pemasaran <span className="font-semibold tabular-nums">{formatRupiah(expenses.marketing.marketingTotal)}</span>
-            <span className="text-sm text-neutral-600"> (iklan + endorse)</span>
-          </p>
-        </div>
       </section>
-      <p className="text-sm text-neutral-600">
+      <p className="text-sm text-neutral-600 text-pretty">
         Rincian per biaya ada di tab{" "}
-        <Link href={expenseListHref({ month: params.toMonth, showVoided: false })} className="font-medium text-brand underline-offset-2 hover:underline">
-          Pengeluaran
+        <Link href={expenseListHref({ month: params.toMonth, group: "marketing", showVoided: false })} className={LINK_CLASS}>
+          Catatan iklan
+        </Link>
+        . Laba bersih dan laporan bulanan ada di{" "}
+        <Link href={expenseSummaryHref(params, "pnl")} className={LINK_CLASS}>
+          Biaya, tab Laba rugi
         </Link>
         .
       </p>

@@ -29,7 +29,8 @@ const nextConfig: NextConfig = {
       { source: "/bahan/baru", destination: "/fabrics/new", permanent: true },
       { source: "/bahan/:id", destination: "/fabrics/:id", permanent: true },
       { source: "/bahan", destination: "/fabrics", permanent: true },
-      { source: "/iklan-biaya", destination: "/ads-expenses", permanent: true },
+      // "Iklan & Biaya" split into /ads and /expenses (expense-master-data.md §3.8): one hop to Biaya.
+      { source: "/iklan-biaya", destination: "/expenses", permanent: true },
       { source: "/pelanggan-voucher", destination: "/customers", permanent: true },
       { source: "/pengaturan", destination: "/settings", permanent: true },
       { source: "/peran-staf", destination: "/roles-staff", permanent: true },
