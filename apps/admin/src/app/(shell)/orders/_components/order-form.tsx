@@ -13,10 +13,20 @@ import type { CustomerOption } from "@/lib/customers/queries";
 import { createCustomerAction, createOrderAction, searchCustomersAction } from "../actions";
 import { OrderItemPicker, type OrderLine } from "./order-item-picker";
 import { STOREFRONT_STALE_MESSAGE } from "@/lib/storefront-stale";
+import type { ManualPaymentOptions } from "@/lib/orders/manual-payment-input";
+import { emptyManualPaymentDraft, ManualPaymentFields, manualPaymentFromDraft, type ManualPaymentDraft } from "./manual-payment-fields";
 
 type CustomerMode = "none" | "existing" | "new";
 
-export function OrderForm({ channels, variants }: { channels: ChannelOption[]; variants: OrderableVariantRow[] }) {
+export function OrderForm({
+  channels,
+  variants,
+  paymentOptions,
+}: {
+  channels: ChannelOption[];
+  variants: OrderableVariantRow[];
+  paymentOptions: ManualPaymentOptions;
+}) {
   const router = useRouter();
   const toast = useToast();
   const [channelId, setChannelId] = useState<ChannelId>(channels[0]?.id ?? "offline");
@@ -38,10 +48,15 @@ export function OrderForm({ channels, variants }: { channels: ChannelOption[]; v
   const [discountAmount, setDiscountAmount] = useState("");
   const [shippingAmount, setShippingAmount] = useState("");
 
+  const [today] = useState(todayInJakarta);
+  const [payment, setPayment] = useState<ManualPaymentDraft>(() => emptyManualPaymentDraft(today));
+
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const isMarketplace = MARKETPLACE_CHANNEL_IDS.includes(channelId);
+  // D-3: a manual order created already paid records how and where the money came in.
+  const needsPayment = !isMarketplace && status === "to_ship";
 
   useEffect(() => {
     // All setState calls happen inside the timeout callback, never synchronously in the effect
@@ -77,6 +92,11 @@ export function OrderForm({ channels, variants }: { channels: ChannelOption[]; v
       setError("Nama pelanggan baru wajib diisi.");
       return;
     }
+    const paymentInput = needsPayment ? manualPaymentFromDraft(payment, todayInJakarta()) : null;
+    if (paymentInput && !paymentInput.ok) {
+      setError(paymentInput.error);
+      return;
+    }
 
     startTransition(async () => {
       let customerId: string | undefined;
@@ -103,6 +123,7 @@ export function OrderForm({ channels, variants }: { channels: ChannelOption[]; v
         discountAmount,
         shippingAmount,
         status,
+        payment: paymentInput?.ok ? paymentInput.payment : undefined,
       });
       if (!result.ok) {
         setError(result.error);
@@ -116,6 +137,7 @@ export function OrderForm({ channels, variants }: { channels: ChannelOption[]; v
 
   return (
     <form
+      noValidate
       onSubmit={(event) => {
         event.preventDefault();
         handleSubmit();
@@ -164,6 +186,14 @@ export function OrderForm({ channels, variants }: { channels: ChannelOption[]; v
           </Select>
         </div>
       </div>
+
+      {needsPayment && (
+        <fieldset className="flex flex-col gap-3 rounded-lg border border-neutral-200 p-4">
+          <legend className="px-1 text-lg font-semibold text-neutral-900">Pembayaran</legend>
+          <p className="text-sm text-neutral-600">Catat cara bayar dan rekening tempat uang pesanan ini masuk.</p>
+          <ManualPaymentFields idPrefix="order-payment" value={payment} onChange={setPayment} options={paymentOptions} maxDate={today} disabled={pending} />
+        </fieldset>
+      )}
 
       <div className="flex flex-col gap-3 rounded-lg border border-neutral-200 p-4">
         <h2 className="text-lg font-semibold text-neutral-900">Pelanggan</h2>

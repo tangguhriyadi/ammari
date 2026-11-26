@@ -53,6 +53,8 @@ test("a staffer prints a card and ships one order, then cancelling a second (alr
     // tests for the full investigation).
     await page.locator("#order-channel").selectOption({ label: "WhatsApp" });
     await page.locator(`#qty-${sku}`).fill(qty);
+    // D-3: a manual order created already paid records its payment (Transfer preselects Bank utama).
+    await page.locator("#order-payment-method").selectOption("transfer");
     await page.getByRole("button", { name: "Simpan pesanan" }).click();
     await openCreated(page, "/orders");
     const orderNo = (await page.locator("h1").textContent())!.trim();
@@ -147,6 +149,8 @@ test("the packing queue renders correctly on a desktop-width browser: rows visib
     await page.goto("/orders/new");
     await page.locator("#order-channel").selectOption({ label: "WhatsApp" });
     await page.locator(`#qty-${sku}`).fill(qty);
+    // D-3: a manual order created already paid records its payment (Transfer preselects Bank utama).
+    await page.locator("#order-payment-method").selectOption("transfer");
     await page.getByRole("button", { name: "Simpan pesanan" }).click();
     await openCreated(page, "/orders");
     return (await page.locator("h1").textContent())!.trim();

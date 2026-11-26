@@ -17,6 +17,10 @@ import { Timeline, type TimelineItem } from "./_components/timeline";
 import { MarketplaceSection } from "./_components/marketplace-section";
 import { productDiscountSummary } from "@/lib/orders/product-discount-summary";
 import { isOpenShipmentStatus } from "@/lib/orders/shipment-labels";
+import { getManualPaymentState, loadManualPaymentOptions } from "@/lib/orders/manual-payment";
+import { MANUAL_PAYMENT_METHOD_LABELS, type ManualPaymentOptions } from "@/lib/orders/manual-payment-input";
+import { todayInJakarta } from "@/lib/products/jakarta-date";
+import { ManualPaymentSection, type ManualPaymentDisplay } from "./_components/manual-payment-section";
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission("orders.view");
@@ -31,6 +35,25 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   // Web checkout order data (docs/plans/cart-checkout.md §7, session 16); null for manual and
   // marketplace orders, which render exactly as before.
   const checkout = detail.checkout;
+  // D-3 (docs/plans/accounting.md Session 6): a manual order's payment record; null for checkout and
+  // marketplace orders.
+  const manualPayment = await getManualPaymentState({ id: detail.id, channelId: detail.channelId, status: detail.status, isCheckout: checkout !== null });
+  const paymentOptions: ManualPaymentOptions | null = manualPayment && canManage ? await loadManualPaymentOptions() : null;
+  const today = todayInJakarta();
+  const manualPaymentDisplay: ManualPaymentDisplay | null = manualPayment?.payment
+    ? {
+        methodLabel: MANUAL_PAYMENT_METHOD_LABELS[manualPayment.payment.method],
+        // Account names can carry bank details: managers and finance staff only.
+        accountName: canManage || canViewProfit ? manualPayment.payment.cashAccountName : null,
+        paidOnLabel: formatDate(new Date(`${manualPayment.payment.paidOn}T00:00:00+07:00`)),
+        recordedLabel: `${formatDateTime(manualPayment.payment.updatedAt)}${manualPayment.payment.recordedByName ? ` · ${manualPayment.payment.recordedByName}` : ""}`,
+      }
+    : null;
+  // The edit form's starting values: sent to the client only for staff who may edit.
+  const savedPaymentDraft =
+    manualPayment?.payment && paymentOptions
+      ? { method: manualPayment.payment.method, cashAccountCode: manualPayment.payment.cashAccountCode, paidOn: manualPayment.payment.paidOn }
+      : null;
   const discountSummary = productDiscountSummary(detail.items, detail.subtotalAmount);
   const refundableAttempts: RefundableAttempt[] = (checkout?.attempts ?? [])
     .filter((attempt) => attempt.status === "paid" || attempt.status === "partially_refunded")
@@ -109,7 +132,11 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
               openBooking={checkout.shipments.some((shipment) => isOpenShipmentStatus(shipment.status))}
             />
           ) : (
-            <StatusActions orderId={detail.id} allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]} />
+            <StatusActions
+              orderId={detail.id}
+              allowedTransitions={[...ORDER_STATUS_TRANSITIONS[detail.status]]}
+              manualPayment={paymentOptions ? { options: paymentOptions, today } : undefined}
+            />
           ))}
 
         {/* Two columns from lg: items and shipping left, the rest right. The columns dissolve on a
@@ -205,6 +232,20 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 canViewProfit={canViewProfit}
                 canViewImports={session.permissionKeys.includes("orders.import")}
                 className="order-2 lg:order-none"
+              />
+            )}
+
+            {manualPayment && (
+              <ManualPaymentSection
+                orderId={detail.id}
+                required={manualPayment.required}
+                awaitingPayment={manualPayment.awaitingPayment}
+                payment={manualPaymentDisplay}
+                savedDraft={savedPaymentDraft}
+                canManage={canManage && paymentOptions !== null}
+                options={paymentOptions ?? { accounts: [], suggestedAccount: { cash: null, transfer: null, card: null } }}
+                today={today}
+                className="order-5 lg:order-none"
               />
             )}
 

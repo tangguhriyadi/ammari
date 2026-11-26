@@ -55,6 +55,8 @@ export function postingIssueMessage(issueCode: string, details: Record<string, u
       return `Kategori biaya dipetakan ke akun persediaan ${text("accountCode")}. Bahan masuk persediaan hanya lewat penerimaan barang; petakan kategori ini ke akun beban.`;
     case "purchase_guard_violation":
       return "Pembayaran supplier tidak boleh dibukukan ke akun beban. Periksa pemetaan akun utang supplier.";
+    case "manual_payment_missing":
+      return `Pesanan manual ${text("orderNo")} belum dicatat cara bayar dan rekening tujuannya. Isi lewat tombol Isi cara bayar di halaman pesanan.`;
     case "account_not_postable":
       return "Akun tujuan sudah nonaktif, berupa akun induk, atau tidak ada.";
     case "missing_system_account":

@@ -6,13 +6,15 @@ import type { OrderStatus } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { moneyString, optionalMoneyString } from "@/lib/products/money-schema";
 import { runAction, type ActionResult } from "@/lib/action-result";
-import { adoptBookedWaybill, createOrder, transitionOrderStatus, updateShipmentDetails } from "@ammari/commerce/orders";
+import { adoptBookedWaybill, transitionOrderStatus, updateShipmentDetails } from "@ammari/commerce/orders";
 import { REFUND_NOTE_MAX_LENGTH, cancelCheckoutOrderByStaff, clearAttentionFlag, recordManualRefund } from "@ammari/commerce/payments";
 import { defaultDb } from "@/lib/db";
 import { getAdminPaymentProvider } from "@/lib/payments/provider";
 import { createCustomer, searchCustomers, type CustomerOption } from "@/lib/customers/queries";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
 import { revalidateStorefrontForSkus, skusForOrder } from "@/lib/storefront-stock";
+import { manualPaymentSchema } from "@/lib/orders/manual-payment-input";
+import { assertPlainTransitionAllowed, confirmManualOrderPayment, createOrderWithManualPayment, recordManualOrderPayment } from "@/lib/orders/manual-payment";
 
 // An order and its status show on the orders pages, the packing queue, and SKU stock.
 const ORDER_SECTIONS = ["/orders", "/packing", "/stock"] as const;
@@ -35,6 +37,9 @@ const createOrderSchema = z.object({
   discountAmount: optionalMoneyString,
   shippingAmount: optionalMoneyString,
   status: z.enum(["awaiting_payment", "to_ship"]),
+  // D-3 (docs/plans/accounting.md Session 6): required for a manual channel created as "Siap
+  // Kirim", refused otherwise (createOrderWithManualPayment).
+  payment: manualPaymentSchema.optional(),
 });
 
 export async function createOrderAction(input: z.input<typeof createOrderSchema>): Promise<ActionResult<{ id: string; storefrontOk: boolean }>> {
@@ -42,7 +47,7 @@ export async function createOrderAction(input: z.input<typeof createOrderSchema>
   const parsed = createOrderSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
-    const order = await createOrder(
+    const order = await createOrderWithManualPayment(
       {
         channelId: parsed.data.channelId,
         channelOrderNo: parsed.data.channelOrderNo || null,
@@ -56,6 +61,7 @@ export async function createOrderAction(input: z.input<typeof createOrderSchema>
         shippingAmount: parsed.data.shippingAmount ?? 0,
         status: parsed.data.status,
       },
+      parsed.data.payment ?? null,
       session.staffUser.id,
     );
     revalidateAdmin(...ORDER_SECTIONS);
@@ -76,6 +82,8 @@ export async function transitionOrderStatusAction(input: z.input<typeof transiti
   const parsed = transitionSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
   return runAction(async () => {
+    // A manual order becomes "Siap Kirim" only with its payment record (confirmManualOrderPaymentAction).
+    await assertPlainTransitionAllowed(parsed.data.orderId, parsed.data.toStatus);
     const order = await transitionOrderStatus(parsed.data.orderId, parsed.data.toStatus, session.staffUser.id);
     revalidateAdmin(...ORDER_SECTIONS);
     // Payment confirmed (stock deducted), cancelled or returned (stock restored). Shipped and
@@ -83,6 +91,38 @@ export async function transitionOrderStatusAction(input: z.input<typeof transiti
     const movesStock = parsed.data.toStatus === "to_ship" || parsed.data.toStatus === "cancelled" || parsed.data.toStatus === "returned";
     const storefront = movesStock ? await revalidateStorefrontForSkus(() => skusForOrder(parsed.data.orderId)) : { ok: true };
     return { status: order.status, storefrontOk: storefront.ok };
+  });
+}
+
+const manualPaymentActionSchema = z.object({ orderId: z.string().uuid(), payment: manualPaymentSchema });
+
+/** "Siap Kirim" on a manual order waiting for payment (D-3): the transition and its payment record
+ * (method, Kas & Bank account, date) in one transaction. */
+export async function confirmManualOrderPaymentAction(
+  input: z.input<typeof manualPaymentActionSchema>,
+): Promise<ActionResult<{ storefrontOk: boolean }>> {
+  const session = await requirePermission("orders.manage");
+  const parsed = manualPaymentActionSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    await confirmManualOrderPayment(parsed.data.orderId, parsed.data.payment, session.staffUser.id);
+    revalidateAdmin(...ORDER_SECTIONS);
+    // Stock left with the transition.
+    const storefront = await revalidateStorefrontForSkus(() => skusForOrder(parsed.data.orderId));
+    return { storefrontOk: storefront.ok };
+  });
+}
+
+/** "Isi cara bayar" / "Ubah cara bayar" for a manual order already paid (D-3), e.g. one entered
+ * before the payment record existed. */
+export async function recordManualOrderPaymentAction(input: z.input<typeof manualPaymentActionSchema>): Promise<ActionResult<{ changed: boolean }>> {
+  const session = await requirePermission("orders.manage");
+  const parsed = manualPaymentActionSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." };
+  return runAction(async () => {
+    const result = await recordManualOrderPayment(parsed.data.orderId, parsed.data.payment, session.staffUser.id);
+    if (result.changed) revalidateAdmin("/orders");
+    return result;
   });
 }
 

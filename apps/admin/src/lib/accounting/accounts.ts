@@ -46,6 +46,9 @@ function mapAccountError(error: unknown): never {
     if (/accounts_code_type_check|accounts_code_check/.test(message)) throw new FieldError("code", ACCOUNT_MESSAGES.codeFormat);
     if (/accounts_bank_fields_cash_bank_check/.test(message)) throw new FieldError("bankName", ACCOUNT_MESSAGES.bankFieldsNotAllowed);
     if (/mapping points at cannot be deactivated/.test(message)) throw new ActionError(ACCOUNT_MESSAGES.mappedCannotDeactivate);
+    // 0053: manual-order payments (D-3) keep their account postable until S6 posts them.
+    if (/manual-order payments not yet posted/.test(message)) throw new ActionError(ACCOUNT_MESSAGES.paymentsCannotDeactivate);
+    if (/manual-order payments point at cannot become a header/.test(message)) throw new ActionError(ACCOUNT_MESSAGES.paymentsCannotBecomeHeader);
     if (/accounts_system_active_check/.test(message)) throw new ActionError(ACCOUNT_MESSAGES.systemCannotDeactivate);
     if (/system accounts are never deleted/.test(message)) throw new ActionError(ACCOUNT_MESSAGES.systemCannotDelete);
     if (/journal lines is never deleted/.test(message)) throw new ActionError(ACCOUNT_MESSAGES.usedCannotDelete);

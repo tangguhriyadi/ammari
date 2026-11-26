@@ -20,7 +20,9 @@ export {
 export { POSTING_START_DATE, isCalendarDate, jakartaDateOf, monthEndOf, monthStartOf, nextMonthStart, postingDateFor } from "./dates";
 export { decideAction, journalContentHash, planEvent, type KeyAction, type PlannedOutcome } from "./plan";
 export {
+  PostingIssueError,
   negateOutcome,
+  resolveOrIssue,
   type AccountInfo,
   type PostingContext,
   type PostingEvent,
@@ -30,6 +32,14 @@ export {
 } from "./rules/types";
 export { EXPENSE_SOURCE_TYPE, expenseRule, expensePaidOutcome, type ExpenseSnapshot } from "./rules/expenses";
 export { SUPPLIER_PAYMENT_SOURCE_TYPE, supplierPaymentRule, supplierPaymentPaidOutcome, type SupplierPaymentSnapshot } from "./rules/supplier-payments";
+export {
+  MANUAL_PAYMENT_MISSING_ISSUE,
+  cashMethodMappingKey,
+  isManualPaymentOrder,
+  manualOrderMoneyIn,
+  suggestedCashAccountFor,
+  type ManualPaymentRecord,
+} from "./rules/manual-orders";
 export {
   accountCodeMatchesType,
   accountTypesForCode,

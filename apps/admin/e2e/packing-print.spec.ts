@@ -94,6 +94,8 @@ test.describe("printing thank-you cards prints ONLY the cards", () => {
       await page.goto("/orders/new");
       await page.locator("#order-channel").selectOption({ label: "WhatsApp" });
       await page.locator(`#qty-${sku}`).fill("1");
+      // D-3: a manual order created already paid records its payment (Transfer preselects Bank utama).
+      await page.locator("#order-payment-method").selectOption("transfer");
       await clickAndWaitForUrl(page, page.getByRole("button", { name: "Simpan pesanan" }), /\/orders$/);
       await openCreated(page, "/orders");
       return (await page.locator("h1").textContent())!.trim();

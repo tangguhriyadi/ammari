@@ -62,6 +62,8 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       import_update: { label: "Pesanan diperbarui dari impor", area: "import" },
       cancel_checkout_order: { label: "Pesanan toko online dibatalkan", area: "payments" },
       record_refund: { label: "Pengembalian dana dicatat", area: "payments" },
+      record_manual_payment: { label: "Cara bayar pesanan manual dicatat", area: "payments" },
+      update_manual_payment: { label: "Cara bayar pesanan manual diubah", area: "payments" },
       request_shipment_booking: { label: "Pemesanan kurir diminta", area: "shipping" },
       book_shipment: { label: "Kurir dipesan", area: "shipping" },
       shipment_booking_failed: { label: "Pemesanan kurir gagal", area: "shipping" },

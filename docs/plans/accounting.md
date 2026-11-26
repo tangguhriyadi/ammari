@@ -357,7 +357,7 @@ All rules are per **event**; their amounts come only from the source rows named.
 | S3 | **Revenue recognised** (`order`,id,`recognised`) [D-1: at handover to the courier] | web/manual: `shipped_at`; marketplace: the real ship time from the export file [D-2] (§4.3 M1) | Dr *prepayment/balance* `total_amount` · Dr 4-1201 Potongan penjualan `discount_amount` [D-4] · Cr 4-110x Penjualan (by channel) `subtotal_amount` · Cr 2-1203 Titipan ongkir pembeli `shipping_amount` [D-6]; and Dr 5-1101 HPP / Cr 1-1505 `Σ qty × unit_cost`. *Prepayment/balance* = 2-1201 Uang muka pelanggan for checkout **and manual** orders (both paid before shipping), 1-1302/1-1303 Saldo Penjual (marketplace). |
 | S4 | Returned after recognition (`order`,id,`returned`) | `returned_at` | Dr 4-1301 Retur penjualan `subtotal` · Dr 6-1301 Beban ongkos kirim `shipping_amount` (the courier was already paid through W9, so ongkir given back to the buyer is Ammari's cost; [D-7]) / Cr 4-1201 `discount` · Cr *refund liability* `total_amount` (2-1202 for web/manual; the marketplace Saldo Penjual account for Shopee/TikTok, which claws back). HPP side is S2 (back at the original cost [D-7]). |
 | S5 | Re-import changes `discount_amount`/`total_amount` | — | Engine reverses S3 and re-posts with the new amounts; if the sale month is closed, the correction lands in the first open month [D-5, D-23]. |
-| S6 | Manual order money in [D-3] (`order`,id,`collected`) — every non-checkout, non-marketplace order (always paid before shipping, no credit sales) | when S1 happens (to_ship) | Dr *the cash/bank account staff picked on the order* (S6 feature; today Kas tunai 1-1101 or Bank utama 1-1201 [D-17]; method `card` = debit card → 1-1201 [D-18]) / Cr 2-1201 Uang muka pelanggan `total_amount`. An order without a recorded method/account (created before the feature, or left blank) is a **posting issue**, never guessed; the feature lets staff fill it in afterwards. A cancel before shipping: Dr 2-1201 / Cr 2-1202 (money to give back), cleared by a manual journal when she refunds by hand. |
+| S6 | Manual order money in [D-3] (`order`,id,`collected`) — every non-checkout, non-marketplace order (always paid before shipping, no credit sales) | the **payment date** staff recorded (`order_manual_payments.paid_on`; owner, 26 Nov 2026) | Dr *the cash/bank account staff picked on the order* (`order_manual_payments.cash_account_code`, Session 6; free choice among the active Kas & Bank accounts, today Kas tunai 1-1101 or Bank utama 1-1201 [D-17]; method `card` = debit card, preselected 1-1201 [D-18]) / Cr 2-1201 Uang muka pelanggan `total_amount`. Same deposit pattern as the website (D-1, W1 then S3): **two journals**, this one on the paid date, then S3 on the ship date (Dr 2-1201 / Cr Penjualan, plus HPP). A corrected record (method, account or date changed after S6 posted) → the engine's normal reverse + repost; if the original month is closed, the correction lands in the first open month [D-23]. An order without a recorded method/account (created before the feature, or left blank) is a **posting issue**, never guessed; the feature lets staff fill it in afterwards. A cancel before shipping: Dr 2-1201 / Cr 2-1202 (money to give back), cleared by a manual journal when she refunds by hand. |
 
 Rationale for 1-1505 (a sub-account of Persediaan): `Persediaan barang jadi` + 1-1505 then equal the
 stock valuation (`Σ stock_movements`) plus to-ship cost exactly at any date, and HPP lands in the
@@ -606,13 +606,27 @@ from the cut-over date whenever a rule lands, and January closes by 10 Feb [D-23
 | **6** | **Feature D-3 — manual-order payment.** New table `order_manual_payments` (`order_id` PK, `method` cash/transfer/card, `cash_account_code` → `accounts`, recorded by/at; audited), written by the manual-order create/edit form; **required** for new WhatsApp/Instagram/offline/manual-web orders; account picker lists active Kas & Bank accounts (today Kas tunai + Bank utama [D-17]), defaulting from the method mapping; an "isi metode bayar" action fills it for older orders. No credit option. | Unit: method → default account; card → Bank utama. DB: order + payment row in one transaction; missing row → posting issue (once Session 9 posts rule S6). e2e: create a manual order with method/account at 390/1280. |
 | 7 | Purchases chain: P1, P2, P3 (with chain), P5, P6, P7; reconciliation checks 1 (bahan) and 2 (utang); **ledger-side guard test** that purchase/payment rules never debit an expense [D-14]. | Unit: chain allocation (DP before receipt, partial receipts, reversal returns advance, overpaid close). DB: against real receipts from fixtures; Σ P1 = tagihan for closed docs. |
 | 8 | Production: R1–R5, A1, A2; reconciliation for 1-1503/1-1504/1-1506. | Unit: R3 split — normal completion residue → 5-1201, short-close rest → 6-4102 [D-15]; A1/P7 → 6-4101/6-4102 [D-16]; scoped cost lines. DB: post → receive partially → short-close (the Haura beige L case: 12 planned, 6 received) → reopen → close; ledger = stock valuation. |
-| 9 | Sales: S1–S6 (S6 reads `order_manual_payments`), W1, W3, W4, W6–W11, M1 (real dates from Session 5), M2, M4; checks 3, 3b, 3c. W2/W5 rule code + tests ship here against fixture rows shaped like fee work A/B (component `payment_gateway_fee`, `source`, `order_settlements`); they post real data only once A+B are deployed. | Unit: per channel × status path (paid→shipped→completed; paid→cancelled→refunded; shipped→returned; re-import fee change into a closed month → first open month); marketplace order without real ship date → issue. DB: through `transitionOrderStatus` fixtures; 1-1504 + 1-1505 = stock valuation + to_ship cost. |
+| 9 | Sales: S1–S6 (S6 reads `order_manual_payments`, dated `paid_on`; a corrected record → reverse + repost into the first open month), W1, W3, W4, W6–W11, M1 (real dates from Session 5), M2, M4; checks 3, 3b, 3c. W2/W5 rule code + tests ship here against fixture rows shaped like fee work A/B (component `payment_gateway_fee`, `source`, `order_settlements`); they post real data only once A+B are deployed. | Unit: per channel × status path (paid→shipped→completed; paid→cancelled→refunded; shipped→returned; re-import fee change into a closed month → first open month); marketplace order without real ship date → issue; manual order without a payment record → `manual_payment_missing`; S6 on `paid_on` then S3 on the ship date; payment record corrected after posting (incl. into a closed month) → reversal + repost in the first open month. DB: through `transitionOrderStatus` fixtures; 1-1504 + 1-1505 = stock valuation + to_ship cost. |
 | 10 | **Neraca, Laba rugi, Arus kas** + PDF/Excel; reconciliation 4 (vs management P&L) and 5. | Unit: statement layout from a trial balance (6-4000 under beban usaha, not HPP). e2e: each report at 390/1280, export downloads. |
 | 11 | Fixed assets + depreciation [D-19] (tax groups, zero residual, from acquisition month, Rp1.000.000 threshold), **PPh final accrual** from `tax_settings` [D-20], year-end closing; turn on W2/W5 and check 3a once fee work A+B (a separate post-launch feature) is live. | Unit: depreciation schedule (rounding in last month); PPh base/exemption crossing Rp500 juta mid-month; no accrual after `rate_valid_until`; rate change by a new effective row. DB: closing zeroes P&L accounts. e2e: asset register + tax settings at 390/1280. |
 | 12 | Cron route for nightly/15-min posting, Rekonsiliasi page polish, docs (SPEC §5.x, runbook). | DB: concurrent runs serialise (advisory lock), no duplicates. |
 
 Every session: `/plan` approval first, `database-reviewer` + `typescript-reviewer` +
 `react-reviewer` at `/code-review`, and the migration file read before committing.
+
+**Session 5 status: BLOCKED (26 Nov 2026), deferred until real Shopee/TikTok export files are
+available.** The repo has no evidence of a ship-time or complete-time column for either marketplace:
+the Shopee adapter's columns come from a public article and are not verified (`SHOPEE_MAPPING_VERIFIED
+= false`, marketplace-import.md O1), and the TikTok adapter has no columns at all (O3). Nothing is
+guessed. Waiting for, per marketplace, a real export **header row** (no buyer data) and for the ship
+time and complete time columns: the exact header text, the value **format** (text such as
+`2026-12-03 14:22` or an Excel date cell), the **empty-value form** of an order not yet shipped or
+completed (empty cell, `-`, other), and whether the value is **the same on every row of an order**.
+The **full TikTok column mapping** is its own task (it is a prerequisite for any TikTok import, not
+part of Session 5). Until Session 5 ships, a marketplace order without a real ship date stays a
+**posting issue** (M1, §4.3; never the import time), and the opening-balance 1-1505 proposal still
+reads `orders.shipped_at` (the import time for marketplace orders), to be switched to the real ship
+time by Session 5.
 
 ### 8.1 Carried over from the Session 1 review (26 Nov 2026)
 
@@ -646,6 +660,46 @@ ON CONFLICT (so `seedAccounting` re-runs on an edited database) and checks the t
 (leading digit fixes the type) and `accounts_bank_fields_cash_bank_check` (bank fields only on a
 postable Kas & Bank account). The same rules live in `packages/accounting/src/mapping-rules.ts` for
 the editors' messages.
+
+**Done in Session 6 (migration 0053, D-3):** table `order_manual_payments` (`order_id` PK, `method`
+cash/transfer/card, `cash_account_code` → an active, postable Kas & Bank account, `paid_on` = the
+Jakarta day the money came in, `recorded_by_staff_user_id`, created/updated stamps; every write
+audited `record_manual_payment` / `update_manual_payment` with before/after). Trigger
+`order_manual_payments_guard`: a row only for a manual order (no `payment_status`, not
+shopee/tiktok) whose stock has left (a `sale` movement, i.e. it reached `to_ship`), the account read
+FOR SHARE and active/postable, `order_id` immutable. Written in ONE transaction with the order
+(order form, required for a manual channel created as "Siap Kirim") or with the `awaiting_payment →
+to_ship` transition ("Siap Kirim" on the order page asks for it; the plain transition is refused on
+the server for a manual order); "Isi cara bayar" / "Ubah cara bayar" on the order page fills or
+corrects it for older orders (the date is never prefilled there). The picker lists the active Kas &
+Bank accounts and preselects the method's `cash.method.*` mapping (card = debit → Bank utama, D-18);
+staff may pick another. `packages/accounting/src/rules/manual-orders.ts` holds the pieces S6 uses in
+Session 9 (`isManualPaymentOrder`, `suggestedCashAccountFor`, `manualOrderMoneyIn`, which raises the
+posting issue `manual_payment_missing` when no row exists: never a default account). Not wired into
+the runner yet (S6 lands with S1/S3 in Session 9). After the Session 6 review: rows are never
+deleted (trigger `order_manual_payments_guard_delete`), and `accounts_guard_update` refuses to turn
+an account payments point at into a header, or to deactivate it while any of those payments has no
+active S6 journal (key `('order', <id>, 'collected')`), so S6 never meets an unpostable account.
+The view-only order page hides the account name (orders.manage or finance.view_profit only).
+
+**Decided for Session 9 (owner, 26 Nov 2026, after the Session 6 review):**
+- **S6 date = the payment date** (`paid_on`), following D-1's deposit pattern: on the paid date Dr the
+  chosen Kas/Bank account / Cr 2-1201 Uang muka pelanggan; on the ship date S3 Dr 2-1201 / Cr
+  Penjualan (plus HPP). Two journals, the same as a website order (W1, then S3). The §4.1 S6 row says so.
+- **Account choice stays free:** any active Kas & Bank account for any method (e.g. cash paid
+  straight into the bank); the method's mapping is only the preselection.
+- **No lower limit on the payment date** (it is not tied to the order date); only "not after today".
+- **No "Belum dicatat" list filter** on the orders page: the posting issue queue
+  (`manual_payment_missing`) is where unrecorded orders are found.
+- **A record corrected after S6 posted it** (method, account or date): the engine's normal
+  reverse + repost (the journal's content hash includes the source date and the account), the
+  correction landing in the first open month when the original month is closed [D-23]. No freeze
+  of the row; edits stay audited (`update_manual_payment`).
+- An order cancelled or returned after payment keeps its record (the money did come in); S6 posts
+  it and the cancel/refund rules (S6 cancel line, W3/W4-style refund) must clear 2-1201/2-1202.
+- "A manual order reaches to_ship only with a record" is enforced in the admin actions (every
+  current `transitionOrderStatus` caller was checked); commerce itself does not enforce it. A new
+  caller would leave an order without a record, which S6 then reports as `manual_payment_missing`.
 
 **Done in Session 4 (migration 0052):** manual journals (attachment as `private_files` purpose
 `journal_attachment`, only on manual/opening journals; templates Top-up Biteship, penarikan Saldo

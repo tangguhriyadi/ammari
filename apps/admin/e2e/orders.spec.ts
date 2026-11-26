@@ -7,7 +7,7 @@ import { E2E_ORDERS_EMAIL } from "./global-setup";
 import { generateSku } from "@ammari/db/catalog";
 import { addVariants, createProductDraft } from "./helpers/product";
 
-test("a staffer creates a manual order, stock decreases, then cancels it and stock is restored", async ({ page }) => {
+test("a staffer creates a manual order with its payment, stock decreases, cancels it, then confirms a waiting order's payment", async ({ page }) => {
   // Mobile-first per docs/SPEC.md (Orders is a daily-use, mobile-first admin page).
   await page.setViewportSize({ width: 390, height: 844 });
   await loginAs(page, E2E_ORDERS_EMAIL);
@@ -58,9 +58,23 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
   // created in this shared e2e database, so several rows can share the "M" size label; the id is
   // unambiguous.
   await page.locator(`#qty-${sku}`).fill("2");
+  // D-3 (docs/plans/accounting.md Session 6): an order created already paid needs its payment
+  // method, destination account and date. Nothing is preselected, so saving without them is refused.
+  await page.getByRole("button", { name: "Simpan pesanan" }).click();
+  await expect(page.getByText("Pilih cara bayar.", { exact: true })).toBeVisible();
+  // Picking a method preselects its mapped Kas & Bank account: card is a debit card -> Bank utama (D-18).
+  await page.locator("#order-payment-method").selectOption("cash");
+  await expect(page.locator("#order-payment-account")).toHaveValue("1-1101");
+  await page.locator("#order-payment-method").selectOption("card");
+  await expect(page.locator("#order-payment-account")).toHaveValue("1-1201");
+  await expect(page.locator("#order-payment-paid-on")).not.toHaveValue("");
   await page.getByRole("button", { name: "Simpan pesanan" }).click();
   await openCreated(page, "/orders");
   const orderUrl = page.url();
+
+  // The order page shows the payment record.
+  await expect(page.getByTestId("manual-payment-method")).toHaveText("Kartu debit");
+  await expect(page.getByTestId("manual-payment-account")).toHaveText("Bank utama");
 
   // 4. The order detail shows "Siap Kirim" and the snapshotted HPP (Rp 200.000/pcs, from the
   // batch posted above) — this session has finance.view_profit, so cost isn't stripped.
@@ -84,4 +98,30 @@ test("a staffer creates a manual order, stock decreases, then cancels it and sto
 
   await page.goto(`/stock/${sku}`);
   await expect(page.getByText("5 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  // 7. Desktop: an order entered as "Menunggu Bayar" asks for no payment; its "Siap Kirim" records
+  // the payment and the status change together (D-3).
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/orders/new");
+  await page.locator("#order-channel").selectOption({ label: "Offline" });
+  await page.locator("#order-status").selectOption("awaiting_payment");
+  await expect(page.locator("#order-payment-method")).toHaveCount(0);
+  await page.locator(`#qty-${sku}`).fill("1");
+  await page.getByRole("button", { name: "Simpan pesanan" }).click();
+  await openCreated(page, "/orders");
+  const payment = page.getByTestId("manual-payment-section");
+  await expect(payment.getByText("Cara bayar dicatat saat pesanan ditandai Siap Kirim.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Siap Kirim", exact: true }).click();
+  const confirm = page.getByRole("form", { name: "Catat pembayaran" });
+  await confirm.locator("#confirm-payment-method").selectOption("cash");
+  await expect(confirm.locator("#confirm-payment-account")).toHaveValue("1-1101");
+  await confirm.getByRole("button", { name: "Simpan dan tandai Siap Kirim" }).click();
+  await expect(page.getByTestId("manual-payment-method")).toHaveText("Tunai", { timeout: 15_000 });
+  await expect(page.getByTestId("manual-payment-account")).toHaveText("Kas tunai");
+  await expect(page.getByText("Siap Kirim", { exact: true }).first()).toBeVisible();
+
+  // Stock left with the confirmation (5 - 1 = 4).
+  await page.goto(`/stock/${sku}`);
+  await expect(page.getByText("4 pcs", { exact: true })).toBeVisible({ timeout: 15_000 });
 });

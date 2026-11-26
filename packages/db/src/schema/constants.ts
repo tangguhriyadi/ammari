@@ -576,6 +576,11 @@ export const ACCOUNTING_CUTOVER_DATE = "2027-01-01";
 /** The last day of the trial month (D-22). */
 export const ACCOUNTING_TRIAL_MONTH_END = "2026-12-31";
 
+/** How a manual order (WhatsApp, Instagram, offline, manual web) was paid (D-3, migration 0053).
+ * "card" is a debit card (D-18). No credit option: a manual order is always paid before it ships. */
+export const MANUAL_ORDER_PAYMENT_METHODS = ["cash", "transfer", "card"] as const;
+export type ManualOrderPaymentMethod = (typeof MANUAL_ORDER_PAYMENT_METHODS)[number];
+
 export const POSTING_RUN_TRIGGERS = ["cron", "manual"] as const;
 export type PostingRunTrigger = (typeof POSTING_RUN_TRIGGERS)[number];
 

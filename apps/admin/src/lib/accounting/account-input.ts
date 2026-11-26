@@ -28,6 +28,8 @@ export const ACCOUNT_MESSAGES = {
   notFound: "Akun tidak ditemukan.",
   systemCannotDeactivate: "Akun sistem dipakai jurnal otomatis dan tidak bisa dinonaktifkan.",
   mappedCannotDeactivate: "Akun ini masih dipakai di Pemetaan Akun. Pindahkan pemetaannya ke akun lain dulu.",
+  paymentsCannotDeactivate: "Akun ini menjadi rekening tujuan pembayaran pesanan manual yang belum dibukukan. Nonaktifkan setelah pembayaran itu dibukukan.",
+  paymentsCannotBecomeHeader: "Akun ini menjadi rekening tujuan pembayaran pesanan manual, jadi tidak bisa dijadikan akun kelompok.",
   parentInactive: "Akun induk sudah nonaktif. Aktifkan dulu akun induknya.",
   headerWithActiveChildren: "Nonaktifkan dulu semua sub-akunnya.",
   systemCannotDelete: "Akun sistem tidak bisa dihapus.",

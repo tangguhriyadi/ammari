@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
   adjustStock: vi.fn(),
   createOrder: vi.fn(),
   transitionOrderStatus: vi.fn(),
+  confirmManualOrderPayment: vi.fn(),
   postGoodsReceiptForBatch: vi.fn(),
   reverseGoodsReceipt: vi.fn(),
 }));
@@ -28,11 +29,19 @@ vi.mock("@/lib/storefront-stock", () => ({
 }));
 vi.mock("@ammari/commerce/stock", () => ({ saveStockCount: m.saveStockCount, adjustStock: m.adjustStock }));
 vi.mock("@ammari/commerce/orders", () => ({ createOrder: m.createOrder, transitionOrderStatus: m.transitionOrderStatus }));
+// The order actions create and confirm manual orders through lib/orders/manual-payment (D-3, a
+// payment record in the same transaction); its own DB behaviour is covered in manual-payment.test.ts.
+vi.mock("@/lib/orders/manual-payment", () => ({
+  createOrderWithManualPayment: m.createOrder,
+  confirmManualOrderPayment: m.confirmManualOrderPayment,
+  assertPlainTransitionAllowed: vi.fn(),
+  recordManualOrderPayment: vi.fn(),
+}));
 vi.mock("@/lib/receipts/production", () => ({ postGoodsReceiptForBatch: m.postGoodsReceiptForBatch, closeBatchShort: vi.fn() }));
 vi.mock("@/lib/receipts/queries", () => ({ postGoodsReceiptForPurchase: vi.fn(), reverseGoodsReceipt: m.reverseGoodsReceipt }));
 
 const { saveStockCountAction, adjustStockAction } = await import("./stock/actions");
-const { createOrderAction, transitionOrderStatusAction } = await import("./orders/actions");
+const { confirmManualOrderPaymentAction, createOrderAction, transitionOrderStatusAction } = await import("./orders/actions");
 const { receiveBatchAction } = await import("./production/actions");
 const { reverseReceiptAction } = await import("./purchases/actions");
 
@@ -94,7 +103,7 @@ describe("storefront revalidation after stock changes", () => {
     m.createOrder.mockResolvedValue({ id: ID });
     const base = { channelId: "offline" as const, orderDate: "2026-10-01", discountAmount: "", shippingAmount: "", items: [{ sku: "SKU-A", qty: 1, unitPrice: "100000" }] };
 
-    await createOrderAction({ ...base, status: "to_ship" });
+    await createOrderAction({ ...base, status: "to_ship", payment: { method: "cash", cashAccountCode: "1-1101", paidOn: "2026-10-01" } });
     expect(m.revalidateStorefrontForSkus).toHaveBeenCalledTimes(1);
     expect(m.revalidateStorefrontForSkus).toHaveBeenCalledWith(["SKU-A"]);
 
@@ -113,6 +122,13 @@ describe("storefront revalidation after stock changes", () => {
     m.revalidateStorefrontForSkus.mockClear();
     await transitionOrderStatusAction({ orderId: ID, toStatus: "shipped" });
     expect(m.revalidateStorefrontForSkus).not.toHaveBeenCalled();
+  });
+
+  test("Siap Kirim with the payment of a manual order (stock leaves) revalidates the order's SKUs", async () => {
+    m.confirmManualOrderPayment.mockResolvedValue(undefined);
+    const result = await confirmManualOrderPaymentAction({ orderId: ID, payment: { method: "transfer", cashAccountCode: "1-1201", paidOn: "2026-10-01" } });
+    expect(result).toEqual({ ok: true, data: { storefrontOk: true } });
+    expect(await resolved()).toEqual(["SKU-A", "SKU-B"]);
   });
 
   test("a failed storefront call never fails the action; it is reported as storefrontOk: false", async () => {

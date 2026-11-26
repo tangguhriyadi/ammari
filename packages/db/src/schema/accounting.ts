@@ -28,6 +28,7 @@ import {
   CASH_FLOW_GROUPS,
   FISCAL_PERIOD_STATUSES,
   JOURNAL_ENTRY_KINDS,
+  MANUAL_ORDER_PAYMENT_METHODS,
   POSTING_RUN_STATUSES,
   POSTING_RUN_TRIGGERS,
   TAXPAYER_TYPES,
@@ -37,6 +38,7 @@ import {
   type ChannelId,
   type FiscalPeriodStatus,
   type JournalEntryKind,
+  type ManualOrderPaymentMethod,
   type PrivateFilePurpose,
   type PostingRunStatus,
   type PostingRunTrigger,
@@ -395,5 +397,42 @@ export const taxSettings = pgTable(
     check("tax_settings_exemption_check", sql`${table.annualExemptionAmount} >= 0`),
     check("tax_settings_valid_until_check", sql`${table.rateValidUntil} is null or ${table.rateValidUntil} >= ${table.effectiveFrom}`),
     check("tax_settings_note_check", sql`${table.note} is null or (btrim(${table.note}) <> '' and char_length(${table.note}) <= 500)`),
+  ],
+);
+
+// ---------- Pembayaran pesanan manual, migration 0053 ----------
+// docs/plans/accounting.md §8 Session 6, D-3: how a manual order (any non-checkout,
+// non-marketplace order) was paid and into which Kas & Bank account the money went, so rule S6
+// (Session 9) posts it there instead of guessing. One row per order, written by the order form
+// (in the order's own transaction), by "Siap Kirim" on an order waiting for payment (with the
+// transition), or by "Isi cara bayar" for an older order; a correction overwrites it (audited).
+// Hand-authored trigger order_manual_payments_guard (0053): only a manual order whose stock has
+// left (it reached "Siap Kirim", so it was paid, D-3) gets a row; the account is read FOR SHARE
+// and must be an active, postable Kas & Bank account (same race reasoning as
+// account_mappings_guard_target); order_id never changes. An order without a row is a posting
+// issue for S6, never a default account.
+export const orderManualPayments = pgTable(
+  "order_manual_payments",
+  {
+    orderId: uuid("order_id")
+      .primaryKey()
+      .references(() => orders.id, { onDelete: "restrict", onUpdate: "restrict" }),
+    method: text("method").$type<ManualOrderPaymentMethod>().notNull(),
+    cashAccountCode: text("cash_account_code")
+      .notNull()
+      .references(() => accounts.code, { onDelete: "restrict", onUpdate: "restrict" }),
+    // The Jakarta calendar day the money came in, as staff recorded it.
+    paidOn: date("paid_on", { mode: "string" }).notNull(),
+    // Whoever recorded or last changed it; created_at/updated_at say when.
+    recordedByStaffUserId: uuid("recorded_by_staff_user_id")
+      .notNull()
+      .references(() => staffUsers.id, { onDelete: "restrict" }),
+    ...timestamps(),
+  },
+  (table) => [
+    index("order_manual_payments_cash_account_code_idx").on(table.cashAccountCode),
+    index("order_manual_payments_recorded_by_staff_user_id_idx").on(table.recordedByStaffUserId),
+    check("order_manual_payments_method_check", checkIn(table.method, MANUAL_ORDER_PAYMENT_METHODS)),
+    check("order_manual_payments_cash_account_check", sql`${table.cashAccountCode} ~ ${sql.raw(`'${CASH_BANK_ACCOUNT_CODE_PATTERN}'`)}`),
   ],
 );
