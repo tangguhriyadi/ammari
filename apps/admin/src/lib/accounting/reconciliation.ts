@@ -1,24 +1,30 @@
 import "server-only";
 import { sql } from "drizzle-orm";
-import { batchWipAsOf, bookSegmentOf, jakartaDateOf, segmentStartOf, type BookSegment } from "@ammari/accounting";
-import { loadProductionBatchSnapshots } from "@ammari/accounting/runner";
+import { batchWipAsOf, bookSegmentOf, jakartaDateOf, orderAccountMovements, segmentStartOf, type BookSegment } from "@ammari/accounting";
+import { loadOrderSnapshots, loadProductionBatchSnapshots } from "@ammari/accounting/runner";
+import type { ChannelId } from "@ammari/db/schema";
 import { defaultDb, type Database } from "@/lib/db";
 import {
+  biteshipDifference,
   reconcileMaterial,
+  reconcileOrderAccount,
   reconcilePayable,
   reconcileStockAccount,
   reconcileWipBatch,
   type MaterialReconciliation,
+  type OrderAccountReconciliation,
   type PayableReconciliation,
   type ReconciliationStatus,
   type StockAccountReconciliation,
   type WipBatchReconciliation,
 } from "./reconciliation-rules";
 
-// Rekonsiliasi (docs/plans/accounting.md §6.3, Sessions 7 and 8): check 1 for inventory (1-1501
+// Rekonsiliasi (docs/plans/accounting.md §6.3, Sessions 7, 8 and 9): check 1 for inventory (1-1501
 // kain, 1-1502 aksesoris vs the raw-material ledgers; 1-1503 barang dalam proses per batch; 1-1504
 // barang jadi vs stock_movements; 1-1506 barang cacat vs defect_movements) and check 2 for supplier
-// payables (utang per purchase document vs the app's tagihan). Read-only. The ledger side is summed within one set of books
+// payables (utang per purchase document vs the app's tagihan); Session 9: check 1 for 1-1505 and checks 3
+// (2-1201 Uang muka pelanggan), 3b (1-1603 Saldo Biteship vs the dashboard) and 3c (2-1203 Titipan
+// ongkir pembeli), per order. Read-only. The ledger side is summed within one set of books
 // (books.ts): from 1 Dec 2026 for the trial month, from the cut-over 1 Jan 2027 for the official
 // books (the opening journal included), so the stock side uses the same window: in the official
 // books everything before the cut-over is the opening balance; in the trial month nothing before
@@ -54,6 +60,46 @@ export interface WipBatchRow extends WipBatchReconciliation {
   batchNo: string;
 }
 
+export type SalesCheckKind = "sold_not_shipped" | "deposit" | "buyer_shipping";
+
+export interface SalesOrderRow extends OrderAccountReconciliation {
+  orderId: string;
+  orderNo: string;
+  channelId: ChannelId;
+  /** The order waits for data the records do not have yet (a marketplace ship time, a manual
+   * payment record): its journal is a posting issue. */
+  pending: boolean;
+}
+
+export interface SalesCheck {
+  kind: SalesCheckKind;
+  accountCode: string;
+  accountName: string;
+  /** The whole account in the window, as a balance on its normal side. */
+  ledgerTotal: number;
+  /** The part on no order's lines (manual and opening journals). */
+  outsideOrders: number;
+  /** Orders with a balance or a difference, mismatches first, at most SALES_ROWS_LIMIT. */
+  rows: SalesOrderRow[];
+  /** How many orders had a balance or a difference before the limit. */
+  rowCount: number;
+  mismatchCount: number;
+}
+
+export interface BiteshipCheck {
+  accountCode: string;
+  accountName: string;
+  ledger: number;
+  /** Bookings and their cancels (W9, W10). */
+  bookings: number;
+  /** Everything else: top-ups and corrections by manual journal, the opening balance. */
+  otherJournals: number;
+  typed: number | null;
+  difference: number | null;
+}
+
+export const SALES_ROWS_LIMIT = 50;
+
 export interface Reconciliation {
   asOf: string;
   segment: BookSegment;
@@ -68,6 +114,9 @@ export interface Reconciliation {
    * journals). */
   payableLedgerTotal: number;
   payableOutsideDocuments: number;
+  /** Session 9: 1-1505, 2-1201, 2-1203 per order. */
+  salesChecks: SalesCheck[];
+  biteship: BiteshipCheck;
 }
 
 const STATUS_ORDER: Record<ReconciliationStatus, number> = { mismatch: 0, review: 1, explained: 2, ok: 3 };
@@ -151,8 +200,16 @@ async function finishedFigures(db: Database, from: string, to: string, official:
     with m as (
       select m.type, m.ref_type, m.value_amount,
         case when m.ref_type = 'goods_receipt_item' then gr.received_at else (m.created_at at time zone 'Asia/Jakarta')::date end as d,
-        ogr.received_at as original_d
+        ogr.received_at as original_d,
+        -- A return held behind its sale (S2 waits while the order's recognition is blocked by
+        -- marketplace_ship_date_missing, rules/sales.ts): no active S2 journal, the issue open.
+        (m.type = 'return'
+          and not exists (select 1 from journal_entries je where je.source_type = 'stock_movement' and je.source_id = m.id::text and je.source_event = 'return'
+            and je.kind = 'system' and je.reversed_by_entry_id is null)
+          and exists (select 1 from posting_issues pi where pi.source_type = 'order' and pi.source_id = oi.order_id::text and pi.source_event = 'recognised'
+            and pi.issue_code = 'marketplace_ship_date_missing' and pi.resolved_at is null)) as held_return
       from stock_movements m
+      left join order_items oi on m.ref_type = 'order_item' and oi.id::text = m.ref_id
       left join goods_receipt_items gri on m.ref_type = 'goods_receipt_item' and gri.id::text = m.ref_id
       left join goods_receipts gr on gr.id = gri.goods_receipt_id
       left join goods_receipts ogr on ogr.id = gr.reverses_receipt_id
@@ -161,14 +218,14 @@ async function finishedFigures(db: Database, from: string, to: string, official:
       coalesce(sum(value_amount) filter (where ${official}::boolean and d < ${from}), 0)::bigint as before_books,
       coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to}), 0)::bigint as in_window,
       coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and ref_type = 'goods_receipt_item' and original_d < ${from}), 0)::bigint as voids_before_books,
-      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and type in ('sale', 'return')), 0)::bigint as sales,
+      coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and held_return), 0)::bigint as held_returns,
       coalesce(sum(value_amount) filter (where d >= ${from} and d <= ${to} and ref_type = 'production_batch_item'), 0)::bigint as legacy
     from m
   `)) as unknown as Record<string, string>[];
   return {
     stockValue: num(row?.before_books) + num(row?.in_window),
     notJournaled: [
-      { label: "Penjualan dan pembatalannya (jurnal penjualan belum tersedia)", value: num(row?.sales) },
+      { label: "Retur pesanan marketplace yang penjualannya menunggu tanggal kirim asli", value: num(row?.held_returns) },
       { label: "Stok produksi cara lama (ditambah saat posting batch)", value: num(row?.legacy) },
       { label: "Pembatalan penerimaan dari sebelum pembukuan", value: num(row?.voids_before_books) },
     ],
@@ -346,7 +403,85 @@ async function payableRows(db: Database, keys: { payable: string; advance: strin
   `)) as unknown as PayableQueryRow[];
 }
 
-export async function getReconciliation(asOf: string, db: Database = defaultDb): Promise<Reconciliation> {
+const SALES_ACCOUNT_KEYS: Record<SalesCheckKind, { key: string; credit: boolean }> = {
+  sold_not_shipped: { key: "inventory.sold_not_shipped", credit: false },
+  deposit: { key: "liability.customer_deposit", credit: true },
+  buyer_shipping: { key: "liability.buyer_shipping", credit: true },
+};
+
+/** Σ (debit − credit) per (order, account) on lines that carry an order id, within the window. */
+async function ledgerByOrder(db: Database, accountCodes: string[], from: string, to: string): Promise<Map<string, number>> {
+  const rows = (await db.execute(sql`
+    select l.order_id::text as order_id, l.account_code, sum(l.debit - l.credit)::bigint as net
+    from journal_lines l join journal_entries e on e.id = l.entry_id
+    where l.order_id is not null and l.account_code in (${sql.join(accountCodes.map((code) => sql`${code}`), sql`, `)}) and ${EFFECTIVE_DATE} >= ${from} and ${EFFECTIVE_DATE} <= ${to}
+    group by l.order_id, l.account_code
+  `)) as unknown as { order_id: string; account_code: string; net: string }[];
+  return new Map(rows.map((row) => [`${row.order_id}|${row.account_code}`, num(row.net)]));
+}
+
+/** Checks 1 (1-1505), 3 (2-1201) and 3c (2-1203): per order, the records against the order's lines. */
+async function salesChecks(db: Database, keys: Map<string, { code: string; name: string }>, from: string, to: string): Promise<SalesCheck[]> {
+  const accountsByKind = Object.fromEntries(
+    (Object.keys(SALES_ACCOUNT_KEYS) as SalesCheckKind[]).map((kind) => {
+      const account = keys.get(SALES_ACCOUNT_KEYS[kind].key);
+      if (!account) throw new Error(`the chart of accounts lost the system account ${SALES_ACCOUNT_KEYS[kind].key}`);
+      return [kind, account];
+    }),
+  ) as Record<SalesCheckKind, { code: string; name: string }>;
+  const [orders, byOrder] = await Promise.all([loadOrderSnapshots(db), ledgerByOrder(db, Object.values(accountsByKind).map((account) => account.code), from, to)]);
+  const appByOrder = new Map(orders.map((order) => [order.id, { order, movements: orderAccountMovements(order, from, to) }]));
+
+  const checks: SalesCheck[] = [];
+  for (const kind of Object.keys(SALES_ACCOUNT_KEYS) as SalesCheckKind[]) {
+    const account = accountsByKind[kind];
+    const sign = SALES_ACCOUNT_KEYS[kind].credit ? -1 : 1;
+    const ledgerTotal = sign * (await ledgerBalance(db, account.code, from, to)) || 0;
+    const rows: SalesOrderRow[] = [];
+    let ordersLedger = 0;
+    for (const [orderId, { order, movements }] of appByOrder) {
+      const ledger = sign * (byOrder.get(`${orderId}|${account.code}`) ?? 0) || 0;
+      ordersLedger += ledger;
+      const app = kind === "sold_not_shipped" ? movements.soldNotShipped : kind === "deposit" ? movements.deposit : movements.buyerShipping;
+      if (app === 0 && ledger === 0) continue;
+      rows.push({ orderId, orderNo: order.orderNo, channelId: order.channelId, pending: movements.pending, ...reconcileOrderAccount({ app, ledger, startsBeforeBooks: movements.startsBeforeBooks }) });
+    }
+    // Lines of an order the loader does not return (nothing to book any more) still count as orders'.
+    for (const [mapKey, net] of byOrder) {
+      const [orderId, code] = mapKey.split("|");
+      if (code === account.code && orderId && !appByOrder.has(orderId)) ordersLedger += sign * net;
+    }
+    rows.sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.orderNo.localeCompare(b.orderNo));
+    checks.push({
+      kind,
+      accountCode: account.code,
+      accountName: account.name,
+      ledgerTotal,
+      outsideOrders: ledgerTotal - ordersLedger,
+      rows: rows.slice(0, SALES_ROWS_LIMIT),
+      rowCount: rows.length,
+      mismatchCount: rows.filter((row) => row.status === "mismatch").length,
+    });
+  }
+  return checks;
+}
+
+/** Check 3b: 1-1603 Saldo Biteship, split into bookings and everything else. */
+async function biteshipCheck(db: Database, account: { code: string; name: string }, from: string, to: string, typed: number | null): Promise<BiteshipCheck> {
+  const [row] = (await db.execute(sql`
+    select
+      coalesce(sum(l.debit - l.credit), 0)::bigint as ledger,
+      coalesce(sum(l.debit - l.credit) filter (where e.source_type = 'shipment'), 0)::bigint as bookings
+    from journal_lines l join journal_entries e on e.id = l.entry_id
+    where l.account_code = ${account.code} and ${EFFECTIVE_DATE} >= ${from} and ${EFFECTIVE_DATE} <= ${to}
+  `)) as unknown as { ledger: string; bookings: string }[];
+  const ledger = num(row?.ledger);
+  const bookings = num(row?.bookings);
+  return { accountCode: account.code, accountName: account.name, ledger, bookings, otherJournals: ledger - bookings, typed, difference: biteshipDifference(ledger, typed) };
+}
+
+/** `biteshipDashboard`: the Saldo Biteship typed from the dashboard for check 3b (not stored). */
+export async function getReconciliation(asOf: string, db: Database = defaultDb, biteshipDashboard: number | null = null): Promise<Reconciliation> {
   const segment = bookSegmentOf(asOf);
   const segmentStart = segmentStartOf(asOf);
   const official = segment === "official";
@@ -409,6 +544,8 @@ export async function getReconciliation(asOf: string, db: Database = defaultDb):
     .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
 
   const payableLedgerTotal = -(await ledgerBalance(db, payable.code, segmentStart, asOf));
+  const biteshipAccount = keys.get("prepaid.biteship");
+  if (!biteshipAccount) throw new Error("the chart of accounts lost the system account prepaid.biteship");
   const documentsPayable = allPayables.reduce((sum, row) => sum + row.ledgerPayable, 0);
   return {
     asOf,
@@ -420,5 +557,7 @@ export async function getReconciliation(asOf: string, db: Database = defaultDb):
     payables,
     payableLedgerTotal,
     payableOutsideDocuments: payableLedgerTotal - documentsPayable,
+    salesChecks: await salesChecks(db, keys, segmentStart, asOf),
+    biteship: await biteshipCheck(db, biteshipAccount, segmentStart, asOf, biteshipDashboard),
   };
 }

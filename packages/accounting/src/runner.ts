@@ -17,7 +17,7 @@ import {
 import { crossesCutover } from "./books";
 import { inReadCommitted, insertLines, insertReversal, loadClosedMonths, nextEntryNo, truncateDescription, type Database, type Tx } from "./ledger-write";
 import { POSTING_START_DATE, postingDateFor } from "./dates";
-import { decideAction, planEvent, type PlannedOutcome } from "./plan";
+import { comparableActiveHash, decideAction, planEvent, type PlannedOutcome } from "./plan";
 import { expenseRule, type ExpenseSnapshot } from "./rules/expenses";
 import { supplierPaymentRule, type SupplierPaymentSnapshot } from "./rules/supplier-payments";
 import { purchaseChainRule, type PurchaseDocumentSnapshot } from "./rules/purchases";
@@ -25,6 +25,8 @@ import { rawMaterialAdjustmentRule, type RawMaterialMovementSnapshot } from "./r
 import { loadPurchaseDocumentSnapshots, loadRawMaterialMovementSnapshots } from "./purchase-loaders";
 import { productionChainRule, type ProductionBatchSnapshot } from "./rules/production";
 import { defectDisposalRule, finishedGoodsAdjustmentRule, type DefectDisposalSnapshot, type FinishedGoodsAdjustmentSnapshot } from "./rules/inventory";
+import { salesRule, type OrderSnapshot } from "./rules/sales";
+import { loadOrderSnapshots } from "./sales-loaders";
 import { loadDefectDisposalSnapshots, loadFinishedGoodsAdjustmentSnapshots, loadProductionBatchSnapshots } from "./production-loaders";
 import type { AccountInfo, PostingContext, PostingEvent, PostingKey, PostingRule } from "./rules/types";
 
@@ -43,6 +45,7 @@ import type { AccountInfo, PostingContext, PostingEvent, PostingKey, PostingRule
 
 export type { Database } from "./ledger-write";
 export { loadProductionBatchSnapshots } from "./production-loaders";
+export { loadOrderSnapshots } from "./sales-loaders";
 
 /** A rule plus the loader for its snapshots. */
 export interface PostingSource {
@@ -143,13 +146,19 @@ export function defectDisposalSource(rule: PostingRule<DefectDisposalSnapshot> =
   return postingSource(rule, loadDefectDisposalSnapshots);
 }
 
+/** S1-S6, W1, W3, W4, W9, W10, M1, M2 (Session 9). */
+export function salesSource(rule: PostingRule<OrderSnapshot> = salesRule): PostingSource {
+  return postingSource(rule, loadOrderSnapshots);
+}
+
 /** Every rule posting so far: E1-E2 (expenses), the purchase chain P1-P6, P7, the production chain
- * R1-R5 (batch payments included, Session 8), A1 and A2. Each posting key is emitted by exactly one
+ * R1-R5 (batch payments included, Session 8), A1 and A2, and the sales chain (Session 9: S1-S6,
+ * W1, W3, W4, W9, W10, M1, M2; W2/W5 wait for fee work A+B, Session 11). Each posting key is emitted by exactly one
  * source. The production chain runs after the purchase chain, so a batch's consumption (R1) is
  * booked after the receipts that brought the material in, within the same run. The supplier_payment
  * rule (Session 2) emits nothing any more and is not listed. */
 export function defaultPostingSources(): PostingSource[] {
-  return [expenseSource(), purchaseChainSource(), rawMaterialAdjustmentSource(), productionChainSource(), finishedGoodsAdjustmentSource(), defectDisposalSource()];
+  return [expenseSource(), purchaseChainSource(), rawMaterialAdjustmentSource(), productionChainSource(), finishedGoodsAdjustmentSource(), defectDisposalSource(), salesSource()];
 }
 
 export async function loadPostingContext(db: Database, postingStartDate: string = POSTING_START_DATE): Promise<PostingContext> {
@@ -253,10 +262,19 @@ async function loadActiveEntry(tx: Database, key: PostingKey): Promise<ActiveEnt
  * active journal (plan §2) AND both sit in the same set of books (books.ts, Session 4): a December
  * trial-month original voided in 2027 posts nothing, since the opening journal already reflects
  * the correction. */
-async function originalAllowsVoid(db: Database, original: PostingKey, voidDate: string): Promise<boolean> {
+async function originalAllowsVoid(db: Database, original: PostingKey, voidDate: string, acrossBooks = false): Promise<boolean> {
   const active = await loadActiveEntry(db, original);
   if (!active) return false;
-  return !crossesCutover(active.sourceDate ?? active.entryDate, voidDate);
+  // A real event held behind a blocked original (requiresActiveJournalAcrossBooks) is not a negation:
+  // once the original posts it follows, whichever set of books the original is in.
+  return acrossBooks || !crossesCutover(active.sourceDate ?? active.entryDate, voidDate);
+}
+
+type Dependency = Pick<PostingEvent, "requiresActiveJournalFor" | "requiresActiveJournalAcrossBooks">;
+
+async function dependencyAllows(db: Database, event: Dependency, sourceDate: string): Promise<boolean> {
+  if (!event.requiresActiveJournalFor) return true;
+  return originalAllowsVoid(db, event.requiresActiveJournalFor, sourceDate, event.requiresActiveJournalAcrossBooks === true);
 }
 
 /** Reverses `active` with a mirrored reversal entry, dated on the original's date or, when that
@@ -290,14 +308,14 @@ type WriteResult = { inserted: number; reversed: number; unchanged: number };
 
 /** The write half for one key, under its advisory lock, re-deciding against the active journal as
  * it is now (another run may have posted it since the pre-read). */
-async function applyPlanned(db: Database, planned: PlannedOutcome, requiresActiveJournalFor: PostingKey | undefined): Promise<WriteResult> {
+async function applyPlanned(db: Database, planned: PlannedOutcome, dependency: Dependency): Promise<WriteResult> {
   return inReadCommitted(db, async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('ammari.posting'), hashtext(${keyString(planned.key)}))`);
     // Re-checked inside the transaction: the original's own reverse + repost is atomic, so a
     // committed original always has exactly one active journal.
-    if (requiresActiveJournalFor && !(await originalAllowsVoid(tx, requiresActiveJournalFor, planned.sourceDate))) return { inserted: 0, reversed: 0, unchanged: 0 };
+    if (!(await dependencyAllows(tx, dependency, planned.sourceDate))) return { inserted: 0, reversed: 0, unchanged: 0 };
     const active = await loadActiveEntry(tx, planned.key);
-    const action = decideAction(planned, active ? active.contentHash : undefined);
+    const action = decideAction(planned, comparableActiveHash(planned, active));
     if (action === "unchanged" || action === "skip" || action === "issue") return { inserted: 0, reversed: 0, unchanged: action === "unchanged" ? 1 : 0 };
     const closedMonths = await loadClosedMonths(tx);
     let reversed = 0;
@@ -393,7 +411,7 @@ export async function runPosting(db: Database, options: PostingRunOptions): Prom
         // A void whose original has no active journal (dated before the cut-over, or still held by
         // an issue) does nothing: no journal, no issue (plan §2). Checked against the database, not
         // the pre-read, because the original may have been posted earlier in this same run.
-        if (event.requiresActiveJournalFor && !(await originalAllowsVoid(db, event.requiresActiveJournalFor, event.sourceDate))) {
+        if (event.requiresActiveJournalFor && !(await dependencyAllows(db, event, event.sourceDate))) {
           if (keyIssues.length > 0) await resolveIssues(db, event.key, null);
           continue;
         }
@@ -409,12 +427,12 @@ export async function runPosting(db: Database, options: PostingRunOptions): Prom
 
         // Pre-read: most keys are unchanged, and those need no transaction or lock at all.
         const active = activeEntries.get(keyText);
-        const preAction = decideAction(planned, active ? active.contentHash : undefined);
+        const preAction = decideAction(planned, comparableActiveHash(planned, active));
         try {
           if (preAction === "unchanged") {
             result.unchangedCount += 1;
           } else if (preAction !== "skip") {
-            const written = await applyPlanned(db, planned, event.requiresActiveJournalFor);
+            const written = await applyPlanned(db, planned, event);
             result.insertedCount += written.inserted;
             result.reversedCount += written.reversed;
             result.unchangedCount += written.unchanged;

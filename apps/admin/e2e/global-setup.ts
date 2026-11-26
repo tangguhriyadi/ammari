@@ -203,6 +203,10 @@ export const E2E_ACCOUNTING_SUPPLIER = "E2E Akun Toko Kain";
 /** A production batch posted on 5 Dec 2026 and still in production (Session 8: R1 and the
  * Rekonsiliasi "Barang dalam proses per batch" list): fabric 200.000 + a 300.000 service line. */
 export const E2E_ACCOUNTING_BATCH_NO = "BTC-E2E-AKUN";
+/** Session 9: a WhatsApp order paid by transfer on 6 Dec 2026 (Session 6's payment record) and packed
+ * the same day, not shipped yet: S1 and S6 post, so the Rekonsiliasi "Penjualan" section lists it on
+ * 1-1505 (HPP 100.000) and 2-1201 (285.000), both "Cocok". */
+export const E2E_ACCOUNTING_ORDER_NO = "ORD-E2E-AKUN-JUAL";
 // accounting-master.spec.ts (docs/plans/accounting.md Session 3): Data Master Akun, Pemetaan akun,
 // Pengaturan pajak. An owner of its own (fresh OTP throttle), the existing view-only role, and one
 // unmapped expense category the spec maps (D-25). The spec touches only this category and an
@@ -455,6 +459,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     stockMovements,
     orders,
     orderItems,
+    orderManualPayments,
     orderChannelFees,
     payments,
     stockReservations,
@@ -1138,6 +1143,40 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       .update(productionBatches)
       .set({ status: "posted", postedAt: new Date("2026-12-05T03:00:00Z"), postedByStaffUserId: owner.id })
       .where(eq(productionBatches.id, batch.id));
+    // Session 9 (see E2E_ACCOUNTING_ORDER_NO above), as createOrderWithManualPayment leaves it, with
+    // December timestamps.
+    const [saleFabric] = await tx.insert(fabrics).values({ name: "E2E Akun Kain Jual" }).returning({ id: fabrics.id });
+    if (!saleFabric) throw new Error("failed to seed the e2e accounting sale fabric");
+    const [saleColor] = await tx.insert(fabricColors).values({ fabricId: saleFabric.id, name: "Mocca" }).returning({ id: fabricColors.id });
+    const [saleProduct] = await tx
+      .insert(products)
+      .values({ name: "E2E Akun Gamis Jual", code: "E2EAKUNJUAL", slug: "e2e-akun-gamis-jual", fabricId: saleFabric.id, closure: "front_zip", sizeMode: "sized", basePrice: 270_000 })
+      .returning({ id: products.id, closure: products.closure });
+    if (!saleColor || !saleProduct) throw new Error("failed to seed the e2e accounting sale product");
+    const saleSku = "E2EAKUNJUAL-M";
+    await tx.insert(productVariants).values({ productId: saleProduct.id, fabricId: saleFabric.id, fabricColorId: saleColor.id, closure: saleProduct.closure, sku: saleSku, size: "M" });
+    const soldAt = new Date("2026-12-06T03:00:00Z");
+    await tx.insert(stockMovements).values({ sku: saleSku, qty: 5, valueAmount: 500_000, type: "production", refType: "manual", createdAt: new Date("2026-11-20T03:00:00Z") });
+    const [saleOrder] = await tx
+      .insert(orders)
+      .values({
+        channelId: "whatsapp",
+        orderNo: E2E_ACCOUNTING_ORDER_NO,
+        status: "to_ship",
+        orderDate: soldAt,
+        subtotalAmount: 270_000,
+        shippingAmount: 15_000,
+        discountAmount: 0,
+        totalAmount: 285_000,
+        createdByStaffUserId: owner.id,
+        createdAt: soldAt,
+      })
+      .returning({ id: orders.id });
+    if (!saleOrder) throw new Error("failed to seed the e2e accounting order");
+    const [saleItem] = await tx.insert(orderItems).values({ orderId: saleOrder.id, sku: saleSku, qty: 1, unitPrice: 270_000, unitCost: 100_000 }).returning({ id: orderItems.id });
+    if (!saleItem) throw new Error("failed to seed the e2e accounting order item");
+    await tx.insert(stockMovements).values({ sku: saleSku, qty: -1, valueAmount: -100_000, type: "sale", refType: "order_item", refId: saleItem.id, createdByStaffUserId: owner.id, createdAt: soldAt });
+    await tx.insert(orderManualPayments).values({ orderId: saleOrder.id, method: "transfer", cashAccountCode: "1-1201", paidOn: "2026-12-06", recordedByStaffUserId: owner.id });
     await tx.insert(supplierPayments).values({
       paymentNo: E2E_ACCOUNTING_PAYMENT_NO,
       targetType: "purchase",

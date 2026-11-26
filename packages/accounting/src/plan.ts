@@ -28,7 +28,17 @@ export function journalContentHash(ruleVersion: number, sourceDate: string, line
 }
 
 export type PlannedOutcome =
-  | { kind: "journal"; key: PostingKey; sourceDate: string; ruleVersion: number; description: string; lines: JournalLineDraft[]; contentHash: string }
+  | {
+      kind: "journal";
+      key: PostingKey;
+      sourceDate: string;
+      ruleVersion: number;
+      description: string;
+      lines: JournalLineDraft[];
+      contentHash: string;
+      /** PostingEvent.dateFollowsActive. */
+      dateFollowsActive?: boolean;
+    }
   | { kind: "issue"; key: PostingKey; sourceDate: string; issueCode: string; details: Record<string, unknown> }
   | { kind: "none"; key: PostingKey; sourceDate: string };
 
@@ -72,7 +82,20 @@ export function planEvent(event: PostingEvent, ruleVersion: number, context: Pos
     description: outcome.description,
     lines: outcome.lines,
     contentHash: journalContentHash(ruleVersion, sourceDate, outcome.lines),
+    ...(event.dateFollowsActive ? { dateFollowsActive: true } : {}),
   };
+}
+
+/** The active journal's content hash as the runner compares it: for an event whose date follows
+ * the active journal (PostingEvent.dateFollowsActive), an active journal with the same lines on its
+ * own (older) source date counts as identical, so the event is "unchanged" rather than re-dated. */
+export function comparableActiveHash(planned: PlannedOutcome, active: { contentHash: string | null; sourceDate: string | null } | undefined): string | null | undefined {
+  if (!active) return undefined;
+  if (planned.kind === "journal" && planned.dateFollowsActive && active.sourceDate && active.sourceDate !== planned.sourceDate) {
+    const onActiveDate = journalContentHash(planned.ruleVersion, active.sourceDate, planned.lines);
+    if (onActiveDate === active.contentHash) return planned.contentHash;
+  }
+  return active.contentHash;
 }
 
 export type KeyAction = "unchanged" | "insert" | "reverse_and_insert" | "reverse" | "issue" | "skip";

@@ -1,35 +1,29 @@
 import Link from "next/link";
-import { Badge, Breadcrumb, Button, Card, CardList, EmptyState, Input, Label, PageHeader, TableContainer, TableHead, Td, Th, Tr, type BadgeVariant } from "@ammari/ui";
+import { Breadcrumb, Button, Card, CardList, EmptyState, Input, Label, PageHeader, TableContainer, TableHead, Td, Th, Tr } from "@ammari/ui";
 import { jakartaDate } from "@ammari/commerce/jakarta-day";
 import { isCalendarDate, OFFICIAL_BOOKS_START, TRIAL_BOOKS_START } from "@ammari/accounting";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { formatBalance, formatDay } from "@/lib/accounting/format";
 import { getReconciliation, type MaterialRow, type PayableRow, type Reconciliation, type StockAccountRow, type WipBatchRow } from "@/lib/accounting/reconciliation";
-import { RECONCILIATION_STATUS_LABELS, type ReconciliationStatus } from "@/lib/accounting/reconciliation-rules";
+import { parseTypedBalance, type ReconciliationStatus } from "@/lib/accounting/reconciliation-rules";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { BiteshipCard, SalesChecks } from "./_components/sales-checks";
+import { Amount, StatusBadge } from "./_components/status";
 
-// Rekonsiliasi (docs/plans/accounting.md §6.3, Sessions 7 and 8): check 1 (persediaan bahan, barang
-// dalam proses per batch, barang jadi and barang cacat vs the app's records) and check 2 (utang
-// pemasok per dokumen pembelian vs tagihan di aplikasi). accounting.view.
-// One "per tanggal" filter in the URL (a GET form); every figure is summed within the set of books
-// that date belongs to (books.ts).
+// Rekonsiliasi (docs/plans/accounting.md §6.3, Sessions 7, 8 and 9): check 1 (persediaan bahan, barang
+// dalam proses per batch, barang jadi, barang terjual belum dikirim and barang cacat vs the app's
+// records), check 2 (utang pemasok per dokumen pembelian vs tagihan di aplikasi), checks 3 and 3c
+// (uang muka pelanggan, titipan ongkir pembeli per pesanan) and 3b (saldo Biteship vs the balance
+// typed from its dashboard, never stored). accounting.view.
+// The "per tanggal" filter and the typed Biteship balance live in the URL (a GET form); every figure
+// is summed within the set of books that date belongs to (books.ts).
 
-type RawParams = { date?: string | string[] };
-
-const STATUS_VARIANT: Record<ReconciliationStatus, BadgeVariant> = { ok: "success", explained: "neutral", review: "warning", mismatch: "danger" };
-
-function StatusBadge({ status }: { status: ReconciliationStatus }) {
-  return <Badge variant={STATUS_VARIANT[status]}>{RECONCILIATION_STATUS_LABELS[status]}</Badge>;
-}
+type RawParams = { date?: string | string[]; biteship?: string | string[] };
 
 function booksNote(report: Reconciliation): string {
   if (report.segment === "official") return `Buku resmi: dihitung sejak ${formatDay(OFFICIAL_BOOKS_START)}, termasuk saldo awal.`;
   if (report.segment === "trial") return `Buku uji coba Desember 2026: dihitung sejak ${formatDay(TRIAL_BOOKS_START)}, tanpa saldo awal.`;
   return `Tanggal ini sebelum pembukuan dimulai (${formatDay(TRIAL_BOOKS_START)}), jadi belum ada jurnal.`;
-}
-
-function Amount({ value }: { value: number }) {
-  return <span className="tabular-nums">{formatBalance(value)}</span>;
 }
 
 interface InventoryCardData {
@@ -244,19 +238,39 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
   const today = jakartaDate();
   const requested = Array.isArray(raw.date) ? raw.date[0] : raw.date;
   const asOf = requested && isCalendarDate(requested) ? requested : today;
-  const report = await getReconciliation(asOf);
+  const rawBiteship = Array.isArray(raw.biteship) ? raw.biteship[0] : raw.biteship;
+  const biteshipTyped = parseTypedBalance(rawBiteship);
+  const biteshipInvalid = Boolean(rawBiteship?.trim()) && biteshipTyped === null;
+  const report = await getReconciliation(asOf, undefined, biteshipTyped);
 
   return (
     <>
       <Breadcrumb items={rootCrumbs("/accounting/reconciliation")} />
       <PageHeader
         title="Rekonsiliasi"
-        description={`Mencocokkan buku besar dengan catatan stok, produksi, dan tagihan pemasok, per ${formatDay(asOf)}.`}
+        description={`Mencocokkan buku besar dengan catatan stok, produksi, tagihan pemasok, dan pesanan, per ${formatDay(asOf)}.`}
       />
       <form method="GET" className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end lg:max-w-2xl" aria-label="Filter rekonsiliasi">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="reconciliation-date">Per tanggal</Label>
           <Input id="reconciliation-date" name="date" type="date" defaultValue={asOf} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="reconciliation-biteship">Saldo dashboard Biteship (opsional)</Label>
+          <Input
+            id="reconciliation-biteship"
+            name="biteship"
+            inputMode="text"
+            placeholder="contoh 1.250.000"
+            defaultValue={rawBiteship ?? ""}
+            aria-invalid={biteshipInvalid || undefined}
+            aria-describedby={biteshipInvalid ? "reconciliation-biteship-error" : undefined}
+          />
+          {biteshipInvalid && (
+            <p id="reconciliation-biteship-error" role="alert" className="text-sm text-danger-700">
+              Format saldo tidak dikenali. Tulis angka rupiah tanpa koma, misalnya 1.250.000.
+            </p>
+          )}
         </div>
         <div>
           <Button type="submit">Tampilkan</Button>
@@ -271,7 +285,7 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
           Persediaan
         </h2>
         <p className="text-sm text-neutral-600">
-          Saldo akun persediaan dibandingkan dengan catatan di aplikasi: stok kain dan aksesoris (termasuk pemakaian produksi), barang dalam proses, barang jadi, dan barang cacat. Penjualan belum dijurnal sampai jurnal penjualan tersedia.
+          Saldo akun persediaan dibandingkan dengan catatan di aplikasi: stok kain dan aksesoris (termasuk pemakaian produksi), barang dalam proses, barang jadi, dan barang cacat. Barang terjual yang belum dikirim dicocokkan per pesanan di bagian Penjualan.
         </p>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {report.materials.map((row) => (
@@ -291,6 +305,26 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
           Biaya yang masih tertahan di tiap batch yang belum selesai, dicocokkan dengan jurnalnya. Batch yang sudah selesai atau ditutup tidak ditampilkan lagi.
         </p>
         <WipBatches rows={report.wipBatches} />
+      </section>
+
+      <section aria-labelledby="reconciliation-sales" className="mb-8 flex flex-col gap-3">
+        <h2 id="reconciliation-sales" className="text-lg font-semibold text-neutral-900">
+          Penjualan
+        </h2>
+        <p className="text-sm text-neutral-600">
+          Per pesanan: saldo yang menurut catatan pesanan, pembayaran, dan pengiriman masih tersimpan di akun ini, dibandingkan dengan jurnal pesanan tersebut. Pesanan yang tidak cocok biasanya punya posting yang perlu dicek.
+        </p>
+        <SalesChecks checks={report.salesChecks} asOf={asOf} segmentStart={report.segmentStart} />
+      </section>
+
+      <section aria-labelledby="reconciliation-biteship-heading" className="mb-8 flex flex-col gap-3">
+        <h2 id="reconciliation-biteship-heading" className="text-lg font-semibold text-neutral-900">
+          Saldo Biteship
+        </h2>
+        <p className="text-sm text-neutral-600">Saldo Biteship di buku dibandingkan dengan saldo yang Anda isi dari dashboard Biteship per tanggal yang sama.</p>
+        <div className="md:max-w-xl">
+          <BiteshipCard check={report.biteship} asOf={asOf} segmentStart={report.segmentStart} />
+        </div>
       </section>
 
       <section aria-labelledby="reconciliation-payables" className="flex flex-col gap-3">

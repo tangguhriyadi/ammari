@@ -18,7 +18,7 @@ export {
   type ReportRange,
 } from "./books";
 export { POSTING_START_DATE, isCalendarDate, jakartaDateOf, monthEndOf, monthStartOf, nextMonthStart, postingDateFor } from "./dates";
-export { decideAction, journalContentHash, planEvent, type KeyAction, type PlannedOutcome } from "./plan";
+export { comparableActiveHash, decideAction, journalContentHash, planEvent, type KeyAction, type PlannedOutcome } from "./plan";
 export {
   PostingIssueError,
   negateOutcome,
@@ -90,6 +90,45 @@ export {
   type DefectDisposalSnapshot,
   type FinishedGoodsAdjustmentSnapshot,
 } from "./rules/inventory";
+export {
+  MARKETPLACE_SHIP_DATE_MISSING_ISSUE,
+  ORDER_SOURCE_TYPE,
+  PAYMENT_CHARGEBACK_ISSUE,
+  PAYMENT_GATEWAY_FEE_COMPONENT,
+  PAYMENT_SOURCE_TYPE,
+  SALES_RULE_VERSION,
+  SHIPMENT_SOURCE_TYPE,
+  depositAtCancel,
+  gatewayRefundAt,
+  isPaidPayment,
+  orderKey,
+  orderKind,
+  orderSaleValue,
+  paidAfterCancel,
+  recognitionDate,
+  refundParts,
+  salesEvents,
+  salesRule,
+  shipmentChargeOutcome,
+  type OrderChannelFeeSnapshot,
+  type OrderKind,
+  type OrderPaymentSnapshot,
+  type OrderShipmentSnapshot,
+  type OrderSnapshot,
+  type OrderStockMovementSnapshot,
+} from "./rules/sales";
+export {
+  ORDER_CHANNEL_FEE_SOURCE_TYPE,
+  ORDER_SETTLEMENT_SOURCE_TYPE,
+  mdrOutcome,
+  mdrRule,
+  midtransSettlementRule,
+  settlementOutcome,
+  type MdrFeeSnapshot,
+  type MdrSource,
+  type MidtransSettlementSnapshot,
+} from "./rules/midtrans";
+export { orderAccountMovements, type OrderAccountMovements } from "./sales-balances";
 export { SUPPLIER_PAYMENT_SOURCE_TYPE, supplierPaymentRule, supplierPaymentPaidOutcome, type SupplierPaymentSnapshot } from "./rules/supplier-payments";
 export {
   MANUAL_PAYMENT_MISSING_ISSUE,

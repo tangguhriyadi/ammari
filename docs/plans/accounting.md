@@ -792,6 +792,43 @@ A's `source` column and lands with Session 11.
   `test/inventory.test.ts`, `apps/admin/src/lib/accounting/session8.test.ts` (Haura beige L, reopen and
   replacement, A1, A2, v1 → v2), e2e `accounting.spec.ts` at 390/1280.
 
+**Done in Session 9 (no migration; every account, mapping and source column already existed):**
+- `packages/accounting/src/rules/sales.ts`, rule `sales` (version 1), one order per snapshot (loader
+  `sales-loaders.ts`): S1 (`stock_movement`,id,`sale`), S2 (`stock_movement`,id,`return`; after shipping exactly
+  when the order ended `returned`), S3/M1 (`order`,id,`recognised`), S4 (`order`,id,`returned`), S6
+  (`order`,id,`collected`, dated `paid_on`), W1 (`payment`,id,`paid`), W3 and the manual cancel line
+  (`order`,id,`cancelled_paid`), W4 (`payment`,id,`refunded` for the hand-recorded part, Cr `bank.main`;
+  `payment`,id,`gateway_refunded` for the rest of `refunded_amount`, Cr 1-1301), W9/W10 (`shipment`,id,
+  `charged`/`cancelled`), M2 (`order`,id,`channel_fees`). W2/W5 rule code in `rules/midtrans.ts`, tested against
+  fee-work-A/B-shaped fixtures, not in `defaultPostingSources()` until Session 11.
+- **S3 HPP = the order's sale movements' exact value**, not Σ qty × `unit_cost` (`unit_cost` is
+  `round(value/qty)`, which would leave rupiah in 1-1505).
+- **W1 for a payment that arrived after the cancel** credits 2-1202 directly (the plan's "W1 then W3" for that
+  payment in one journal, same balances); W3 holds only the payments paid by the cancel, less refunds made before
+  it. **W4's debit** is 2-1202 once the order was cancelled/returned before the refund, else 2-1201 (a refunded
+  duplicate payment of an order going ahead). A chargeback has no amount in the data: issue `payment_chargeback`.
+- **Gateway refund date:** the first signature-valid `payment_notifications` row with status `refund` /
+  `partial_refund` (stable); only without one `payments.updated_at`, and then the journal keeps its first date
+  while its lines are unchanged (runner flag `dateFollowsActive`), since every later status read bumps
+  `updated_at`.
+- **W9 uses up the buyer's titipan in full** at booking: Dr 2-1203 `shipping_amount` · Dr 6-1302 subsidy ·
+  Dr/Cr 6-1301 `cost − shipping − subsidy` (D-10: the difference between the real and the checkout tariff is Beban
+  ongkos kirim, either sign; check 3c expects 0). The §4.2 "(at most …)" caps are not applied: with them a courier
+  cheaper than the quote could never credit 6-1301. To confirm with the owner/accountant.
+- **Held events:** S2 after shipping, S4 and M2 wait behind S3 while S3 is a posting issue (today every marketplace
+  order shipped on/after the start: `marketplace_ship_date_missing`, Session 5 is blocked); the manual cancel waits
+  behind S6 while it is `manual_payment_missing`. New runner flag `requiresActiveJournalAcrossBooks`: unlike a
+  void, a held real event follows its original across the cut-over. Keys that can lose their event (W3, both W4
+  keys) are always emitted, "none" when empty, so a stale journal is reversed.
+- Rekonsiliasi: section "Penjualan" with per-order checks 1 (1-1505), 3 (2-1201) and 3c (2-1203) (records via
+  `sales-balances.ts` vs the journal lines carrying the order id, within the set of books; orders with events
+  before the books are "review"), check 3b (1-1603 vs the dashboard balance typed in the filter, never stored).
+  1-1504 no longer lists sales as "not journaled"; it lists marketplace returns held behind a missing ship date.
+- Tests: `packages/accounting/test/sales.test.ts`, `test/runner-session9.test.ts`,
+  `apps/admin/src/lib/accounting/session9.test.ts` (through createOrder, Session 6's payment record,
+  transitionOrderStatus, applyPaymentStatus, cancelCheckoutOrderByStaff, recordManualRefund), e2e
+  `accounting.spec.ts` at 390/1280.
+
 **Session 12 (cron, Rekonsiliasi polish, docs and runbook):**
 - **Runbook: revoke TRUNCATE.** Row-level triggers do not fire on `TRUNCATE`, so `TRUNCATE
   journal_lines` (or `journal_entries CASCADE`) bypasses every append-only guard; the same holds for

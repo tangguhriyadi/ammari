@@ -53,6 +53,15 @@ export interface PostingEvent {
    * in the opening balances), so neither is its void (plan §2). The runner checks this against
    * the database, which a pure rule cannot see. */
   requiresActiveJournalFor?: PostingKey;
+  /** With requiresActiveJournalFor: the other key may sit in the other set of books (books.ts).
+   * Set when the event is NOT a negation but a real economic event held back only while the key it
+   * builds on is blocked by a posting issue (e.g. a marketplace return held until its sale has a
+   * real ship date, Session 9). A void never sets it: a void must stay in its original's books. */
+  requiresActiveJournalAcrossBooks?: boolean;
+  /** The source has no stable date for this event (a gateway refund is dated by
+   * `payments.updated_at`, which any later status read bumps): while the lines are unchanged the
+   * active journal keeps its date instead of being reversed and re-posted on the new one. */
+  dateFollowsActive?: boolean;
 }
 
 /** Raised by a rule's account resolution; converted to an issue outcome by `resolveOrIssue`. */

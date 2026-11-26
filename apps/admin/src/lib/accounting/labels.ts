@@ -12,6 +12,13 @@ export const JOURNAL_SOURCE_TYPE_LABELS = {
   defect_movement: "Barang cacat",
   fabric_stock_movement: "Penyesuaian stok kain",
   accessory_movement: "Penyesuaian stok aksesoris",
+  production_batch: "Batch produksi",
+  stock_movement: "Stok barang jadi",
+  order: "Pesanan",
+  payment: "Pembayaran Midtrans",
+  shipment: "Pengiriman kurir",
+  order_channel_fee: "Biaya Midtrans",
+  order_settlement: "Pencairan Midtrans",
 } as const;
 export type JournalSourceType = keyof typeof JOURNAL_SOURCE_TYPE_LABELS;
 
@@ -29,6 +36,20 @@ const SOURCE_EVENT_LABELS: Record<string, string> = {
   return_out: "Diretur ke supplier",
   adjustment: "Penyesuaian",
   legacy_purchase: "Pembelian lama",
+  sale: "Barang keluar",
+  return: "Barang kembali",
+  recognised: "Penjualan diakui",
+  collected: "Uang masuk",
+  returned: "Retur",
+  cancelled_paid: "Dibatalkan setelah dibayar",
+  channel_fees: "Biaya marketplace",
+  refunded: "Dana dikembalikan",
+  gateway_refunded: "Dana dikembalikan lewat Midtrans",
+  chargeback: "Chargeback",
+  charged: "Ongkir kurir",
+  cancelled: "Pengiriman dibatalkan",
+  mdr: "Biaya Midtrans",
+  settled: "Pencairan",
 };
 
 export function sourceEventLabel(sourceEvent: string | null): string | null {
@@ -80,6 +101,12 @@ export function postingIssueMessage(issueCode: string, details: Record<string, u
       return "Penyesuaian stok tanpa alasan tidak bisa dipilihkan akun bebannya.";
     case "manual_payment_missing":
       return `Pesanan manual ${text("orderNo")} belum dicatat cara bayar dan rekening tujuannya. Isi lewat tombol Isi cara bayar di halaman pesanan.`;
+    case "marketplace_ship_date_missing":
+      return `Pesanan ${text("orderNo")} belum punya tanggal kirim asli dari file ekspor marketplace, jadi penjualannya belum dibukukan (tanggal unggah tidak dipakai). Biaya marketplace dan retur pesanan ini menunggu sampai tanggalnya ada.`;
+    case "payment_chargeback":
+      return `Pembayaran ${text("providerOrderId")} pesanan ${text("orderNo")} terkena chargeback. Jumlahnya tidak tercatat, jadi buat jurnal manual sesuai laporan Midtrans.`;
+    case "unmapped_sales_channel":
+      return `Kanal penjualan "${text("channelId")}" belum dipetakan ke akun penjualan.`;
     case "account_not_postable":
       return "Akun tujuan sudah nonaktif, berupa akun induk, atau tidak ada.";
     case "missing_system_account":

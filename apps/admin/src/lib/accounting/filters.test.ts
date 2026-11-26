@@ -17,7 +17,7 @@ describe("accounting filters", () => {
       kind: "reversal",
       accountCode: "6-2101",
     });
-    expect(parseJournalFilters({ source: "order", kind: "edited", account: "6-21011'--" }, "2026-12-05")).toMatchObject({
+    expect(parseJournalFilters({ source: "invoice", kind: "edited", account: "6-21011'--" }, "2026-12-05")).toMatchObject({
       sourceType: null,
       kind: null,
       accountCode: null,

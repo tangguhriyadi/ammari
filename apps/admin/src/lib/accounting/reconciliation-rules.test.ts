@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { reconcileMaterial, reconcilePayable, reconcileStockAccount, reconcileWipBatch } from "./reconciliation-rules";
+import { biteshipDifference, parseTypedBalance, reconcileMaterial, reconcileOrderAccount, reconcilePayable, reconcileStockAccount, reconcileWipBatch } from "./reconciliation-rules";
 
 // Rekonsiliasi checks 1 and 2 (docs/plans/accounting.md §6.3, Session 7): what a difference means.
 
@@ -82,5 +82,35 @@ describe("check 2: utang per purchase document vs the app's tagihan", () => {
     const missing = { ...payable, tagihan: 500_000, paid: 500_000, netReceived: 500_000, ledgerPayable: 500_000 };
     expect(reconcilePayable(missing)).toMatchObject({ difference: -500_000, status: "mismatch" });
     expect(reconcilePayable({ ...missing, startsBeforeBooks: true }).status).toBe("review");
+  });
+});
+
+describe("checks 1 (1-1505), 3 and 3c per order (Session 9)", () => {
+  test("ledger equal to the order's records: ok", () => {
+    expect(reconcileOrderAccount({ app: 264_000, ledger: 264_000, startsBeforeBooks: false })).toMatchObject({ difference: 0, status: "ok" });
+  });
+
+  test("a journal missing (a posting issue): mismatch", () => {
+    expect(reconcileOrderAccount({ app: 264_000, ledger: 0, startsBeforeBooks: false })).toMatchObject({ difference: -264_000, status: "mismatch" });
+  });
+
+  test("an order with events before the books: a difference is for review, not a failure", () => {
+    expect(reconcileOrderAccount({ app: 0, ledger: -264_000, startsBeforeBooks: true })).toMatchObject({ status: "review" });
+  });
+});
+
+describe("check 3b: Saldo Biteship", () => {
+  test("the typed balance accepts Indonesian thousands separators and Rp, nothing else", () => {
+    expect(parseTypedBalance("1.250.000")).toBe(1_250_000);
+    expect(parseTypedBalance("Rp 475.000")).toBe(475_000);
+    expect(parseTypedBalance("-5000")).toBe(-5_000);
+    expect(parseTypedBalance("")).toBeNull();
+    expect(parseTypedBalance("12,5")).toBeNull();
+    expect(parseTypedBalance("abc")).toBeNull();
+  });
+
+  test("difference = dashboard − ledger; none until a balance is typed", () => {
+    expect(biteshipDifference(-25_000, 475_000)).toBe(500_000);
+    expect(biteshipDifference(-25_000, null)).toBeNull();
   });
 });

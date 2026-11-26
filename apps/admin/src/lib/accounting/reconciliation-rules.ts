@@ -142,6 +142,44 @@ export function reconcilePayable(figures: PayableFigures): PayableReconciliation
   return { ...figures, appBalance, ledgerBalance, notReceived, difference, status };
 }
 
+/** Checks 1 (1-1505), 3 (2-1201) and 3c (2-1203) for one order (Session 9). Both sides are counted
+ * within the set of books up to the date, as the balance the account holds for this order (a
+ * liability as a positive credit balance). */
+export interface OrderAccountFigures {
+  /** What the order's own records say (orderAccountMovements in @ammari/accounting). */
+  app: number;
+  /** Σ the order's lines on the account in the ledger, same sign convention. */
+  ledger: number;
+  startsBeforeBooks: boolean;
+}
+
+export interface OrderAccountReconciliation extends OrderAccountFigures {
+  /** ledger − app. */
+  difference: number;
+  status: ReconciliationStatus;
+}
+
+export function reconcileOrderAccount(figures: OrderAccountFigures): OrderAccountReconciliation {
+  const difference = figures.ledger - figures.app;
+  const status: ReconciliationStatus = difference === 0 ? "ok" : figures.startsBeforeBooks ? "review" : "mismatch";
+  return { ...figures, difference, status };
+}
+
+/** The Saldo Biteship typed on the Rekonsiliasi page ("1.250.000", "Rp 1.250.000", "-5000"): whole
+ * rupiah, or null when empty or not a number. Never stored. */
+export function parseTypedBalance(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+  const cleaned = raw.replace(/rp/i, "").replace(/[\s.]/g, "");
+  if (!/^-?\d{1,15}$/.test(cleaned)) return null;
+  const value = Number(cleaned);
+  return Number.isSafeInteger(value) ? value || 0 : null;
+}
+
+/** Check 3b: Saldo Biteship (1-1603) against the balance typed from the Biteship dashboard. */
+export function biteshipDifference(ledger: number, typed: number | null): number | null {
+  return typed === null ? null : typed - ledger;
+}
+
 export const RECONCILIATION_STATUS_LABELS: Record<ReconciliationStatus, string> = {
   ok: "Cocok",
   explained: "Cocok, ada selisih yang dijelaskan",

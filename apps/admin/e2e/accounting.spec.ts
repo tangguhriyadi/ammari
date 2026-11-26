@@ -6,6 +6,7 @@ import {
   E2E_ACCOUNTING_CS_EMAIL,
   E2E_ACCOUNTING_EMAIL,
   E2E_ACCOUNTING_EXPENSE_NO,
+  E2E_ACCOUNTING_ORDER_NO,
   E2E_ACCOUNTING_PAYMENT_NO,
   E2E_ACCOUNTING_PURCHASE_NO,
   E2E_ACCOUNTING_SUPPLIER,
@@ -93,7 +94,9 @@ async function checkJournal(page: Page, layout: Layout): Promise<void> {
   await expect(page.locator(layout.journalRow).filter({ hasText: E2E_ACCOUNTING_EXPENSE_NO })).toHaveCount(0);
 }
 
-/** Rekonsiliasi (Sessions 7 and 8): five inventory accounts and the seeded batch's WIP reconcile;
+/** Rekonsiliasi (Sessions 7, 8 and 9): five inventory accounts and the seeded batch's WIP reconcile;
+ * the seeded manual order is listed under Penjualan (1-1505, 2-1201) and the typed Biteship balance
+ * shows in check 3b;
  * the seeded DP reconciles (app: lebih bayar 500.000 on a purchase with
  * no lines; ledger: an advance of 500.000), on this viewport's rows, the other layout hidden. */
 async function checkReconciliation(page: Page, layout: Layout): Promise<void> {
@@ -134,6 +137,36 @@ async function checkReconciliation(page: Page, layout: Layout): Promise<void> {
   const other = page.getByTestId(hidden).filter({ hasText: E2E_ACCOUNTING_PURCHASE_NO });
   await expect(other).toHaveCount(1);
   await expect(other).toBeHidden();
+
+  // Session 9: the seeded WhatsApp order, paid and packed on 6 Dec, not shipped. S1 keeps its HPP in
+  // 1-1505 and S6 its money in 2-1201; each check lists it per order, records and journals equal.
+  const shownSale = layout.label === "mobile" ? "reconciliation-sales-card" : "reconciliation-sales-row";
+  const hiddenSale = layout.label === "mobile" ? "reconciliation-sales-row" : "reconciliation-sales-card";
+  for (const [kind, amount] of [
+    ["sold_not_shipped", "Rp 100.000"],
+    ["deposit", "Rp 285.000"],
+  ] as const) {
+    const section = page.getByTestId(`reconciliation-sales-${kind}`);
+    const saleRow = section.getByTestId(shownSale).filter({ hasText: E2E_ACCOUNTING_ORDER_NO });
+    await expect(saleRow).toHaveCount(1);
+    await expect(saleRow).toBeVisible();
+    await expect(saleRow).toContainText(amount);
+    await expect(saleRow.getByText("Cocok", { exact: true })).toBeVisible();
+    await expect(saleRow.getByRole("link", { name: E2E_ACCOUNTING_ORDER_NO })).toHaveAttribute("href", /^\/orders\//);
+    const otherSale = section.getByTestId(hiddenSale).filter({ hasText: E2E_ACCOUNTING_ORDER_NO });
+    await expect(otherSale).toHaveCount(1);
+    await expect(otherSale).toBeHidden();
+  }
+  // Not shipped and no courier booked: nothing on the buyer's titipan for it.
+  await expect(page.getByTestId("reconciliation-sales-buyer_shipping").getByText(E2E_ACCOUNTING_ORDER_NO)).toHaveCount(0);
+
+  // Check 3b: the dashboard balance typed in the filter (never stored) against 1-1603.
+  const form = page.getByRole("form", { name: "Filter rekonsiliasi" });
+  await form.getByLabel("Saldo dashboard Biteship (opsional)").fill("1.000.000");
+  await form.getByRole("button", { name: "Tampilkan" }).click();
+  await expect(page).toHaveURL(/biteship=1\.000\.000/);
+  await expect(page.getByTestId("reconciliation-biteship")).toBeVisible();
+  await expect(page.getByTestId("reconciliation-biteship")).toContainText("Rp 1.000.000");
 }
 
 async function checkLedger(page: Page, layout: Layout): Promise<void> {
