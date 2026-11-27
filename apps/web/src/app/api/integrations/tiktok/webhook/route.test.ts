@@ -311,7 +311,7 @@ describe("POST /api/integrations/tiktok/webhook", () => {
     expect(logs.error).toHaveBeenCalledWith("[tiktok] webhook", expect.objectContaining({ result: "db_timeout" }));
   });
 
-  test("a stored delivery answers fast with the real database, no TikTok call in the request", async () => {
+  test("a stored delivery answers fast with the real database, no TikTok call in the request (only Get Order Detail after it)", async () => {
     await inRollback(async (tx) => {
       quietLogs();
       await connectShop(tx);
@@ -319,8 +319,10 @@ describe("POST /api/integrations/tiktok/webhook", () => {
       const started = Date.now();
       await expectEmpty(await post(OFFICIAL_BODY, { authorization: OFFICIAL.authorization }), 200);
       expect(Date.now() - started).toBeLessThan(3_000);
-      await runAfter();
       expect(fetchSpy).not.toHaveBeenCalled();
+      // T4: after the answer, the order the event names is re-fetched (read only: Get Order Detail).
+      await runAfter();
+      for (const [input] of fetchSpy.mock.calls) expect(new URL(String(input)).pathname).toBe("/order/202507/orders");
     });
   });
 

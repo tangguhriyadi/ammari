@@ -366,6 +366,12 @@ export const E2E_CONTENT_ADMIN_EMAIL = "content-admin@e2e.ammari.test";
 export const E2E_TIKTOK_ADMIN_EMAIL = "tiktok-admin@e2e.ammari.test";
 export const E2E_TIKTOK_NO_ACCESS_EMAIL = "tiktok-no-access@e2e.ammari.test";
 const E2E_TIKTOK_NO_ACCESS_ROLE_KEY = "e2e_tiktok_settings_only";
+// tiktok-sku-mappings.spec.ts (docs/plans/tiktok-shop-integration.md T4): one stored TikTok order
+// (snapshot + projection, as the sync would leave it) whose only line has a TikTok SKU with no
+// mapping, and the Ammari variant the spec maps it to (E2E_RESERVATION_FREE_SKU, seeded below).
+export const E2E_TIKTOK_ORDER_ID = "579000000000000001";
+export const E2E_TIKTOK_SKU_ID = "1729000000000000901";
+export const E2E_TIKTOK_SELLER_SKU = "E2E-TT-TIDAK-DIKENAL";
 export const E2E_ACTIVITY_LOG_ADMIN_EMAIL = "activity-log-admin@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_OWNER_EMAIL = "activity-log-owner@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_SUPPLIER_NAME = "E2E Log Supplier Baru";
@@ -488,6 +494,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     customerAuthUsers,
     thankYouCards,
     vouchers,
+    tiktokOrderSnapshots,
+    tiktokOrders,
   } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
 
@@ -687,6 +695,23 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       },
       { actorStaffUserId: null, action: E2E_ACTIVITY_LOG_UNKNOWN_ACTION, entityType: "e2e_widget", entityId: "widget-1" },
     ]);
+  }
+
+  {
+    // A TikTok order with an unmapped SKU (T4). ammari_e2e is truncated on every run.
+    const payload = {
+      id: E2E_TIKTOK_ORDER_ID,
+      status: "AWAITING_SHIPMENT",
+      update_time: 1764200200,
+      payment: { currency: "IDR", sub_total: "259000", total_amount: "259000" },
+      line_items: [{ id: "e2e-li-1", sku_id: E2E_TIKTOK_SKU_ID, product_id: "1729000000000000900", seller_sku: E2E_TIKTOK_SELLER_SKU, product_name: "Gamis E2E TikTok", sku_name: "Hitam, L", original_price: "259000" }],
+    };
+    const [snapshot] = await db
+      .insert(tiktokOrderSnapshots)
+      .values({ tiktokOrderId: E2E_TIKTOK_ORDER_ID, updateTime: new Date(1764200200 * 1000), contentSha256: "0".repeat(64), payload, source: "poll" })
+      .returning({ id: tiktokOrderSnapshots.id });
+    if (!snapshot) throw new Error("failed to insert the TikTok snapshot fixture");
+    await db.insert(tiktokOrders).values({ tiktokOrderId: E2E_TIKTOK_ORDER_ID, status: "AWAITING_SHIPMENT", latestUpdateTime: new Date(1764200200 * 1000), latestSnapshotId: snapshot.id, paidTime: new Date(1764200100 * 1000) });
   }
 
   await ensureStaffFixture(E2E_OVERVIEW_EMAIL, "E2E Overview", OWNER_ROLE_KEY);

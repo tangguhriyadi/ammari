@@ -1,11 +1,14 @@
 import { sql } from "drizzle-orm";
-import { bigint, check, customType, index, integer, jsonb, pgTable, smallint, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { checkIn, createdAtOnly, timestamps } from "./columns";
+import { bigint, boolean, check, customType, index, integer, jsonb, pgTable, smallint, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { productVariants } from "./catalog";
+import { checkArraySubset, checkIn, createdAtOnly, timestamps } from "./columns";
+import { orders } from "./orders";
 import { staffUsers } from "./rbac";
 
 // TikTok Shop connection, OAuth state, sync cursors and webhook inbox (docs/plans/
-// tiktok-shop-integration.md §3.1, §3.2; migration 0057). New tables only: nothing the previously
-// deployed release reads changes (expand-only).
+// tiktok-shop-integration.md §3.1, §3.2; migration 0057), and the order read side: versioned
+// snapshots, the current-state projection and the SKU mapping (§3.3; migration 0058). New tables
+// only: nothing the previously deployed release reads changes (expand-only).
 
 /** Raw bytes (`bytea`). Holds AES-256-GCM token ciphertext only (`version | iv | ct | tag`, plan
  * §7.2); never a plaintext token. */
@@ -151,5 +154,126 @@ export const tiktokWebhookEvents = pgTable(
     index("tiktok_webhook_events_tiktok_order_id_idx").on(table.tiktokOrderId),
     // Retention (12 months) and the settings page's "last webhook".
     index("tiktok_webhook_events_received_at_idx").on(table.receivedAt),
+  ],
+);
+
+// ---- Orders: snapshots, projection, SKU mapping (plan §3.3, T4, migration 0058) -----------------
+
+export const TIKTOK_SNAPSHOT_SOURCES = ["webhook", "poll", "backfill", "manual"] as const;
+export type TikTokSnapshotSource = (typeof TIKTOK_SNAPSHOT_SOURCES)[number];
+
+/** Written by T5 once an order is applied to admin; NULL until then (T4 is a dry run). */
+export const TIKTOK_APPLY_STATES = ["applied", "held", "skipped_unpaid", "skipped_undone"] as const;
+export type TikTokApplyState = (typeof TIKTOK_APPLY_STATES)[number];
+
+export const TIKTOK_HELD_REASONS = ["unknown_sku", "short_stock", "lines_differ", "final_in_admin", "partial_shipping", "partial_refund", "unknown_status", "money_format"] as const;
+export type TikTokHeldReason = (typeof TIKTOK_HELD_REASONS)[number];
+
+/** Things the sync saw that it never resolves on its own (plan §3.3, §6): the same `update_time`
+ * with different content, and an order leaving COMPLETED/CANCELLED again. Shown on the dry-run page. */
+export const TIKTOK_ORDER_REVIEW_FLAGS = ["tiktok_snapshot_conflict", "tiktok_left_terminal"] as const;
+export type TikTokOrderReviewFlag = (typeof TIKTOK_ORDER_REVIEW_FLAGS)[number];
+
+export const TIKTOK_SKU_MAPPING_SOURCES = ["auto_seller_sku", "manual"] as const;
+export type TikTokSkuMappingSource = (typeof TIKTOK_SKU_MAPPING_SOURCES)[number];
+
+/** `tiktok_orders.buyer_message` is capped (plan §3.3, Q14). */
+export const TIKTOK_BUYER_MESSAGE_MAX_CHARS = 1_000;
+
+/** Versioned, allowlisted copies of an order (plan §3.3). Never the raw response, never the buyer
+ * message. A replay of the same version is a no-op (the unique key); the same `update_time` with
+ * different content is kept as its own row and flagged on the projection. Kept as long as the order. */
+export const tiktokOrderSnapshots = pgTable(
+  "tiktok_order_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tiktokOrderId: text("tiktok_order_id").notNull(),
+    // TikTok's `update_time`: the version.
+    updateTime: timestamp("update_time", { withTimezone: true, mode: "date" }).notNull(),
+    // SHA-256 hex of the allowlisted JSON with sorted keys.
+    contentSha256: text("content_sha256").notNull(),
+    payload: jsonb("payload").notNull(),
+    source: text("source", { enum: TIKTOK_SNAPSHOT_SOURCES }).notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("tiktok_order_snapshots_source_check", checkIn(table.source, TIKTOK_SNAPSHOT_SOURCES)),
+    check("tiktok_order_snapshots_sha_check", sql`${table.contentSha256} ~ '^[0-9a-f]{64}$'`),
+    check("tiktok_order_snapshots_order_id_check", sql`char_length(${table.tiktokOrderId}) between 1 and 128`),
+    unique("tiktok_order_snapshots_version_key").on(table.tiktokOrderId, table.updateTime, table.contentSha256),
+  ],
+);
+
+/** The current state of each TikTok order (plan §3.3). Moves forward only: every write is
+ * conditional on `latest_update_time < $new`, so a late older snapshot never overwrites a newer one.
+ * `buyer_message` lives only here (never in a snapshot or the inbox) so it can be purged. */
+export const tiktokOrders = pgTable(
+  "tiktok_orders",
+  {
+    tiktokOrderId: text("tiktok_order_id").primaryKey(),
+    // Set by T5 once the order is applied to admin.
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "restrict" }),
+    status: text("status").notNull(),
+    latestUpdateTime: timestamp("latest_update_time", { withTimezone: true, mode: "date" }).notNull(),
+    latestSnapshotId: uuid("latest_snapshot_id")
+      .notNull()
+      .references((): AnyPgColumn => tiktokOrderSnapshots.id, { onDelete: "restrict" }),
+    paidTime: timestamp("paid_time", { withTimezone: true, mode: "date" }),
+    collectionTime: timestamp("collection_time", { withTimezone: true, mode: "date" }),
+    deliveryTime: timestamp("delivery_time", { withTimezone: true, mode: "date" }),
+    cancelTime: timestamp("cancel_time", { withTimezone: true, mode: "date" }),
+    isOnHoldOrder: boolean("is_on_hold_order"),
+    // Ship-by deadline, for packing (T5).
+    rtsSlaTime: timestamp("rts_sla_time", { withTimezone: true, mode: "date" }),
+    applyState: text("apply_state", { enum: TIKTOK_APPLY_STATES }),
+    heldReason: text("held_reason", { enum: TIKTOK_HELD_REASONS }),
+    appliedUpdateTime: timestamp("applied_update_time", { withTimezone: true, mode: "date" }),
+    buyerMessage: text("buyer_message"),
+    // Terminal time (COMPLETED/CANCELLED) + 30 days (Q14). The retention job clears the message then.
+    buyerMessagePurgeAfter: timestamp("buyer_message_purge_after", { withTimezone: true, mode: "date" }),
+    reviewFlags: text("review_flags").array().notNull().default(sql`'{}'::text[]`),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_orders_apply_state_check", sql`${table.applyState} is null or ${checkIn(table.applyState, TIKTOK_APPLY_STATES)}`),
+    check("tiktok_orders_held_reason_check", sql`${table.heldReason} is null or ${checkIn(table.heldReason, TIKTOK_HELD_REASONS)}`),
+    check("tiktok_orders_buyer_message_check", sql`${table.buyerMessage} is null or char_length(${table.buyerMessage}) <= ${sql.raw(String(TIKTOK_BUYER_MESSAGE_MAX_CHARS))}`),
+    check("tiktok_orders_status_check", sql`char_length(${table.status}) between 1 and 64`),
+    check("tiktok_orders_review_flags_check", checkArraySubset(table.reviewFlags, TIKTOK_ORDER_REVIEW_FLAGS)),
+    uniqueIndex("tiktok_orders_order_id_key").on(table.orderId).where(sql`${table.orderId} is not null`),
+    index("tiktok_orders_latest_update_time_idx").on(table.latestUpdateTime),
+    index("tiktok_orders_latest_snapshot_id_idx").on(table.latestSnapshotId),
+    // The retention job's purge.
+    index("tiktok_orders_buyer_message_purge_idx").on(table.buyerMessagePurgeAfter).where(sql`${table.buyerMessage} is not null`),
+  ],
+);
+
+/** One TikTok SKU = one Ammari variant (plan §3.3, decided Q12): the primary key allows no 1→n.
+ * Two TikTok SKUs (two listings) may point at the same variant. An inactive row counts as unmapped
+ * and is never re-created by the auto-map (someone removed it on purpose). */
+export const tiktokSkuMappings = pgTable(
+  "tiktok_sku_mappings",
+  {
+    tiktokSkuId: text("tiktok_sku_id").primaryKey(),
+    tiktokProductId: text("tiktok_product_id"),
+    // As typed in TikTok.
+    sellerSku: text("seller_sku"),
+    variantSku: text("variant_sku")
+      .notNull()
+      .references(() => productVariants.sku, { onDelete: "restrict" }),
+    source: text("source", { enum: TIKTOK_SKU_MAPPING_SOURCES }).notNull(),
+    mappedByStaffUserId: uuid("mapped_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    mappedAt: timestamp("mapped_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    isActive: boolean("is_active").notNull().default(true),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_sku_mappings_source_check", checkIn(table.source, TIKTOK_SKU_MAPPING_SOURCES)),
+    check("tiktok_sku_mappings_sku_id_check", sql`char_length(${table.tiktokSkuId}) between 1 and 128`),
+    // A manual mapping names who made it; the auto-map has no person.
+    check("tiktok_sku_mappings_actor_check", sql`(${table.source} = 'manual') = (${table.mappedByStaffUserId} is not null)`),
+    index("tiktok_sku_mappings_variant_sku_idx").on(table.variantSku),
+    index("tiktok_sku_mappings_mapped_by_idx").on(table.mappedByStaffUserId),
   ],
 );

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { Badge, Breadcrumb, Card, PageHeader, type BadgeVariant } from "@ammari/ui";
 import { formatDateTime, formatNumber } from "@ammari/ui/lib";
 import { tiktokConnectionBanner } from "@ammari/commerce/tiktok";
@@ -20,6 +21,15 @@ const STATUS: Record<TikTokConnectionStatus, { label: string; variant: BadgeVari
   reauth_required: { label: "Perlu dihubungkan ulang", variant: "danger" },
   deauthorized: { label: "Izin dicabut penjual", variant: "danger" },
   disconnected: { label: "Diputuskan", variant: "neutral" },
+};
+
+const TOPIC_LABELS: Record<number, string> = {
+  1: "Status pesanan",
+  3: "Alamat penerima",
+  6: "Izin dicabut",
+  7: "Izin akan berakhir",
+  11: "Pembatalan",
+  12: "Retur",
 };
 
 const SCOPE_LABELS: Record<string, string> = {
@@ -61,7 +71,7 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
   await requirePermission(TIKTOK_PERMISSION);
   const search = await searchParams;
   const runtime = getTikTokRuntime({ requireServiceId: true });
-  const { connection, connectedByName, webhookCounts } = await getTikTokIntegrationPageData();
+  const { connection, connectedByName, webhookCounts, ordersCursor, failedEvents, tiktokOrderCount, unmappedSkuCount } = await getTikTokIntegrationPageData();
   const now = new Date();
   const banner = tiktokConnectionBanner(connection, now);
 
@@ -154,6 +164,45 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
               <Row label="Webhook menunggu diproses">{formatNumber(webhookCounts.pending)}</Row>
               <Row label="Webhook gagal">{formatNumber(webhookCounts.failed)}</Row>
             </dl>
+            {failedEvents.length > 0 && (
+              <div className="flex flex-col gap-2 pt-2">
+                <h3 className="text-sm font-semibold text-neutral-900">Webhook gagal terbaru</h3>
+                <p className="text-sm text-neutral-600">Sudah dicoba 10 kali. Pesanannya tetap terbaca lewat sinkronisasi berkala.</p>
+                <ul className="flex flex-col divide-y divide-neutral-100 rounded-lg border border-neutral-200" aria-label="Webhook gagal terbaru">
+                  {failedEvents.map((event) => (
+                    <li key={event.id} className="flex flex-col gap-0.5 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                      <span className="font-medium text-neutral-900">{TOPIC_LABELS[event.type] ?? `Topik ${event.type}`}</span>
+                      <span className="text-neutral-600">
+                        {when(event.receivedAt)}, kode: {event.lastErrorCode ?? "tidak ada"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </Section>
+        )}
+
+        {connection && (
+          <Section id="tiktok-orders-heading" title="Pesanan TikTok (uji coba)">
+            <p className="text-sm text-neutral-600">
+              Pesanan TikTok dibaca dan disimpan, tetapi belum dibuat di admin dan stok belum berubah. Halaman pratinjau menunjukkan pesanan mana yang akan dibuat dan mana yang ditahan.
+            </p>
+            <dl className="divide-y divide-neutral-100">
+              <Row label="Pesanan terbaca sampai">{when(ordersCursor?.windowEnd ?? null)}</Row>
+              <Row label="Sinkronisasi pesanan terakhir">{when(ordersCursor?.lastRunAt ?? null)}</Row>
+              {ordersCursor?.lastErrorCode && <Row label="Kesalahan sinkronisasi pesanan">{ordersCursor.lastErrorCode}</Row>}
+              <Row label="Pesanan TikTok tersimpan">{formatNumber(tiktokOrderCount)}</Row>
+              <Row label="SKU TikTok belum dipetakan">{formatNumber(unmappedSkuCount)}</Row>
+            </dl>
+            <div className="flex flex-col gap-2 pt-2 sm:flex-row">
+              <Link href={`${TIKTOK_INTEGRATION_PATH}/orders`} className="text-sm font-medium text-brand hover:underline">
+                Lihat pratinjau pesanan
+              </Link>
+              <Link href={`${TIKTOK_INTEGRATION_PATH}/sku-mappings`} className="text-sm font-medium text-brand hover:underline sm:ml-4">
+                Buka Pemetaan SKU TikTok
+              </Link>
+            </div>
           </Section>
         )}
       </div>

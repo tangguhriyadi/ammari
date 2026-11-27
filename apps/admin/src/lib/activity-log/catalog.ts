@@ -507,6 +507,17 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       tiktok_expiry_warning: { label: "Izin TikTok Shop akan berakhir" },
     },
   },
+  // docs/plans/tiktok-shop-integration.md T4: Pemetaan SKU TikTok. The auto-map has no actor
+  // (packages/commerce/src/tiktok/order-store.ts); a person's map/remove names them.
+  tiktok_sku_mapping: {
+    label: "Pemetaan SKU TikTok",
+    area: "settings",
+    actions: {
+      tiktok_sku_auto_map: { label: "SKU TikTok dipetakan otomatis" },
+      tiktok_sku_map: { label: "SKU TikTok dipetakan" },
+      tiktok_sku_unmap: { label: "Pemetaan SKU TikTok dihapus" },
+    },
+  },
   staff_user: {
     label: "Staf",
     area: "access",

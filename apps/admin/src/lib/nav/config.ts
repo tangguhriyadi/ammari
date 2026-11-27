@@ -383,6 +383,15 @@ export const NAV_ITEMS: readonly NavItem[] = [
     mobilePrimary: false,
   },
   {
+    // docs/plans/tiktok-shop-integration.md T4 (§3.3, Q12): one TikTok SKU = one Ammari variant.
+    label: "Pemetaan SKU TikTok",
+    href: "/settings/integrations/tiktok/sku-mappings",
+    icon: Shuffle,
+    group: "Administrasi",
+    permissionKeys: ["integrations.manage"],
+    mobilePrimary: false,
+  },
+  {
     label: "Peran & Staf",
     href: "/roles-staff",
     icon: ShieldCheck,

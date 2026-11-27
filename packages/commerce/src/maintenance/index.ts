@@ -4,4 +4,4 @@
 import "server-only";
 
 export { CRON_JOBS, withExclusiveRun, type CronJob, type ExclusiveRun } from "./lock";
-export { RETENTION_BATCH_SIZE, RETENTION_RULES, runRetention, type RetentionRuleName, type RetentionSummary } from "./retention";
+export { RETENTION_BATCH_SIZE, RETENTION_RULES, purgeTikTokBuyerMessages, runRetention, type RetentionRuleName, type RetentionSummary } from "./retention";

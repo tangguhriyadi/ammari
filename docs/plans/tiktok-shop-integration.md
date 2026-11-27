@@ -1,7 +1,8 @@
 # TikTok Shop integration (Indonesia, ROW seller): in-house API sync in admin
 
 Status: **T1 built** (`d6b82d2`); **T2 built** (`e2ec0a5`, connection + OAuth, migration 0057, runbook §7.4);
-**T3 built** 27 Nov 2026 (webhook receiver, no migration, runbook §7.5). T4-T9 not started.
+**T3 built** 27 Nov 2026 (webhook receiver, no migration, runbook §7.5); **T4 built** 27 Nov 2026 (order
+read side in dry run, migration 0058, build notes §9.1). T5-T9 not started.
 Every session below needs its own `/plan` approval first (CLAUDE.md Workflow 1). **Owner decisions of
 27 Nov 2026 are recorded in §12** and folded into the sections and sessions they affect. Q1, Q3, Q6 and
 Q13 are verified in T0 on the development shop.
@@ -776,6 +777,63 @@ T2 built the connection; nothing reaches TikTok until the owner sets these. Valu
   on its own schedule. No new secret: the existing `INTERNAL_CRON_SECRET`.
 - Admin "Sinkronkan sekarang" (`integrations.manage`) calls the same function under the same lock
   (skipped if a cron run holds it).
+
+### 9.1 T4 build notes (27 Nov 2026)
+
+- **Read side only.** `runTikTokSync` (packages/commerce/src/tiktok/sync.ts) runs: due topic 6/7
+  events (`processDueTikTokConnectionEvents`, the retry T3 left for the cron), the token refresh when
+  due, the inbox drain, then the order poll. No admin order, stock or journal is written;
+  `tiktok_orders.order_id` / `apply_state` stay NULL until T5. Steps 3, 5 and 6 of §9 are T5-T7.
+- **Inbox (topics 1/11/12):** refresh triggers only. Claimed with `FOR UPDATE SKIP LOCKED` and a
+  10-minute lease (`next_attempt_at`), the order re-fetched with Get Order Detail (the body is never
+  trusted), then `processed` (`last_error_code` `order_not_found` when TikTok did not return it) or
+  `ignored` (`no_order_id`). A TikTok error counts an attempt with T3's backoff, `failed` after 10;
+  running out of budget gives the claim back without counting. The webhook's `after()` drains its own
+  event the same way (20-s budget, outside the cron lock: the store is serialized per order).
+- **Poll:** windows per §8.3 (`order-windows.ts`): start `window_end − 5 min` (first run:
+  `backfill_from`, else 24 h back), end `now − 2 min`, contiguous ≤ 6-h slices in whole seconds, both
+  bounds always sent, `page_size` 100, `update_time` ASC. An id already stored in the run is not
+  fetched again (page boundaries and the overlap repeat ids). A `page_token` TikTok hands back twice,
+  or more than 500 pages in a slice, stops the run as `invalid_response`. The cursor moves forward
+  only, after each fully stored slice. `last_poll_ok_at` is set only when the run caught up.
+- **Store** (`order-store.ts`): one transaction per order under
+  `pg_advisory_xact_lock(hashtext('tiktok-order:' || id))`; snapshot `ON CONFLICT DO NOTHING`; same
+  `update_time` with other content → kept and `review_flags` `tiktok_snapshot_conflict`; projection
+  `ON CONFLICT DO UPDATE ... WHERE latest_update_time < $new`; leaving COMPLETED/CANCELLED →
+  `tiktok_left_terminal`. `buyer_message` only on the projection, cut to 1000 characters, never stored
+  again once its purge date has passed. The daily retention run clears it after
+  `buyer_message_purge_after` while the order is still COMPLETED/CANCELLED.
+- **0058 additions beyond §3.3:** `tiktok_orders.review_flags text[]` (CHECK on the two flags above),
+  `first_seen_at`; `tiktok_sku_mappings` CHECK that `manual` rows name a staff user and auto rows do
+  not. Removing a mapping sets `is_active = false` (kept, so the auto-map never brings it back).
+- **Pages** (integrations.manage): Pemetaan SKU TikTok (`/settings/integrations/tiktok/sku-mappings`,
+  unmapped SKUs from orders not yet applied and not cancelled, "Cocokkan ke varian" reusing the import's
+  variant search; audited `tiktok_sku_map` / `tiktok_sku_unmap` / `tiktok_sku_auto_map`), Pratinjau
+  pesanan TikTok (`/settings/integrations/tiktok/orders`, latest 100: Akan dibuat / Akan dicocokkan /
+  Ditahan (unknown SKU, money format, unknown status) / Dilewati, computed at read time; stock is not
+  checked until T5). The Integrasi page shows the order cursor and the latest failed inbox events.
+- **Cron:** `POST /api/internal/tiktok/sync` (`tiktokSync` in `CRON_JOBS`), `cron.sh` every 5 min
+  (`TIKTOK_SYNC_MAX_TIME=240`, ALERT after 3 failures). A 503 (not configured, e.g. dev without
+  TikTok) is an ERROR line, no ALERT, retried hourly. No shop connected → 200 `skipped:
+  not_connected`. `reauth_required` → 500.
+- **Nothing listed is skipped** (review fixes): an id Search lists that Get Order Detail does not
+  return (`order_missing`), returns unusable (`order_invalid`, also a Search entry without an id) or
+  that fails to store (`store_failed`) holds the slice's cursor; the run answers 500 `incomplete` with
+  up to 20 order ids, and the next run repeats the slice. One bad order never stops the others. For the
+  inbox the same outcomes count an attempt with that code (never settled as done); events whose orders
+  were stored before a failure are settled `processed`. Payload strings are cleaned of what jsonb
+  refuses (NUL, lone surrogate). The inbox gets at most half of the run's budget, so the poll always
+  runs; a run that ran out of budget answers 200 but logs a warning and leaves `budget_exhausted` on
+  the cursor. A refresh failure, an unapplied 6/7 event or a snapshot conflict logs a warning.
+- **Known limits, left as they are:** a single 6-h slice too big for one 150-s run (thousands of
+  orders) never finishes (T9 sizes backfill slices); an allowlist change makes a re-fetched,
+  unchanged order look like a `tiktok_snapshot_conflict`; webhook `after()` drains are not
+  rate-bounded; `listUnmappedTikTokSkus` reads every unapplied order's latest snapshot (fine at
+  Ammari's volume, revisit with a lines table); snapshots have no retention (kept as long as the order).
+- **To check in T0:** the 202309/202507 order field names in `TIKTOK_ORDER_ALLOWLIST`
+  (packages/tiktok-shop/src/orders.ts; a misnamed field is dropped, never guessed, and the preview
+  shows what it breaks), whether line items carry `quantity`, and TikTok's auth-error codes (still not
+  passed as `authErrorCodes`; HTTP 401 always counts). Admin "Sinkronkan sekarang" is not built yet.
 
 ---
 

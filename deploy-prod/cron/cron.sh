@@ -13,6 +13,9 @@
 # Every 15 minutes (the first call 30 s after start): POST /api/internal/accounting/posting (the
 # accounting posting run, docs/plans/accounting.md §2 and Session 12: reads source records, writes
 # journals only; the same run as admin's "Posting sekarang", under the same run lock).
+# Every 5 minutes: POST /api/internal/tiktok/sync (TikTok Shop, docs/plans/tiktok-shop-integration.md
+# §9: due connection events, token refresh, the webhook inbox and the order reconciliation poll; read
+# only until T5). While TikTok is not configured (503) it is retried hourly, not every tick.
 # All straight at the web
 # container over the internal Docker network (`web` is the dev service name and prod's floating
 # alias for the active slot, deploy-prod/remote-deploy.sh point_web_alias), never through Caddy,
@@ -59,6 +62,13 @@ POLL_RETRY_AFTER=600
 POLL_MAX_TIME=240
 # This many failed sweeps in a row (15 minutes) logs an ALERT line on every further failure.
 SWEEP_ALERT_AFTER=3
+# TikTok Shop sync (plan §9). The run stops starting TikTok calls after 150 seconds.
+TIKTOK_SYNC_EVERY=300
+TIKTOK_SYNC_MAX_TIME=240
+# This many failed runs in a row (15 minutes) logs an ALERT line on every further one. A 503 (TikTok
+# not configured in web.env, e.g. dev without a shop) is an ERROR line but no ALERT, retried hourly.
+TIKTOK_SYNC_ALERT_AFTER=3
+TIKTOK_SYNC_NOT_CONFIGURED_RETRY=3600
 
 log() {
   echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') cron: $*"
@@ -74,7 +84,7 @@ pause() {
 # Whitespace or a CR from the env file would never match the web side (which trims): drop it.
 INTERNAL_CRON_SECRET="$(printf '%s' "${INTERNAL_CRON_SECRET:-}" | tr -d ' \t\r\n')"
 if [ -z "$INTERNAL_CRON_SECRET" ]; then
-  log "INTERNAL_CRON_SECRET is not set in env/cron.env; idle (no sweep, no emails, no retention, no tracking poll, no accounting posting)"
+  log "INTERNAL_CRON_SECRET is not set in env/cron.env; idle (no sweep, no emails, no retention, no tracking poll, no accounting posting, no TikTok sync)"
   while :; do pause 3600; done
 fi
 
@@ -96,8 +106,8 @@ call() {
       return 0
       ;;
     401) log "ERROR $1 -> 401: INTERNAL_CRON_SECRET differs between env/cron.env and env/web.env" ;;
-    503) log "ERROR $1 -> 503 $answer (web.env lacks INTERNAL_CRON_SECRET, or the payment provider, email sending or courier tracking is not configured: see web's logs)" ;;
-    429) log "ERROR $1 -> 429 $answer (the daily Biteship order read budget is used up; tracking reads wait until tomorrow)" ;;
+    503) log "ERROR $1 -> 503 $answer (web.env lacks INTERNAL_CRON_SECRET, or the payment provider, email sending, courier tracking or TikTok Shop is not configured: see web's logs)" ;;
+    429) log "ERROR $1 -> 429 $answer (the daily Biteship order read budget is used up, or TikTok Shop kept rate limiting: see web's logs)" ;;
     *) log "ERROR $1 -> ${status:-no answer} (curl exit $rc) $answer" ;;
   esac
   return 1
@@ -109,6 +119,8 @@ last_retention=0
 last_poll=0
 last_posting=0
 posting_failures=0
+last_tiktok=0
+tiktok_failures=0
 sweep_failures=0
 email_failures=0
 while :; do
@@ -159,6 +171,22 @@ while :; do
       posting_failures=$((posting_failures + 1))
       if [ "$posting_failures" -ge "$POSTING_ALERT_AFTER" ]; then
         log "ALERT: the accounting posting run has failed $posting_failures times in a row; journals are not being posted (see web's logs and Akuntansi > Jurnal umum)"
+      fi
+    fi
+  fi
+  # TikTok Shop sync. Not configured (503): an ERROR line, then retried an hour later, no ALERT.
+  now="$(date +%s)"
+  if [ $((now - last_tiktok)) -ge "$TIKTOK_SYNC_EVERY" ]; then
+    if call /api/internal/tiktok/sync "$TIKTOK_SYNC_MAX_TIME"; then
+      last_tiktok="$now"
+      tiktok_failures=0
+    elif [ "$status" = "503" ]; then
+      last_tiktok=$((now - TIKTOK_SYNC_EVERY + TIKTOK_SYNC_NOT_CONFIGURED_RETRY))
+    else
+      last_tiktok="$now"
+      tiktok_failures=$((tiktok_failures + 1))
+      if [ "$tiktok_failures" -ge "$TIKTOK_SYNC_ALERT_AFTER" ]; then
+        log "ALERT: the TikTok Shop sync has failed $tiktok_failures times in a row; TikTok orders are not being read (see web's logs and Integrasi TikTok)"
       fi
     fi
   fi

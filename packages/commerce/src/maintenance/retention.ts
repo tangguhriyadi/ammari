@@ -22,6 +22,9 @@ import { errorLogFields } from "../errors";
 //   events themselves stay with the order in `shipment_events`);
 // - `tiktok_webhook_events` older than 12 months (docs/plans/tiktok-shop-integration.md §3.2, T3:
 //   the verified, allowlisted TikTok webhook inbox; the orders themselves come from the poll).
+// Not a delete, but on the same daily run: `tiktok_orders.buyer_message` is set to NULL once
+// `buyer_message_purge_after` (TikTok's COMPLETED/CANCELLED + 30 days) has passed, only while the
+// order is still COMPLETED or CANCELLED (an open order's note is never purged; plan §3.3, §6, Q14, T4).
 // Not here (later sessions): anonymizing unpaid orders after 90 days and paid ones after 10 years.
 //
 // Each table is deleted in batches of RETENTION_BATCH_SIZE rows, each batch its own statement, so
@@ -51,9 +54,37 @@ export type RetentionRuleName = (typeof RETENTION_RULES)[number]["name"];
 export interface RetentionSummary {
   deleted: Record<RetentionRuleName, number>;
   /** Rules that stopped at MAX_BATCHES (the rest goes next run). */
-  truncated: RetentionRuleName[];
+  truncated: (RetentionRuleName | "tiktok_buyer_messages")[];
   /** Rules whose delete failed (logged); the others still ran. */
-  failed: RetentionRuleName[];
+  failed: (RetentionRuleName | "tiktok_buyer_messages")[];
+  /** Values cleared in place (not rows deleted). */
+  purged: { tiktok_buyer_messages: number };
+}
+
+/** Clears TikTok buyer messages past their purge date, in batches like the deletes. */
+export async function purgeTikTokBuyerMessages(db: Database, options: { batchSize?: number; maxBatches?: number } = {}): Promise<{ purged: number; truncated: boolean }> {
+  const batchSize = options.batchSize ?? RETENTION_BATCH_SIZE;
+  const maxBatches = options.maxBatches ?? MAX_BATCHES;
+  let purged = 0;
+  for (let batch = 1; ; batch += 1) {
+    const rows = await db.execute<{ purged: number }>(sql`
+      with picked as (
+        select tiktok_order_id from tiktok_orders
+        where buyer_message is not null and buyer_message_purge_after <= now() and status in ('COMPLETED', 'CANCELLED')
+        limit ${batchSize} for update skip locked
+      ), done as (
+        update tiktok_orders t set buyer_message = null, updated_at = now()
+        from picked where t.tiktok_order_id = picked.tiktok_order_id
+          and t.buyer_message_purge_after <= now() and t.status in ('COMPLETED', 'CANCELLED')
+        returning 1
+      )
+      select count(*)::int as purged from done
+    `);
+    const count = Number(rows[0]?.purged ?? 0);
+    purged += count;
+    if (count < batchSize) return { purged, truncated: false };
+    if (batch >= maxBatches) return { purged, truncated: true };
+  }
 }
 
 async function deleteBatch(db: Database, rule: (typeof RETENTION_RULES)[number], batchSize: number): Promise<number> {
@@ -80,6 +111,7 @@ export async function runRetention(db: Database, options: { batchSize?: number; 
     deleted: Object.fromEntries(RETENTION_RULES.map((rule) => [rule.name, 0])) as Record<RetentionRuleName, number>,
     truncated: [],
     failed: [],
+    purged: { tiktok_buyer_messages: 0 },
   };
   for (const rule of RETENTION_RULES) {
     try {
@@ -96,6 +128,14 @@ export async function runRetention(db: Database, options: { batchSize?: number; 
       console.error("[retention] delete failed; other tables still run", { rule: rule.name, ...errorLogFields(error) });
       summary.failed.push(rule.name);
     }
+  }
+  try {
+    const result = await purgeTikTokBuyerMessages(db, { batchSize, maxBatches });
+    summary.purged.tiktok_buyer_messages = result.purged;
+    if (result.truncated) summary.truncated.push("tiktok_buyer_messages");
+  } catch (error) {
+    console.error("[retention] TikTok buyer message purge failed; the deletes still ran", { rule: "tiktok_buyer_messages", ...errorLogFields(error) });
+    summary.failed.push("tiktok_buyer_messages");
   }
   return summary;
 }

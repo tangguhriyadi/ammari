@@ -35,6 +35,21 @@ export {
   TIKTOK_AUTH_ENDPOINTS,
   TIKTOK_ENDPOINTS,
 } from "./endpoints";
+export {
+  TIKTOK_BUYER_MESSAGE_MAX_CHARS,
+  TIKTOK_ORDER_ALLOWLIST,
+  canonicalJson,
+  getTikTokOrderDetails,
+  isTikTokOrderId,
+  projectTikTokOrder,
+  searchTikTokOrders,
+  tiktokSeconds,
+  type ProjectTikTokOrderResult,
+  type SearchTikTokOrdersInput,
+  type SearchTikTokOrdersPage,
+  type TikTokOrderDetailsResult,
+  type TikTokOrderProjection,
+} from "./orders";
 export { TikTokMoneyFormatError, parseRupiah, type ParseRupiahOptions } from "./rupiah";
 export { Secret } from "./secret";
 export { getAuthorizedShops, type TikTokAuthorizedShop } from "./shops";
