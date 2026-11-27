@@ -17,6 +17,9 @@ export interface TikTokIntegrationPageData {
   failedEvents: { id: string; type: number; receivedAt: Date; attempts: number; lastErrorCode: string | null }[];
   tiktokOrderCount: number;
   unmappedSkuCount: number;
+  /** T5: TikTok orders applied to admin, and held (with why). */
+  appliedCount: number;
+  heldByReason: { reason: string; count: number }[];
 }
 
 export const FAILED_EVENTS_SHOWN = 10;
@@ -47,9 +50,15 @@ export async function getTikTokIntegrationPageData(db: Database = defaultDb): Pr
       .where(eq(tiktokWebhookEvents.status, "failed"))
       .orderBy(desc(tiktokWebhookEvents.receivedAt))
       .limit(FAILED_EVENTS_SHOWN),
-    db.select({ count: sql<number>`count(*)::int` }).from(tiktokOrders),
+    db.select({ count: sql<number>`count(*)::int`, applied: sql<number>`count(*) filter (where ${tiktokOrders.applyState} = 'applied')::int` }).from(tiktokOrders),
     listUnmappedTikTokSkus(db),
   ]);
+  const held = await db
+    .select({ reason: sql<string>`coalesce(${tiktokOrders.heldReason}, 'unknown')`, count: sql<number>`count(*)::int` })
+    .from(tiktokOrders)
+    .where(eq(tiktokOrders.applyState, "held"))
+    .groupBy(tiktokOrders.heldReason)
+    .orderBy(desc(sql`count(*)`));
   return {
     connection,
     connectedByName,
@@ -58,5 +67,7 @@ export async function getTikTokIntegrationPageData(db: Database = defaultDb): Pr
     failedEvents,
     tiktokOrderCount: orderCount?.count ?? 0,
     unmappedSkuCount: unmapped.length,
+    appliedCount: orderCount?.applied ?? 0,
+    heldByReason: held,
   };
 }

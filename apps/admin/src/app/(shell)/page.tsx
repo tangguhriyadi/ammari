@@ -65,6 +65,8 @@ export default async function RingkasanPage({ searchParams }: { searchParams: Pr
     profit: canViewProfit,
     // Iklan and Biaya need both keys (docs/plans/growth.md §7); the item links there.
     expenses: has("ads_expenses.manage") && canViewProfit,
+    // The held TikTok orders link to Pratinjau pesanan TikTok (T5).
+    tiktok: has("integrations.manage"),
   };
   const showActions = hasAnyNeedsAction(access);
 

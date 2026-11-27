@@ -15,6 +15,7 @@ import {
 import type { TikTokSnapshotSource } from "@ammari/db/schema";
 import type { Database } from "../db";
 import { getTikTokConnectionView, loadTikTokCredentials, refreshTikTokToken, tiktokErrorCode } from "./connection";
+import { applyTikTokOrder, listTikTokOrdersToApply, tiktokOrdersApplyEnabled, type ApplyTikTokOrderResult } from "./apply";
 import { ingestTikTokOrder } from "./order-store";
 import { planTikTokPollWindows } from "./order-windows";
 import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokConnectionEvents } from "./webhook";
@@ -34,8 +35,14 @@ import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokCon
 //   4. the reconciliation poll: Search Orders over `update_time` windows (order-windows.ts), every
 //      page, then Get Order Detail in batches of ≤ 50. The cursor moves to a slice's end only once
 //      every order of that slice is stored.
-// T5 adds step "re-check held orders and the packing gate"; T6 the cancellation/return polls; T7
-// finance. Nothing here logs: the route logs the summary (codes only, never a body or a token).
+// T5 (docs/plans/tiktok-shop-integration.md §4, §9 step 3): when the kill switch
+// `tiktok_shop_connections.orders_apply_enabled` is on, every stored order is applied to admin orders
+// and stock (apply.ts), and each run first re-checks the orders not applied yet: held ones (a SKU
+// mapped or stock recorded since), newer versions, and applied orders waiting at the packing gate
+// (an hour passing fires no webhook). While it is off the run stays T4's dry run. An apply that is
+// held or busy never blocks the cursor: the re-check picks it up on every run. T6 adds the
+// cancellation/return polls; T7 finance. Nothing here logs: the route logs the summary (codes only,
+// never a body or a token).
 
 export const TIKTOK_SYNC_BUDGET_MS = 150_000;
 /** The webhook's `after()` drain of one order. */
@@ -73,6 +80,29 @@ export interface TikTokOrderCounts {
   autoMapped: number;
 }
 
+export interface TikTokApplyCounts {
+  /** Whether the kill switch was on for this run. */
+  enabled: boolean;
+  created: number;
+  updated: number;
+  unchanged: number;
+  held: number;
+  skipped: number;
+  busy: number;
+  /** A database or programming failure on one order (the others go on). */
+  failed: number;
+  /** Orders the re-check step looked at. */
+  rechecked: number;
+  /** The re-check ran out of its share of the budget, or more orders were due than one run takes;
+   * the rest waits for the next run. */
+  recheckIncomplete: boolean;
+  /** Projection gone between store and apply (should never happen). */
+  notFound: number;
+  /** Up to 20 orders that failed (error class or SQLSTATE) or were busy (lock timeout, deadlock, an
+   * order moved under the lock), so a repeating one can be named. Codes only, never values. */
+  problems: { id: string; kind: "failed" | "busy" | "not_found"; code: string }[];
+}
+
 export interface TikTokSyncSummary {
   connection: "active" | "not_connected" | "reauth_required";
   connectionEvents: { processed: number; notApplied: number };
@@ -80,6 +110,7 @@ export interface TikTokSyncSummary {
   inbox: { claimed: number; processed: number; ignored: number; retried: number; failed: number; released: number };
   poll: { slices: number; slicesDone: number; pages: number; orderIds: number; caughtUp: boolean; windowEnd: string | null };
   orders: TikTokOrderCounts;
+  apply: TikTokApplyCounts;
   budgetExhausted: boolean;
   /** What stopped the run: a TikTok error's kind and code, or `incomplete` (orders of a slice
    * not stored; the cursor stayed). Never a message or a body. */
@@ -92,6 +123,10 @@ function emptyCounts(): TikTokOrderCounts {
   return { fetched: 0, snapshotsInserted: 0, replays: 0, conflicts: 0, projectionsAdvanced: 0, missing: 0, invalid: 0, storeFailed: 0, autoMapped: 0 };
 }
 
+function emptyApplyCounts(): TikTokApplyCounts {
+  return { enabled: false, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 0, rechecked: 0, recheckIncomplete: false, notFound: 0, problems: [] };
+}
+
 function emptySummary(): TikTokSyncSummary {
   return {
     connection: "not_connected",
@@ -100,6 +135,7 @@ function emptySummary(): TikTokSyncSummary {
     inbox: { claimed: 0, processed: 0, ignored: 0, retried: 0, failed: 0, released: 0 },
     poll: { slices: 0, slicesDone: 0, pages: 0, orderIds: 0, caughtUp: false, windowEnd: null },
     orders: emptyCounts(),
+    apply: emptyApplyCounts(),
     budgetExhausted: false,
     error: null,
     problems: [],
@@ -116,9 +152,10 @@ interface Session {
   accessToken: Secret;
   tokenGeneration: number;
   counts: TikTokOrderCounts;
+  apply: TikTokApplyCounts;
 }
 
-async function openSession(db: Database, deps: TikTokSyncDeps, clock: () => Date, deadline: number, counts: TikTokOrderCounts): Promise<Session | "not_connected" | "reauth_required"> {
+async function openSession(db: Database, deps: TikTokSyncDeps, clock: () => Date, deadline: number, counts: TikTokOrderCounts, apply: TikTokApplyCounts): Promise<Session | "not_connected" | "reauth_required"> {
   const credentials = await loadTikTokCredentials(db, deps.keyring, clock());
   if (!credentials.ok) {
     if (credentials.reason === "reauth_required") return "reauth_required";
@@ -126,7 +163,8 @@ async function openSession(db: Database, deps: TikTokSyncDeps, clock: () => Date
     return view?.status === "reauth_required" ? "reauth_required" : "not_connected";
   }
   const { shopCipher, accessToken, tokenGeneration } = credentials.credentials;
-  return { db, deps, clock, deadline, shopCipher, accessToken, tokenGeneration, counts };
+  apply.enabled = await tiktokOrdersApplyEnabled(db);
+  return { db, deps, clock, deadline, shopCipher, accessToken, tokenGeneration, counts, apply };
 }
 
 function onAuthError(session: Session, path: string): () => Promise<Secret> {
@@ -193,7 +231,9 @@ async function syncTikTokOrdersById(session: Session, ids: readonly string[], so
         // The error itself is dropped: a driver message can quote the payload. The id is kept.
         outcome.problems.set(order.tiktokOrderId, "store_failed");
         session.counts.storeFailed += 1;
+        continue;
       }
+      await applyStored(session, order.tiktokOrderId, source);
     }
     for (const id of details.invalid) if (id) outcome.problems.set(id, "order_invalid");
     session.counts.invalid += details.invalid.length;
@@ -202,6 +242,81 @@ async function syncTikTokOrdersById(session: Session, ids: readonly string[], so
       outcome.problems.set(id, "order_missing");
       session.counts.missing += 1;
     }
+  }
+}
+
+const APPLY_PROBLEM_SAMPLE = 20;
+
+function noteApplyProblem(apply: TikTokApplyCounts, problem: TikTokApplyCounts["problems"][number]): void {
+  if (apply.problems.length < APPLY_PROBLEM_SAMPLE) apply.problems.push(problem);
+}
+
+/** A database error's SQLSTATE, else the error class: enough to tell one failure from another
+ * without any message text (a driver message can quote values). */
+function applyErrorCode(error: unknown): string {
+  const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+  if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) return `sqlstate:${code}`;
+  return error instanceof Error ? error.name.slice(0, 40) : "unknown";
+}
+
+function countApply(apply: TikTokApplyCounts, tiktokOrderId: string, result: ApplyTikTokOrderResult): void {
+  switch (result.kind) {
+    case "created":
+      apply.created += 1;
+      break;
+    case "updated":
+      apply.updated += 1;
+      break;
+    case "unchanged":
+      apply.unchanged += 1;
+      break;
+    case "not_found":
+      apply.notFound += 1;
+      noteApplyProblem(apply, { id: tiktokOrderId, kind: "not_found", code: "not_found" });
+      break;
+    case "held":
+      apply.held += 1;
+      break;
+    case "skipped":
+      apply.skipped += 1;
+      break;
+    case "busy":
+      apply.busy += 1;
+      noteApplyProblem(apply, { id: tiktokOrderId, kind: "busy", code: result.code });
+      break;
+  }
+}
+
+/** Applies one stored order when the kill switch is on. A failure is counted, never thrown: the
+ * order is stored, and the re-check step retries it on the next run. */
+async function applyStored(session: Session, tiktokOrderId: string, source: TikTokSnapshotSource | "recheck"): Promise<void> {
+  if (!session.apply.enabled) return;
+  try {
+    countApply(session.apply, tiktokOrderId, await applyTikTokOrder(session.db, tiktokOrderId, { now: session.clock(), source }));
+  } catch (error) {
+    // The message is dropped like a store failure's (a driver message can quote values); the order
+    // id and the code are kept, so the route's ERROR line names it. Retried on the next run.
+    session.apply.failed += 1;
+    noteApplyProblem(session.apply, { id: tiktokOrderId, kind: "failed", code: applyErrorCode(error) });
+  }
+}
+
+/** Plan §9 step 3: held orders, newer versions not applied yet, and orders waiting at the packing
+ * gate. No TikTok call: only what is stored. Stops at the run's budget. */
+async function recheckStoredOrders(session: Session, budgetMs: number): Promise<void> {
+  if (!session.apply.enabled) return;
+  // At most a quarter of the run, so the inbox and the poll always get their turn; the rest waits
+  // for the next run.
+  const until = Math.min(session.deadline, session.clock().getTime() + Math.floor(budgetMs / 4));
+  const due = await listTikTokOrdersToApply(session.db, session.clock());
+  if (due.truncated) session.apply.recheckIncomplete = true;
+  for (const id of due.ids) {
+    if (session.clock().getTime() >= until) {
+      session.apply.recheckIncomplete = true;
+      return;
+    }
+    session.apply.rechecked += 1;
+    await applyStored(session, id, "recheck");
   }
 }
 
@@ -445,7 +560,7 @@ export async function runTikTokSync(db: Database, deps: TikTokSyncDeps, options:
   const refresh = await refreshTikTokToken(db, { auth: deps.auth, keyring: deps.keyring, now: clock });
   summary.tokenRefresh = refresh.kind === "failed" ? `failed:${refresh.errorCode}` : refresh.kind;
 
-  const session = await openSession(db, deps, clock, deadline, summary.orders);
+  const session = await openSession(db, deps, clock, deadline, summary.orders, summary.apply);
   if (typeof session === "string") {
     summary.connection = session;
     return summary;
@@ -454,6 +569,9 @@ export async function runTikTokSync(db: Database, deps: TikTokSyncDeps, options:
 
   let pollTouched = false;
   try {
+    // 3a. Re-check what is stored and not applied yet (no TikTok call), so a newly mapped SKU or a
+    // passed packing gate never waits for a new version from TikTok.
+    await recheckStoredOrders(session, options.budgetMs ?? TIKTOK_SYNC_BUDGET_MS);
     // 3. Inbox, with at most half the budget, so a burst of webhooks never starves the poll.
     const fullDeadline = session.deadline;
     session.deadline = Math.min(fullDeadline, clock().getTime() + Math.floor((options.budgetMs ?? TIKTOK_SYNC_BUDGET_MS) / 2));
@@ -489,7 +607,9 @@ export async function runTikTokSync(db: Database, deps: TikTokSyncDeps, options:
 }
 
 export type DrainTikTokWebhookEventResult =
-  | { kind: "processed" | "not_due" | "not_connected" | "reauth_required" | "budget_exhausted" }
+  /** `apply`: what applying did with the order (T5; `enabled: false` while the switch is off). */
+  | { kind: "processed"; apply: TikTokApplyCounts }
+  | { kind: "not_due" | "not_connected" | "reauth_required" | "budget_exhausted" }
   /** The order was not stored (missing, unusable, not storable); the event's retry is scheduled. */
   | { kind: "not_stored"; problems: { id: string; problem: TikTokOrderProblem }[] }
   | { kind: "error"; error: { kind: TikTokErrorKind; code: string } };
@@ -500,7 +620,7 @@ export type DrainTikTokWebhookEventResult =
 export async function drainTikTokWebhookOrderEvent(db: Database, deps: TikTokSyncDeps, eventId: string, options: { budgetMs?: number } = {}): Promise<DrainTikTokWebhookEventResult> {
   const clock = deps.now ?? (() => new Date());
   const summary = emptySummary();
-  const session = await openSession(db, deps, clock, clock().getTime() + (options.budgetMs ?? TIKTOK_WEBHOOK_DRAIN_BUDGET_MS), summary.orders);
+  const session = await openSession(db, deps, clock, clock().getTime() + (options.budgetMs ?? TIKTOK_WEBHOOK_DRAIN_BUDGET_MS), summary.orders, summary.apply);
   if (typeof session === "string") return { kind: session };
   try {
     await drainOrderEvents(session, summary, { eventId, limit: 1 });
@@ -510,5 +630,5 @@ export async function drainTikTokWebhookOrderEvent(db: Database, deps: TikTokSyn
     return { kind: "error", error: { kind: error.kind, code: tiktokErrorCode(error) } };
   }
   if (summary.inbox.claimed === 0) return { kind: "not_due" };
-  return summary.inbox.retried + summary.inbox.failed > 0 ? { kind: "not_stored", problems: summary.problems } : { kind: "processed" };
+  return summary.inbox.retried + summary.inbox.failed > 0 ? { kind: "not_stored", problems: summary.problems } : { kind: "processed", apply: summary.apply };
 }

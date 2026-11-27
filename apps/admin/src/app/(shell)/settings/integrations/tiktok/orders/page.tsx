@@ -6,11 +6,12 @@ import type { TikTokOrderReviewFlag } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { defaultDb } from "@/lib/db";
 import { TIKTOK_INTEGRATION_PATH, TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
+import { TIKTOK_HELD_REASON_LABELS } from "@/lib/integrations/tiktok-messages";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 
-// Pratinjau pesanan TikTok (docs/plans/tiktok-shop-integration.md §10 T4: the dry-run view "Akan
-// dibuat / ditahan"). Read only: what T5 would do with each stored TikTok order. Nothing here creates
-// an admin order or moves stock. integrations.manage on the server.
+// Pesanan TikTok (docs/plans/tiktok-shop-integration.md §10 T4/T5): each stored TikTok order with what
+// the sync did with it (masuk admin, ditahan with the reason, dilewati) once applying is on, else the
+// dry-run outcome ("Akan dibuat / ditahan"). Read only. integrations.manage on the server.
 
 const STATUS_LABELS: Record<string, string> = {
   UNPAID: "Belum dibayar",
@@ -27,7 +28,42 @@ const STATUS_LABELS: Record<string, string> = {
 const FLAG_LABELS: Record<TikTokOrderReviewFlag, string> = {
   tiktok_snapshot_conflict: "Dua versi berbeda di waktu yang sama",
   tiktok_left_terminal: "Keluar dari status akhir",
+  tiktok_ship_time_changed: "Waktu serah ke kurir berubah",
+  tiktok_partial_shipping: "Lebih dari satu paket",
 };
+
+
+/** What the sync actually did (T5), when applying is on. */
+function appliedView(applied: NonNullable<TikTokOrderPreviewRow["applied"]>): { label: string; variant: BadgeVariant; detail: string | null } {
+  switch (applied.state) {
+    case "applied":
+      return { label: "Masuk admin", variant: "success", detail: null };
+    case "held":
+      return { label: "Ditahan", variant: "danger", detail: applied.heldReason ? TIKTOK_HELD_REASON_LABELS[applied.heldReason] : null };
+    case "skipped_unpaid":
+      return { label: "Dilewati", variant: "neutral", detail: "Belum dibayar" };
+    case "skipped_undone":
+      return { label: "Dilewati", variant: "neutral", detail: "Dibatalkan sebelum masuk admin" };
+  }
+}
+
+/** The real state when the sync has applied (or held) the order; the dry-run outcome otherwise. */
+function rowView(row: TikTokOrderPreviewRow): { label: string; variant: BadgeVariant; detail: string | null } {
+  if (!row.applied) return outcomeView(row.outcome);
+  const view = appliedView(row.applied);
+  // The preview's detail names the unmapped SKUs; keep it for an unknown_sku hold.
+  if (row.applied.state === "held" && row.applied.heldReason === "unknown_sku" && row.outcome.kind === "held" && row.outcome.detail) return { ...view, detail: `${view.detail}: ${row.outcome.detail}` };
+  return view;
+}
+
+function OrderLink({ row }: { row: TikTokOrderPreviewRow }) {
+  if (!row.applied?.orderId || !row.applied.orderNo) return null;
+  return (
+    <Link href={`/orders/${row.applied.orderId}`} className="inline-flex min-h-11 items-center text-sm font-medium text-brand hover:underline">
+      {row.applied.orderNo}
+    </Link>
+  );
+}
 
 function outcomeView(outcome: TikTokPreviewOutcome): { label: string; variant: BadgeVariant; detail: string | null } {
   switch (outcome.kind) {
@@ -77,13 +113,13 @@ export default async function TikTokOrderPreviewPage() {
 
   return (
     <>
-      <Breadcrumb items={[...rootCrumbs(TIKTOK_INTEGRATION_PATH), { label: "Pratinjau pesanan" }]} />
+      <Breadcrumb items={[...rootCrumbs(TIKTOK_INTEGRATION_PATH), { label: "Pesanan TikTok" }]} />
       <PageHeader
-        title="Pratinjau pesanan TikTok"
-        description="Uji coba: pesanan TikTok sudah dibaca, tetapi belum dibuat di admin dan stok belum berubah. Halaman ini menunjukkan apa yang akan terjadi saat pesanan mulai dimasukkan."
+        title="Pesanan TikTok"
+        description="Pesanan TikTok yang sudah dibaca, dan apakah sudah masuk admin, ditahan, atau dilewati. Selama penerapan belum dimulai, halaman ini menunjukkan apa yang akan terjadi."
       />
       <div className="flex flex-col gap-4">
-        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Ringkasan pratinjau">
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Ringkasan pesanan TikTok">
           {[
             { label: "Akan dibuat", value: counts.create },
             { label: "Akan dicocokkan", value: counts.update },
@@ -110,7 +146,7 @@ export default async function TikTokOrderPreviewPage() {
           <>
             <CardList>
               {preview.rows.map((row) => {
-                const view = outcomeView(row.outcome);
+                const view = rowView(row);
                 return (
                   <li key={row.tiktokOrderId}>
                     <Card className="flex flex-col gap-1">
@@ -125,6 +161,7 @@ export default async function TikTokOrderPreviewPage() {
                       <span className="text-sm text-neutral-600">Diperbarui {when(row.latestUpdateTime)}</span>
                       {row.hasBuyerMessage && <span className="text-sm text-neutral-600">Ada catatan pembeli</span>}
                       <Flags row={row} />
+                      <OrderLink row={row} />
                     </Card>
                   </li>
                 );
@@ -140,7 +177,7 @@ export default async function TikTokOrderPreviewPage() {
               </TableHead>
               <tbody>
                 {preview.rows.map((row) => {
-                  const view = outcomeView(row.outcome);
+                  const view = rowView(row);
                   return (
                     <Tr key={row.tiktokOrderId}>
                       <Td className="font-mono text-sm text-neutral-900">{row.tiktokOrderId}</Td>
@@ -155,6 +192,7 @@ export default async function TikTokOrderPreviewPage() {
                           <Badge variant={view.variant}>{view.label}</Badge>
                           {view.detail && <span className="max-w-xs text-sm break-words text-neutral-700">{view.detail}</span>}
                           <Flags row={row} />
+                          <OrderLink row={row} />
                         </div>
                       </Td>
                     </Tr>

@@ -78,6 +78,17 @@ for (const viewport of VIEWPORTS) {
       await section.getByRole("button", { name: "Hubungkan ulang" }).click();
       await expect(page.getByText("TikTok Shop terhubung ulang. Token baru sudah disimpan.")).toBeVisible();
 
+      // The T5 kill switch: off by default; turned on and off again (each after confirming), so the
+      // next viewport starts from the same state. No cron runs here: nothing is applied.
+      const ordersSection = page.getByRole("region", { name: "Pesanan TikTok" });
+      await expect(ordersSection.getByText("Belum aktif (uji coba)", { exact: true })).toBeVisible();
+      await ordersSection.getByRole("button", { name: "Mulai terapkan pesanan" }).click();
+      await page.getByRole("dialog", { name: "Mulai terapkan pesanan TikTok?" }).getByRole("button", { name: "Mulai terapkan" }).click();
+      await expect(ordersSection.getByText("Aktif", { exact: true })).toBeVisible();
+      await ordersSection.getByRole("button", { name: "Hentikan penerapan pesanan" }).click();
+      await page.getByRole("dialog", { name: "Hentikan penerapan pesanan TikTok?" }).getByRole("button", { name: "Hentikan" }).click();
+      await expect(ordersSection.getByText("Belum aktif (uji coba)", { exact: true })).toBeVisible();
+
       // A code TikTok refuses (used or expired): the Indonesian message and the code, never TikTok's text.
       await page.unroute("https://services.tiktokshop.com/**");
       await stubAuthorize(page, "already-used-code");
@@ -109,7 +120,13 @@ for (const viewport of VIEWPORTS) {
 
       // Log Aktivitas, area Pengaturan.
       await page.goto("/activity-log?area=settings");
-      for (const label of ["TikTok Shop dihubungkan", "TikTok Shop dihubungkan ulang", "TikTok Shop diputuskan"]) {
+      for (const label of [
+        "TikTok Shop dihubungkan",
+        "TikTok Shop dihubungkan ulang",
+        "TikTok Shop diputuskan",
+        "Pesanan TikTok mulai diterapkan ke pesanan dan stok",
+        "Pesanan TikTok berhenti diterapkan (hanya pratinjau)",
+      ]) {
         await expect(page.getByText(label, { exact: true }).filter({ visible: true }).first()).toBeVisible();
       }
     });

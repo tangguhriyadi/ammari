@@ -2,7 +2,8 @@
 
 Status: **T1 built** (`d6b82d2`); **T2 built** (`e2ec0a5`, connection + OAuth, migration 0057, runbook §7.4);
 **T3 built** 27 Nov 2026 (webhook receiver, no migration, runbook §7.5); **T4 built** 27 Nov 2026 (order
-read side in dry run, migration 0058, build notes §9.1). T5-T9 not started.
+read side in dry run, migration 0058, build notes §9.1); **T5 built** 27 Nov 2026 (apply to orders and stock
+behind a kill switch that is off by default, migration 0059, build notes §9.2). T6-T9 not started.
 Every session below needs its own `/plan` approval first (CLAUDE.md Workflow 1). **Owner decisions of
 27 Nov 2026 are recorded in §12** and folded into the sections and sessions they affect. Q1, Q3, Q6 and
 Q13 are verified in T0 on the development shop.
@@ -399,7 +400,10 @@ The invariant tested later in T8 is that `total_amount` equals what TikTok credi
   That is harmless.
 - **The packing gate is separate from stock.** An order shows as packable on `/packing` only when
   the gate holds: **`AWAITING_SHIPMENT` and (`is_on_hold_order` or 1 h since `paid_time`)**, exactly
-  as decided (Q1). The predicate is one pure function, `tiktokReadyToShip(order, now)`. Its truth table
+  as decided (Q1). **Confirmed (owner, 27 Nov 2026), from TikTok's Order Sync guide:** "If
+  is_on_hold_order = true, the order served the remorse window during ON_HOLD. Fulfillment can begin
+  immediately." So `is_on_hold_order = true` means the hold window is already over: the order is
+  packable at once. The predicate is one pure function, `tiktokReadyToShip(order, now)`. Its truth table
   is checked in T0 against real orders on the development shop before T5 relies on it (§12 Q1). If
   that check shows a different meaning of `is_on_hold_order`, only this function and its tests change.
   Until the gate passes, the order shows "Tunggu: pembeli masih bisa membatalkan (sampai 14.32)" and the
@@ -835,6 +839,49 @@ T2 built the connection; nothing reaches TikTok until the owner sets these. Valu
   shows what it breaks), whether line items carry `quantity`, and TikTok's auth-error codes (still not
   passed as `authErrorCodes`; HTTP 401 always counts). Admin "Sinkronkan sekarang" is not built yet.
 
+### 9.2 T5 build notes (27 Nov 2026)
+
+- **Kill switch** (proposed, not in the plan before): `tiktok_shop_connections.orders_apply_enabled`
+  (0059, default **false**), turned on/off on Integrasi TikTok Shop ("Mulai terapkan pesanan" /
+  "Hentikan penerapan pesanan", confirmed, audited `tiktok_apply_enable` / `_disable`). Off = T4's dry
+  run. Turn it on only after T0 has confirmed Q1/Q6/Q13 and the preview looks right.
+- **Rules** (`apply-rules.ts`, pure): §4.3 table for new and existing orders, both ON_HOLD flows, forward
+  only, terminal stays terminal (a cancelled admin order TikTok still sells → `final_in_admin`), cancel
+  after shipping → `marketplace_return_pending` + `marketplace_return_in_transit` + `marketplace_returned_at
+  = cancel_time`, no status/stock change. Amounts (Q7): `unit_price` = line `original_price`, discount =
+  `payment.seller_discount` (must be present and ≥ Σ line seller discounts, else `money_format`), no
+  shipping. A line without `quantity` counts 1 piece (TikTok's one-line-per-piece shape; T0 to confirm); a
+  bad quantity or one variant at two prices → new held reason `line_format`. Hand-typed orders are matched
+  on (tiktok, channel_order_no); goods compared on SKU + qty only (typed prices are kept), a difference →
+  `lines_differ`. `marketplace_completed_at` = the `update_time` of the first COMPLETED version (TikTok has
+  no completion field in the allowlist).
+- **Commit** (`apply.ts`): advisory lock `tiktok-order:<id>`, re-read under lock, SKUs locked sorted, `INSERT
+  ... ON CONFLICT (channel_id, channel_order_no) DO NOTHING`, stock through `decrementStockForOrderItems`,
+  every move through `transitionOrderStatus` (actor NULL), dates write-once via `coalesce`. A refused sale →
+  savepoint rolled back, held `short_stock`. Same version already applied → only the packing gate is
+  re-checked; nothing else is written. Audit: `tiktok_create` / `tiktok_update` (order),
+  `tiktok_hold` / `tiktok_skip` (entity `tiktok_order`, on state change only).
+- **Sync:** every stored order is applied when the switch is on; a re-check step (≤ ¼ of the budget, no
+  TikTok call) retries held orders, versions not applied yet and orders waiting at the gate. Held/busy
+  never block the cursor (the re-check covers them). An apply that throws → route 500 (ERROR, ALERT after 3).
+- **Gate meaning confirmed** (owner, 27 Nov 2026, TikTok Order Sync guide): `is_on_hold_order = true` on
+  `AWAITING_SHIPMENT` means the remorse window was already served during ON_HOLD, so the order is packable
+  at once; `tiktokReadyToShip` is correct as built. T0 still checks which ON_HOLD flow Indonesia uses.
+- **Still for T0** (built on a stated assumption, never guessed silently): a line without `quantity` counts
+  as one piece; the order discount is `payment.seller_discount`; `AWAITING_COLLECTION` is packable; a
+  hand-typed order is compared on SKU and quantity only; `marketplace_completed_at` is the first COMPLETED
+  version's `update_time`.
+- **Packing gate:** computed at read time on /packing, the order page and the list; `tiktok_on_hold` is set
+  and cleared by the sync. Staff "Tandai dikirim" (single and bulk) refuses a TikTok order that is not
+  packable (`transitionOrderStatus` checks it for a staff actor). `AWAITING_COLLECTION` counts as packable
+  (shipment already arranged in Seller Center). An order whose only flag is `tiktok_on_hold` is not
+  "Perlu dicek"; held TikTok orders show as a count under Perlu dicek on the home page.
+- `tiktok_on_hold` and `marketplace_return_in_transit` cannot be cleared by "Tandai beres"; Batal/Retur
+  clears both (and `marketplace_return_pending`).
+- **Not done here (later sessions):** the accounting loader still reads `marketplace_shipped_at` as NULL
+  (T8; `SALES_RULE_VERSION` untouched); returns/refunds (T6); courier/resi from TikTok are not copied onto
+  the admin order.
+
 ---
 
 ## 10. Sessions
@@ -896,7 +943,7 @@ Nothing is guessed.
 | # | Question | Decision | Affects |
 |---|---|---|---|
 | Q1 (stock) | When does stock leave? | When TikTok **first reports the order as paid**. | §4.4, T5 |
-| Q1 (gate) | ON_HOLD flow and gate | The code handles **both ON_HOLD flows**. Gate = `AWAITING_SHIPMENT` and (`is_on_hold_order` or 1 h since `paid_time`). Which flow Indonesia uses is **verified in T0** on the development shop. | §4.3, §4.4, T0, T5 |
+| Q1 (gate) | ON_HOLD flow and gate | The code handles **both ON_HOLD flows**. Gate = `AWAITING_SHIPMENT` and (`is_on_hold_order` or 1 h since `paid_time`). **Meaning of `is_on_hold_order = true` confirmed** from TikTok's Order Sync guide: the order already served its remorse window in ON_HOLD, fulfilment can begin at once (owner, 27 Nov 2026). Which flow Indonesia uses is **verified in T0** on the development shop. | §4.3, §4.4, T0, T5 |
 | Q2 | Multi-package / partial shipping | Flag for **manual review**, no automation. | §3.4, §4.3, T5 |
 | Q3 | Draft app, dev testing | **Verified in T0** on the development shop. | §2, T0 |
 | Q4 | `service_id` | The **app ID shown in Partner Center, `7712559784284669716`**, not the App Key. | §7.1, T2 |

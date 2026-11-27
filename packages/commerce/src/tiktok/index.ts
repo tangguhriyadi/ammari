@@ -2,7 +2,8 @@ import "server-only";
 
 // TikTok Shop write paths (docs/plans/tiktok-shop-integration.md §2): the connection, OAuth state and
 // tokens (T2), the webhook inbox (T3), the order read side: snapshots, projection, SKU mapping, the
-// sync run and its dry-run preview (T4). Later sessions add order apply (T5) and finance here.
+// sync run and its dry-run preview (T4), applying orders to admin orders and stock behind the kill
+// switch (T5). Later sessions add returns (T6) and finance (T7) here.
 
 export {
   consumeTikTokOAuthState,
@@ -26,6 +27,26 @@ export {
   type TikTokCredentialsResult,
   type TikTokReauthReason,
 } from "./connection";
+export {
+  applyTikTokOrder,
+  listTikTokOrdersToApply,
+  setTikTokOrdersApply,
+  tiktokOrdersApplyEnabled,
+  type ApplyTikTokOrderOptions,
+  type ApplyTikTokOrderResult,
+  type SetTikTokOrdersApplyResult,
+} from "./apply";
+export {
+  TIKTOK_PACKING_HOLD_MS,
+  decideTikTokOrder,
+  formatJakartaTime,
+  tiktokPackingRefusal,
+  tiktokPackingState,
+  tiktokReadyToShip,
+  type TikTokDecision,
+  type TikTokGateInput,
+  type TikTokPackingState,
+} from "./apply-rules";
 export { FAKE_TIKTOK_GOOD_CODE, FAKE_TIKTOK_SHOP } from "./fake";
 export {
   TIKTOK_ORDER_PREVIEW_LIMIT,
@@ -71,6 +92,7 @@ export {
   drainTikTokWebhookOrderEvent,
   runTikTokSync,
   type DrainTikTokWebhookEventResult,
+  type TikTokApplyCounts,
   type TikTokSyncDeps,
   type TikTokSyncSummary,
 } from "./sync";

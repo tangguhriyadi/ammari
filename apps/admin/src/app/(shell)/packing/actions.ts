@@ -7,7 +7,7 @@ import { runAction, type ActionResult } from "@/lib/action-result";
 import { ActionError } from "@/lib/errors";
 import { defaultDb } from "@/lib/db";
 import { transitionOrderStatus } from "@ammari/commerce/orders";
-import { getCardPrintStatus, getCheckoutOrderNos, getOrdersMissingCard, mintThankYouCardsForOrders } from "@/lib/packing/queries";
+import { getCardPrintStatus, getCheckoutOrderNos, getOrdersMissingCard, getTikTokNotPackableOrderNos, mintThankYouCardsForOrders } from "@/lib/packing/queries";
 import { claimUrl, claimUrlHost, formatClaimTokenForDisplay } from "@/lib/packing/token";
 import { buildStickerSheetPdf, stickerPdfFilename, type StickerPdfCard } from "@/lib/packing/sticker-pdf";
 import { revalidateAdmin } from "@/lib/admin-revalidate";
@@ -159,6 +159,11 @@ export async function bulkMarkShippedAction(input: z.input<typeof bulkMarkShippe
     const checkoutOrderNos = await getCheckoutOrderNos(parsed.data.orderIds);
     if (checkoutOrderNos.length > 0) {
       throw new ActionError(`${checkoutOrderNos.join(", ")} pesanan website: perlu nomor resi. Tandai dikirim satu per satu.`);
+    }
+    // A TikTok order still in its cancel window (or split into packages) is not packable yet.
+    const waitingTikTok = await getTikTokNotPackableOrderNos(parsed.data.orderIds);
+    if (waitingTikTok.length > 0) {
+      throw new ActionError(`${waitingTikTok.join(", ")} pesanan TikTok belum boleh dikemas. Hapus dari pilihan lalu coba lagi.`);
     }
     // Sequential — transitionOrderStatus is its own transaction per order; nothing here needs
     // (or would benefit from) a single cross-order transaction.

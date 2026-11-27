@@ -65,6 +65,12 @@ export const tiktokShopConnections = pgTable(
     // Error codes only (a TikTok code or our own short reason), never a response body.
     lastErrorCode: text("last_error_code"),
     lastErrorAt: timestamp("last_error_at", { withTimezone: true, mode: "date" }),
+    // The kill switch for T5 (migration 0059): while false the sync stays a dry run (snapshots and
+    // projection only, no admin order or stock). Off by default; turned on and off on the Integrasi
+    // page without a deploy, audited.
+    ordersApplyEnabled: boolean("orders_apply_enabled").notNull().default(false),
+    ordersApplyChangedAt: timestamp("orders_apply_changed_at", { withTimezone: true, mode: "date" }),
+    ordersApplyChangedByStaffUserId: uuid("orders_apply_changed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     ...timestamps(),
   },
   (table) => [
@@ -81,6 +87,7 @@ export const tiktokShopConnections = pgTable(
     check("tiktok_shop_connections_last_error_code_check", sql`${table.lastErrorCode} is null or char_length(${table.lastErrorCode}) <= 64`),
     uniqueIndex("tiktok_shop_connections_one_active").on(table.status).where(sql`${table.status} = 'active'`),
     index("tiktok_shop_connections_connected_by_idx").on(table.connectedByStaffUserId),
+    index("tiktok_shop_connections_orders_apply_changed_by_idx").on(table.ordersApplyChangedByStaffUserId),
   ],
 );
 
@@ -160,18 +167,31 @@ export const tiktokWebhookEvents = pgTable(
 // ---- Orders: snapshots, projection, SKU mapping (plan §3.3, T4, migration 0058) -----------------
 
 export const TIKTOK_SNAPSHOT_SOURCES = ["webhook", "poll", "backfill", "manual"] as const;
+/** What a snapshot holds (migration 0059): an order (T4/T5), or a return / cancellation (T6). */
+export const TIKTOK_SNAPSHOT_KINDS = ["order", "return", "cancellation"] as const;
+export type TikTokSnapshotKind = (typeof TIKTOK_SNAPSHOT_KINDS)[number];
 export type TikTokSnapshotSource = (typeof TIKTOK_SNAPSHOT_SOURCES)[number];
 
 /** Written by T5 once an order is applied to admin; NULL until then (T4 is a dry run). */
 export const TIKTOK_APPLY_STATES = ["applied", "held", "skipped_unpaid", "skipped_undone"] as const;
 export type TikTokApplyState = (typeof TIKTOK_APPLY_STATES)[number];
 
-export const TIKTOK_HELD_REASONS = ["unknown_sku", "short_stock", "lines_differ", "final_in_admin", "partial_shipping", "partial_refund", "unknown_status", "money_format"] as const;
+/** `line_format` (migration 0059, T5): a line quantity that is not a positive whole number, or one
+ * variant at two prices in one order (it cannot be one order line). */
+export const TIKTOK_HELD_REASONS = ["unknown_sku", "short_stock", "lines_differ", "final_in_admin", "partial_shipping", "partial_refund", "unknown_status", "money_format", "line_format"] as const;
 export type TikTokHeldReason = (typeof TIKTOK_HELD_REASONS)[number];
 
 /** Things the sync saw that it never resolves on its own (plan §3.3, §6): the same `update_time`
  * with different content, and an order leaving COMPLETED/CANCELLED again. Shown on the dry-run page. */
-export const TIKTOK_ORDER_REVIEW_FLAGS = ["tiktok_snapshot_conflict", "tiktok_left_terminal"] as const;
+export const TIKTOK_ORDER_REVIEW_FLAGS = [
+  "tiktok_snapshot_conflict",
+  "tiktok_left_terminal",
+  // Migration 0059 (T5): a later version reported another `collection_time` than the one already
+  // written to `orders.marketplace_shipped_at` (written once, never overwritten, plan §3.4); and the
+  // reason behind an order's `marketplace_review` flag (multi-package / partial shipping, Q2).
+  "tiktok_ship_time_changed",
+  "tiktok_partial_shipping",
+] as const;
 export type TikTokOrderReviewFlag = (typeof TIKTOK_ORDER_REVIEW_FLAGS)[number];
 
 export const TIKTOK_SKU_MAPPING_SOURCES = ["auto_seller_sku", "manual"] as const;
@@ -194,10 +214,12 @@ export const tiktokOrderSnapshots = pgTable(
     contentSha256: text("content_sha256").notNull(),
     payload: jsonb("payload").notNull(),
     source: text("source", { enum: TIKTOK_SNAPSHOT_SOURCES }).notNull(),
+    kind: text("kind", { enum: TIKTOK_SNAPSHOT_KINDS }).notNull().default("order"),
     fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
     check("tiktok_order_snapshots_source_check", checkIn(table.source, TIKTOK_SNAPSHOT_SOURCES)),
+    check("tiktok_order_snapshots_kind_check", checkIn(table.kind, TIKTOK_SNAPSHOT_KINDS)),
     check("tiktok_order_snapshots_sha_check", sql`${table.contentSha256} ~ '^[0-9a-f]{64}$'`),
     check("tiktok_order_snapshots_order_id_check", sql`char_length(${table.tiktokOrderId}) between 1 and 128`),
     unique("tiktok_order_snapshots_version_key").on(table.tiktokOrderId, table.updateTime, table.contentSha256),

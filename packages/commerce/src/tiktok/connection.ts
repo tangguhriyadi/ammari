@@ -533,6 +533,9 @@ export interface TikTokConnectionView {
   lastPollOkAt: Date | null;
   lastErrorCode: string | null;
   lastErrorAt: Date | null;
+  /** The T5 kill switch: whether orders are applied to admin orders and stock. */
+  ordersApplyEnabled: boolean;
+  ordersApplyChangedAt: Date | null;
 }
 
 /** The current connection: the active or reauth-required one, else the most recently changed. No
@@ -559,6 +562,8 @@ export async function getTikTokConnectionView(db: Database): Promise<TikTokConne
       lastPollOkAt: c.lastPollOkAt,
       lastErrorCode: c.lastErrorCode,
       lastErrorAt: c.lastErrorAt,
+      ordersApplyEnabled: c.ordersApplyEnabled,
+      ordersApplyChangedAt: c.ordersApplyChangedAt,
     })
     .from(c)
     .orderBy(sql`case when ${c.status} in ('active', 'reauth_required') then 0 else 1 end`, desc(c.updatedAt))

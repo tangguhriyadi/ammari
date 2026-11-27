@@ -13,6 +13,7 @@ import { formatCompactRupiah, formatDateRange, formatMonthYear } from "@/lib/ove
 import {
   CHECKOUT_EXPIRY_SOON_MINUTES,
   getAttentionOrders,
+  getHeldTikTokOrderCount,
   getAwaitingPaymentOrders,
   getLowStock,
   getToShipOrders,
@@ -37,6 +38,8 @@ export interface NeedsActionAccess {
   profit: boolean;
   /** ads_expenses.manage AND finance.view_profit: "Gaji/Sewa belum dicatat" (docs/plans/growth.md §6). */
   expenses: boolean;
+  /** integrations.manage: held TikTok orders under Perlu dicek, linking to their page (T5). */
+  tiktok?: boolean;
 }
 
 export function hasAnyNeedsAction(access: NeedsActionAccess): boolean {
@@ -144,10 +147,24 @@ function OrderItem({ order, aside, note }: { order: ActionOrderRow; aside?: Reac
   );
 }
 
-async function AttentionBlock() {
-  const { count, rows } = await getAttentionOrders();
+async function AttentionBlock({ tiktok }: { tiktok: boolean }) {
+  const [{ count, rows }, heldTikTok] = await Promise.all([getAttentionOrders(), tiktok ? getHeldTikTokOrderCount() : Promise.resolve(0)]);
   return (
-    <Block title="Perlu dicek" count={count} href="/orders?status=perlu-dicek" testId="action-attention">
+    <Block
+      title="Perlu dicek"
+      // Held TikTok orders have no admin order yet, so they are not in `count`; they still keep the
+      // block open (a collapsed "Tidak ada" would hide them).
+      count={count + heldTikTok}
+      href="/orders?status=perlu-dicek"
+      testId="action-attention"
+      extraLinks={
+        heldTikTok > 0 ? (
+          <Link href="/settings/integrations/tiktok/orders" className="inline-flex min-h-11 items-center text-sm text-danger-700 underline underline-offset-4" data-testid="action-tiktok-held">
+            {formatNumber(heldTikTok)} pesanan TikTok ditahan
+          </Link>
+        ) : undefined
+      }
+    >
       {rows.map((order) => (
         <OrderItem key={order.id} order={order} />
       ))}
@@ -374,7 +391,7 @@ export function OverviewNeedsAction({ access, now, className }: { access: NeedsA
           {access.orders && (
             <>
               <Suspense fallback={<BlockSkeleton />}>
-                <AttentionBlock />
+                <AttentionBlock tiktok={access.tiktok === true} />
               </Suspense>
               <Suspense fallback={<BlockSkeleton />}>
                 <ToShipBlock now={now} packing={access.packing} />

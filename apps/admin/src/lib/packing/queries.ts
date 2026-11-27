@@ -11,9 +11,11 @@ import {
   productVariants,
   shipments,
   thankYouCards,
+  tiktokOrders,
 } from "@ammari/db/schema";
 import type { ChannelId, ShipmentStatus, Size } from "@ammari/db/schema";
 import { orderBuyerNameSql } from "@/lib/orders/buyer-name";
+import { tiktokPackingState, type TikTokPackingState } from "@ammari/commerce/tiktok";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { buildImageSizeUrl } from "@/lib/products/image-queries";
 import { ActionError } from "@/lib/errors";
@@ -96,6 +98,9 @@ export interface PackingQueueRow {
   shippingServiceLabel: string | null;
   /** The order's live courier booking (Phase K2: "Pesan kurir"), if any. */
   shipment: { status: ShipmentStatus; awb: string | null; providerStatus: string | null } | null;
+  /** A TikTok order applied by the sync (docs/plans/tiktok-shop-integration.md §4.4, T5): its packing
+   * gate (only `ready` may be packed and shipped) and the buyer's note (Q14). Null otherwise. */
+  tiktok: { packing: TikTokPackingState; buyerMessage: string | null; rtsSlaTime: Date | null } | null;
 }
 
 export interface PackingPickListItem {
@@ -185,6 +190,11 @@ export async function listPackingQueue(
       shipmentStatus: liveShipment.status,
       shipmentAwb: liveShipment.awb,
       shipmentProviderStatus: liveShipment.providerStatus,
+      tiktokStatus: tiktokOrders.status,
+      tiktokIsOnHoldOrder: tiktokOrders.isOnHoldOrder,
+      tiktokPaidTime: tiktokOrders.paidTime,
+      tiktokBuyerMessage: tiktokOrders.buyerMessage,
+      tiktokRtsSlaTime: tiktokOrders.rtsSlaTime,
     })
     .from(orders)
     .innerJoin(channels, eq(channels.id, orders.channelId))
@@ -192,6 +202,7 @@ export async function listPackingQueue(
     .leftJoin(activeCard, eq(activeCard.orderId, orders.id))
     .leftJoin(claimedCard, eq(claimedCard.orderId, orders.id))
     .leftJoin(liveShipment, eq(liveShipment.orderId, orders.id))
+    .leftJoin(tiktokOrders, eq(tiktokOrders.orderId, orders.id))
     .where(where)
     .orderBy(asc(orders.orderDate), asc(orders.id))
     .limit(pagination.limit)
@@ -202,7 +213,8 @@ export async function listPackingQueue(
 
   const previewMap = assignStickerCodes(previewInputs, fixedEntries);
 
-  const rowsWithStickerCodes: PackingQueueRow[] = rows.map(({ persistedStickerCode, paymentStatus, shipmentStatus, shipmentAwb, shipmentProviderStatus, ...row }) => {
+  const now = new Date();
+  const rowsWithStickerCodes: PackingQueueRow[] = rows.map(({ persistedStickerCode, paymentStatus, shipmentStatus, shipmentAwb, shipmentProviderStatus, tiktokStatus, tiktokIsOnHoldOrder, tiktokPaidTime, tiktokBuyerMessage, tiktokRtsSlaTime, ...row }) => {
     const isPrinted = row.cardPrintedAt !== null;
     const isCheckout = paymentStatus !== null;
     // An order whose card is already printed or claimed keeps showing it even if the rule would no
@@ -216,6 +228,10 @@ export async function listPackingQueue(
       stickerCodeIsPreview: takesCard && !isPrinted,
       isCheckout,
       shipment: shipmentStatus ? { status: shipmentStatus, awb: shipmentAwb, providerStatus: shipmentProviderStatus } : null,
+      tiktok:
+        tiktokStatus !== null
+          ? { packing: tiktokPackingState({ status: tiktokStatus, isOnHoldOrder: tiktokIsOnHoldOrder, paidTime: tiktokPaidTime }, now), buyerMessage: tiktokBuyerMessage, rtsSlaTime: tiktokRtsSlaTime }
+          : null,
     };
   });
 
@@ -345,6 +361,20 @@ export async function getCheckoutOrderNos(orderIds: string[], db: Database = def
     .where(and(inArray(orders.id, orderIds), isNotNull(orders.paymentStatus)))
     .orderBy(orders.orderNo);
   return rows.map((row) => row.orderNo);
+}
+
+/** The order numbers of the TikTok orders among `orderIds` that may not be shipped yet (the packing
+ * gate, docs/plans/tiktok-shop-integration.md §4.4): bulk "Tandai dikirim" refuses the whole
+ * selection before anything ships. transitionOrderStatus enforces the same gate per order. */
+export async function getTikTokNotPackableOrderNos(orderIds: string[], db: Database = defaultDb, now: Date = new Date()): Promise<string[]> {
+  if (orderIds.length === 0) return [];
+  const rows = await db
+    .select({ orderNo: orders.orderNo, status: tiktokOrders.status, isOnHoldOrder: tiktokOrders.isOnHoldOrder, paidTime: tiktokOrders.paidTime })
+    .from(orders)
+    .innerJoin(tiktokOrders, eq(tiktokOrders.orderId, orders.id))
+    .where(inArray(orders.id, orderIds))
+    .orderBy(orders.orderNo);
+  return rows.filter((row) => tiktokPackingState(row, now).kind !== "ready").map((row) => row.orderNo);
 }
 
 // ---------- Order summary (for the printed card's own text) ----------

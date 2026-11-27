@@ -18,14 +18,26 @@ import { emptyManualPaymentDraft, ManualPaymentFields, manualPaymentFromDraft, t
 
 type CustomerMode = "none" | "existing" | "new";
 
+/** TikTok Shop is connected (Q16): typing a TikTok order by hand is warned about, never blocked.
+ * `applying`: orders already arrive on their own; `connected`: they will once applying is turned on. */
+export type TikTokEntryNotice = "applying" | "connected" | null;
+
+const TIKTOK_ENTRY_NOTICE: Record<Exclude<TikTokEntryNotice, null>, string> = {
+  applying: "Pesanan TikTok masuk otomatis dari TikTok Shop. Buat manual hanya jika pesanan ini tidak muncul.",
+  connected:
+    "TikTok Shop sudah terhubung. Setelah penerapan pesanan diaktifkan, pesanan TikTok masuk otomatis. Pesanan yang dicatat manual dengan nomor yang sama akan dicocokkan, tidak dibuat dua kali.",
+};
+
 export function OrderForm({
   channels,
   variants,
   paymentOptions,
+  tiktokNotice = null,
 }: {
   channels: ChannelOption[];
   variants: OrderableVariantRow[];
   paymentOptions: ManualPaymentOptions;
+  tiktokNotice?: TikTokEntryNotice;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -164,6 +176,14 @@ export function OrderForm({
             </Label>
             <Input id="order-date" type="date" value={orderDate} onChange={(event) => setOrderDate(event.target.value)} />
           </div>
+        </div>
+        {/* A live region that stays mounted, so picking TikTok announces the warning. */}
+        <div role="status">
+          {channelId === "tiktok" && tiktokNotice && (
+            <p className="rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-700" data-testid="tiktok-entry-notice">
+              {TIKTOK_ENTRY_NOTICE[tiktokNotice]}
+            </p>
+          )}
         </div>
         <div>
           <Label htmlFor="order-channel-no" required={isMarketplace}>

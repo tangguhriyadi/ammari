@@ -10,7 +10,8 @@ function buyerLabel(row: OrderListRow): string {
 }
 
 /** The payment state (web checkout orders only) and a "Perlu dicek" marker when any flag is set
- * (any channel: an imported order can carry `marketplace_return_pending`). */
+ * (any channel: an imported order can carry `marketplace_return_pending`). A TikTok order waiting
+ * at its packing gate shows "Tunggu TikTok" instead (docs/plans/tiktok-shop-integration.md §4.4). */
 function CheckoutBadges({ row }: { row: OrderListRow }) {
   return (
     <>
@@ -19,7 +20,12 @@ function CheckoutBadges({ row }: { row: OrderListRow }) {
           {ORDER_PAYMENT_STATUS_LABELS[row.paymentStatus]}
         </Badge>
       )}
-      {row.needsAttention.length > 0 && (
+      {row.needsAttention.includes("tiktok_on_hold") && (
+        <Badge variant="warning" className="whitespace-nowrap" data-testid="tiktok-on-hold-badge">
+          Tunggu TikTok
+        </Badge>
+      )}
+      {row.needsAttention.some((flag) => flag !== "tiktok_on_hold") && (
         <Badge variant="danger" className="whitespace-nowrap">
           Perlu dicek
         </Badge>

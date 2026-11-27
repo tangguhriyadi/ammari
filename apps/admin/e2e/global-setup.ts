@@ -372,6 +372,16 @@ const E2E_TIKTOK_NO_ACCESS_ROLE_KEY = "e2e_tiktok_settings_only";
 export const E2E_TIKTOK_ORDER_ID = "579000000000000001";
 export const E2E_TIKTOK_SKU_ID = "1729000000000000901";
 export const E2E_TIKTOK_SELLER_SKU = "E2E-TT-TIDAK-DIKENAL";
+// tiktok-apply.spec.ts (docs/plans/tiktok-shop-integration.md T5): two TikTok orders the sync has
+// applied (admin order + projection linked, as applyTikTokOrder leaves them): one paid minutes ago,
+// still in the buyer's cancel window (not packable, flagged tiktok_on_hold), one paid hours ago
+// (packable). Both carry a buyer message. Lines use E2E_RESERVATION_FREE_SKU without a sale
+// movement, so the seeded stock other specs count is untouched.
+export const E2E_TIKTOK_WAITING_ORDER_ID = "579000000000000101";
+export const E2E_TIKTOK_WAITING_ORDER_NO = "ORD-E2E-TIKTOK-TUNGGU";
+export const E2E_TIKTOK_READY_ORDER_ID = "579000000000000102";
+export const E2E_TIKTOK_READY_ORDER_NO = "ORD-E2E-TIKTOK-SIAP";
+export const E2E_TIKTOK_BUYER_MESSAGE = "Tolong bungkus rapi, untuk hadiah";
 export const E2E_ACTIVITY_LOG_ADMIN_EMAIL = "activity-log-admin@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_OWNER_EMAIL = "activity-log-owner@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_SUPPLIER_NAME = "E2E Log Supplier Baru";
@@ -790,6 +800,58 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       { sku: E2E_RESERVATION_HELD_SKU, qty: 5, valueAmount: 500_000, type: "production", refType: "manual" },
       { sku: E2E_RESERVATION_FREE_SKU, qty: 3, valueAmount: 300_000, type: "production", refType: "manual" },
     ]);
+
+    // T5: two applied TikTok orders (see E2E_TIKTOK_WAITING_ORDER_ID).
+    for (const fixture of [
+      { tiktokOrderId: E2E_TIKTOK_WAITING_ORDER_ID, orderNo: E2E_TIKTOK_WAITING_ORDER_NO, paidAgoMs: 5 * 60_000, flags: ["tiktok_on_hold" as const] },
+      { tiktokOrderId: E2E_TIKTOK_READY_ORDER_ID, orderNo: E2E_TIKTOK_READY_ORDER_NO, paidAgoMs: 3 * 60 * 60_000, flags: [] },
+    ]) {
+      const paidTime = new Date(Date.now() - fixture.paidAgoMs);
+      const updateTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+      const [order] = await tx
+        .insert(orders)
+        .values({
+          channelId: "tiktok",
+          orderNo: fixture.orderNo,
+          channelOrderNo: fixture.tiktokOrderId,
+          status: "to_ship",
+          orderDate: paidTime,
+          subtotalAmount: 259_000,
+          shippingAmount: 0,
+          discountAmount: 0,
+          totalAmount: 259_000,
+          needsAttention: fixture.flags,
+          channelStatus: "AWAITING_SHIPMENT",
+          channelSyncedAt: updateTime,
+        })
+        .returning({ id: orders.id });
+      if (!order) throw new Error("failed to seed a TikTok order");
+      await tx.insert(orderItems).values({ orderId: order.id, sku: E2E_RESERVATION_FREE_SKU, qty: 1, unitPrice: 259_000, unitCost: 100_000 });
+      const payload = {
+        id: fixture.tiktokOrderId,
+        status: "AWAITING_SHIPMENT",
+        update_time: Math.floor(updateTime.getTime() / 1000),
+        payment: { currency: "IDR", sub_total: "259000", seller_discount: "0", total_amount: "259000" },
+        line_items: [{ id: `${fixture.tiktokOrderId}-li`, sku_id: `${fixture.tiktokOrderId}-sku`, seller_sku: E2E_RESERVATION_FREE_SKU, product_name: "Gamis E2E TikTok", original_price: "259000" }],
+      };
+      const [snapshot] = await tx
+        .insert(tiktokOrderSnapshots)
+        .values({ tiktokOrderId: fixture.tiktokOrderId, updateTime, contentSha256: "1".repeat(64), payload, source: "poll" })
+        .returning({ id: tiktokOrderSnapshots.id });
+      if (!snapshot) throw new Error("failed to seed a TikTok snapshot");
+      await tx.insert(tiktokOrders).values({
+        tiktokOrderId: fixture.tiktokOrderId,
+        orderId: order.id,
+        status: "AWAITING_SHIPMENT",
+        latestUpdateTime: updateTime,
+        latestSnapshotId: snapshot.id,
+        paidTime,
+        isOnHoldOrder: false,
+        applyState: "applied",
+        appliedUpdateTime: updateTime,
+        buyerMessage: E2E_TIKTOK_BUYER_MESSAGE,
+      });
+    }
 
     const now = Date.now();
     const checkoutOrder = (orderNo: string) => ({

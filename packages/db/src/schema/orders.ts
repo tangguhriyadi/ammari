@@ -212,6 +212,14 @@ export const orders = pgTable(
     channelStatus: text("channel_status"),
     // When an import last wrote this order.
     channelSyncedAt: timestamp("channel_synced_at", { withTimezone: true, mode: "date" }),
+
+    // ---- Marketplace dates (docs/plans/tiktok-shop-integration.md §3.4, migration 0059) ----
+    // The marketplace's own dates, for accounting; the app's shipped_at/completed_at/returned_at
+    // are never overwritten. Each is written once (conditional on IS NULL). TikTok: the shipped
+    // date is `collection_time`, the returned date the cancel/return completion time.
+    marketplaceShippedAt: timestamp("marketplace_shipped_at", { withTimezone: true, mode: "date" }),
+    marketplaceCompletedAt: timestamp("marketplace_completed_at", { withTimezone: true, mode: "date" }),
+    marketplaceReturnedAt: timestamp("marketplace_returned_at", { withTimezone: true, mode: "date" }),
     ...timestamps(),
   },
   (table) => [
@@ -374,6 +382,39 @@ export const orderChannelFees = pgTable(
     index("order_channel_fees_import_batch_id_idx").on(table.importBatchId),
     check("order_channel_fees_component_check", checkIn(table.component, CHANNEL_FEE_COMPONENTS)),
     check("order_channel_fees_amount_check", sql`${table.amount} >= 0`),
+  ],
+);
+
+export const MARKETPLACE_REFUND_KINDS = ["refund_only"] as const;
+export type MarketplaceRefundKind = (typeof MARKETPLACE_REFUND_KINDS)[number];
+
+/** Refund-only money: the buyer got money back and kept the goods (docs/plans/tiktok-shop-integration.md
+ * §3.4, decided Q10; migration 0059, written by T6). The order's status and stock are untouched.
+ * Append-only; a replay of the same channel refund is a no-op (the unique key). */
+export const marketplaceRefunds = pgTable(
+  "marketplace_refunds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "restrict" }),
+    channelId: text("channel_id")
+      .$type<ChannelId>()
+      .notNull()
+      .references(() => channels.id, { onDelete: "restrict" }),
+    channelRefundId: text("channel_refund_id").notNull(),
+    kind: text("kind", { enum: MARKETPLACE_REFUND_KINDS }).notNull(),
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    refundedAt: timestamp("refunded_at", { withTimezone: true, mode: "date" }).notNull(),
+    ...createdAtOnly(),
+  },
+  (table) => [
+    unique("marketplace_refunds_channel_refund_key").on(table.channelId, table.channelRefundId),
+    index("marketplace_refunds_order_id_idx").on(table.orderId),
+    index("marketplace_refunds_refunded_at_idx").on(table.refundedAt),
+    check("marketplace_refunds_kind_check", checkIn(table.kind, MARKETPLACE_REFUND_KINDS)),
+    check("marketplace_refunds_amount_check", sql`${table.amount} > 0`),
+    check("marketplace_refunds_channel_refund_id_check", sql`char_length(${table.channelRefundId}) between 1 and 128`),
   ],
 );
 

@@ -1,6 +1,6 @@
 import "server-only";
 import { sql } from "drizzle-orm";
-import type { TikTokHeldReason, TikTokOrderReviewFlag } from "@ammari/db/schema";
+import type { TikTokApplyState, TikTokHeldReason, TikTokOrderReviewFlag } from "@ammari/db/schema";
 import { TikTokMoneyFormatError, parseRupiah, type AllowlistedObject } from "@ammari/tiktok-shop";
 import type { Database } from "../db";
 import { tiktokSnapshotLines } from "./order-store";
@@ -118,6 +118,8 @@ export interface TikTokOrderPreviewRow {
   hasBuyerMessage: boolean;
   reviewFlags: TikTokOrderReviewFlag[];
   outcome: TikTokPreviewOutcome;
+  /** What T5 actually did (null while applying is off or the order was never tried). */
+  applied: { state: TikTokApplyState; heldReason: TikTokHeldReason | null; orderId: string | null; orderNo: string | null } | null;
 }
 
 export interface TikTokOrderPreview {
@@ -142,12 +144,18 @@ export async function listTikTokOrderPreviews(db: Database, limit = TIKTOK_ORDER
     review_flags: TikTokOrderReviewFlag[];
     payload: AllowlistedObject;
     in_admin: boolean;
+    apply_state: TikTokApplyState | null;
+    held_reason: TikTokHeldReason | null;
+    order_id: string | null;
+    order_no: string | null;
   }>(sql`
     select o.tiktok_order_id, o.status, o.latest_update_time, o.paid_time, o.rts_sla_time,
            o.buyer_message is not null as has_buyer_message, o.review_flags, s.payload,
-           exists (select 1 from orders a where a.channel_id = 'tiktok' and a.channel_order_no = o.tiktok_order_id) as in_admin
+           exists (select 1 from orders a where a.channel_id = 'tiktok' and a.channel_order_no = o.tiktok_order_id) as in_admin,
+           o.apply_state, o.held_reason, o.order_id, ao.order_no
     from tiktok_orders o
     join tiktok_order_snapshots s on s.id = o.latest_snapshot_id
+    left join orders ao on ao.id = o.order_id
     order by o.latest_update_time desc, o.tiktok_order_id
     limit ${limit}
   `);
@@ -168,6 +176,7 @@ export async function listTikTokOrderPreviews(db: Database, limit = TIKTOK_ORDER
       hasBuyerMessage: row.has_buyer_message,
       reviewFlags: row.review_flags,
       outcome,
+      applied: row.apply_state ? { state: row.apply_state, heldReason: row.held_reason, orderId: row.order_id, orderNo: row.order_no } : null,
     };
   });
   return { rows: result, counts, total: Number(total) };

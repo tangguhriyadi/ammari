@@ -27,6 +27,9 @@ let loggedConfigProblems: string | null = null;
 
 function statusFor(summary: TikTokSyncSummary): number {
   if (summary.connection === "reauth_required") return 500;
+  // T5: an order whose apply failed with a database or programming error (not a hold, not a busy
+  // row) is retried every run, so it must show as an ERROR line and reach the ALERT count.
+  if (!summary.error && summary.apply.failed > 0) return 500;
   if (!summary.error) return 200;
   switch (summary.error.kind) {
     case "rate_limited":
@@ -67,10 +70,10 @@ export async function POST(request: Request): Promise<Response> {
     // Not failures of this run, but nothing else would show them: a refresh that keeps failing
     // until the token expires, a deauthorization not applied, two versions with the same time, a
     // run that could not catch up (behind, not failing: the next run carries on).
-    const attention = summary.tokenRefresh?.startsWith("failed") || summary.connectionEvents.notApplied > 0 || summary.orders.conflicts > 0 || summary.budgetExhausted || summary.inbox.failed > 0;
+    const attention = summary.tokenRefresh?.startsWith("failed") || summary.connectionEvents.notApplied > 0 || summary.orders.conflicts > 0 || summary.budgetExhausted || summary.inbox.failed > 0 || summary.apply.busy > 0 || summary.apply.notFound > 0 || summary.apply.recheckIncomplete;
     if (status !== 200) console.error("[tiktok] sync stopped; the next run retries", summary);
     else if (attention) console.warn("[tiktok] sync done, needs a look", summary);
-    else if (summary.orders.fetched > 0 || summary.inbox.claimed > 0) console.info("[tiktok] sync done", summary);
+    else if (summary.orders.fetched > 0 || summary.inbox.claimed > 0 || summary.apply.created + summary.apply.updated > 0) console.info("[tiktok] sync done", summary);
     return cronJson(status, summary);
   } catch (error) {
     console.error("[tiktok] sync failed; retried on the next run", errorLogFields(error));

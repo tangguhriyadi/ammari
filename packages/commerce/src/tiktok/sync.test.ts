@@ -1,10 +1,11 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
-import { auditLog, productVariants, tiktokOrderSnapshots, tiktokOrders, tiktokShopConnections, tiktokSkuMappings, tiktokSyncCursors, tiktokWebhookEvents } from "@ammari/db/schema";
+import { auditLog, orders, productVariants, stockMovements, tiktokOrderSnapshots, tiktokOrders, tiktokShopConnections, tiktokSkuMappings, tiktokSyncCursors, tiktokWebhookEvents } from "@ammari/db/schema";
 import { insertOrder, insertProductVariant, insertStaffUser } from "@ammari/db/test-fixtures";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { Secret, createTikTokClient, projectTikTokOrder, type FetchLike, type TikTokAuthClient, type TikTokOrderProjection, type TikTokTokenSet, type TokenKeyring } from "@ammari/tiktok-shop";
 import { purgeTikTokBuyerMessages } from "../maintenance/retention";
+import { setTikTokOrdersApply } from "./apply";
 import { saveTikTokConnection } from "./connection";
 import { listTikTokOrderPreviews } from "./order-preview";
 import { ingestTikTokOrder } from "./order-store";
@@ -565,7 +566,7 @@ describe("runTikTokSync", () => {
       if (!parsed.ok) throw new Error(parsed.reason);
       const stored = await recordTikTokWebhookEvent(tx, parsed.event);
       if (stored.kind !== "stored") throw new Error(stored.kind);
-      expect(await drainTikTokWebhookOrderEvent(tx, deps(fake), stored.id)).toEqual({ kind: "processed" });
+      expect(await drainTikTokWebhookOrderEvent(tx, deps(fake), stored.id)).toMatchObject({ kind: "processed", apply: { enabled: false } });
       expect(await drainTikTokWebhookOrderEvent(tx, deps(fake), stored.id)).toEqual({ kind: "not_due" });
       expect(fake.detailCalls).toEqual([["a-1"]]);
       expect(await snapshotCount(tx, "a-1")).toBe(1);
@@ -590,6 +591,111 @@ describe("runTikTokSync", () => {
       const [connection] = await tx.select().from(tiktokShopConnections).where(eq(tiktokShopConnections.id, connectionId));
       expect(connection?.status).toBe("deauthorized");
       expect(fake.searches).toHaveLength(0);
+    });
+  });
+});
+
+// ---- T5: applying, behind the kill switch -------------------------------------------------------
+
+describe("runTikTokSync applying orders (T5)", () => {
+  async function paidOrder(tx: TestDatabase, id: string, updateTime: Date, mapped = true) {
+    const { variant } = await insertProductVariant(tx);
+    if (mapped) await tx.insert(tiktokSkuMappings).values({ tiktokSkuId: `sku-${id}`, variantSku: variant.sku, source: "auto_seller_sku", sellerSku: variant.sku });
+    await tx.insert(stockMovements).values({ sku: variant.sku, qty: 3, valueAmount: 300_000, type: "production", refType: "manual" });
+    return {
+      sku: variant.sku,
+      raw: {
+        ...rawOrder(id, updateTime, { paid_time: seconds(updateTime) - 2 * 3600 }),
+        payment: { currency: "IDR", sub_total: "259000", seller_discount: "0", total_amount: "259000" },
+        line_items: [{ id: `${id}-li`, sku_id: `sku-${id}`, seller_sku: variant.sku, product_name: "Gamis", original_price: "259000" }],
+      },
+    };
+  }
+
+  test("switch off (the default): a dry run, nothing reaches admin orders or stock", async () => {
+    await withRollback(async (tx) => {
+      await connect(tx);
+      const clock = { ms: NOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await setCursor(tx, new Date(NOW.getTime() - 30 * MIN));
+      const { raw } = await paidOrder(tx, "k-off", new Date(NOW.getTime() - 10 * MIN));
+      fake.orders.set("k-off", raw);
+      const summary = await runTikTokSync(tx, deps(fake));
+      expect(summary.apply).toMatchObject({ enabled: false, created: 0 });
+      expect(await tx.select().from(orders).where(eq(orders.channelOrderNo, "k-off"))).toHaveLength(0);
+      expect((await projection(tx, "k-off"))?.applyState).toBeNull();
+    });
+  });
+
+  test("switch on: the stored order is applied (stock out); turned off again, the next run writes nothing", async () => {
+    await withRollback(async (tx) => {
+      await connect(tx);
+      const staff = await insertStaffUser(tx);
+      expect(await setTikTokOrdersApply(tx, { enabled: true, staffUserId: staff.id })).toEqual({ ok: true, changed: true });
+      const audits = await tx.select().from(auditLog).where(and(eq(auditLog.action, "tiktok_apply_enable"), eq(auditLog.actorStaffUserId, staff.id)));
+      expect(audits).toHaveLength(1);
+      const clock = { ms: NOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await setCursor(tx, new Date(NOW.getTime() - 30 * MIN));
+      const { raw, sku } = await paidOrder(tx, "k-on", new Date(NOW.getTime() - 10 * MIN));
+      fake.orders.set("k-on", raw);
+      const summary = await runTikTokSync(tx, deps(fake));
+      expect(summary.apply).toMatchObject({ enabled: true, created: 1, failed: 0 });
+      const [order] = await tx.select().from(orders).where(and(eq(orders.channelId, "tiktok"), eq(orders.channelOrderNo, "k-on")));
+      expect(order?.status).toBe("to_ship");
+      const [{ qty } = { qty: 0 }] = await tx.execute<{ qty: number }>(sql`select coalesce(sum(qty), 0)::int as qty from stock_movements where sku = ${sku}`);
+      expect(qty).toBe(2);
+
+      expect(await setTikTokOrdersApply(tx, { enabled: false, staffUserId: staff.id })).toEqual({ ok: true, changed: true });
+      const later = new Date(NOW.getTime() + 5 * MIN);
+      fake.orders.set("k-on", { ...raw, status: "CANCELLED", update_time: seconds(later), cancel_time: seconds(later) });
+      clock.ms += 10 * MIN;
+      const off = await runTikTokSync(tx, deps(fake));
+      expect(off.apply.enabled).toBe(false);
+      const [still] = await tx.select().from(orders).where(eq(orders.id, order!.id));
+      expect(still?.status).toBe("to_ship");
+    });
+  });
+
+  test("the switch can always be turned off, even once the connection needs reconnecting; never turned on then", async () => {
+    await withRollback(async (tx) => {
+      const connectionId = await connect(tx);
+      const staff = await insertStaffUser(tx);
+      await setTikTokOrdersApply(tx, { enabled: true, staffUserId: staff.id });
+      await tx.update(tiktokShopConnections).set({ status: "reauth_required" }).where(eq(tiktokShopConnections.id, connectionId));
+      expect(await setTikTokOrdersApply(tx, { enabled: false, staffUserId: staff.id })).toEqual({ ok: true, changed: true });
+      expect(await setTikTokOrdersApply(tx, { enabled: true, staffUserId: staff.id })).toEqual({ ok: false, reason: "not_connected" });
+      const [row] = await tx.select().from(tiktokShopConnections).where(eq(tiktokShopConnections.id, connectionId));
+      expect(row?.ordersApplyEnabled).toBe(false);
+    });
+  });
+
+  test("a held order is re-checked (after its 15-minute back-off) without a TikTok call, and applied once its SKU is mapped", async () => {
+    await withRollback(async (tx) => {
+      await connect(tx);
+      const staff = await insertStaffUser(tx);
+      await setTikTokOrdersApply(tx, { enabled: true, staffUserId: staff.id });
+      const clock = { ms: NOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await setCursor(tx, new Date(NOW.getTime() - 30 * MIN));
+      const { raw, sku } = await paidOrder(tx, "k-held", new Date(NOW.getTime() - 10 * MIN), false);
+      // No mapping yet: held as unknown_sku.
+      fake.orders.set("k-held", raw);
+      const first = await runTikTokSync(tx, deps(fake));
+      expect(first.apply).toMatchObject({ held: 1 });
+      expect(await projection(tx, "k-held")).toMatchObject({ applyState: "held", heldReason: "unknown_sku" });
+
+      await tx.insert(tiktokSkuMappings).values({ tiktokSkuId: "sku-k-held", variantSku: sku, source: "manual", mappedByStaffUserId: staff.id });
+      fake.orders.clear();
+      fake.detailCalls.length = 0;
+      // The next run, 5 minutes on: the hold backs off (15 minutes), nothing re-checked yet.
+      clock.ms += 5 * MIN;
+      expect((await runTikTokSync(tx, deps(fake))).apply).toMatchObject({ rechecked: 0, created: 0 });
+      clock.ms += 11 * MIN;
+      const second = await runTikTokSync(tx, deps(fake));
+      expect(second.apply).toMatchObject({ rechecked: 1, created: 1 });
+      expect(fake.detailCalls).toHaveLength(0);
+      expect(await projection(tx, "k-held")).toMatchObject({ applyState: "applied" });
     });
   });
 });

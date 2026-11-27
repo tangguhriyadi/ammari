@@ -108,6 +108,27 @@ export const ATTENTION_FLAG_COPY: Record<OrderAttentionFlag, AttentionFlagCopy> 
     meaning:
       "Menurut file impor marketplace, pembeli sedang mengembalikan paket. Stok belum dikembalikan. Kalau paket sudah diterima, ubah status ke Retur. Kalau retur ditolak, tekan Hapus tanda retur.",
   },
+  // Migration 0059 (docs/plans/tiktok-shop-integration.md §3.4, §4.3-§4.5).
+  tiktok_on_hold: {
+    label: "Tunggu TikTok",
+    meaning: "Pembeli TikTok masih bisa membatalkan. Stok sudah dikurangi, tapi pesanan belum boleh dikemas. Tanda ini hilang sendiri.",
+  },
+  marketplace_review: {
+    label: "Perlu dicek di marketplace",
+    meaning: "Pesanan dikirim dalam beberapa paket atau baru sebagian dikirim. Cek di Seller Center dan selesaikan status pesanan secara manual, lalu tandai beres.",
+  },
+  marketplace_partial_return: {
+    label: "Retur sebagian",
+    meaning: "Hanya sebagian barang dikembalikan pembeli. Cek di Seller Center dan catat secara manual, lalu tandai beres.",
+  },
+  tiktok_return_response_due: {
+    label: "Tanggapi retur di TikTok",
+    meaning: "Pembeli mengajukan retur atau pengembalian dana. Tanggapi di Seller Center sebelum batas waktu, lalu tandai beres.",
+  },
+  marketplace_return_in_transit: {
+    label: "Paket kembali ke toko",
+    meaning: "Paket gagal dikirim atau dikembalikan pembeli dan sedang dalam perjalanan kembali. Stok belum dikembalikan. Setelah paket diterima, ubah status ke Retur.",
+  },
 };
 
 export function isKnownAttentionFlag(flag: string): flag is OrderAttentionFlag {

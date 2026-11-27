@@ -60,6 +60,8 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       clear_attention_flag: { label: "Tanda perlu dicek dihapus" },
       import_create: { label: "Pesanan ditambahkan dari impor", area: "import" },
       import_update: { label: "Pesanan diperbarui dari impor", area: "import" },
+      tiktok_create: { label: "Pesanan masuk dari TikTok Shop" },
+      tiktok_update: { label: "Pesanan diperbarui dari TikTok Shop" },
       cancel_checkout_order: { label: "Pesanan toko online dibatalkan", area: "payments" },
       record_refund: { label: "Pengembalian dana dicatat", area: "payments" },
       record_manual_payment: { label: "Cara bayar pesanan manual dicatat", area: "payments" },
@@ -505,10 +507,22 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       tiktok_reauth_required: { label: "TikTok Shop perlu dihubungkan ulang" },
       tiktok_deauthorize: { label: "Izin TikTok Shop dicabut penjual" },
       tiktok_expiry_warning: { label: "Izin TikTok Shop akan berakhir" },
+      tiktok_apply_enable: { label: "Pesanan TikTok mulai diterapkan ke pesanan dan stok" },
+      tiktok_apply_disable: { label: "Pesanan TikTok berhenti diterapkan (hanya pratinjau)" },
     },
   },
   // docs/plans/tiktok-shop-integration.md T4: Pemetaan SKU TikTok. The auto-map has no actor
   // (packages/commerce/src/tiktok/order-store.ts); a person's map/remove names them.
+  // docs/plans/tiktok-shop-integration.md T5: a TikTok order held or skipped by the sync (no admin
+  // order yet). Written without an actor (packages/commerce/src/tiktok/apply.ts).
+  tiktok_order: {
+    label: "Pesanan TikTok",
+    area: "orders",
+    actions: {
+      tiktok_hold: { label: "Pesanan TikTok ditahan" },
+      tiktok_skip: { label: "Pesanan TikTok dilewati" },
+    },
+  },
   tiktok_sku_mapping: {
     label: "Pemetaan SKU TikTok",
     area: "settings",

@@ -1,7 +1,8 @@
 "use server";
 
 import { buildAuthorizeUrl } from "@ammari/tiktok-shop";
-import { createTikTokOAuthState, disconnectTikTokShop } from "@ammari/commerce/tiktok";
+import { z } from "zod";
+import { createTikTokOAuthState, disconnectTikTokShop, setTikTokOrdersApply } from "@ammari/commerce/tiktok";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin, revalidateOverview } from "@/lib/admin-revalidate";
@@ -37,5 +38,24 @@ export async function disconnectTikTokAction(): Promise<ActionResult> {
     revalidateAdmin("/settings");
     revalidateOverview();
     return undefined;
+  });
+}
+
+const ordersApplySchema = z.object({ enabled: z.boolean() });
+
+/** The T5 kill switch (docs/plans/tiktok-shop-integration.md §4, migration 0059): "Terapkan pesanan
+ * TikTok" on or off, without a deploy. integrations.manage on the server; audited
+ * (`tiktok_apply_enable` / `tiktok_apply_disable`). Off: the sync keeps reading and storing orders
+ * (the preview) but writes no admin order and no stock. */
+export async function setTikTokOrdersApplyAction(input: z.input<typeof ordersApplySchema>): Promise<ActionResult<{ changed: boolean }>> {
+  const session = await requirePermission(TIKTOK_PERMISSION);
+  const parsed = ordersApplySchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Input tidak valid." };
+  return runAction(async () => {
+    const result = await setTikTokOrdersApply(defaultDb, { enabled: parsed.data.enabled, staffUserId: session.staffUser.id });
+    if (!result.ok) throw new ActionError("Hubungkan TikTok Shop dulu.");
+    revalidateAdmin("/settings", "/orders", "/packing");
+    revalidateOverview();
+    return { changed: result.changed };
   });
 }

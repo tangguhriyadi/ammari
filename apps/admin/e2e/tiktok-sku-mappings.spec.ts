@@ -37,7 +37,7 @@ for (const viewport of VIEWPORTS) {
 
       // The preview holds the order while its SKU is unmapped.
       await page.goto(PREVIEW);
-      await expect(page.getByRole("heading", { level: 1, name: "Pratinjau pesanan TikTok" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Pesanan TikTok" })).toBeVisible();
       const previewRow = rows(page, desktop).filter({ hasText: E2E_TIKTOK_ORDER_ID });
       await expect(previewRow).toHaveCount(1);
       await expect(previewRow.getByText("Ditahan", { exact: true })).toBeVisible();

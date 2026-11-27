@@ -353,6 +353,8 @@ const productLookup: Lookup = async (db, ids) => {
 };
 
 const LOOKUPS: Record<string, Lookup> = {
+  // A TikTok order held or skipped by the sync: its entity id is TikTok's own number (T5).
+  tiktok_order: async (_db, ids) => new Map(ids.map((id) => [id, { label: `TikTok ${id}`, href: "/settings/integrations/tiktok/orders" }])),
   order: async (db, ids) => {
     const rows = await db.select({ id: orders.id, orderNo: orders.orderNo }).from(orders).where(inArray(orders.id, uuids(ids)));
     return byId(rows, (row) => ({ label: row.orderNo, href: `/orders/${row.id}` }));

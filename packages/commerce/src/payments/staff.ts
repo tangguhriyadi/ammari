@@ -355,6 +355,8 @@ export const FLAG_MESSAGES = {
   alreadyCleared: "Tanda ini sudah tidak ada. Mungkin sudah ditandai beres oleh orang lain. Muat ulang halaman.",
   stockShortOpen: "Pesanan ini masih menunggu. Proses pesanan (setelah stok ditambah) atau batalkan dan kembalikan dananya.",
   refundOwed: "Dana pembeli masih tercatat belum dikembalikan. Kembalikan dananya, lalu pakai Catat dana dikembalikan.",
+  tiktokOnHold: "Tanda ini hilang sendiri setelah pesanan TikTok boleh dikemas (dicek tiap 5 menit).",
+  returnInTransit: "Paket masih dalam perjalanan kembali. Tanda ini hilang setelah status diubah ke Retur saat paket diterima.",
 } as const;
 
 /** Paid attempts whose money Ammari still holds but must give back: every paid attempt of a
@@ -379,6 +381,14 @@ export async function clearAttentionFlag(db: Database, orderId: string, flag: Or
     if (!order) throw new ActionError(FLAG_MESSAGES.notFound);
     if (!order.needsAttention.includes(flag)) throw new ActionError(FLAG_MESSAGES.alreadyCleared);
     if (flag === "stock_short_at_payment" && order.status === "awaiting_payment") throw new ActionError(FLAG_MESSAGES.stockShortOpen);
+    // TikTok (docs/plans/tiktok-shop-integration.md §4.4, §4.5): the hold ends with the packing gate
+    // (the sync clears it; a click would be re-set), and a parcel on its way back ends only with the
+    // return that puts its stock back (Q11), never by a click.
+    // While applying is off (the kill switch) nothing clears the hold, so a person may.
+    if (flag === "tiktok_on_hold" && (await tx.execute<{ on: boolean }>(sql`select exists (select 1 from tiktok_shop_connections where status = 'active' and orders_apply_enabled) as on`))[0]?.on) {
+      throw new ActionError(FLAG_MESSAGES.tiktokOnHold);
+    }
+    if (flag === "marketplace_return_in_transit") throw new ActionError(FLAG_MESSAGES.returnInTransit);
     // Money still owed never drops out of "Perlu dicek" by a click: it ends with a recorded refund
     // (recordManualRefund), or when the gateway reports the refund (the attempt is then refunded).
     if (flag === "refund_due" || flag === "paid_after_cancel") {

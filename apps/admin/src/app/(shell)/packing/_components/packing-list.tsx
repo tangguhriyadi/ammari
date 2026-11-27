@@ -14,6 +14,7 @@ import {
 } from "../actions";
 import { downloadOrOpenPdf, openStickerPopupPlaceholder } from "@/lib/client/pdf-download";
 import { CourierBooking } from "@/components/orders/courier-booking";
+import { TikTokPackingBadge } from "@/components/orders/tiktok-packing-badge";
 import { SHIPMENT_STATUS_BADGE_VARIANT, SHIPMENT_STATUS_LABELS } from "@/lib/orders/shipment-labels";
 import { PickList } from "./pick-list";
 import { MarkShippedDialog } from "./mark-shipped-dialog";
@@ -95,6 +96,28 @@ function StickerCode({ code, isPreview, srLabel }: { code: string | null; isPrev
   );
 }
 
+/** A TikTok order applied by the sync is packed only once its gate passes (docs/plans/
+ * tiktok-shop-integration.md §4.4): before that the buyer can still cancel. Not selectable, not
+ * shippable; the server refuses it too. Every other order is packable. */
+function isPackable(row: PackingQueueRow): boolean {
+  return row.tiktok === null || row.tiktok.packing.kind === "ready";
+}
+
+/** The TikTok packing state and the buyer's note (Q14), shown to whoever packs the parcel. */
+function TikTokLines({ tiktok }: { tiktok: PackingQueueRow["tiktok"] }) {
+  if (!tiktok) return null;
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <TikTokPackingBadge packing={tiktok.packing} />
+      {tiktok.buyerMessage && (
+        <p className="max-w-80 whitespace-pre-line break-words text-sm text-neutral-900" data-testid="packing-buyer-message">
+          <span className="font-medium">Pesan pembeli:</span> {tiktok.buyerMessage}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function PackingList({ rows, items, canShip }: PackingListProps) {
   const router = useRouter();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -113,7 +136,8 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
   // just cause an extra cascading render for the same result) — every action below reads
   // `visibleSelectedIds`, never `selectedIds` directly.
   const visibleSelectedIds = useMemo(() => {
-    const visibleIds = new Set(rows.map((row) => row.id));
+    // A TikTok order that became unpackable (a refresh mid-selection) drops out too.
+    const visibleIds = new Set(rows.filter(isPackable).map((row) => row.id));
     return [...selectedIds].filter((id) => visibleIds.has(id));
   }, [selectedIds, rows]);
   // Cards and stickers are printed only for the selected orders that take a card (a web checkout
@@ -141,8 +165,9 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
 
   // Desktop table only — the mobile CardList has no bulk "select all" affordance (each row's
   // own checkbox is already one tap away).
-  const allSelected = rows.length > 0 && rows.every((row) => selectedIds.has(row.id));
-  const someSelected = rows.some((row) => selectedIds.has(row.id));
+  const selectableRows = rows.filter(isPackable);
+  const allSelected = selectableRows.length > 0 && selectableRows.every((row) => selectedIds.has(row.id));
+  const someSelected = selectableRows.some((row) => selectedIds.has(row.id));
   const selectAllRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected && !allSelected;
@@ -151,7 +176,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
   function toggleSelectAll() {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      for (const row of rows) {
+      for (const row of selectableRows) {
         if (allSelected) next.delete(row.id);
         else next.add(row.id);
       }
@@ -312,7 +337,8 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
               <div className="flex items-start justify-between gap-3">
                 <Checkbox
                   label={`${row.orderNo} · ${row.channelName}`}
-                  checked={selectedIds.has(row.id)}
+                  checked={isPackable(row) && selectedIds.has(row.id)}
+                  disabled={!isPackable(row)}
                   onChange={() => toggleSelected(row.id)}
                 />
                 <CardStatusBadge printedAt={row.cardPrintedAt} claimedAt={row.cardClaimedAt} takesCard={row.takesCard} />
@@ -320,12 +346,13 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
               <p className="text-sm text-neutral-600">
                 {formatDate(new Date(row.orderDate))} · {row.customerName ?? row.buyerUsername ?? "-"}
               </p>
+              <TikTokLines tiktok={row.tiktok} />
               <ServiceLine label={row.shippingServiceLabel} />
               <BookingLine shipment={row.shipment} />
               <StickerCode code={row.stickerCode} isPreview={row.stickerCodeIsPreview} srLabel="Kode stiker" />
               <PickList items={items[row.id] ?? []} />
               {canShip && row.isCheckout && <CourierBooking orderId={row.id} orderNo={row.orderNo} shipment={row.shipment} variant="row" disabled={pending} />}
-              {canShip && (
+              {canShip && isPackable(row) && (
                 // Disabled while ANY bulk/print transition is in flight (`pending` covers the
                 // header's "Cetak kartu"/"Tandai dikirim" actions) — otherwise a staffer could
                 // open this row's own ship dialog for an order the bulk action is concurrently
@@ -353,6 +380,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
               label="Pilih semua"
               hideLabel
               checked={allSelected}
+              disabled={selectableRows.length === 0}
               onChange={toggleSelectAll}
             />
           </Th>
@@ -374,7 +402,8 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 <Checkbox
                   label={`Pilih ${row.orderNo}`}
                   hideLabel
-                  checked={selectedIds.has(row.id)}
+                  checked={isPackable(row) && selectedIds.has(row.id)}
+                  disabled={!isPackable(row)}
                   onChange={() => toggleSelected(row.id)}
                 />
               </Td>
@@ -382,6 +411,7 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 <div className="flex flex-col items-start gap-1">
                   <span className="font-medium">{row.orderNo}</span>
                   <Badge variant="neutral">{row.channelName}</Badge>
+                  <TikTokLines tiktok={row.tiktok} />
                   <ServiceLine label={row.shippingServiceLabel} />
                   <BookingLine shipment={row.shipment} />
                 </div>
@@ -411,9 +441,11 @@ export function PackingList({ rows, items, canShip }: PackingListProps) {
                 <Td className="whitespace-nowrap">
                   <div className="flex flex-col items-start gap-2">
                     {row.isCheckout && <CourierBooking orderId={row.id} orderNo={row.orderNo} shipment={row.shipment} variant="row" disabled={pending} />}
-                    <Button variant="secondary" disabled={pending} onClick={() => setShippingOrder(row)}>
-                      Tandai dikirim
-                    </Button>
+                    {isPackable(row) && (
+                      <Button variant="secondary" disabled={pending} onClick={() => setShippingOrder(row)}>
+                        Tandai dikirim
+                      </Button>
+                    )}
                   </div>
                 </Td>
               )}

@@ -6,11 +6,12 @@ import { tiktokConnectionBanner } from "@ammari/commerce/tiktok";
 import type { TikTokConnectionStatus } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getTikTokRuntime, TIKTOK_INTEGRATION_PATH, TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
-import { TIKTOK_CONNECT_ERRORS, TIKTOK_CONNECTED_MESSAGE, TIKTOK_RECONNECTED_MESSAGE, isTikTokConnectErrorCode } from "@/lib/integrations/tiktok-messages";
+import { TIKTOK_CONNECT_ERRORS, TIKTOK_CONNECTED_MESSAGE, TIKTOK_HELD_REASON_LABELS, TIKTOK_RECONNECTED_MESSAGE, isTikTokConnectErrorCode } from "@/lib/integrations/tiktok-messages";
 import { getTikTokIntegrationPageData } from "@/lib/integrations/tiktok-queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { TikTokConnectionActions } from "./_components/tiktok-connection-actions";
 import { TikTokConnectionBanner } from "./_components/tiktok-connection-banner";
+import { TikTokOrdersApplyToggle } from "./_components/tiktok-orders-apply-toggle";
 
 // Pengaturan > Integrasi TikTok Shop (docs/plans/tiktok-shop-integration.md §3.1, §7.3, T2): status,
 // shop, granted scopes, token expiry, health, and Hubungkan / Hubungkan ulang / Putuskan.
@@ -71,7 +72,7 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
   await requirePermission(TIKTOK_PERMISSION);
   const search = await searchParams;
   const runtime = getTikTokRuntime({ requireServiceId: true });
-  const { connection, connectedByName, webhookCounts, ordersCursor, failedEvents, tiktokOrderCount, unmappedSkuCount } = await getTikTokIntegrationPageData();
+  const { connection, connectedByName, webhookCounts, ordersCursor, failedEvents, tiktokOrderCount, unmappedSkuCount, appliedCount, heldByReason } = await getTikTokIntegrationPageData();
   const now = new Date();
   const banner = tiktokConnectionBanner(connection, now);
 
@@ -184,20 +185,36 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
         )}
 
         {connection && (
-          <Section id="tiktok-orders-heading" title="Pesanan TikTok (uji coba)">
-            <p className="text-sm text-neutral-600">
-              Pesanan TikTok dibaca dan disimpan, tetapi belum dibuat di admin dan stok belum berubah. Halaman pratinjau menunjukkan pesanan mana yang akan dibuat dan mana yang ditahan.
-            </p>
+          <Section id="tiktok-orders-heading" title="Pesanan TikTok">
+            <div className="flex flex-col gap-2" data-testid="tiktok-orders-apply">
+              <p className="flex flex-wrap items-center gap-2 text-sm text-neutral-900">
+                <span className="font-medium">Penerapan ke pesanan dan stok:</span>
+                <Badge variant={connection.ordersApplyEnabled ? "success" : "neutral"}>{connection.ordersApplyEnabled ? "Aktif" : "Belum aktif (uji coba)"}</Badge>
+              </p>
+              <p className="text-sm text-neutral-600">
+                {connection.ordersApplyEnabled
+                  ? "Pesanan TikTok yang sudah dibayar dibuat di admin dan stoknya dikurangi. Status ikut berubah sesuai TikTok."
+                  : "Pesanan TikTok dibaca dan disimpan, tetapi belum dibuat di admin dan stok belum berubah. Halaman pesanan TikTok menunjukkan mana yang akan dibuat dan mana yang ditahan."}
+                {connection.ordersApplyChangedAt && ` Terakhir diubah ${when(connection.ordersApplyChangedAt)}.`}
+              </p>
+              {/* Stopping is always possible (a TikTok incident, a lost connection); starting needs an active one. */}
+              <TikTokOrdersApplyToggle enabled={connection.ordersApplyEnabled} disabled={!connection.ordersApplyEnabled && connection.status !== "active"} />
+              {!connection.ordersApplyEnabled && connection.status !== "active" && <p className="text-sm text-neutral-600">Hubungkan TikTok Shop dulu untuk mulai menerapkan pesanan.</p>}
+            </div>
             <dl className="divide-y divide-neutral-100">
               <Row label="Pesanan terbaca sampai">{when(ordersCursor?.windowEnd ?? null)}</Row>
               <Row label="Sinkronisasi pesanan terakhir">{when(ordersCursor?.lastRunAt ?? null)}</Row>
               {ordersCursor?.lastErrorCode && <Row label="Kesalahan sinkronisasi pesanan">{ordersCursor.lastErrorCode}</Row>}
               <Row label="Pesanan TikTok tersimpan">{formatNumber(tiktokOrderCount)}</Row>
               <Row label="SKU TikTok belum dipetakan">{formatNumber(unmappedSkuCount)}</Row>
+              <Row label="Sudah masuk admin">{formatNumber(appliedCount)}</Row>
+              <Row label="Ditahan">
+                {heldByReason.length === 0 ? "Tidak ada" : heldByReason.map((held) => `${formatNumber(held.count)} ${(TIKTOK_HELD_REASON_LABELS as Record<string, string>)[held.reason] ?? held.reason}`).join("; ")}
+              </Row>
             </dl>
             <div className="flex flex-col gap-2 pt-2 sm:flex-row">
               <Link href={`${TIKTOK_INTEGRATION_PATH}/orders`} className="text-sm font-medium text-brand hover:underline">
-                Lihat pratinjau pesanan
+                Lihat pesanan TikTok
               </Link>
               <Link href={`${TIKTOK_INTEGRATION_PATH}/sku-mappings`} className="text-sm font-medium text-brand hover:underline sm:ml-4">
                 Buka Pemetaan SKU TikTok

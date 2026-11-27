@@ -274,6 +274,16 @@ export const ORDER_ATTENTION_FLAGS = [
   // buyer is returning the parcel ("Dalam Pengembalian"). No stock effect until the return is final;
   // cleared when the order becomes cancelled/returned.
   "marketplace_return_pending",
+  // Migration 0059 (docs/plans/tiktok-shop-integration.md §3.4, T5). `tiktok_on_hold`: a paid TikTok
+  // order that may not be packed yet (the buyer can still cancel, §4.4). `marketplace_review`: a
+  // multi-package or partially shipped order, settled by hand (Q2). `marketplace_return_in_transit`:
+  // the parcel is on its way back; stock returns only when staff confirm it arrived (Q11, Q18).
+  // `marketplace_partial_return` and `tiktok_return_response_due` are set by T6.
+  "tiktok_on_hold",
+  "marketplace_review",
+  "marketplace_partial_return",
+  "tiktok_return_response_due",
+  "marketplace_return_in_transit",
 ] as const;
 export type OrderAttentionFlag = (typeof ORDER_ATTENTION_FLAGS)[number];
 

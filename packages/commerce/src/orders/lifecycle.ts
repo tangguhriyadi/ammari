@@ -18,6 +18,7 @@ import { canTransitionOrderStatus, ORDER_STATUS_TIMESTAMP_COLUMN, STOCK_NOT_YET_
 // order voiding its own active card is this function's job; the rest of the card lifecycle
 // (minting, printing) stays in apps/admin's lib/packing per docs/plans/packing-cards.md.
 import { voidActiveCardForOrder, voidUnusedVoucherForEndedOrder } from "../thank-you-cards";
+import { tiktokPackingRefusal } from "../tiktok/apply-rules";
 
 // ---------- Create (manual entry) ----------
 
@@ -353,7 +354,26 @@ export interface TransitionOrderStatusOptions {
   /** Set only by `cancelCheckoutOrderByStaff` (payments/staff.ts), which ends the payment attempts
    * and records why first. Without it a staff cancel of a checkout order is refused. */
   checkoutCancelByStaff?: boolean;
+  /** The clock for the TikTok packing gate (tests); defaults to now. */
+  now?: Date;
 }
+
+/** A TikTok order applied by the sync may be marked shipped by staff only once it passes the packing
+ * gate (docs/plans/tiktok-shop-integration.md §4.4, Q1): before that the buyer can still cancel. A
+ * TikTok order the sync never applied (hand-typed, no projection) is not limited. */
+async function assertTikTokPackable(tx: Tx, orderId: string, now: Date): Promise<void> {
+  const rows = await tx.execute<{ status: string; is_on_hold_order: boolean | null; paid_time: string | Date | null }>(sql`
+    select status, is_on_hold_order, paid_time from tiktok_orders where order_id = ${orderId}::uuid limit 1
+  `);
+  const row = rows[0];
+  if (!row) return;
+  const refusal = tiktokPackingRefusal({ status: row.status, isOnHoldOrder: row.is_on_hold_order, paidTime: row.paid_time ? new Date(row.paid_time) : null }, now);
+  if (refusal) throw new ActionError(refusal);
+}
+
+/** Flags that end with the order: a marketplace return waiting or on its way back, and the TikTok
+ * hold (docs/plans/marketplace-import.md §3 rule 3a; tiktok-shop-integration.md §4.5). */
+const FLAGS_ENDED_WITH_ORDER = ["marketplace_return_pending", "marketplace_return_in_transit", "tiktok_on_hold"] as const;
 
 export const CHECKOUT_ORDER_UNPAID_MESSAGE = "Pesanan website ini belum dibayar. Pesanan masuk Siap Kirim otomatis setelah pembayaran diterima.";
 export const CHECKOUT_ORDER_CANCEL_PATH_MESSAGE = "Pesanan website dibatalkan lewat tombol Batalkan pesanan di halaman pesanan.";
@@ -492,6 +512,7 @@ export async function transitionOrderStatus(
     }
     assertStaffMayMoveCheckoutOrder(order, toStatus, actorStaffUserId, options);
     const shipment = toStatus === "shipped" ? shipmentDetailsOrThrow(options, order.paymentStatus !== null) : null;
+    if (toStatus === "shipped" && actorStaffUserId !== null && order.channelId === "tiktok") await assertTikTokPackable(tx, orderId, options.now ?? new Date());
     // "Proses" of a checkout order paid while stock was short (plan §6.2): once the sale is
     // written the flag is resolved, so it ends in the same update (every other flag stays).
     const resolvesStockShort = fromStatus === "awaiting_payment" && toStatus === "to_ship" && order.needsAttention.includes("stock_short_at_payment");
@@ -540,7 +561,14 @@ export async function transitionOrderStatus(
         // A marketplace return waiting (docs/plans/marketplace-import.md §3 rule 3a) ends with the
         // order: a manual Retur or Batal never leaves the flag behind. Only these two targets, so it
         // never meets the two needs_attention expressions above (to_ship and shipped only).
-        ...(endsOrder && order.needsAttention.includes("marketplace_return_pending") ? { needsAttention: withoutAttentionFlag("marketplace_return_pending") } : {}),
+        // A TikTok parcel on its way back (marketplace_return_in_transit) and the TikTok hold end the
+        // same way.
+        ...(endsOrder && FLAGS_ENDED_WITH_ORDER.some((flag) => order.needsAttention.includes(flag))
+          ? { needsAttention: sql`array(select f from unnest(${orders.needsAttention}) with ordinality as t(f, i) where not (f = any(array[${sql.join(
+              FLAGS_ENDED_WITH_ORDER.map((flag) => sql`${flag}`),
+              sql`, `,
+            )}]::text[])) order by i)` }
+          : {}),
       })
       .where(and(eq(orders.id, orderId), eq(orders.status, fromStatus)))
       .returning();

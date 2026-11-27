@@ -67,11 +67,19 @@ export async function getAttentionOrders(db: Database = defaultDb): Promise<Atte
   const rows = await db.execute<OrderSqlRow & { total: number }>(sql`
     select ${orderRowColumns}, count(*) over ()::int as total
     ${orderRowFrom}
-    where cardinality(o.needs_attention) > 0
+    where cardinality(o.needs_attention) > 0 and o.needs_attention <> array['tiktok_on_hold']::text[]
     order by o.created_at desc, o.id desc
     limit ${ACTION_LIST_LIMIT}
   `);
   return { count: rows[0]?.total ?? 0, rows: rows.map(toOrderRow) };
+}
+
+/** TikTok orders the sync holds (no admin order or a different one: unknown SKU, short stock, lines
+ * differ, ...; docs/plans/tiktok-shop-integration.md §4.4, T5). Each is a loud item: TikTok still
+ * expects it to ship. */
+export async function getHeldTikTokOrderCount(db: Database = defaultDb): Promise<number> {
+  const [row] = await db.execute<{ total: number }>(sql`select count(*)::int as total from tiktok_orders where apply_state = 'held'`);
+  return row?.total ?? 0;
 }
 
 export interface ToShipOrders {

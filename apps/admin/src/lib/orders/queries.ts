@@ -17,12 +17,14 @@ import {
   shippingAreas,
   staffUsers,
   thankYouCards,
+  tiktokOrders,
   vouchers,
 } from "@ammari/db/schema";
 import type { ChannelFeeComponent, ChannelId, OrderAttentionFlag, OrderNotificationKind, OrderPaymentStatus, OrderStatus, PaymentStatus, ShipmentEventSource, ShipmentStatus } from "@ammari/db/schema";
 import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { resolveUnitPrice } from "@ammari/db/pricing";
 import { productPricingColumns } from "@ammari/db/pricing-columns";
+import { tiktokPackingState, type TikTokPackingState } from "@ammari/commerce/tiktok";
 import { defaultDb, type Database } from "@/lib/db";
 import { channelDisplayNameSql } from "./channel-label";
 import { orderBuyerNameSql } from "./buyer-name";
@@ -129,7 +131,9 @@ export interface ListOrdersFilters {
 }
 
 /** The "Perlu dicek" condition, spelled like the partial index's predicate so it can be used. */
-const NEEDS_ATTENTION = sql`cardinality(${orders.needsAttention}) > 0`;
+// A TikTok order whose only flag is `tiktok_on_hold` waits for its packing gate (it clears itself,
+// docs/plans/tiktok-shop-integration.md §4.4): nothing for staff to do, so not "Perlu dicek".
+const NEEDS_ATTENTION = sql`cardinality(${orders.needsAttention}) > 0 and ${orders.needsAttention} <> array['tiktok_on_hold']::text[]`;
 
 /** How many orders carry a flag (the "Perlu dicek" tab's count). */
 export async function countOrdersNeedingAttention(db: Database = defaultDb): Promise<number> {
@@ -250,6 +254,21 @@ export interface MarketplaceOrderDetail {
   importBatchId: string | null;
   /** Platform fees per component. `null` when stripped for a viewer without finance.view_profit. */
   fees: { component: ChannelFeeComponent; amount: number }[] | null;
+  /** The marketplace's own dates (migration 0059), written once by the TikTok sync. */
+  marketplaceShippedAt: Date | null;
+  marketplaceCompletedAt: Date | null;
+  marketplaceReturnedAt: Date | null;
+  /** Set when the TikTok sync applied this order (docs/plans/tiktok-shop-integration.md T5). */
+  tiktok: TikTokOrderDetail | null;
+}
+
+export interface TikTokOrderDetail {
+  status: string;
+  packing: TikTokPackingState;
+  /** The buyer's note, for packing (Q14); purged 30 days after COMPLETED/CANCELLED. */
+  buyerMessage: string | null;
+  /** TikTok's ship-by deadline. */
+  rtsSlaTime: Date | null;
 }
 
 export interface CheckoutPaymentAttempt {
@@ -600,16 +619,32 @@ export async function getOrderDetail(id: string, db: Database = defaultDb): Prom
       ? db.select({ component: orderChannelFees.component, amount: orderChannelFees.amount }).from(orderChannelFees).where(eq(orderChannelFees.orderId, id))
       : Promise.resolve([]),
   ]);
+  const tiktok = full?.channelId === "tiktok" ? await getTikTokOrderDetail(id, db) : null;
   const marketplace: MarketplaceOrderDetail | null = imported
     ? {
         channelStatus: full.channelStatus,
         syncedAt: full.channelSyncedAt,
         importBatchId: full.importBatchId,
         fees: [...feeRows].sort((a, b) => CHANNEL_FEE_COMPONENTS.indexOf(a.component) - CHANNEL_FEE_COMPONENTS.indexOf(b.component)),
+        marketplaceShippedAt: full.marketplaceShippedAt,
+        marketplaceCompletedAt: full.marketplaceCompletedAt,
+        marketplaceReturnedAt: full.marketplaceReturnedAt,
+        tiktok,
       }
     : null;
 
   return { ...order, items: itemRows, cardClaimedAt: claimedCard?.claimedAt ?? null, checkout, needsAttention: full?.needsAttention ?? [], marketplace };
+}
+
+/** The TikTok projection of an applied order (T5): status, packing gate, buyer message. */
+async function getTikTokOrderDetail(orderId: string, db: Database): Promise<TikTokOrderDetail | null> {
+  const [row] = await db
+    .select({ status: tiktokOrders.status, isOnHoldOrder: tiktokOrders.isOnHoldOrder, paidTime: tiktokOrders.paidTime, buyerMessage: tiktokOrders.buyerMessage, rtsSlaTime: tiktokOrders.rtsSlaTime })
+    .from(tiktokOrders)
+    .where(eq(tiktokOrders.orderId, orderId))
+    .limit(1);
+  if (!row) return null;
+  return { status: row.status, packing: tiktokPackingState(row, new Date()), buyerMessage: row.buyerMessage, rtsSlaTime: row.rtsSlaTime };
 }
 
 /** Cost data (unit_cost) is gated by finance.view_profit, same discipline every other cost field
