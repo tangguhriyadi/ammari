@@ -288,7 +288,7 @@ used**. Codes are proposals; the accountant may renumber before go-live.
 - 1-1000 Aset lancar (header)
   - 1-1100 Kas — 1-1101 Kas tunai 🔒 (`cash.method.cash`)
   - 1-1200 Bank — 1-1201 Bank utama 🔒 (`cash.method.transfer`, `cash.method.card` [D-17, D-18]); Ammari has **one** bank account [D-17]; a second one would be added as a sub-account
-  - 1-1300 Saldo pembayaran & marketplace — 1-1301 Piutang Midtrans 🔒, 1-1302 Saldo Penjual Shopee 🔒, 1-1303 Saldo Penjual TikTok 🔒, 1-1305 Saldo marketplace belum dipilah 🔒 (clearing for unallocated marketplace-balance spend [D-11])
+  - 1-1300 Saldo pembayaran & marketplace — 1-1301 Piutang Midtrans 🔒, 1-1302 Saldo Penjual Shopee 🔒, 1-1303 Saldo Penjual TikTok 🔒, 1-1305 Saldo marketplace belum dipilah 🔒 (clearing for unallocated marketplace-balance spend [D-11]); receivables for Arus kas, not cash (cash flow group `operating`, migration 0054)
   - 1-1400 Piutang — 1-1402 Piutang klaim pemasok (lebih bayar) 🔒, 1-1409 Piutang lain-lain (no trade receivable: there are no credit sales)
   - 1-1500 Persediaan — 1-1501 Persediaan bahan kain 🔒, 1-1502 Persediaan aksesoris 🔒, 1-1503 Barang dalam proses (produksi) 🔒, 1-1504 Persediaan barang jadi 🔒, 1-1505 Barang terjual belum dikirim 🔒, 1-1506 Persediaan barang cacat 🔒
   - 1-1600 Uang muka & dibayar di muka — 1-1601 Uang muka pembelian 🔒, 1-1602 Sewa dibayar di muka, 1-1603 Saldo Biteship (uang muka ongkir) 🔒
@@ -532,7 +532,7 @@ report-xlsx.ts), every figure drillable to the journal and its source document.
 | Neraca saldo | All accounts, opening / debit / credit / closing; must balance. |
 | Neraca (Laporan posisi keuangan) | SAK EMKM layout; comparative to previous period end. |
 | Laba rugi | Penjualan − potongan − retur = Penjualan bersih; − HPP (5-1101 + 5-1201 Selisih biaya produksi) = Laba kotor; − beban usaha (incl. 6-4000 Beban persediaan: barang cacat dilepas, selisih persediaan, kerusakan & kehilangan [D-16]); ± lain-lain; − PPh final = Laba bersih. Per month columns option, per channel option. |
-| Arus kas | **Direct method** proposed (readable for the owner: "uang masuk dari penjualan, keluar ke pemasok"): every line on a cash/bank/saldo account classified by the counter-account's `cash_flow_group`. Indirect also derivable later. Note: SAK EMKM's required statements are Neraca, Laba rugi and CALK; arus kas is extra. |
+| Arus kas | **Direct method** proposed (readable for the owner: "uang masuk dari penjualan, keluar ke pemasok"): every line on a cash account (`cash_flow_group = 'cash'`: Kas tunai and the bank accounts only) classified by the counter-account's `cash_flow_group`. **Decided (owner + accountant, 27 Nov 2026):** Piutang Midtrans (1-1301) and the marketplace balances (1-1302, 1-1303, 1-1305) are receivables, not cash (group `operating`, migration 0054), so a Midtrans or marketplace sale is cash in only when the money reaches Kas/Bank (W5 payout, M3 withdrawal), shown on the operating line of that receivable. Indirect also derivable later. Note: SAK EMKM's required statements are Neraca, Laba rugi and CALK; arus kas is extra. |
 
 ### 6.3 Reconciliation checks (a "Rekonsiliasi" page; each red line links to the cause)
 
@@ -847,7 +847,8 @@ A's `source` column and lands with Session 11.
 - **Laba rugi:** layout as §6 (HPP = the `cogs` accounts only, so 6-4000 Beban persediaan is beban usaha, D-7/D-16;
   penjualan bersih = Penjualan − 4-1201 − 4-1301, after vouchers, no ongkir, D-4/D-6). Column options: jumlah saja,
   per bulan, per saluran (by `journal_lines.channel_id`; lines without one in "Tanpa saluran").
-- **Arus kas (direct):** per journal touching a `cash_flow_group = 'cash'` account, the cash moved is classified by its
+- **Arus kas (direct):** per journal touching a `cash_flow_group = 'cash'` account (Kas tunai and Bank only, after
+  migration 0054 below), the cash moved is classified by its
   other lines' groups; transfers between cash accounts and journals without a cash line are no cash flow. Within one
   journal, two non-cash lines of the same group that exactly offset (S3's HPP pair riding with the sale) are dropped from
   the per-account detail only (group totals unchanged; sales/contra/other-income lines are never netted).
@@ -869,6 +870,14 @@ A's `source` column and lands with Session 11.
   months before its last month, with a note); a too-wide amount in the PDF shrinks to fit its column. Open for fee work A:
   `orderPlatformFeeSql` sums every `order_channel_fees` row, so once `payment_gateway_fee` rows exist check 4 will show the
   MDR as a management platform fee against a ledger-only 6-1203 (net 0, wrong line); fix in that feature.
+- **Migration 0054 (owner + accountant, 27 Nov 2026): receivables are not cash.** 1-1301 Piutang Midtrans, 1-1302/1-1303
+  Saldo Penjual Shopee/TikTok and 1-1305 Saldo marketplace belum dipilah move from `cash_flow_group = 'cash'` to
+  `operating`; cash is Kas tunai and the bank accounts only. 0049 (already deployed) is not edited: 0054 updates each row in
+  place only while it still holds the seeded `cash`, so an accountant's own edit is kept; data only, backward compatible.
+  The seed constants (`packages/db/src/accounting/chart-of-accounts.ts`) hold the new group, and
+  `CASH_FLOW_GROUP_BEFORE_0054` records 0049's values for its migration test. Effect: a marketplace or Midtrans sale is
+  cash in only at the withdrawal / payout (M3, W5), on the operating line of the receivable it clears; a sale and its
+  fees on Saldo Penjual move no cash. Test: `packages/db/test/migration-0054.test.ts`.
 - Tests: `statement-layout.test.ts`, `pnl-reconciliation-rules.test.ts`, `session10.test.ts` (Neraca balances and = Neraca
   saldo; laba rugi = movement of the unclosed result and of equity net of capital/drawings; trial month and opening
   journal; per month/channel; Arus kas closing = cash accounts in Neraca saldo; check 4 through the real order/payment

@@ -8,8 +8,10 @@ import type { AccountType, CashFlowGroup } from "@ammari/db/schema";
 //   - Laba rugi: penjualan − potongan & retur = penjualan bersih; − HPP (cogs accounts only:
 //     5-1101 and 5-1201) = laba kotor; − beban usaha (every expense account, so 6-4000 Beban
 //     persediaan sits here and never in HPP, D-7/D-16); ± lain-lain; − pajak = laba bersih.
-//   - Arus kas (direct method): every line on a "cash" account (cash_flow_group = 'cash': kas, bank,
-//     Piutang Midtrans, Saldo Penjual) classified by its journal's counter-accounts' group.
+//   - Arus kas (direct method): every line on a "cash" account (cash_flow_group = 'cash': Kas tunai and
+//     the bank accounts only; Piutang Midtrans and the Saldo Penjual accounts are receivables since
+//     migration 0054) classified by its journal's counter-accounts' group, so a marketplace or
+//     Midtrans sale is cash in only at the withdrawal / payout.
 // Sections follow the account TYPE and the header tree the accountant maintains (Data Master Akun),
 // never hard-coded account codes, so a new sub-account lands in the right place by itself.
 
@@ -230,7 +232,7 @@ const NEVER_NETTED = new Set<AccountType>(["revenue", "contra_revenue", "other_i
 /**
  * Direct method (plan §6): per journal touching a cash account, the cash moved (Σ of its cash lines)
  * is explained by its other lines, each classified by its account's cash_flow_group. A journal whose
- * cash lines net to zero (Kas → Bank, Saldo Penjual → Bank) moves no cash; a journal with no cash
+ * cash lines net to zero (Kas → Bank) moves no cash; a journal with no cash
  * line (a purchase on credit) is not a cash flow at all. Inside one journal, two non-cash lines of
  * the SAME group that exactly offset each other (S3's HPP pair Dr 5-1101 / Cr 1-1505 riding along
  * with the sale) are dropped from the per-account detail: the group total is unchanged, the detail

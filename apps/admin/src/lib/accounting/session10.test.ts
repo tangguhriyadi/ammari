@@ -50,7 +50,7 @@ async function books(tx: TestTx) {
   await journal("2027-01-25", "manual", [["6-4101", 50_000, 0], ["1-1504", 0, 50_000]]);
   await journal("2027-01-26", "manual", [["1-1201", 2_000_000, 0], ["3-1001", 0, 2_000_000]]);
   await journal("2027-01-27", "manual", [["3-1002", 100_000, 0], ["1-1201", 0, 100_000]]);
-  // February: rent, and a withdrawal Saldo Penjual → Bank (no cash flow).
+  // February: rent, and the withdrawal Saldo Penjual → Bank (the sale's cash in, D-11).
   await journal("2027-02-05", "manual", [["6-2201", 200_000, 0], ["1-1201", 0, 200_000]]);
   await journal("2027-02-06", "manual", [["1-1201", 900_000, 0], ["1-1302", 0, 900_000]]);
   await tx.execute(sql`set constraints all immediate`);
@@ -161,16 +161,21 @@ describe("statements tie out (Session 10)", () => {
       const january = await getCashFlow({ from: "2027-01-01", to: "2027-01-31" }, tx);
       const { figures } = january.statement;
       expect(figures.openingCash).toBe(10_000_000);
-      expect(figures.byActivity).toEqual({ operating: 600_000, investing: 0, financing: 1_900_000, none: 0 });
-      expect(figures.closingCash).toBe(12_500_000);
+      // The Shopee sale is on Saldo Penjual, a receivable (0054): not cash until it is withdrawn.
+      expect(figures.byActivity).toEqual({ operating: -300_000, investing: 0, financing: 1_900_000, none: 0 });
+      expect(row(january.statement, "operating:4-1102")).toBeUndefined();
+      expect(figures.closingCash).toBe(11_600_000);
       expect(january.statement.checks.every((check) => check.ok)).toBe(true);
       const trial = await getTrialBalance({ from: "2027-01-01", to: "2027-01-31" }, tx);
-      const cashCodes = ["1-1101", "1-1201", "1-1301", "1-1302", "1-1303", "1-1305"];
+      // Cash is Kas tunai and Bank only (0054); the marketplace balances are receivables.
+      const cashCodes = ["1-1101", "1-1201"];
       expect(figures.closingCash).toBe(trial.rows.filter((entry) => cashCodes.includes(entry.code)).reduce((sum, entry) => sum + entry.closingDebit - entry.closingCredit, 0));
 
-      // February: the Saldo Penjual → Bank withdrawal moves no cash; only the rent does.
+      // February: the withdrawal Saldo Penjual → Bank is when the sale becomes cash (operating, by the
+      // counter-account 1-1302), less the rent.
       const february = await getCashFlow({ from: "2027-02-01", to: "2027-02-28" }, tx);
-      expect(february.statement.figures).toMatchObject({ openingCash: 12_500_000, netChange: -200_000, closingCash: 12_300_000 });
+      expect(february.statement.figures).toMatchObject({ openingCash: 11_600_000, netChange: 700_000, closingCash: 12_300_000 });
+      expect(row(february.statement, "operating:1-1302")).toEqual([900_000]);
 
       // The trial month starts from zero (no opening journal) and stays on its own.
       const december = await getCashFlow({ from: "2026-12-01", to: "2026-12-31" }, tx);

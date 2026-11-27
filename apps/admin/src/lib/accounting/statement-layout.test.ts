@@ -24,7 +24,8 @@ const CHART: StatementAccount[] = [
   a("1-1200", "Bank", "asset", { parent: "1-1000", header: true }),
   a("1-1201", "Bank utama", "asset", { parent: "1-1200", group: "cash" }),
   a("1-1300", "Saldo pembayaran & marketplace", "asset", { parent: "1-1000", header: true }),
-  a("1-1302", "Saldo Penjual Shopee", "asset", { parent: "1-1300", group: "cash" }),
+  // A receivable since migration 0054 (owner + accountant): cash is Kas and Bank only.
+  a("1-1302", "Saldo Penjual Shopee", "asset", { parent: "1-1300" }),
   a("1-1500", "Persediaan", "asset", { parent: "1-1000", header: true }),
   a("1-1504", "Persediaan barang jadi", "asset", { parent: "1-1500" }),
   a("1-1505", "Barang terjual belum dikirim", "asset", { parent: "1-1500" }),
@@ -183,24 +184,33 @@ describe("Neraca", () => {
 describe("Arus kas (direct method)", () => {
   const line = (entryId: string, accountCode: string, net: number) => ({ entryId, accountCode, net });
   const lines = [
-    // M1 + HPP: Saldo Penjual 270.000 in, Penjualan 300.000, Potongan 30.000; HPP pair rides along.
-    line("s3", "1-1302", 270_000),
-    line("s3", "4-1201", 30_000),
-    line("s3", "4-1102", -300_000),
-    line("s3", "5-1101", 120_000),
-    line("s3", "1-1505", -120_000),
+    // M1 + HPP: a Shopee sale lands on Saldo Penjual, a receivable (0054): no cash yet.
+    line("m1", "1-1302", 270_000),
+    line("m1", "4-1201", 30_000),
+    line("m1", "4-1102", -300_000),
+    line("m1", "5-1101", 120_000),
+    line("m1", "1-1505", -120_000),
+    // An offline sale paid in cash at handover, with its HPP pair riding along.
+    line("cs", "1-1101", 270_000),
+    line("cs", "4-1201", 30_000),
+    line("cs", "4-1101", -300_000),
+    line("cs", "5-1101", 120_000),
+    line("cs", "1-1505", -120_000),
     // E1: Gaji out of the bank.
     line("e1", "6-2101", 500_000),
     line("e1", "1-1201", -500_000),
     // Owner capital into the bank.
-    line("m1", "1-1201", 2_000_000),
-    line("m1", "3-1001", -2_000_000),
+    line("mc", "1-1201", 2_000_000),
+    line("mc", "3-1001", -2_000_000),
     // A computer paid from the bank (investing).
     line("fa", "1-2102", 1_500_000),
     line("fa", "1-1201", -1_500_000),
-    // Withdrawal Saldo Penjual → Bank: no cash moved.
+    // Withdrawal Saldo Penjual → Bank: this is when the marketplace sale becomes cash.
     line("wd", "1-1201", 200_000),
     line("wd", "1-1302", -200_000),
+    // Kas → Bank: no cash moved.
+    line("tr", "1-1201", 50_000),
+    line("tr", "1-1101", -50_000),
     // A purchase on credit: no cash line at all.
     line("p1", "1-1504", 800_000),
     line("p1", "2-1101", -800_000),
@@ -208,39 +218,38 @@ describe("Arus kas (direct method)", () => {
   const allocation = allocateCashFlow(lines, ACCOUNTS);
 
   test("each cash movement is classified by its counter-accounts; the HPP pair never shows as cash", () => {
-    expect(Object.fromEntries(allocation.byActivity.operating)).toEqual({ "4-1102": 300_000, "4-1201": -30_000, "6-2101": -500_000 });
+    expect(Object.fromEntries(allocation.byActivity.operating)).toEqual({ "4-1101": 300_000, "4-1201": -30_000, "6-2101": -500_000, "1-1302": 200_000 });
     expect(Object.fromEntries(allocation.byActivity.investing)).toEqual({ "1-2102": -1_500_000 });
     expect(Object.fromEntries(allocation.byActivity.financing)).toEqual({ "3-1001": 2_000_000 });
-    expect(allocation.netChange).toBe(270_000);
+    expect(allocation.netChange).toBe(470_000);
   });
 
-  test("a transfer between cash accounts and a purchase on credit are no cash flow", () => {
+  test("a marketplace sale is cash only at the withdrawal; a transfer between Kas and Bank and a purchase on credit are no cash flow", () => {
+    expect([...allocation.byActivity.operating.keys()]).not.toContain("4-1102");
     expect([...allocation.byActivity.operating.keys()]).not.toContain("1-1504");
     expect([...allocation.byActivity.operating.keys()]).not.toContain("2-1101");
-    expect([...allocation.byActivity.operating.keys()]).not.toContain("1-1302");
+    expect([...allocation.byActivity.operating.keys()]).not.toContain("1-1101");
   });
 
   test("a discount equal to the HPP is never netted against it (sales lines are never netted)", () => {
     const tricky = allocateCashFlow(
-      [line("x", "1-1302", 70_000), line("x", "4-1201", 30_000), line("x", "4-1102", -100_000), line("x", "5-1101", 30_000), line("x", "1-1505", -30_000)],
+      [line("x", "1-1101", 70_000), line("x", "4-1201", 30_000), line("x", "4-1101", -100_000), line("x", "5-1101", 30_000), line("x", "1-1505", -30_000)],
       ACCOUNTS,
     );
-    expect(Object.fromEntries(tricky.byActivity.operating)).toEqual({ "4-1102": 100_000, "4-1201": -30_000 });
+    expect(Object.fromEntries(tricky.byActivity.operating)).toEqual({ "4-1101": 100_000, "4-1201": -30_000 });
   });
 
   test("opening + net change = closing, and the statement lists each cash account's closing balance", () => {
     const cash = new Map<string, [number, number]>([
-      ["1-1101", [100_000, 100_000]],
-      ["1-1201", [1_000_000, 1_200_000]],
-      ["1-1302", [0, 70_000]],
+      ["1-1101", [100_000, 320_000]],
+      ["1-1201", [1_000_000, 1_250_000]],
     ]);
     const statement = buildCashFlowStatement(CHART, allocation, cash, { key: "total", label: "Jumlah" });
-    expect(statement.figures).toMatchObject({ openingCash: 1_100_000, closingCash: 1_370_000, netChange: 270_000, byActivity: { operating: -230_000, investing: -1_500_000, financing: 2_000_000, none: 0 } });
+    expect(statement.figures).toMatchObject({ openingCash: 1_100_000, closingCash: 1_570_000, netChange: 470_000, byActivity: { operating: -30_000, investing: -1_500_000, financing: 2_000_000, none: 0 } });
     expect(statement.checks.every((check) => check.ok)).toBe(true);
     expect(statement.rows.filter((row) => row.key.startsWith("cash:")).map((row) => [row.accountCode, row.amounts[0]])).toEqual([
-      ["1-1101", 100_000],
-      ["1-1201", 1_200_000],
-      ["1-1302", 70_000],
+      ["1-1101", 320_000],
+      ["1-1201", 1_250_000],
     ]);
     expect(statement.rows.some((row) => row.key === "none")).toBe(false);
   });

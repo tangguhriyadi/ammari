@@ -45,10 +45,10 @@ const ROWS: readonly Row[] = [
   ["1-1200", "Bank", "asset", "1-1000", { header: true }],
   ["1-1201", "Bank utama", "asset", "1-1200", { systemKey: "bank.main", cashFlow: "cash" }],
   ["1-1300", "Saldo pembayaran & marketplace", "asset", "1-1000", { header: true }],
-  ["1-1301", "Piutang Midtrans", "asset", "1-1300", { systemKey: "receivable.midtrans", cashFlow: "cash" }],
-  ["1-1302", "Saldo Penjual Shopee", "asset", "1-1300", { systemKey: "seller_balance.shopee", cashFlow: "cash" }],
-  ["1-1303", "Saldo Penjual TikTok", "asset", "1-1300", { systemKey: "seller_balance.tiktok", cashFlow: "cash" }],
-  ["1-1305", "Saldo marketplace belum dipilah", "asset", "1-1300", { systemKey: "seller_balance.unallocated", cashFlow: "cash" }],
+  ["1-1301", "Piutang Midtrans", "asset", "1-1300", { systemKey: "receivable.midtrans" }],
+  ["1-1302", "Saldo Penjual Shopee", "asset", "1-1300", { systemKey: "seller_balance.shopee" }],
+  ["1-1303", "Saldo Penjual TikTok", "asset", "1-1300", { systemKey: "seller_balance.tiktok" }],
+  ["1-1305", "Saldo marketplace belum dipilah", "asset", "1-1300", { systemKey: "seller_balance.unallocated" }],
   ["1-1400", "Piutang", "asset", "1-1000", { header: true }],
   ["1-1402", "Piutang klaim pemasok (lebih bayar)", "asset", "1-1400", { systemKey: "receivable.supplier_claim" }],
   ["1-1409", "Piutang lain-lain", "asset", "1-1400"],
@@ -157,6 +157,17 @@ export const CHART_OF_ACCOUNTS: readonly AccountSeed[] = ROWS.map(([code, name, 
 });
 
 /** system_key → code, for the keys a later session's posting rules name. */
+/** Migration 0054 (owner + accountant, 27 Nov 2026): Piutang Midtrans and the marketplace
+ * balances are receivables, not cash, so Arus kas counts a sale as cash only once the money reaches
+ * Kas/Bank. 0049 (already deployed, never edited) seeded them as `cash`; 0054 moves each row still
+ * at that value to the group CHART_OF_ACCOUNTS now holds. The migration tests read this. */
+export const CASH_FLOW_GROUP_BEFORE_0054: Readonly<Record<string, CashFlowGroup>> = {
+  "1-1301": "cash",
+  "1-1302": "cash",
+  "1-1303": "cash",
+  "1-1305": "cash",
+};
+
 export function systemAccountCode(systemKey: string): string {
   const account = CHART_OF_ACCOUNTS.find((row) => row.systemKey === systemKey);
   if (!account) throw new Error(`unknown system account key "${systemKey}"`);

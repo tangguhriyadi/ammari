@@ -39,7 +39,7 @@ export function statementNotes(report: StatementReport): string[] {
   if (report.kind === "income_statement" && report.monthsClamped) notes.push("Per bulan menampilkan paling banyak 12 bulan terakhir dari periode yang dipilih.");
   if (report.kind === "income_statement" && report.view === "channel") notes.push("Per saluran mengikuti saluran pada baris jurnal; beban tanpa saluran (gaji, sewa, jurnal manual) ada di kolom Tanpa saluran.");
   if (report.kind === "cash_flow") {
-    notes.push("Metode langsung: setiap mutasi akun kas, bank, Piutang Midtrans dan Saldo Penjual dikelompokkan menurut akun lawannya.");
+    notes.push("Metode langsung: setiap mutasi akun kas dan bank dikelompokkan menurut akun lawannya. Penjualan marketplace dan Midtrans baru menjadi kas saat dananya ditarik ke bank.");
     if (report.range.segment === "official") notes.push("Kas awal pembukuan resmi berasal dari jurnal saldo awal 1 Jan 2027.");
   }
   return notes;

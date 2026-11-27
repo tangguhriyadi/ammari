@@ -379,6 +379,13 @@
       "when": 1795696993657,
       "tag": "0053_order_manual_payments",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1795738751387,
+      "tag": "0054_accounting_receivables_not_cash",
+      "breakpoints": true
     }
   ]
 }

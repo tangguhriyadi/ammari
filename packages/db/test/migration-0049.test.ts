@@ -4,7 +4,7 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, describe, expect, test } from "vitest";
-import { CHART_OF_ACCOUNTS, DEFAULT_ACCOUNT_MAPPINGS, INITIAL_TAX_SETTING, systemAccountCode } from "../src/accounting/chart-of-accounts";
+import { CASH_FLOW_GROUP_BEFORE_0054, CHART_OF_ACCOUNTS, DEFAULT_ACCOUNT_MAPPINGS, INITIAL_TAX_SETTING, systemAccountCode } from "../src/accounting/chart-of-accounts";
 import { CHANNEL_IDS, DEFAULT_EXPENSE_CATEGORIES } from "../src/schema/constants";
 import { ownerDefaultPermissionKeys, PERMISSIONS, PREDEFINED_ROLES, superAdminDefaultPermissionKeys } from "../src/rbac/permissions";
 import { seed } from "../src/seed";
@@ -52,7 +52,8 @@ const grantsSql = (client: Client) => client`
   join roles r on r.id = rp.role_id join permissions p on p.id = rp.permission_id
   where p.key like 'accounting.%' order by r.key, p.key`;
 
-function expectedAccounts() {
+/** The rows as 0049 inserted them, or as seed.ts inserts them today (the current constants). */
+function expectedAccounts(source: "0049" | "seed" = "0049") {
   return CHART_OF_ACCOUNTS.map((account) => ({
     code: account.code,
     name: account.name,
@@ -63,7 +64,8 @@ function expectedAccounts() {
     is_system: account.systemKey !== null,
     system_key: account.systemKey,
     is_active: true,
-    cash_flow_group: account.cashFlowGroup,
+    // As 0049 seeded it (0054 later moved the receivables out of `cash`).
+    cash_flow_group: (source === "0049" ? CASH_FLOW_GROUP_BEFORE_0054[account.code] : undefined) ?? account.cashFlowGroup,
     bank_name: null,
     account_no_last4: null,
     sort_order: account.sortOrder,
@@ -261,12 +263,12 @@ describe("migration 0049 (accounting ledger)", () => {
       await client.unsafe(`TRUNCATE TABLE journal_lines, journal_entries, account_mappings, accounts, tax_settings RESTART IDENTITY CASCADE`);
       expect(await accountsSql(client)).toEqual([]);
       await seed(drizzle(client));
-      expect(await accountsSql(client)).toEqual(expectedAccounts());
+      expect(await accountsSql(client)).toEqual(expectedAccounts("seed"));
       expect(await mappingsSql(client)).toEqual(expectedMappings());
       expect(await taxSql(client)).toEqual(expectedTax);
       // A second seed is a no-op.
       await seed(drizzle(client));
-      expect(await accountsSql(client)).toEqual(expectedAccounts());
+      expect(await accountsSql(client)).toEqual(expectedAccounts("seed"));
     } finally {
       await client.end();
       rmSync(upTo0049, { recursive: true, force: true });

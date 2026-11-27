@@ -8,7 +8,7 @@ import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { DateField, ExportButtons, FilterForm, StatementNotes, StatementView } from "../_components/statement-view";
 
 // Arus kas, metode langsung (docs/plans/accounting.md §6, Session 10): every movement of a cash
-// account (kas, bank, Piutang Midtrans, Saldo Penjual) by its counter-account's cash-flow group
+// account (Kas tunai and Bank; Piutang Midtrans and Saldo Penjual are receivables, migration 0054) by its counter-account's cash-flow group
 // (operasi, investasi, pendanaan). accounting.view. One set of books per range (books.ts); the
 // official opening journal is the opening cash, never a cash flow of January.
 
