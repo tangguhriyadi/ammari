@@ -10,7 +10,22 @@ import { closePeriodAction, reopenPeriodAction } from "../actions";
 // a reason only while the month still has open posting issues; reopening always does. The server
 // re-checks permission (accounting.close) and every rule.
 
-export function PeriodActions({ month, label, status, openIssueCount, closeRefusal }: { month: string; label: string; status: "open" | "closed"; openIssueCount: number; closeRefusal: string | null }) {
+export function PeriodActions({
+  month,
+  label,
+  status,
+  openIssueCount,
+  closeRefusal,
+  closePostings = [],
+}: {
+  month: string;
+  label: string;
+  status: "open" | "closed";
+  openIssueCount: number;
+  closeRefusal: string | null;
+  /** What the close posts (PPh final, year end), shown before confirming (Session 11). */
+  closePostings?: string[];
+}) {
   const router = useRouter();
   const toast = useToast();
   const reasonId = useId();
@@ -66,6 +81,13 @@ export function PeriodActions({ month, label, status, openIssueCount, closeRefus
         onConfirm={confirm}
         loading={pending}
       >
+        {closing && closePostings.length > 0 && (
+          <div className="mb-3 flex flex-col gap-1 text-sm text-neutral-700">
+            {closePostings.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+          </div>
+        )}
         {needsReason ? (
           <div className="flex flex-col gap-1.5">
             {closing && <p className="text-sm text-danger-700">Masih ada {openIssueCount} sumber yang belum bisa dibukukan. Tulis alasan untuk tetap menutup.</p>}

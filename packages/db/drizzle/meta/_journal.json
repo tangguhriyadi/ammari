@@ -386,6 +386,13 @@
       "when": 1795738751387,
       "tag": "0054_accounting_receivables_not_cash",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1795739954173,
+      "tag": "0055_accounting_fixed_assets",
+      "breakpoints": true
     }
   ]
 }

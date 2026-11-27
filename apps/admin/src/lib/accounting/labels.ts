@@ -107,6 +107,8 @@ export function postingIssueMessage(issueCode: string, details: Record<string, u
       return `Pembayaran ${text("providerOrderId")} pesanan ${text("orderNo")} terkena chargeback. Jumlahnya tidak tercatat, jadi buat jurnal manual sesuai laporan Midtrans.`;
     case "unmapped_sales_channel":
       return `Kanal penjualan "${text("channelId")}" belum dipetakan ke akun penjualan.`;
+    case "unmapped_fixed_asset_disposal":
+      return "Akun laba/rugi pelepasan aset tetap belum dipetakan (kunci fixed_asset.disposal_result), jadi pelepasan aset ini belum dibukukan.";
     case "account_not_postable":
       return "Akun tujuan sudah nonaktif, berupa akun induk, atau tidak ada.";
     case "missing_system_account":

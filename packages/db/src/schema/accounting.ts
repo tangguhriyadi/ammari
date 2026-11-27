@@ -436,3 +436,120 @@ export const orderManualPayments = pgTable(
     check("order_manual_payments_cash_account_check", sql`${table.cashAccountCode} ~ ${sql.raw(`'${CASH_BANK_ACCOUNT_CODE_PATTERN}'`)}`),
   ],
 );
+
+// ---------- Aset tetap dan penyusutan, migration 0055 ----------
+// docs/plans/accounting.md §5.3, Session 11, D-19: straight line from the acquisition month, life
+// from the tax group (a setting, fixed_asset_groups), zero residual, capitalisation threshold
+// Rp1.000.000 (a setting, fixed_asset_settings). The register is a source record: the posting
+// runner (packages/accounting rules/fixed-assets.ts) derives the acquisition, the monthly
+// depreciation and the disposal journals from it, so an edit or a void is re-derived (reverse +
+// repost, into the first open month when the original month is closed, D-23). Rows are never
+// deleted (a wrong one is voided with a written reason); every write is audited.
+
+export const fixedAssetGroups = pgTable(
+  "fixed_asset_groups",
+  {
+    // "group_1", "group_2".
+    code: text("code").primaryKey(),
+    label: text("label").notNull(),
+    usefulLifeMonths: integer("useful_life_months").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    updatedByStaffUserId: uuid("updated_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    ...timestamps(),
+  },
+  (table) => [
+    index("fixed_asset_groups_updated_by_staff_user_id_idx").on(table.updatedByStaffUserId),
+    check("fixed_asset_groups_code_check", sql`${table.code} ~ '^[a-z][a-z0-9_]{0,39}$'`),
+    check("fixed_asset_groups_label_check", sql`btrim(${table.label}) <> '' and char_length(${table.label}) <= 60`),
+    check("fixed_asset_groups_life_check", sql`${table.usefulLifeMonths} between 1 and 600`),
+  ],
+);
+
+/** One row (id = 1). */
+export const fixedAssetSettings = pgTable(
+  "fixed_asset_settings",
+  {
+    id: integer("id").primaryKey(),
+    // Whole rupiah: an asset costing less is an ordinary expense (D-19).
+    capitalizationThreshold: bigint("capitalization_threshold", { mode: "number" }).notNull(),
+    updatedByStaffUserId: uuid("updated_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    ...timestamps(),
+  },
+  (table) => [
+    index("fixed_asset_settings_updated_by_staff_user_id_idx").on(table.updatedByStaffUserId),
+    check("fixed_asset_settings_singleton_check", sql`${table.id} = 1`),
+    check("fixed_asset_settings_threshold_check", sql`${table.capitalizationThreshold} >= 0`),
+  ],
+);
+
+export const fixedAssets = pgTable(
+  "fixed_assets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    groupCode: text("group_code")
+      .notNull()
+      .references(() => fixedAssetGroups.code, { onDelete: "restrict", onUpdate: "restrict" }),
+    // Copied from the group when the asset is saved: a later edit of the group never re-writes
+    // this asset's schedule.
+    usefulLifeMonths: integer("useful_life_months").notNull(),
+    acquisitionDate: date("acquisition_date", { mode: "string" }).notNull(),
+    cost: bigint("cost", { mode: "number" }).notNull(),
+    // 1-21xx (the asset class) and its 1-219x Akumulasi penyusutan.
+    assetAccountCode: text("asset_account_code")
+      .notNull()
+      .references(() => accounts.code, { onDelete: "restrict", onUpdate: "restrict" }),
+    accumulatedAccountCode: text("accumulated_account_code")
+      .notNull()
+      .references(() => accounts.code, { onDelete: "restrict", onUpdate: "restrict" }),
+    // The credit side of the acquisition journal: a Kas & Bank account or a liability (bought on
+    // credit). NULL = the purchase is already in the books (the opening balance, or another
+    // journal), so no acquisition journal is posted.
+    fundingAccountCode: text("funding_account_code").references(() => accounts.code, { onDelete: "restrict", onUpdate: "restrict" }),
+    // Disposal (sold, scrapped): the Jakarta day, the money received (0 when scrapped) and the
+    // Kas & Bank account it went to.
+    disposedOn: date("disposed_on", { mode: "string" }),
+    disposalProceeds: bigint("disposal_proceeds", { mode: "number" }),
+    disposalCashAccountCode: text("disposal_cash_account_code").references(() => accounts.code, { onDelete: "restrict", onUpdate: "restrict" }),
+    // A wrongly registered asset: every journal it produced is reversed by the next posting run.
+    voidedAt: timestamp("voided_at", { withTimezone: true, mode: "date" }),
+    voidReason: text("void_reason"),
+    note: text("note"),
+    createdByStaffUserId: uuid("created_by_staff_user_id")
+      .notNull()
+      .references(() => staffUsers.id, { onDelete: "restrict" }),
+    updatedByStaffUserId: uuid("updated_by_staff_user_id")
+      .notNull()
+      .references(() => staffUsers.id, { onDelete: "restrict" }),
+    ...timestamps(),
+  },
+  (table) => [
+    index("fixed_assets_group_code_idx").on(table.groupCode),
+    index("fixed_assets_asset_account_code_idx").on(table.assetAccountCode),
+    index("fixed_assets_accumulated_account_code_idx").on(table.accumulatedAccountCode),
+    index("fixed_assets_funding_account_code_idx").on(table.fundingAccountCode),
+    index("fixed_assets_disposal_cash_account_code_idx").on(table.disposalCashAccountCode),
+    index("fixed_assets_created_by_staff_user_id_idx").on(table.createdByStaffUserId),
+    index("fixed_assets_updated_by_staff_user_id_idx").on(table.updatedByStaffUserId),
+    check("fixed_assets_name_check", sql`btrim(${table.name}) <> '' and char_length(${table.name}) <= 120`),
+    check("fixed_assets_life_check", sql`${table.usefulLifeMonths} between 1 and 600`),
+    check("fixed_assets_cost_check", sql`${table.cost} > 0`),
+    check("fixed_assets_asset_account_check", sql`${table.assetAccountCode} ~ '^1-2[0-9]{3}$'`),
+    check("fixed_assets_accumulated_account_check", sql`${table.accumulatedAccountCode} ~ '^1-2[0-9]{3}$' and ${table.accumulatedAccountCode} <> ${table.assetAccountCode}`),
+    check("fixed_assets_funding_account_check", sql`${table.fundingAccountCode} is null or ${table.fundingAccountCode} ~ '^(1-1[12][0-9]{2}|2-[0-9]{4})$'`),
+    check(
+      "fixed_assets_disposal_check",
+      sql`(${table.disposedOn} is null and ${table.disposalProceeds} is null and ${table.disposalCashAccountCode} is null)
+        or (${table.disposedOn} is not null and ${table.disposedOn} >= ${table.acquisitionDate}
+            and ${table.disposalProceeds} is not null and ${table.disposalProceeds} >= 0
+            and (${table.disposalProceeds} = 0) = (${table.disposalCashAccountCode} is null)
+            and (${table.disposalCashAccountCode} is null or ${table.disposalCashAccountCode} ~ ${sql.raw(`'${CASH_BANK_ACCOUNT_CODE_PATTERN}'`)}))`,
+    ),
+    check(
+      "fixed_assets_void_check",
+      sql`(${table.voidedAt} is null and ${table.voidReason} is null)
+        or (${table.voidedAt} is not null and ${table.voidReason} is not null and btrim(${table.voidReason}) <> '' and char_length(${table.voidReason}) <= 500)`,
+    ),
+    check("fixed_assets_note_check", sql`${table.note} is null or (btrim(${table.note}) <> '' and char_length(${table.note}) <= 500)`),
+  ],
+);

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { journalLinesProblems, type JournalLineDraft } from "./journal";
 import { purchaseGuardViolations } from "./purchase-guard";
-import type { PostingContext, PostingEvent, PostingKey } from "./rules/types";
+import type { EngineEntryKind, PostingContext, PostingEvent, PostingKey } from "./rules/types";
 
 // The pure half of the runner (docs/plans/accounting.md §2): turns a rule's event into what the
 // database should hold for that key, so every decision is unit-testable without a database.
@@ -38,6 +38,8 @@ export type PlannedOutcome =
       contentHash: string;
       /** PostingEvent.dateFollowsActive. */
       dateFollowsActive?: boolean;
+      /** PostingEvent.entryKind; absent = `system`. */
+      entryKind?: EngineEntryKind;
     }
   | { kind: "issue"; key: PostingKey; sourceDate: string; issueCode: string; details: Record<string, unknown> }
   | { kind: "none"; key: PostingKey; sourceDate: string };
@@ -83,6 +85,7 @@ export function planEvent(event: PostingEvent, ruleVersion: number, context: Pos
     lines: outcome.lines,
     contentHash: journalContentHash(ruleVersion, sourceDate, outcome.lines),
     ...(event.dateFollowsActive ? { dateFollowsActive: true } : {}),
+    ...(event.entryKind && event.entryKind !== "system" ? { entryKind: event.entryKind } : {}),
   };
 }
 

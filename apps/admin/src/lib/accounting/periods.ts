@@ -2,11 +2,14 @@ import "server-only";
 import { and, asc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { inReadCommitted, loadClosedMonths } from "@ammari/accounting/ledger-write";
+import { checkPostingCompleteness, defaultPostingSources, type Database as LedgerDatabase } from "@ammari/accounting/runner";
 import { monthEndOf, OFFICIAL_BOOKS_START, segmentStartOf } from "@ammari/accounting";
-import { fiscalPeriods, journalEntries, postingIssues, staffUsers, taxSettings } from "@ammari/db/schema";
+import { fiscalPeriods, journalEntries, postingIssues, staffUsers } from "@ammari/db/schema";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
+import { postPeriodCloseJournals, pphFinalWarning, proposePphFinalFor } from "./period-close-postings";
+import type { PphFinalProposal } from "@ammari/accounting";
 import {
   closeDeadlineOf,
   MAX_PERIOD_REASON_LENGTH,
@@ -27,13 +30,18 @@ import {
 // commits first and is counted, or waits and then sees the month closed. Requires no open posting
 // issues for it (or a written override reason, stored on fiscal_periods.close_override_reason and
 // in audit_log) and a balanced trial balance; warns, never blocks, when the PPh final rate has
-// ended (D-20), and for January 2027 when no opening journal exists yet (D-22). (The MDR "still an estimate" warning, D-8, needs fee work A's `source` column on
-// order_channel_fees; it is added with that feature, Session 11.)
+// ended (D-20), and for January 2027 when no opening journal exists yet (D-22).
 //
-// Lock order: this closes ONE month per transaction. A future multi-month close (year end, Session
-// 11) must take the months' locks in ascending order and post its closing entries before setting
-// status = 'closed': two closers that each already hold a shared lock on the same month would
-// otherwise deadlock (Postgres aborts one).
+// Session 11: before setting `closed`, the close posts the month's PPh final accrual and, for
+// December, the year-end closing journal (period-close-postings.ts), under the same exclusive lock.
+// The MDR "still an estimate" warning (D-8) stays dormant: it reads fee work A's `source` column on
+// order_channel_fees (component payment_gateway_fee), which does not exist yet; add it to
+// periodWarnings with that feature.
+//
+// Lock order: this closes ONE month per transaction (the year end is the close of December, one
+// month, so there is no multi-month close). A future multi-month close must take the months' locks
+// in ascending order and post its closing entries before setting status = 'closed': two closers
+// that each already hold a shared lock on the same month would otherwise deadlock (Postgres aborts one).
 //
 // Reopening: only a closed month, newest first (period-rules.ts), with a written reason (the 0049 trigger also refuses a reopen
 // without a new stamp and reason); clears the close override.
@@ -48,6 +56,10 @@ export interface PeriodRow {
   overdue: boolean;
   openIssueCount: number;
   warnings: string[];
+  /** Official months still open: what closing would post as PPh final (D-20). */
+  pphFinal: PphFinalProposal | null;
+  /** December of an official year: closing also posts the year-end closing journal (§5.7). */
+  closesYear: boolean;
   closeRefusal: string | null;
   closedAt: Date | null;
   closedByName: string | null;
@@ -86,27 +98,15 @@ async function trialBalanceTotals(db: Database, month: string): Promise<{ debitT
 
 /** D-20: the PPh final setting in force for the month has ended (or there is none). D-22: January
  * 2027 has no opening journal yet (closing it would then need a reopen to enter one). */
-async function periodWarnings(db: Database, month: string): Promise<string[]> {
+async function periodWarnings(db: Database, month: string): Promise<{ warnings: string[]; proposal: PphFinalProposal | null }> {
   const warnings: string[] = [];
   if (month === OFFICIAL_BOOKS_START) {
     const [opening] = await db.select({ id: journalEntries.id }).from(journalEntries).where(and(eq(journalEntries.kind, "opening"), isNull(journalEntries.reversedByEntryId))).limit(1);
     if (!opening) warnings.push("Saldo awal belum dibukukan. Bukukan saldo awal sebelum menutup Januari 2027.");
   }
-  return [...warnings, ...(await taxWarnings(db, month))];
-}
-
-async function taxWarnings(db: Database, month: string): Promise<string[]> {
-  const [setting] = await db
-    .select({ rateValidUntil: taxSettings.rateValidUntil })
-    .from(taxSettings)
-    .where(lte(taxSettings.effectiveFrom, month))
-    .orderBy(sql`${taxSettings.effectiveFrom} desc`)
-    .limit(1);
-  if (!setting) return ["Belum ada pengaturan pajak untuk bulan ini. Periksa Pengaturan Pajak."];
-  if (setting.rateValidUntil !== null && setting.rateValidUntil < monthEndOf(month)) {
-    return ["Tarif PPh final berakhir, periksa pengaturan pajak."];
-  }
-  return [];
+  const proposal = await proposePphFinalFor(month, db);
+  const taxWarning = proposal ? pphFinalWarning(proposal) : null;
+  return { warnings: taxWarning ? [...warnings, taxWarning] : warnings, proposal };
 }
 
 export async function listPeriods(db: Database = defaultDb, now: Date = new Date()): Promise<PeriodRow[]> {
@@ -139,7 +139,10 @@ export async function listPeriods(db: Database = defaultDb, now: Date = new Date
       const isTrial = month < OFFICIAL_BOOKS_START;
       const ended = monthEndOf(month) < today;
       const deadline = closeDeadlineOf(month);
-      const [openIssueCount, warnings] = isTrial ? [0, []] : await Promise.all([countOpenIssues(db, month), periodWarnings(db, month)]);
+      const [openIssueCount, { warnings, proposal }] = isTrial
+        ? [0, { warnings: [], proposal: null }]
+        : await Promise.all([countOpenIssues(db, month), periodWarnings(db, month)]);
+      const pphFinal = status === "open" ? proposal : null;
       return {
         month,
         label: monthLabel(month),
@@ -150,6 +153,8 @@ export async function listPeriods(db: Database = defaultDb, now: Date = new Date
         overdue: !isTrial && status === "open" && today > deadline,
         openIssueCount,
         warnings,
+        pphFinal,
+        closesYear: !isTrial && month.slice(5, 7) === "12",
         closeRefusal: status === "closed" ? null : periodCloseRefusal(month, today, closedMonths),
         closedAt: row?.closedAt ?? null,
         closedByName: row?.closedByName ?? null,
@@ -185,9 +190,22 @@ export async function closePeriod(month: string, overrideReason: string | null, 
     const refusal = periodCloseRefusal(month, today, await loadClosedMonths(tx));
     if (refusal) throw new ActionError(refusal);
 
-    const [openIssueCount, totals, warnings] = await Promise.all([countOpenIssues(tx, month), trialBalanceTotals(tx, month), periodWarnings(tx, month)]);
+    const [openIssueCount, totals, { warnings }] = await Promise.all([countOpenIssues(tx, month), trialBalanceTotals(tx, month), periodWarnings(tx, month)]);
     if (totals.debitTotal !== totals.creditTotal) throw new ActionError(PERIOD_MESSAGES.unbalanced);
     if (openIssueCount > 0 && reason === null) throw new FieldError("overrideReason", PERIOD_MESSAGES.overrideRequired);
+
+    // Session 11: the PPh final accrual and the year-end closing are computed from the ledger, so the
+    // ledger must be up to date first: every source event dated in the official books through the
+    // month's end is posted or explained by an open issue (Rekonsiliasi check 5). Otherwise a sale or
+    // a depreciation the runner has not posted yet would be left out of the base and land, too late,
+    // in the next open month.
+    if (month >= OFFICIAL_BOOKS_START) {
+      const completeness = await checkPostingCompleteness(tx as unknown as LedgerDatabase, { from: OFFICIAL_BOOKS_START, to: monthEndOf(month) }, { sources: defaultPostingSources(now) });
+      if (completeness.gaps.length > 0) throw new ActionError(PERIOD_MESSAGES.postingStale(completeness.gaps.length));
+    }
+
+    // Session 11: the PPh final accrual and (December) the year-end closing, while the month is open.
+    const postings = await postPeriodCloseJournals(tx, month, actorStaffUserId);
 
     const [after] = await tx
       .update(fiscalPeriods)
@@ -201,7 +219,7 @@ export async function closePeriod(month: string, overrideReason: string | null, 
       entityType: "fiscal_period",
       entityId: month,
       before,
-      after: { period: after, openIssueCount, warnings, ...totals },
+      after: { period: after, openIssueCount, warnings, ...totals, postings },
     });
     return after;
   });

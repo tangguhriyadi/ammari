@@ -62,7 +62,14 @@ export interface PostingEvent {
    * `payments.updated_at`, which any later status read bumps): while the lines are unchanged the
    * active journal keeps its date instead of being reversed and re-posted on the new one. */
   dateFollowsActive?: boolean;
+  /** The journal's `kind` (default `system`): `depreciation` for the monthly depreciation (plan
+   * §2.1, Session 11), so Jurnal umum can tell it apart. Both are the engine's own journals. */
+  entryKind?: EngineEntryKind;
 }
+
+/** The kinds of journal the runner writes and re-derives. */
+export type EngineEntryKind = "system" | "depreciation";
+export const ENGINE_ENTRY_KINDS: readonly EngineEntryKind[] = ["system", "depreciation"];
 
 /** Raised by a rule's account resolution; converted to an issue outcome by `resolveOrIssue`. */
 export class PostingIssueError extends Error {

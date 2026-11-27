@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Badge, Breadcrumb, Card, CardList, PageHeader, TableContainer, TableHead, Td, Th, Tr } from "@ammari/ui";
 import { formatDateTime } from "@ammari/ui/lib";
+import { closePostingsSummary } from "@/lib/accounting/close-postings-text";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { formatDay } from "@/lib/accounting/format";
 import { listPeriods, type PeriodRow } from "@/lib/accounting/periods";
@@ -38,6 +39,7 @@ function Details({ row }: { row: PeriodRow }) {
           </Link>
         </span>
       )}
+      {row.status === "open" && <ClosePostingsText row={row} />}
       {row.status === "open" &&
         row.warnings.map((warning) => (
           <span key={warning} className="text-warning-700">
@@ -45,6 +47,18 @@ function Details({ row }: { row: PeriodRow }) {
           </span>
         ))}
     </div>
+  );
+}
+
+function ClosePostingsText({ row }: { row: PeriodRow }) {
+  return (
+    <>
+      {closePostingsSummary(row).map((line) => (
+        <span key={line} data-testid="close-postings">
+          {line}
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -72,7 +86,7 @@ export default async function PeriodsPage() {
                 <StatusBadge row={row} />
               </div>
               <Details row={row} />
-              {canClose && !row.isTrial && <PeriodActions month={row.month} label={row.label} status={row.status} openIssueCount={row.openIssueCount} closeRefusal={row.closeRefusal} />}
+              {canClose && !row.isTrial && <PeriodActions month={row.month} label={row.label} status={row.status} openIssueCount={row.openIssueCount} closeRefusal={row.closeRefusal} closePostings={closePostingsSummary(row)} />}
             </Card>
           </li>
         ))}
@@ -98,7 +112,7 @@ export default async function PeriodsPage() {
               </Td>
               {canClose && (
                 <Td className="text-right">
-                  {!row.isTrial && <PeriodActions month={row.month} label={row.label} status={row.status} openIssueCount={row.openIssueCount} closeRefusal={row.closeRefusal} />}
+                  {!row.isTrial && <PeriodActions month={row.month} label={row.label} status={row.status} openIssueCount={row.openIssueCount} closeRefusal={row.closeRefusal} closePostings={closePostingsSummary(row)} />}
                 </Td>
               )}
             </Tr>

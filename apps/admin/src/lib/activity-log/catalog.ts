@@ -355,6 +355,33 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       create_manual: { label: "Jurnal manual dicatat" },
       create_opening: { label: "Saldo awal dibukukan" },
       reverse: { label: "Jurnal dibalik" },
+      post_pph_final: { label: "PPh final bulanan dibukukan saat tutup buku" },
+      post_year_close: { label: "Jurnal penutup tahun dibukukan" },
+      reverse_close_posting: { label: "Jurnal tutup buku dibalik untuk dihitung ulang" },
+    },
+  },
+  fixed_asset: {
+    label: "Aset tetap",
+    area: "accounting",
+    actions: {
+      create: { label: "Aset tetap dicatat" },
+      update: { label: "Aset tetap diubah" },
+      dispose: { label: "Aset tetap dilepas" },
+      void: { label: "Aset tetap dibatalkan" },
+    },
+  },
+  fixed_asset_group: {
+    label: "Kelompok aset tetap",
+    area: "accounting",
+    actions: {
+      update: { label: "Kelompok aset tetap diubah" },
+    },
+  },
+  fixed_asset_settings: {
+    label: "Pengaturan aset tetap",
+    area: "accounting",
+    actions: {
+      update: { label: "Batas kapitalisasi diubah" },
     },
   },
   fiscal_period: {

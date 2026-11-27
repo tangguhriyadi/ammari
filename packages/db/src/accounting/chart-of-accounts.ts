@@ -250,3 +250,37 @@ export const INITIAL_TAX_SETTING: TaxSettingSeed = {
   rateValidUntil: "2026-12-31",
   note: "Tarif PPh final 0,5% (PP 55/2022). Perbarui tanggal akhir setelah revisi PP 55 dipastikan.",
 };
+
+// ---------- Aset tetap (D-19, migration 0055, Session 11) ----------
+
+export interface FixedAssetGroupSeed {
+  code: string;
+  label: string;
+  usefulLifeMonths: number;
+  sortOrder: number;
+}
+
+/** The tax groups (D-19): Kelompok 1 = 4 years, Kelompok 2 = 8 years, straight line, zero residual.
+ * A setting the accountant may edit (fixed_asset_groups), never a constant a rule reads: each asset
+ * copies its group's months when it is registered, so a later edit never re-writes a schedule. */
+export const FIXED_ASSET_GROUPS: readonly FixedAssetGroupSeed[] = [
+  { code: "group_1", label: "Kelompok 1", usefulLifeMonths: 48, sortOrder: 10 },
+  { code: "group_2", label: "Kelompok 2", usefulLifeMonths: 96, sortOrder: 20 },
+];
+
+/** D-19: a purchase below this is an ordinary expense; the register refuses an asset below it. */
+export const INITIAL_CAPITALIZATION_THRESHOLD = 1_000_000;
+
+/** Where the gain or loss of a disposed asset goes (plan §5.3: Dr/Cr 8-1102 Rugi pelepasan aset
+ * tetap). A mapping, not a system key, so the accountant can point a gain elsewhere. Shipped in
+ * 0055, separate from DEFAULT_ACCOUNT_MAPPINGS (which migration-0049.test.ts pins to 0049's rows). */
+export const FIXED_ASSET_ACCOUNT_MAPPINGS: readonly AccountMappingSeed[] = [{ mappingKey: "fixed_asset.disposal_result", accountCode: "8-1102" }];
+
+/** The register's default Akumulasi penyusutan per asset account (plan §3: one contra per class).
+ * Only a preselection in the form; the asset row stores both accounts. */
+export const DEFAULT_ACCUMULATED_DEPRECIATION_ACCOUNT: Readonly<Record<string, string>> = {
+  "1-2101": "1-2191",
+  "1-2102": "1-2192",
+  "1-2103": "1-2193",
+  "1-2104": "1-2194",
+};

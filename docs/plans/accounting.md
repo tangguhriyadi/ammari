@@ -503,8 +503,10 @@ new migration, additive), audit-logged, corrected only by reversal.
      revenue; marketplace sales **gross before fees**, which are expenses; net of returns).
    - **Exemption** per tax year (Jan–Dec): taxable(m) = max(0, YTD base through m − exemption) −
      max(0, YTD base through m−1 − exemption). The cut-over on 1 Jan makes YTD start clean.
-   - **Accrual** = taxable(m) × `rate_bps` / 10000, rounded down to whole rupiah, using the
-     `tax_settings` row effective for month m (§2.1).
+   - **Accrual** = max(0, taxable(m) × `rate_bps` / 10000), rounded down to whole rupiah per month, using the
+     `tax_settings` row effective for month m (§2.1). **Never negative** (owner, 27 Nov 2026): a month with negative net
+     sales books nothing and never reverses an earlier month's accrual; the exemption stays measured on the net YTD base,
+     so the headroom a negative month frees is used by the next months' sales first (worked example in §8.1, Session 11).
    - **After `rate_valid_until`**: no accrual is proposed; month close shows a warning
      ("tarif PPh final berakhir, periksa pengaturan pajak"). With the initial setting (end
      2026-12-31) this warning fires for January 2027 until the accountant enters the extended
@@ -883,6 +885,61 @@ A's `source` column and lands with Session 11.
   journal; per month/channel; Arus kas closing = cash accounts in Neraca saldo; check 4 through the real order/payment
   write paths), `packages/accounting/test/completeness.test.ts`, export route tests, e2e `accounting-statements.spec.ts`
   at 390/1280.
+
+**Done in Session 11 (migration 0055, D-19, D-20, §5.7):**
+- **Migration 0055** (additive): `fixed_asset_groups` (Kelompok 1 = 48, Kelompok 2 = 96 months, a setting), `fixed_asset_settings`
+  (one row, capitalisation threshold Rp1.000.000), `fixed_assets` (the register: group, life copied from the group when saved,
+  acquisition date, cost > 0, asset account 1-2xxx, its Akumulasi penyusutan 1-2xxx, funding account Kas & Bank or a liability or
+  NULL = "already in the books", disposal date/proceeds/cash account, void with a written reason). Rows are never deleted; a voided
+  asset is final (trigger); a group's code is immutable. Mapping `fixed_asset.disposal_result` → 8-1102 (inserted only while 8-1102
+  is postable). Reference rows also in `seed.ts` (`seedFixedAssets`, skipped on a database older than 0055).
+- `packages/accounting/src/rules/fixed-assets.ts`, rule `fixed_asset` v1, in `defaultPostingSources()`: `acquired` (Dr asset / Cr
+  funding, none without a funding account or before the posting start), `dep:YYYY-MM` (journal **kind `depreciation`**, dated the
+  month's last day, Dr 6-2401 / Cr the accumulated account; floor(cost / life), the last month absorbs the rounding; posted once the
+  month has started; months before the posting start are in the opening balance), `disposed` (Dr Kas & Bank proceeds, Dr
+  accumulated = the depreciation of the months BEFORE the disposal month, Cr cost, rest to `fixed_asset.disposal_result`). Every key
+  of the life plus every month from the posting start to the current month is emitted, so an edit (date, cost, life), a disposal
+  or a void reverses what is stale; corrections into a closed month land in the first open month (D-23). The runner now treats
+  `system` and `depreciation` as its own kinds (`ENGINE_ENTRY_KINDS`).
+- Register UI `/accounting/fixed-assets` (list, CardList + table), `/new`, `/[id]` (edit while not disposed, "Lepas aset",
+  "Batalkan aset"), `/settings` (group months, threshold); accounting.view reads, accounting.manage writes; every write audited
+  (`fixed_asset` create/update/dispose/void, `fixed_asset_group` update, `fixed_asset_settings` update). The threshold refuses an
+  asset below it ("catat sebagai biaya biasa"); a group edit applies to assets saved (or moved to that group) afterwards only.
+- **PPh final accrual at month close** (`packages/accounting/src/period-close.ts` pure, `apps/admin/src/lib/accounting/
+  period-close-postings.ts`): closing an official month, under its exclusive lock and before `status = closed`, posts
+  (`tax`,`pph_final`,`YYYY-MM`), kind system, dated the month's last day, by the closing staff member. Base = Σ credit − debit on
+  the revenue + contra-revenue accounts in the official books (opening/closing journals left out); taxable = max(0, YTD − exemption)
+  − max(0, YTD before − exemption); amount = taxable × rate_bps / 10000 toward zero (BigInt). The `tax_settings` row in force for
+  the month gives rate/exemption/end date. No row, a rate ending before the month's last day, or a company taxpayer → nothing
+  posted, a warning (never a guess). Tutup buku shows the proposal before closing. A re-close after a reopen keeps an identical
+  journal, else reverses it (in the month) and posts the new one.
+  **PPh final is never negative (owner, 27 Nov 2026):** accrual(m) = max(0, taxable(m) × rate_bps / 10000), rounded down per
+  month (matches the monthly setoran). A month whose net sales are negative books nothing (no journal) and never reverses or
+  reduces an earlier month's accrual. **Effect on the exemption:** the exemption is measured on the net YTD base, returns
+  included, and taxable(m) = max(0, YTD(m) − exemption) − max(0, YTD(m−1) − exemption) is unchanged. So a negative month lowers
+  YTD, and the exemption headroom it frees (up to the amount by which YTD falls back below the exemption) is used again by the
+  next months' sales before they are taxed. Example, exemption 500: January YTD 600 → 100 taxed; February −200 → YTD 400,
+  accrual 0 (January's stays); March +150 → YTD 550, taxable = 50 − 0 = 50; April +1.000 → all 1.000 taxed. While YTD stays above
+  the exemption, a negative month simply books 0 and the next months' sales are taxed in full.
+- **Year-end closing** (§5.7): closing December of an official year also posts (`year_close`,`YYYY`,`closing`), kind `closing`,
+  dated 31 December: every P&L account's year balance → 3-2001 Saldo laba, Prive → 3-1001 Modal pemilik. Re-derived the same way on a
+  re-close. Laba rugi already leaves `closing` journals out (Session 10).
+- Check 5 does not list the close's own PPh journals as orphans (`PERIOD_CLOSE_SOURCE_TYPES`).
+- After the Session 11 review: a close of an official month is **refused while check 5 shows gaps** for events dated from
+  1 Jan 2027 through the month's end ("Jalankan Posting sekarang dulu"), so the PPh base and the year-end closing never miss a
+  journal the runner has not posted yet (e.g. December's depreciation); the capitalisation threshold is checked on create and
+  when the cost changes, not on every edit. Owner answers (27 Nov 2026): no depreciation in the disposal month (approved); the accrual is rounded per
+  month, matching the monthly setoran (approved); a rate ending mid-month proposes nothing for that month (approved); a group's
+  lifetime edit applies only to assets saved or moved to it afterwards (approved); PPh final is never negative (changed, above).
+- **W2/W5 and check 3a stay OFF; the MDR "still an estimate" close warning stays dormant (D-8).** Fee work A/B is not built: no
+  `payment_gateway_fee` component in `CHANNEL_FEE_COMPONENTS`, no `source` column on `order_channel_fees`, and nothing writes
+  `order_settlements`. Turn them on (add `mdrRule`/`midtransSettlementRule` loaders to `defaultPostingSources`, the warning to
+  `periodWarnings`) in the fee-work feature.
+- PT conversion (D-24) is not in this session's scope (§5.8: multi-entity out of scope).
+- Tests: `packages/accounting/test/fixed-assets.test.ts`, `period-close.test.ts`, `apps/admin/src/lib/accounting/fixed-asset-input.test.ts`,
+  `session11.test.ts` (runner idempotent, edit after close → first open month, void, disposal, pre-books asset, PPh crossing the
+  exemption, rate end, rate change, re-close, year close zeroes P&L), `packages/db/test/migration-0055.test.ts`, e2e
+  `accounting-fixed-assets.spec.ts` at 390/1280.
 
 **Session 12 (cron, Rekonsiliasi polish, docs and runbook):**
 - **Runbook: revoke TRUNCATE.** Row-level triggers do not fire on `TRUNCATE`, so `TRUNCATE

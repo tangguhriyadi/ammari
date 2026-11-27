@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  Armchair,
   BookOpen,
   BookText,
   Boxes,
@@ -341,6 +342,15 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Pemetaan Akun",
     href: "/accounting/mappings",
     icon: Shuffle,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    // Session 11 (D-19): the fixed asset register; depreciation is posted by the runner.
+    label: "Aset Tetap",
+    href: "/accounting/fixed-assets",
+    icon: Armchair,
     group: "Akuntansi",
     permissionKeys: ["accounting.view"],
     mobilePrimary: false,

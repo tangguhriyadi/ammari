@@ -1,11 +1,12 @@
 import "server-only";
-import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import {
   accountMappings,
   accounts,
   businessExpenses,
   expenseCategories,
   expenseItems,
+  fixedAssets,
   journalEntries,
   postingIssues,
   postingRuns,
@@ -16,7 +17,9 @@ import {
 } from "@ammari/db/schema";
 import { crossesCutover } from "./books";
 import { inReadCommitted, insertLines, insertReversal, loadClosedMonths, nextEntryNo, truncateDescription, type Database, type Tx } from "./ledger-write";
-import { POSTING_START_DATE, postingDateFor } from "./dates";
+import { POSTING_START_DATE, jakartaDateOf, monthStartOf, postingDateFor } from "./dates";
+import { fixedAssetRule, type FixedAssetSnapshot } from "./rules/fixed-assets";
+import { PERIOD_CLOSE_SOURCE_TYPES } from "./period-close";
 import { comparableActiveHash, decideAction, planEvent, type PlannedOutcome } from "./plan";
 import { expenseRule, type ExpenseSnapshot } from "./rules/expenses";
 import { supplierPaymentRule, type SupplierPaymentSnapshot } from "./rules/supplier-payments";
@@ -28,7 +31,7 @@ import { defectDisposalRule, finishedGoodsAdjustmentRule, type DefectDisposalSna
 import { salesRule, type OrderSnapshot } from "./rules/sales";
 import { loadOrderSnapshots } from "./sales-loaders";
 import { loadDefectDisposalSnapshots, loadFinishedGoodsAdjustmentSnapshots, loadProductionBatchSnapshots } from "./production-loaders";
-import type { AccountInfo, PostingContext, PostingEvent, PostingKey, PostingRule } from "./rules/types";
+import { ENGINE_ENTRY_KINDS, type AccountInfo, type PostingContext, type PostingEvent, type PostingKey, type PostingRule } from "./rules/types";
 
 // The posting runner (docs/plans/accounting.md §2, Session 2). Reads source records, asks each
 // rule what the ledger should hold, and per posting key does one of: nothing (identical active
@@ -151,14 +154,55 @@ export function salesSource(rule: PostingRule<OrderSnapshot> = salesRule): Posti
   return postingSource(rule, loadOrderSnapshots);
 }
 
+/** The fixed asset register (Session 11, D-19). `now` fixes the current Jakarta month, the last
+ * month whose depreciation is posted. */
+export async function loadFixedAssetSnapshots(db: Database, now: Date = new Date()): Promise<FixedAssetSnapshot[]> {
+  const asOfMonth = monthStartOf(jakartaDateOf(now));
+  const rows = await db
+    .select({
+      id: fixedAssets.id,
+      name: fixedAssets.name,
+      usefulLifeMonths: fixedAssets.usefulLifeMonths,
+      acquisitionDate: fixedAssets.acquisitionDate,
+      cost: fixedAssets.cost,
+      assetAccountCode: fixedAssets.assetAccountCode,
+      accumulatedAccountCode: fixedAssets.accumulatedAccountCode,
+      fundingAccountCode: fixedAssets.fundingAccountCode,
+      disposedOn: fixedAssets.disposedOn,
+      disposalProceeds: fixedAssets.disposalProceeds,
+      disposalCashAccountCode: fixedAssets.disposalCashAccountCode,
+      voidedAt: fixedAssets.voidedAt,
+    })
+    .from(fixedAssets)
+    .orderBy(asc(fixedAssets.acquisitionDate), asc(fixedAssets.createdAt), asc(fixedAssets.id));
+  return rows.map(({ voidedAt, ...row }) => ({ ...row, voided: voidedAt !== null, asOfMonth }));
+}
+
+/** Acquisition, monthly depreciation and disposal of the fixed asset register (Session 11). */
+export function fixedAssetSource(options: { now?: Date; rule?: PostingRule<FixedAssetSnapshot> } = {}): PostingSource {
+  return postingSource(options.rule ?? fixedAssetRule, (db) => loadFixedAssetSnapshots(db, options.now));
+}
+
 /** Every rule posting so far: E1-E2 (expenses), the purchase chain P1-P6, P7, the production chain
  * R1-R5 (batch payments included, Session 8), A1 and A2, and the sales chain (Session 9: S1-S6,
- * W1, W3, W4, W9, W10, M1, M2; W2/W5 wait for fee work A+B, Session 11). Each posting key is emitted by exactly one
+ * W1, W3, W4, W9, W10, M1, M2) and the fixed asset register (Session 11: acquisition, depreciation,
+ * disposal). W2/W5 (rules/midtrans.ts) stay out until fee work A+B exists: today no
+ * order_channel_fees row has the `payment_gateway_fee` component or a `source` column, and nothing
+ * writes order_settlements, so there is nothing for them to read. Each posting key is emitted by exactly one
  * source. The production chain runs after the purchase chain, so a batch's consumption (R1) is
  * booked after the receipts that brought the material in, within the same run. The supplier_payment
  * rule (Session 2) emits nothing any more and is not listed. */
-export function defaultPostingSources(): PostingSource[] {
-  return [expenseSource(), purchaseChainSource(), rawMaterialAdjustmentSource(), productionChainSource(), finishedGoodsAdjustmentSource(), defectDisposalSource(), salesSource()];
+export function defaultPostingSources(now?: Date): PostingSource[] {
+  return [
+    expenseSource(),
+    purchaseChainSource(),
+    rawMaterialAdjustmentSource(),
+    productionChainSource(),
+    finishedGoodsAdjustmentSource(),
+    defectDisposalSource(),
+    salesSource(),
+    fixedAssetSource(now ? { now } : {}),
+  ];
 }
 
 export async function loadPostingContext(db: Database, postingStartDate: string = POSTING_START_DATE): Promise<PostingContext> {
@@ -233,7 +277,7 @@ async function loadActiveEntries(db: Database): Promise<Map<string, ActiveEntry>
       sourceEvent: journalEntries.sourceEvent,
     })
     .from(journalEntries)
-    .where(and(eq(journalEntries.kind, "system"), isNull(journalEntries.reversedByEntryId)));
+    .where(and(inArray(journalEntries.kind, [...ENGINE_ENTRY_KINDS]), isNull(journalEntries.reversedByEntryId)));
   const map = new Map<string, ActiveEntry>();
   for (const { sourceType, sourceId, sourceEvent, ...entry } of rows) {
     if (sourceType && sourceId && sourceEvent) map.set(keyString({ sourceType, sourceId, sourceEvent }), entry);
@@ -254,7 +298,7 @@ async function loadActiveEntry(tx: Database, key: PostingKey): Promise<ActiveEnt
     })
     .from(journalEntries)
     // Same filter as loadActiveEntries: only the engine's own journals are ever re-derived.
-    .where(and(keyCondition(key), eq(journalEntries.kind, "system"), isNull(journalEntries.reversedByEntryId)));
+    .where(and(keyCondition(key), inArray(journalEntries.kind, [...ENGINE_ENTRY_KINDS]), isNull(journalEntries.reversedByEntryId)));
   return row;
 }
 
@@ -295,7 +339,7 @@ async function insertEntry(tx: Tx, planned: Extract<PlannedOutcome, { kind: "jou
       sourceId: planned.key.sourceId,
       sourceEvent: planned.key.sourceEvent,
       ruleVersion: planned.ruleVersion,
-      kind: "system",
+      kind: planned.entryKind ?? "system",
       description: truncateDescription(planned.description),
       contentHash: planned.contentHash,
     })
@@ -567,6 +611,8 @@ export async function checkPostingCompleteness(
     const date = entry.sourceDate ?? entry.entryDate;
     if (!inWindow(date)) continue;
     const [sourceType, sourceId, sourceEvent] = JSON.parse(keyText) as [string, string, string];
+    // The PPh final accrual is written by the month close (period-close.ts), not by a rule.
+    if (PERIOD_CLOSE_SOURCE_TYPES.includes(sourceType)) continue;
     result.orphans.push({ key: { sourceType, sourceId, sourceEvent }, entryNo: entry.entryNo, entryDate: entry.entryDate });
   }
   result.gaps.sort((a, b) => a.sourceDate.localeCompare(b.sourceDate) || keyString(a.key).localeCompare(keyString(b.key)));

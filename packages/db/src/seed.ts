@@ -1,6 +1,13 @@
-import { and, eq, inArray, notInArray } from "drizzle-orm";
+import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db as defaultDb } from "./client";
-import { CHART_OF_ACCOUNTS, DEFAULT_ACCOUNT_MAPPINGS, INITIAL_TAX_SETTING } from "./accounting/chart-of-accounts";
+import {
+  CHART_OF_ACCOUNTS,
+  DEFAULT_ACCOUNT_MAPPINGS,
+  FIXED_ASSET_ACCOUNT_MAPPINGS,
+  FIXED_ASSET_GROUPS,
+  INITIAL_CAPITALIZATION_THRESHOLD,
+  INITIAL_TAX_SETTING,
+} from "./accounting/chart-of-accounts";
 import {
   accountMappings,
   accounts,
@@ -21,6 +28,8 @@ import {
   storefrontHomepageSections,
   storeSettings,
   taxSettings,
+  fixedAssetGroups,
+  fixedAssetSettings,
 } from "./schema";
 import type { ChannelId } from "./schema";
 import {
@@ -291,6 +300,19 @@ async function seedAccounting(db: Database) {
     .onConflictDoNothing();
   await db.insert(accountMappings).values([...DEFAULT_ACCOUNT_MAPPINGS]).onConflictDoNothing({ target: accountMappings.mappingKey });
   await db.insert(taxSettings).values(INITIAL_TAX_SETTING).onConflictDoNothing({ target: taxSettings.effectiveFrom });
+  await seedFixedAssets(db);
+}
+
+// Migration 0055 (Session 11, D-19): the tax groups, the capitalisation threshold and the disposal
+// result mapping, restored after e2e-db.ts's TRUNCATE. Insert-only, like everything above. Skipped on
+// a database migrated only up to an older migration (migration-0049/0051.test.ts seed a 0049/0051
+// scratch database, which has no fixed_asset_* tables and must keep exactly 0049's mappings).
+async function seedFixedAssets(db: Database) {
+  const [table] = (await db.execute(sql`select to_regclass('public.fixed_asset_groups') is not null as present`)) as unknown as { present: boolean }[];
+  if (!table?.present) return;
+  await db.insert(fixedAssetGroups).values([...FIXED_ASSET_GROUPS]).onConflictDoNothing({ target: fixedAssetGroups.code });
+  await db.insert(fixedAssetSettings).values({ id: 1, capitalizationThreshold: INITIAL_CAPITALIZATION_THRESHOLD }).onConflictDoNothing({ target: fixedAssetSettings.id });
+  await db.insert(accountMappings).values([...FIXED_ASSET_ACCOUNT_MAPPINGS]).onConflictDoNothing({ target: accountMappings.mappingKey });
 }
 
 // Same dual mechanism again: migration 0039 inserts the one sales_goal row for dev/prod (the

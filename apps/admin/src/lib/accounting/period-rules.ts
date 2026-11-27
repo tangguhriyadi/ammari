@@ -26,6 +26,7 @@ export const PERIOD_MESSAGES = {
   overrideTooLong: `Alasan maksimal ${MAX_PERIOD_REASON_LENGTH} karakter.`,
   reopenReasonRequired: "Alasan membuka kembali wajib diisi.",
   reopenReasonTooLong: `Alasan maksimal ${MAX_PERIOD_REASON_LENGTH} karakter.`,
+  postingStale: (count: number) => `Ada ${count} sumber yang belum dibukukan ulang sejak berubah. Jalankan Posting sekarang dulu, lalu tutup bulan.`,
   unbalanced: "Neraca saldo tidak seimbang. Bulan tidak bisa ditutup; hubungi tim aplikasi.",
 } as const;
 

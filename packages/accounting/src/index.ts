@@ -150,3 +150,35 @@ export {
   type MappingTargetAccount,
   type MappingTargetProblem,
 } from "./mapping-rules";
+export {
+  FIXED_ASSET_RULE_VERSION,
+  FIXED_ASSET_SOURCE_TYPE,
+  accumulatedAtDisposal,
+  bookValueAt,
+  depreciatedMonths,
+  depreciationEvent,
+  depreciationSchedule,
+  fixedAssetEvents,
+  fixedAssetRule,
+  type DepreciationMonth,
+  type FixedAssetSnapshot,
+} from "./rules/fixed-assets";
+export {
+  PERIOD_CLOSE_SOURCE_TYPES,
+  PPH_FINAL_RULE_VERSION,
+  PPH_FINAL_SOURCE_ID,
+  PPH_FINAL_SOURCE_TYPE,
+  PROFIT_AND_LOSS_ACCOUNT_TYPES,
+  YEAR_CLOSE_SOURCE_EVENT,
+  YEAR_CLOSE_SOURCE_TYPE,
+  pphFinalLines,
+  pphFinalSourceEvent,
+  pphFinalWarning,
+  proposePphFinal,
+  taxSettingFor,
+  yearEndClosingLines,
+  type ClosingBalance,
+  type PphFinalProposal,
+  type PphTaxSetting,
+} from "./period-close";
+export { ENGINE_ENTRY_KINDS, type EngineEntryKind } from "./rules/types";
