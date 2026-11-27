@@ -76,6 +76,9 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   },
   { key: "accounting.close", group: "accounting", description: "Close and reopen accounting periods, and run year-end closing" },
   { key: "settings.manage", group: "settings", description: "Manage targets, cost assumptions, and settings" },
+  // docs/plans/tiktok-shop-integration.md §3.1 (T2): connect, reconnect and disconnect TikTok Shop
+  // (later also "Sinkronkan sekarang"). Shipped by migration 0057 to super_admin and owner only.
+  { key: "integrations.manage", group: "settings", description: "Connect, reconnect and disconnect marketplace integrations (TikTok Shop)" },
   { key: "customers.view", group: "customers", description: "View customers" },
   // docs/plans/growth.md §8.3, owner answer Q7: record a customer's promo-consent withdrawal.
   // Shipped by migration 0042 (owner, super_admin, and the predefined CS role).

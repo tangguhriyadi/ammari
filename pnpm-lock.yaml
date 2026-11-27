@@ -196,6 +196,9 @@ importers:
       '@ammari/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@ammari/tiktok-shop':
+        specifier: workspace:*
+        version: link:../../packages/tiktok-shop
       '@ammari/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -476,6 +479,9 @@ importers:
       '@ammari/email':
         specifier: workspace:*
         version: link:../email
+      '@ammari/tiktok-shop':
+        specifier: workspace:*
+        version: link:../tiktok-shop
       drizzle-orm:
         specifier: 0.45.3
         version: 0.45.3(kysely@0.29.6)(postgres@3.4.9)

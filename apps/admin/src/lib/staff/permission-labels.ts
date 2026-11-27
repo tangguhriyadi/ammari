@@ -87,6 +87,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, PermissionLabel> = {
   "vouchers.void": { area: "Pelanggan", label: "Batalkan atau perpanjang voucher" },
   "content.manage": { area: "Konten", label: "Kelola beranda, halaman info, tabel ukuran, deskripsi produk" },
   "settings.manage": { area: "Pengaturan", label: "Ubah target, asumsi biaya, pengaturan" },
+  "integrations.manage": { area: "Pengaturan", label: "Hubungkan, hubungkan ulang, dan putuskan TikTok Shop" },
   "staff.manage": {
     area: "Staf & Akses",
     label: "Kelola akun staf",

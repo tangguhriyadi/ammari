@@ -106,6 +106,9 @@ export default defineConfig({
       // The in-memory courier booking provider (Phase K2, same gate): "Pesan kurir" books with it,
       // nothing reaches Biteship.
       SHIPPING_ORDER_PROVIDER: "fake",
+      // The in-memory TikTok Shop (packages/commerce/src/tiktok/fake.ts, same gate): token exchange
+      // and Get Authorized Shops for the Integrasi page. Nothing reaches TikTok.
+      TIKTOK_PROVIDER: "fake",
       DATABASE_URL: e2eDatabaseUrl(),
       MAIN_SITE_URL: "http://localhost:3000",
       E2E_OTP_EXPIRES_IN_SECONDS: "8",

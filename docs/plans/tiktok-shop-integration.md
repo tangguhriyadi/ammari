@@ -1,6 +1,6 @@
 # TikTok Shop integration (Indonesia, ROW seller): in-house API sync in admin
 
-Status: **plan only, not started** (27 Nov 2026, branch `dev`, HEAD `0a614ab`). Nothing here is built.
+Status: **T1 built** (`d6b82d2`); **T2 built** 27 Nov 2026 (connection + OAuth, migration 0057, runbook §7.4). T3-T9 not started.
 Every session below needs its own `/plan` approval first (CLAUDE.md Workflow 1). **Owner decisions of
 27 Nov 2026 are recorded in §12** and folded into the sections and sessions they affect. Q1, Q3, Q6 and
 Q13 are verified in T0 on the development shop.
@@ -608,6 +608,42 @@ Backups therefore hold only ciphertext. Deauthorize or disconnect wipes both col
    banner on the admin home and Integrasi ("Hubungkan ulang sebelum …"). Topic 6 (deauthorization)
    wipes the tokens, sets `deauthorized`, stops sync and shows a red banner.
 
+### 7.4 Runbook: setting up the connection (T0, owner)
+
+T2 built the connection; nothing reaches TikTok until the owner sets these. Values come from
+`~/ammari-secrets` and are never echoed, pasted into a chat or put on a command line.
+
+1. **Generate the token encryption key once**, on the owner's Mac (the agent never runs this):
+
+   ```bash
+   (umask 077; openssl rand -base64 32 > ~/ammari-secrets/tiktok-token-enc-key-v1)
+   ```
+
+   Losing it means every stored token becomes unreadable: the connection shows "Perlu dihubungkan
+   ulang" and the owner reconnects (nothing else is lost). Keep it with the other secrets backups.
+2. **admin.env** (dev with `/opt/ammari/set-env-var.sh`, prod with `deploy/set-env-var.sh` into
+   `~/ammari-secrets/prod-admin.env`, then `deploy-prod/upload-prod-env.sh`), names as in
+   `deploy/env/admin.env.example` / `deploy-prod/env/admin.env.example`:
+   - `TIKTOK_APP_KEY` from `~/ammari-secrets/tiktok-app-key`
+   - `TIKTOK_APP_SECRET` from `~/ammari-secrets/tiktok-app-secret`
+   - `TIKTOK_SERVICE_ID` = the Partner Center app ID (Q4), not the App Key
+   - `TIKTOK_TOKEN_ENC_KEY_V1` from `~/ammari-secrets/tiktok-token-enc-key-v1`
+   - `TIKTOK_TOKEN_ENC_KEY_CURRENT=1`
+3. **web.env** gets the same `TIKTOK_APP_KEY`, `TIKTOK_APP_SECRET`, `TIKTOK_TOKEN_ENC_KEY_V1` and
+   `TIKTOK_TOKEN_ENC_KEY_CURRENT` when T3 ships (webhook and cron). The key must be identical in both
+   files, or the cron cannot read what the admin stored.
+4. Restart admin, open **Administrasi > Integrasi TikTok**, press **Hubungkan TikTok Shop**, approve
+   in TikTok. The callback is the registered redirect URL (§0), so this works only on the host
+   registered in Partner Center (prod admin); what dev can use is checked in T0 (Q3).
+5. To verify in T0, on the first real connect: the token response's field names and that
+   `access_token_expire_in` / `refresh_token_expire_in` are absolute Unix seconds
+   (`packages/tiktok-shop/src/auth.ts` refuses anything else as `invalid_response` and the page shows
+   `kode: invalid_response`), and the envelope codes TikTok uses for an expired access token
+   (passed to the API client as `authErrorCodes` in T4).
+6. **Key rotation:** add `TIKTOK_TOKEN_ENC_KEY_V2` (same command, new file), set
+   `TIKTOK_TOKEN_ENC_KEY_CURRENT=2`, restart, reconnect (or let the next refresh re-encrypt with V2),
+   then remove `_V1` once `token_key_version` is 2 on the connection row.
+
 ---
 
 ## 8. Failure handling
@@ -694,7 +730,7 @@ migration is read before it is committed. Test DBs are `ammari_e2e`/scratch data
 
 | # | Scope | Migration | Tests |
 |---|---|---|---|
-| **T0** | Owner, no code. TikTok approves the app's scopes. **Verification on the development shop** (decided: Q1, Q3, Q6, Q13 are settled by real data, not by guessing): (a) which ON_HOLD flow Indonesia uses (an `ON_HOLD` status, or `is_on_hold_order` on `AWAITING_SHIPMENT`), and a few real orders checked against the gate predicate; (b) that the Draf app can authorize the development shop, and what dev can use (redirect URL, test orders); (c) that amounts come back as whole-rupiah strings; (d) how far back order search reaches, and that `collection_time` is set for each fulfilment type used. Results are recorded in §12 before the session that needs each one. Webhook URL `https://ammari.id/api/integrations/tiktok/webhook` set in Partner Center > Kelola Webhook once T3 is deployed. The token encryption key generated into `~/ammari-secrets`. | none | — |
+| **T0** | Owner, no code. TikTok approves the app's scopes. **Verification on the development shop** (decided: Q1, Q3, Q6, Q13 are settled by real data, not by guessing): (a) which ON_HOLD flow Indonesia uses (an `ON_HOLD` status, or `is_on_hold_order` on `AWAITING_SHIPMENT`), and a few real orders checked against the gate predicate; (b) that the Draf app can authorize the development shop, and what dev can use (redirect URL, test orders); (c) that amounts come back as whole-rupiah strings; (d) how far back order search reaches, and that `collection_time` is set for each fulfilment type used. Results are recorded in §12 before the session that needs each one. Webhook URL `https://ammari.id/api/integrations/tiktok/webhook` set in Partner Center > Kelola Webhook once T3 is deployed. The token encryption key generated into `~/ammari-secrets` and the T2 env vars set (§7.4). | none | — |
 | **T1** | `packages/tiktok-shop`: config + `Secret`; `signRequest` (sorted params, excluding `sign`/`access_token`, exact raw body); `verifyWebhookSignature`; HTTP client (envelope parsing with zod, typed errors, backoff, 503 rule, time budget); `parseRupiah` (strict: rejects non-integers, Q6); token encryption (AES-256-GCM, AAD); allowlist helper. No DB, no routes. | none | **Official TikTok test vectors** in `packages/tiktok-shop/test/fixtures/official-vectors.json` (source: TikTok docs, copied by the owner's assistant; **verified with `openssl dgst -sha256 -hmac` on 27 Nov 2026, both match**). (1) API sign: app_secret `e59af819cc`, `GET /authorization/202309/shops`, query `app_key=29a39d`, `timestamp=1623812664`, `sign`/`access_token` excluded. String to sign `e59af819cc/authorization/202309/shopsapp_key29a39dtimestamp1623812664e59af819cc` → `b596b73e0cc6de07ac26f036364178ab16b0a907af13d43f0a0cd2345f582dc8`. The test asserts both the string-to-sign builder and the final hex, and that adding `sign=…`/`access_token=…` to the query does not change it. (2) Webhook: app_key `abcdef`, app_secret `123`, the raw body stored **byte-exact as a separate file** (`official-webhook-body.json`, no trailing newline; the test asserts its length and SHA-256 so an editor cannot reformat it unnoticed) → `Authorization` `5dec0f11ec2f6783b8deee53c9ffbf8d024302f7c7e7fa55a35d17629031ac05`. Raw body (TikTok Order Sync guide, Appendix B; 223 bytes, SHA-256 `3007a31e74e55c2825a5868a29f4ae001fc63a298d429dc3dbfa2a7aa908e492`; re-verified 27 Nov 2026 with `{ printf '%s' 'abcdef'; cat official-webhook-body.json; } | openssl dgst -sha256 -hmac '123'`): `{"type":1,"tts_notification_id":"7380066284010030890","shop_id":"7495540735365777507","timestamp":1718305585,"data":{"is_on_hold_order":true,"order_id":"576653688135258178","order_status":"UNPAID","update_time":1718305585}}`. Both are dummy credentials from the docs, never real ones. Plus own vectors, each derived with openssl and the command recorded in the fixture: POST with a JSON body whose whitespace must be kept byte for byte, params arriving unsorted, empty values, unicode in the body. Webhook: one byte changed → refused, uppercase hex refused, wrong length refused. Backoff schedule with a fake clock and seeded jitter: `Retry-After` honoured, 5-try cap, 1-60 s bounds, 429 vs `36009002` vs 503 vs 500. `page_token` with `+/=` URL-encoded. `parseRupiah`: `"125000"` ok; `"125000.50"`, `"1e5"`, `""`, `" 1"` refused. Crypto: round trip, tamper → fail, AAD swap → fail, wrong key version → fail. Redaction: `JSON.stringify`/`inspect`/template string of a `Secret` show `[redacted]`. |
 | **T2** | Connection + OAuth: 0057 tables (connections, oauth states, sync cursors, inbox), permission `integrations.manage`; admin Pengaturan > **Integrasi TikTok Shop** page (status, shop, scopes, expiry, health, Hubungkan/Hubungkan ulang/Putuskan); authorize link with `service_id` = the Partner Center app ID (Q4) + callback route; Get Authorized Shops; token refresh service; deauthorization and expiry handling (applied when T3 delivers topics 6/7). | **0057** | DB: migration idempotent, permission row present; state consumed once (two concurrent callbacks → one wins), expired or other-staff state refused; refresh race (two refreshers → one TikTok call, one write, `token_generation` +1); deauth wipes the ciphertext. Unit: the authorize URL uses `TIKTOK_SERVICE_ID`, never the App Key; callback error mapping to Indonesian messages. Security: customer session and staff without the permission → 403 on page, action and callback; log capture: no code, state, token or secret in any log line. e2e: Integrasi page at 390/1280 with a stubbed TikTok. |
 | **T3** | Webhook receiver in apps/web (`/api/integrations/tiktok/webhook`, registered per app in Kelola Webhook, Q5): capped body, verify, shop check, inbox insert, 200 empty / 401 / 503; `after()` drain hook (no-op until T4); topics 6/7 wired to T2; retention entry; Cloudflare Access bypass + Caddy note in the runbook. | none | Route tests: **the official webhook vector** (T1 fixture) posted as the raw body with its `Authorization` → verified (with that test's app key/secret injected), stored, 200 with an empty body; replay of the same `tts_notification_id` → 200, still one row; bad signature → 401, no row; oversized → 413/401, no row; DB down → 503; unknown topic → `ignored`; response time with the DB stubbed slow stays < 3 s (no API call in the request path). Retention deletes > 12 months only. |

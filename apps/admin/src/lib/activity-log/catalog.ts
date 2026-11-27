@@ -492,6 +492,21 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       update: { label: "Pengingat biaya bulanan diubah" },
     },
   },
+  // docs/plans/tiktok-shop-integration.md T2: every change to the TikTok Shop connection. Tokens,
+  // codes and states never appear in before/after (packages/commerce/src/tiktok/connection.ts).
+  tiktok_shop_connection: {
+    label: "Koneksi TikTok Shop",
+    area: "settings",
+    actions: {
+      tiktok_connect: { label: "TikTok Shop dihubungkan" },
+      tiktok_reconnect: { label: "TikTok Shop dihubungkan ulang" },
+      tiktok_disconnect: { label: "TikTok Shop diputuskan" },
+      tiktok_token_refresh: { label: "Token TikTok Shop diperbarui" },
+      tiktok_reauth_required: { label: "TikTok Shop perlu dihubungkan ulang" },
+      tiktok_deauthorize: { label: "Izin TikTok Shop dicabut penjual" },
+      tiktok_expiry_warning: { label: "Izin TikTok Shop akan berakhir" },
+    },
+  },
   staff_user: {
     label: "Staf",
     area: "access",

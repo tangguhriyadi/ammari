@@ -360,6 +360,12 @@ export const E2E_CONTENT_ADMIN_EMAIL = "content-admin@e2e.ammari.test";
 // three audit rows it reads back: a supplier rename by the super_admin, a buyer's card claim whose
 // payload carries a token hash (must render redacted), and an entity/action the catalog does not
 // know (must render as its raw key).
+// tiktok-integration.spec.ts (docs/plans/tiktok-shop-integration.md T2): a super_admin (holds
+// integrations.manage and audit_log.view, so it can read its own changes back in Log Aktivitas), and a
+// role with settings.manage but not integrations.manage (403 on the page and the callback).
+export const E2E_TIKTOK_ADMIN_EMAIL = "tiktok-admin@e2e.ammari.test";
+export const E2E_TIKTOK_NO_ACCESS_EMAIL = "tiktok-no-access@e2e.ammari.test";
+const E2E_TIKTOK_NO_ACCESS_ROLE_KEY = "e2e_tiktok_settings_only";
 export const E2E_ACTIVITY_LOG_ADMIN_EMAIL = "activity-log-admin@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_OWNER_EMAIL = "activity-log-owner@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_SUPPLIER_NAME = "E2E Log Supplier Baru";
@@ -647,6 +653,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_CONTENT_ADMIN_EMAIL, "E2E Admin Konten", "content_admin");
   await ensureStaffFixture(E2E_ACTIVITY_LOG_ADMIN_EMAIL, "E2E Log Super Admin", SUPER_ADMIN_ROLE_KEY);
   await ensureStaffFixture(E2E_ACTIVITY_LOG_OWNER_EMAIL, "E2E Log Owner", OWNER_ROLE_KEY);
+  await ensureStaffFixture(E2E_TIKTOK_ADMIN_EMAIL, "E2E TikTok Super Admin", SUPER_ADMIN_ROLE_KEY);
+  await ensureLimitedRole(E2E_TIKTOK_NO_ACCESS_ROLE_KEY, ["settings.manage", "finance.view_profit"]);
+  await ensureStaffFixture(E2E_TIKTOK_NO_ACCESS_EMAIL, "E2E TikTok Tanpa Akses", E2E_TIKTOK_NO_ACCESS_ROLE_KEY);
   {
     // ammari_e2e is TRUNCATEd above on every run, so these rows are always fresh and inside the
     // page's default last-7-days range.

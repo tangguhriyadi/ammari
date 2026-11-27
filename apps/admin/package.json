@@ -20,6 +20,7 @@
     "@ammari/db": "workspace:*",
     "@ammari/email": "workspace:*",
     "@ammari/storage": "workspace:*",
+    "@ammari/tiktok-shop": "workspace:*",
     "@ammari/ui": "workspace:*",
     "@tiptap/core": "3.32.0",
     "@tiptap/extension-bold": "3.32.0",

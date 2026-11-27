@@ -14,6 +14,7 @@ import { hasAnyNeedsAction, OverviewNeedsAction, OverviewNeedsActionSkeleton, ty
 import { OverviewPeriodPicker } from "./_components/overview-period-picker";
 import { OverviewSalesChart, OverviewSalesChartSkeleton } from "./_components/overview-sales-chart";
 import { OverviewTargetCard, OverviewTargetCardSkeleton } from "./_components/overview-target-card";
+import { OverviewTikTokBanner } from "./_components/overview-tiktok-banner";
 import { OverviewTopProducts, OverviewTopProductsSkeleton } from "./_components/overview-top-products";
 import { OverviewVoucherCard, OverviewVoucherCardSkeleton } from "./_components/overview-voucher-card";
 
@@ -82,6 +83,13 @@ export default async function RingkasanPage({ searchParams }: { searchParams: Pr
     <>
       <Breadcrumb items={rootCrumbs("/")} />
       <PageHeader title="Ringkasan" description={`Data per ${formatDateTime(now)} WIB`} />
+      {has("integrations.manage") && (
+        <div className="mb-6 empty:hidden">
+          <Suspense fallback={null}>
+            <OverviewTikTokBanner now={now} />
+          </Suspense>
+        </div>
+      )}
 
       <div className={`grid grid-cols-1 gap-8 ${twoColumns ? "xl:grid-cols-[minmax(0,1fr)_22.5rem] xl:gap-x-8" : ""}`}>
         {canViewProfit && (

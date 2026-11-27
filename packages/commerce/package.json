@@ -27,6 +27,7 @@
     "./size-label": "./src/size-label.ts",
     "./stock": "./src/stock/index.ts",
     "./thank-you-cards": "./src/thank-you-cards.ts",
+    "./tiktok": "./src/tiktok/index.ts",
     "./voucher-adjustments": "./src/vouchers/adjustments.ts"
   },
   "scripts": {
@@ -37,6 +38,7 @@
   "dependencies": {
     "@ammari/db": "workspace:*",
     "@ammari/email": "workspace:*",
+    "@ammari/tiktok-shop": "workspace:*",
     "drizzle-orm": "0.45.3",
     "server-only": "0.0.1",
     "zod": "4.6.5"

@@ -4,6 +4,7 @@ import "server-only";
 // webhook verification, the HTTP client, money parsing, token encryption and the allowlist helper.
 // No database import, no `apps/*` import; packages/commerce owns every write.
 
+export { buildAuthorizeUrl, createTikTokAuthClient, type TikTokAuthClient, type TikTokAuthClientOptions, type TikTokTokenSet } from "./auth";
 export { applyAllowlist, type AllowlistRule, type AllowlistSpec, type AllowlistedObject, type AllowlistedValue } from "./allowlist";
 export {
   MAX_RATE_LIMIT_TRIES,
@@ -30,11 +31,13 @@ export {
   SEARCH_ORDERS_MAX_PAGE_SIZE,
   TIKTOK_API_BASE_URL,
   TIKTOK_AUTH_BASE_URL,
+  TIKTOK_AUTHORIZE_URL,
   TIKTOK_AUTH_ENDPOINTS,
   TIKTOK_ENDPOINTS,
 } from "./endpoints";
 export { TikTokMoneyFormatError, parseRupiah, type ParseRupiahOptions } from "./rupiah";
 export { Secret } from "./secret";
+export { getAuthorizedShops, type TikTokAuthorizedShop } from "./shops";
 export { SIGN_EXCLUDED_PARAMS, buildStringToSign, signRequest, type QueryParams, type SignInput } from "./sign";
 export {
   TOKEN_KEY_BYTES,

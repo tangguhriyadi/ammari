@@ -14,6 +14,7 @@ import {
   Megaphone,
   Package,
   PackageCheck,
+  Plug,
   Palette,
   Percent,
   Receipt,
@@ -370,6 +371,15 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: Settings,
     group: "Administrasi",
     permissionKeys: ["settings.manage"],
+    mobilePrimary: false,
+  },
+  {
+    // docs/plans/tiktok-shop-integration.md T2: connect, reconnect and disconnect TikTok Shop.
+    label: "Integrasi TikTok",
+    href: "/settings/integrations/tiktok",
+    icon: Plug,
+    group: "Administrasi",
+    permissionKeys: ["integrations.manage"],
     mobilePrimary: false,
   },
   {

@@ -7,6 +7,8 @@ import "server-only";
 
 export const TIKTOK_API_BASE_URL = "https://open-api.tiktokglobalshop.com";
 export const TIKTOK_AUTH_BASE_URL = "https://auth.tiktok-shops.com";
+/** Where the seller authorizes the app (§0 "Auth"): `?service_id=...&state=...`. */
+export const TIKTOK_AUTHORIZE_URL = "https://services.tiktokshop.com/open/authorize";
 
 export const TIKTOK_ENDPOINTS = {
   /** GET, gives `shop_cipher`. */

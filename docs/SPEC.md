@@ -840,7 +840,7 @@ Full plan, rules and runbook: **[docs/plans/accounting.md](plans/accounting.md)*
 - Permissions are constants defined in code (e.g. `orders.view`, `orders.import`,
   `packing.print_cards`, `stock.view`, `stock.adjust`, `production.manage`, `products.manage`,
   `inventory.view`, `inventory.manage`, `inventory.receive`, `finance.view_profit`,
-  `settings.manage`, `customers.view`, `customers.manage`, `customers.export`, `vouchers.void`,
+  `settings.manage`, `integrations.manage`, `customers.view`, `customers.manage`, `customers.export`, `vouchers.void`,
   `ads_expenses.manage`, `staff.manage`, `roles.manage`, `audit_log.view`). A startup/seed step syncs them into the `permissions` table, and any key the
   code matches by literal value also ships in a migration (CLAUDE.md). Roles and role→permission
   mappings live in the database and are editable from the admin UI.
