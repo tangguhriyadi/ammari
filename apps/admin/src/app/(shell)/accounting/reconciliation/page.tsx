@@ -1,13 +1,15 @@
 import Link from "next/link";
 import { Breadcrumb, Button, Card, CardList, EmptyState, Input, Label, PageHeader, TableContainer, TableHead, Td, Th, Tr } from "@ammari/ui";
 import { jakartaDate } from "@ammari/commerce/jakarta-day";
-import { isCalendarDate, OFFICIAL_BOOKS_START, TRIAL_BOOKS_START } from "@ammari/accounting";
+import { isCalendarDate, monthStartOf, OFFICIAL_BOOKS_START, TRIAL_BOOKS_START } from "@ammari/accounting";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { formatBalance, formatDay } from "@/lib/accounting/format";
-import { getReconciliation, type MaterialRow, type PayableRow, type Reconciliation, type StockAccountRow, type WipBatchRow } from "@/lib/accounting/reconciliation";
+import { getPnlReconciliation } from "@/lib/accounting/pnl-reconciliation";
+import { getPostingCompleteness, getReconciliation, type MaterialRow, type PayableRow, type Reconciliation, type StockAccountRow, type WipBatchRow } from "@/lib/accounting/reconciliation";
 import { parseTypedBalance, type ReconciliationStatus } from "@/lib/accounting/reconciliation-rules";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { BiteshipCard, SalesChecks } from "./_components/sales-checks";
+import { CompletenessCheck, PnlCheck } from "./_components/statement-checks";
 import { Amount, StatusBadge } from "./_components/status";
 
 // Rekonsiliasi (docs/plans/accounting.md §6.3, Sessions 7, 8 and 9): check 1 (persediaan bahan, barang
@@ -241,7 +243,12 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
   const rawBiteship = Array.isArray(raw.biteship) ? raw.biteship[0] : raw.biteship;
   const biteshipTyped = parseTypedBalance(rawBiteship);
   const biteshipInvalid = Boolean(rawBiteship?.trim()) && biteshipTyped === null;
-  const report = await getReconciliation(asOf, undefined, biteshipTyped);
+  const [report, pnl, completeness] = await Promise.all([
+    getReconciliation(asOf, undefined, biteshipTyped),
+    // Check 4 compares the month of the chosen date, up to that date (inside its set of books).
+    getPnlReconciliation({ from: monthStartOf(asOf), to: asOf }),
+    getPostingCompleteness(asOf),
+  ]);
 
   return (
     <>
@@ -438,6 +445,26 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
             </TableContainer>
           </>
         )}
+      </section>
+
+      <section aria-labelledby="reconciliation-pnl" className="mt-8 flex flex-col gap-3">
+        <h2 id="reconciliation-pnl" className="text-lg font-semibold text-neutral-900">
+          Laba rugi dibandingkan dengan laporan manajemen
+        </h2>
+        <p className="text-sm text-neutral-600">
+          Laba rugi buku besar {formatDay(pnl.range.from)} s.d. {formatDay(pnl.range.to)} dibandingkan dengan laporan Laba rugi di menu Biaya untuk tanggal yang sama. Laporan manajemen menghitung pesanan menurut tanggal pesan dan biaya menurut tanggal bayar; buku besar mengakui penjualan saat barang dikirim. Setiap selisih dipecah menurut penyebabnya.
+        </p>
+        <PnlCheck report={pnl} />
+      </section>
+
+      <section aria-labelledby="reconciliation-completeness" className="mt-8 flex flex-col gap-3">
+        <h2 id="reconciliation-completeness" className="text-lg font-semibold text-neutral-900">
+          Kelengkapan posting
+        </h2>
+        <p className="text-sm text-neutral-600">
+          Setiap kejadian di aplikasi sejak {formatDay(report.segmentStart)} sampai {formatDay(asOf)} harus sudah punya jurnal, atau tercatat di daftar masalah posting.
+        </p>
+        <CompletenessCheck report={completeness} />
       </section>
     </>
   );

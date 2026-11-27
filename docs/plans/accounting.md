@@ -829,6 +829,52 @@ A's `source` column and lands with Session 11.
   transitionOrderStatus, applyPaymentStatus, cancelCheckoutOrderByStaff, recordManualRefund), e2e
   `accounting.spec.ts` at 390/1280.
 
+**Done in Session 10 (no migration; reads only):**
+- Pages `/accounting/balance-sheet` (Neraca), `/accounting/income-statement` (Laba rugi) and `/accounting/cash-flow`
+  (Arus kas), accounting.view, each with PDF and Excel (`…/export`, audited as `balance_sheet` / `income_statement` /
+  `cash_flow_statement` `download` in Log Aktivitas, like Neraca saldo). One pure layout module
+  (`apps/admin/src/lib/accounting/statement-layout.ts`) builds the rows the page, the PDF and the Excel file all show;
+  sections follow the account TYPE and the header tree, never hard-coded codes.
+- **Books split (§5.4):** every figure is summed within one set of books, by `entry_date` (so the statements tie out
+  to Neraca saldo and Buku besar). Laba rugi and the Arus kas movements leave out the opening journal (and a reversal
+  of it); the Neraca and the Arus kas opening cash include it. A range crossing the cut-over starts at 1 Jan 2027.
+  Laba rugi also leaves out `kind = 'closing'` journals (Session 11's year-end close), so the Neraca's "Laba (rugi)
+  berjalan" (Σ of the P&L accounts not yet closed, shown in equity so the statement balances) and Laba rugi stay
+  consistent once closing exists.
+- **Neraca:** aset (header tree), kewajiban jangka pendek / jangka panjang (the chart's 2-1 / 2-2 convention), ekuitas
+  + laba berjalan; comparative = the end of the previous month in the same books; January 2027 compares to the
+  official opening balance (the opening journal only), the trial month has no comparative.
+- **Laba rugi:** layout as §6 (HPP = the `cogs` accounts only, so 6-4000 Beban persediaan is beban usaha, D-7/D-16;
+  penjualan bersih = Penjualan − 4-1201 − 4-1301, after vouchers, no ongkir, D-4/D-6). Column options: jumlah saja,
+  per bulan, per saluran (by `journal_lines.channel_id`; lines without one in "Tanpa saluran").
+- **Arus kas (direct):** per journal touching a `cash_flow_group = 'cash'` account, the cash moved is classified by its
+  other lines' groups; transfers between cash accounts and journals without a cash line are no cash flow. Within one
+  journal, two non-cash lines of the same group that exactly offset (S3's HPP pair riding with the sale) are dropped from
+  the per-account detail only (group totals unchanged; sales/contra/other-income lines are never netted).
+- **Rekonsiliasi check 4** (`pnl-reconciliation.ts`, `pnl-reconciliation-rules.ts`): the ledger's Laba rugi for the
+  month of the page's date vs the management P&L built from the same `revenue-sql.ts` fragments as Ringkasan/Biaya (test:
+  equal to `getExpenseSummary().net`). Every P&L account is in exactly one component; per component, per order or per
+  expense: only in management (timing, not posted, before the books), only in the ledger, different amount (refunds,
+  returns, courier vs quote, HPP rounding), and ledger lines without a key (manual journals, accruals). The lines add up
+  to the difference exactly. Components the management P&L lacks (5-1201, MDR, 6-4000, depreciation, 7/8, PPh) are shown
+  with their reason.
+- **Rekonsiliasi check 5** (`checkPostingCompleteness` in `@ammari/accounting/runner`): a read-only dry run of the runner
+  over every source for events dated from the segment start to the page's date: posted / explained by an open issue /
+  held behind its original / gap (missing, outdated, stale, issue not recorded) plus orphans (active system journals no
+  rule emits). After a posting run there are no gaps.
+- After the Session 10 review: check 5 counts a missing/outdated journal as explained only by a `posting_failed` issue
+  (any other open issue on the key is stale until the next run, so it is a gap); check 4 keeps 6-1301 Beban ongkos kirim
+  (courier vs quote, return ongkir) as its own component, not part of "subsidi ongkir website" (the management P&L has no
+  such figure, so it is never shown as a timing difference); "per bulan" shows at most 12 months (a longer range starts 11
+  months before its last month, with a note); a too-wide amount in the PDF shrinks to fit its column. Open for fee work A:
+  `orderPlatformFeeSql` sums every `order_channel_fees` row, so once `payment_gateway_fee` rows exist check 4 will show the
+  MDR as a management platform fee against a ledger-only 6-1203 (net 0, wrong line); fix in that feature.
+- Tests: `statement-layout.test.ts`, `pnl-reconciliation-rules.test.ts`, `session10.test.ts` (Neraca balances and = Neraca
+  saldo; laba rugi = movement of the unclosed result and of equity net of capital/drawings; trial month and opening
+  journal; per month/channel; Arus kas closing = cash accounts in Neraca saldo; check 4 through the real order/payment
+  write paths), `packages/accounting/test/completeness.test.ts`, export route tests, e2e `accounting-statements.spec.ts`
+  at 390/1280.
+
 **Session 12 (cron, Rekonsiliasi polish, docs and runbook):**
 - **Runbook: revoke TRUNCATE.** Row-level triggers do not fire on `TRUNCATE`, so `TRUNCATE
   journal_lines` (or `journal_entries CASCADE`) bypasses every append-only guard; the same holds for

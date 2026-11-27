@@ -372,6 +372,27 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       download: { label: "Neraca saldo diunduh" },
     },
   },
+  balance_sheet: {
+    label: "Neraca",
+    area: "accounting",
+    actions: {
+      download: { label: "Neraca diunduh" },
+    },
+  },
+  income_statement: {
+    label: "Laba rugi",
+    area: "accounting",
+    actions: {
+      download: { label: "Laba rugi diunduh" },
+    },
+  },
+  cash_flow_statement: {
+    label: "Arus kas",
+    area: "accounting",
+    actions: {
+      download: { label: "Arus kas diunduh" },
+    },
+  },
   expense_report: {
     label: "Laporan keuangan",
     area: "expenses",

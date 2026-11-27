@@ -470,3 +470,106 @@ function counts(result: PostingRunResult) {
     issueCount: result.issueCount,
   };
 }
+
+// ---------- Rekonsiliasi check 5: posting completeness (plan §6.3, Session 10) ----------
+
+/** Why a source event is not (correctly) in the ledger although no open issue explains it. */
+export type PostingGapStatus =
+  /** The rule says "post this journal" and there is no active journal for the key. */
+  | "missing"
+  /** An active journal exists but differs from what the rule says now (source, mapping or rule changed). */
+  | "outdated"
+  /** The rule posts nothing any more but a journal is still active. */
+  | "stale"
+  /** The rule raises an issue that is not in the open-issue queue yet. */
+  | "issue_unrecorded";
+
+export interface PostingGap {
+  key: PostingKey;
+  sourceDate: string;
+  status: PostingGapStatus;
+  issueCode?: string;
+}
+
+export interface PostingCompleteness {
+  /** Source events dated in the window the rules produce a journal or an issue for. */
+  checkedEvents: number;
+  /** ... of which the identical journal is active. */
+  posted: number;
+  /** ... of which an open posting issue explains the missing journal. */
+  withOpenIssue: number;
+  /** Events held behind their original (a void, a held return), which posts nothing yet. */
+  held: number;
+  gaps: PostingGap[];
+  /** Active system journals in the window whose key no rule produces any more (e.g. a source
+   * that vanished): the next run does not touch them, so they need a look. Only meaningful with the
+   * full default source list (a subset reports every other source's journals here). */
+  orphans: { key: PostingKey; entryNo: string; entryDate: string }[];
+}
+
+/**
+ * Read-only dry run of the posting runner over every source (plan §6.3 check 5: "every source event
+ * after the cut-over has an active journal or an open issue"). Writes nothing: it compares what each
+ * rule would post for events dated in [from, to] with the active journals and the open issues as
+ * they are now. A gap means "Posting sekarang" has not run since the source changed (or a write
+ * failed without an issue); after a successful run every gap is gone.
+ */
+export async function checkPostingCompleteness(
+  db: Database,
+  window: { from: string; to: string },
+  options: { sources?: PostingSource[]; postingStartDate?: string } = {},
+): Promise<PostingCompleteness> {
+  const sources = options.sources ?? defaultPostingSources();
+  const context = await loadPostingContext(db, options.postingStartDate);
+  const [activeEntries, openIssues] = await Promise.all([loadActiveEntries(db), loadOpenIssues(db)]);
+  const result: PostingCompleteness = { checkedEvents: 0, posted: 0, withOpenIssue: 0, held: 0, gaps: [], orphans: [] };
+  const emitted = new Set<string>();
+  const inWindow = (date: string) => date >= window.from && date <= window.to;
+
+  for (const source of sources) {
+    for (const event of await source.events(db, context)) {
+      const keyText = keyString(event.key);
+      emitted.add(keyText);
+      if (!inWindow(event.sourceDate)) continue;
+      if (event.requiresActiveJournalFor) {
+        // Same rule as dependencyAllows, against the pre-read (nothing is written here).
+        const original = activeEntries.get(keyString(event.requiresActiveJournalFor));
+        const allowed = !!original && (event.requiresActiveJournalAcrossBooks === true || !crossesCutover(original.sourceDate ?? original.entryDate, event.sourceDate));
+        if (!allowed) {
+          if (event.outcome.kind !== "none") result.held += 1;
+          continue;
+        }
+      }
+      const planned = planEvent(event, source.ruleVersion, context);
+      const active = activeEntries.get(keyText);
+      const issues = openIssues.get(keyText) ?? [];
+      if (planned.kind === "none") {
+        if (active) result.gaps.push({ key: planned.key, sourceDate: planned.sourceDate, status: "stale" });
+        continue;
+      }
+      result.checkedEvents += 1;
+      if (planned.kind === "issue") {
+        if (issues.some((issue) => issue.issueCode === planned.issueCode)) result.withOpenIssue += 1;
+        else result.gaps.push({ key: planned.key, sourceDate: planned.sourceDate, status: "issue_unrecorded", issueCode: planned.issueCode });
+        continue;
+      }
+      const action = decideAction(planned, comparableActiveHash(planned, active));
+      if (action === "unchanged") result.posted += 1;
+      // A failed write leaves a posting_failed issue: explained, not a silent gap. Any other open
+      // issue on the key is stale (e.g. a mapping fixed since): the next run resolves it, so it is a gap.
+      else if (issues.some((issue) => issue.issueCode === "posting_failed")) result.withOpenIssue += 1;
+      else result.gaps.push({ key: planned.key, sourceDate: planned.sourceDate, status: action === "insert" ? "missing" : "outdated" });
+    }
+  }
+
+  for (const [keyText, entry] of activeEntries) {
+    if (emitted.has(keyText)) continue;
+    const date = entry.sourceDate ?? entry.entryDate;
+    if (!inWindow(date)) continue;
+    const [sourceType, sourceId, sourceEvent] = JSON.parse(keyText) as [string, string, string];
+    result.orphans.push({ key: { sourceType, sourceId, sourceEvent }, entryNo: entry.entryNo, entryDate: entry.entryDate });
+  }
+  result.gaps.sort((a, b) => a.sourceDate.localeCompare(b.sourceDate) || keyString(a.key).localeCompare(keyString(b.key)));
+  result.orphans.sort((a, b) => a.entryDate.localeCompare(b.entryDate) || a.entryNo.localeCompare(b.entryNo));
+  return result;
+}

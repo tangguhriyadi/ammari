@@ -85,3 +85,18 @@ export function parseLedgerFilters(raw: RawLedgerParams, today: string): LedgerF
 export function toSearchParams(values: Record<string, string | null | undefined>): Record<string, string> {
   return Object.fromEntries(Object.entries(values).filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== ""));
 }
+
+/** A single "per tanggal" date in the URL, or today (Jakarta). */
+export function parseAsOfDate(raw: { date?: string | string[] }, today: string): string {
+  const date = first(raw.date);
+  return date && isCalendarDate(date) ? date : today;
+}
+
+export const INCOME_STATEMENT_VIEWS = ["total", "month", "channel"] as const;
+export type IncomeStatementView = (typeof INCOME_STATEMENT_VIEWS)[number];
+
+/** Laba rugi columns: jumlah saja (default), per bulan, per saluran. */
+export function parseIncomeStatementView(raw: { view?: string | string[] }): IncomeStatementView {
+  const view = first(raw.view);
+  return view && (INCOME_STATEMENT_VIEWS as readonly string[]).includes(view) ? (view as IncomeStatementView) : "total";
+}

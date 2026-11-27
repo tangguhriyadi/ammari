@@ -48,6 +48,11 @@ export interface TrialBalance {
  * `not (... or NULL)` would drop every ordinary movement). */
 export const IS_OPENING_SQL = sql.raw(`(e.kind = 'opening' or coalesce(reversed.kind = 'opening', false))`);
 
+/** A year-end closing journal (Session 11, plan §5.7) and a reversal of it: it moves the year's
+ * result into Saldo laba, so it is never a revenue or an expense of the period (Laba rugi and its
+ * reconciliation leave it out). Same `e` / `reversed` aliases as IS_OPENING_SQL. */
+export const IS_CLOSING_SQL = sql.raw(`(e.kind = 'closing' or coalesce(reversed.kind = 'closing', false))`);
+
 const side = (signed: number) => ({ debit: signed > 0 ? signed : 0, credit: signed < 0 ? -signed : 0 });
 
 export async function getTrialBalance(requested: DateRange, db: Database = defaultDb, now: Date = new Date()): Promise<TrialBalance> {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseDateRange, parseJournalFilters, parseLedgerFilters, toSearchParams } from "./filters";
+import { parseAsOfDate, parseDateRange, parseIncomeStatementView, parseJournalFilters, parseLedgerFilters, toSearchParams } from "./filters";
 
 describe("accounting filters", () => {
   test("the default range is the current Jakarta month", () => {
@@ -37,5 +37,21 @@ describe("accounting filters", () => {
 
   test("toSearchParams drops empty values", () => {
     expect(toSearchParams({ from: "2026-12-01", source: null, kind: undefined, account: "" })).toEqual({ from: "2026-12-01" });
+  });
+});
+
+describe("parseAsOfDate / parseIncomeStatementView (Session 10)", () => {
+  test("a valid date is kept, anything else is today", () => {
+    expect(parseAsOfDate({ date: "2027-01-31" }, "2027-02-10")).toBe("2027-01-31");
+    expect(parseAsOfDate({ date: "2027-02-30" }, "2027-02-10")).toBe("2027-02-10");
+    expect(parseAsOfDate({ date: ["x", "2027-01-01"] }, "2027-02-10")).toBe("2027-02-10");
+    expect(parseAsOfDate({}, "2027-02-10")).toBe("2027-02-10");
+  });
+
+  test("the Laba rugi view is total unless month or channel", () => {
+    expect(parseIncomeStatementView({ view: "month" })).toBe("month");
+    expect(parseIncomeStatementView({ view: "channel" })).toBe("channel");
+    expect(parseIncomeStatementView({ view: "year" })).toBe("total");
+    expect(parseIncomeStatementView({})).toBe("total");
   });
 });

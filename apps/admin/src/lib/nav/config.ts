@@ -32,6 +32,9 @@ import {
   Landmark,
   Scale,
   ListChecks,
+  Banknote,
+  Building2,
+  TrendingUp,
 } from "lucide-react";
 import type { PermissionKey } from "@ammari/db/rbac";
 
@@ -277,6 +280,31 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Neraca Saldo",
     href: "/accounting/trial-balance",
     icon: Scale,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    // Session 10 (plan §6): the financial statements, each with PDF and Excel.
+    label: "Neraca",
+    href: "/accounting/balance-sheet",
+    icon: Building2,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    label: "Laba Rugi",
+    href: "/accounting/income-statement",
+    icon: TrendingUp,
+    group: "Akuntansi",
+    permissionKeys: ["accounting.view"],
+    mobilePrimary: false,
+  },
+  {
+    label: "Arus Kas",
+    href: "/accounting/cash-flow",
+    icon: Banknote,
     group: "Akuntansi",
     permissionKeys: ["accounting.view"],
     mobilePrimary: false,

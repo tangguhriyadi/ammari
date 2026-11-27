@@ -1,7 +1,7 @@
 import "server-only";
 import { sql } from "drizzle-orm";
 import { batchWipAsOf, bookSegmentOf, jakartaDateOf, orderAccountMovements, segmentStartOf, type BookSegment } from "@ammari/accounting";
-import { loadOrderSnapshots, loadProductionBatchSnapshots } from "@ammari/accounting/runner";
+import { checkPostingCompleteness, loadOrderSnapshots, loadProductionBatchSnapshots, type PostingCompleteness } from "@ammari/accounting/runner";
 import type { ChannelId } from "@ammari/db/schema";
 import { defaultDb, type Database } from "@/lib/db";
 import {
@@ -560,4 +560,10 @@ export async function getReconciliation(asOf: string, db: Database = defaultDb, 
     salesChecks: await salesChecks(db, keys, segmentStart, asOf),
     biteship: await biteshipCheck(db, biteshipAccount, segmentStart, asOf, biteshipDashboard),
   };
+}
+
+/** Check 5 (Session 10): every source event dated in the set of books of `asOf`, up to `asOf`, has
+ * its active journal or an open posting issue. A read-only dry run of the posting runner. */
+export async function getPostingCompleteness(asOf: string, db: Database = defaultDb): Promise<PostingCompleteness> {
+  return checkPostingCompleteness(db, { from: segmentStartOf(asOf), to: asOf });
 }
