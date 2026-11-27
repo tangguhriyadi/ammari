@@ -7,7 +7,9 @@ import { formatBalance, formatDay } from "@/lib/accounting/format";
 import { getPnlReconciliation } from "@/lib/accounting/pnl-reconciliation";
 import { getPostingCompleteness, getReconciliation, type MaterialRow, type PayableRow, type Reconciliation, type StockAccountRow, type WipBatchRow } from "@/lib/accounting/reconciliation";
 import { parseTypedBalance, type ReconciliationStatus } from "@/lib/accounting/reconciliation-rules";
+import { getPostingStatus } from "@/lib/accounting/queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { PostingStatusNotice } from "../_components/posting-status-notice";
 import { BiteshipCard, SalesChecks } from "./_components/sales-checks";
 import { CompletenessCheck, PnlCheck } from "./_components/statement-checks";
 import { Amount, StatusBadge } from "./_components/status";
@@ -243,11 +245,12 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
   const rawBiteship = Array.isArray(raw.biteship) ? raw.biteship[0] : raw.biteship;
   const biteshipTyped = parseTypedBalance(rawBiteship);
   const biteshipInvalid = Boolean(rawBiteship?.trim()) && biteshipTyped === null;
-  const [report, pnl, completeness] = await Promise.all([
+  const [report, pnl, completeness, postingState] = await Promise.all([
     getReconciliation(asOf, undefined, biteshipTyped),
     // Check 4 compares the month of the chosen date, up to that date (inside its set of books).
     getPnlReconciliation({ from: monthStartOf(asOf), to: asOf }),
     getPostingCompleteness(asOf),
+    getPostingStatus(),
   ]);
 
   return (
@@ -255,8 +258,9 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
       <Breadcrumb items={rootCrumbs("/accounting/reconciliation")} />
       <PageHeader
         title="Rekonsiliasi"
-        description={`Mencocokkan buku besar dengan catatan stok, produksi, tagihan pemasok, dan pesanan, per ${formatDay(asOf)}.`}
+        description={`Mencocokkan buku besar dengan catatan stok, produksi, tagihan pemasok, dan pesanan, per ${formatDay(asOf)}. ${postingState.summary}`}
       />
+      <PostingStatusNotice status={postingState} />
       <form method="GET" className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end lg:max-w-2xl" aria-label="Filter rekonsiliasi">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="reconciliation-date">Per tanggal</Label>

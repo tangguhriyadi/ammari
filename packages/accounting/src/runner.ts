@@ -1,5 +1,6 @@
 import "server-only";
-import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { PgTransaction } from "drizzle-orm/pg-core";
 import {
   accountMappings,
   accounts,
@@ -41,10 +42,11 @@ import { ENGINE_ENTRY_KINDS, type AccountInfo, type PostingContext, type Posting
 // Concurrency: each write happens in its own READ COMMITTED transaction (the 0049 period-lock
 // trigger refuses any other level) under a per-key advisory lock, re-reading the active journal
 // inside the lock; the partial unique index journal_entries_active_source_key is the backstop. So
-// two concurrent runs never post the same key twice (Session 12 adds a run-level lock for the cron).
+// two concurrent runs never post the same key twice. Session 12: callers go through
+// runPostingExclusive (one run at a time, stale "running" rows closed); see "Run-level lock".
 //
 // Never called from an existing write path (the ledger is derived, plan §2): only the "Posting
-// sekarang" button today, and the cron route in Session 12.
+// sekarang" button and the cron route (apps/web /api/internal/accounting/posting).
 
 export type { Database } from "./ledger-write";
 export { loadProductionBatchSnapshots } from "./production-loaders";
@@ -495,15 +497,85 @@ export async function runPosting(db: Database, options: PostingRunOptions): Prom
     await db
       .update(postingRuns)
       .set({ status: "failed", finishedAt: sql`greatest(clock_timestamp(), ${postingRuns.startedAt})`, error: errorMessage(error) || "unknown error", ...counts(result) })
-      .where(eq(postingRuns.id, run.id));
+      .where(and(eq(postingRuns.id, run.id), runStillOurs()));
     throw error;
   }
 
   await db
     .update(postingRuns)
-    .set({ status: "succeeded", finishedAt: sql`greatest(clock_timestamp(), ${postingRuns.startedAt})`, ...counts(result) })
-    .where(eq(postingRuns.id, run.id));
+    .set({ status: "succeeded", finishedAt: sql`greatest(clock_timestamp(), ${postingRuns.startedAt})`, error: null, ...counts(result) })
+    .where(and(eq(postingRuns.id, run.id), runStillOurs()));
   return result;
+}
+
+// ---------- Run-level lock (Session 12) ----------
+//
+// The cron route (apps/web /api/internal/accounting/posting) and "Posting sekarang" both go through
+// runPostingExclusive: ONE posting run at a time. The per-key advisory locks above already keep two
+// runs from posting the same key twice; this lock keeps a second run from scanning everything again
+// while the first is still writing (wasted work, and two runs racing to record the same issues), and
+// it makes "a run marked running is stale" decidable: whoever holds the lock knows no other run is
+// alive. The lock is transaction-scoped, held by an idle transaction of its own on its own
+// connection for as long as the run lasts, the same idiom as commerce's withExclusiveRun; if the
+// process dies, Postgres drops it with the connection. Never waits: a second caller is told the run
+// is busy.
+
+/** The run lock's two keys (the two-int advisory lock space; the per-key locks use
+ * hashtext('ammari.posting') as their first key, so they never collide). */
+export const POSTING_RUN_LOCK_SQL = sql`hashtext('ammari.posting_run'), 0`;
+
+/** A run still marked `running` this long after it started, found while holding the run lock,
+ * belongs to a process that died (or to a release from before this lock, mid-deploy): no live run
+ * can hold the lock alongside us. The margin only covers that deploy overlap. */
+export const STALE_POSTING_RUN_MINUTES = 10;
+
+export const STALE_POSTING_RUN_ERROR = "interrupted: the process stopped before the run finished";
+
+export type ExclusivePostingRun = { ran: true; result: PostingRunResult; staleRunsClosed: number } | { ran: false };
+
+/** Marks runs left `running` by a dead process as failed. Only call while holding the run lock. */
+export async function closeStalePostingRuns(db: Database): Promise<number> {
+  const rows = await db
+    .update(postingRuns)
+    .set({ status: "failed", finishedAt: sql`greatest(clock_timestamp(), ${postingRuns.startedAt})`, error: STALE_POSTING_RUN_ERROR })
+    .where(and(eq(postingRuns.status, "running"), sql`${postingRuns.startedAt} < clock_timestamp() - make_interval(mins => ${STALE_POSTING_RUN_MINUTES})`))
+    .returning({ id: postingRuns.id });
+  if (rows.length > 0) console.warn("[accounting] closed posting runs left running by a stopped process", { count: rows.length });
+  return rows.length;
+}
+
+/** runPosting under the run-level lock, after closing stale runs. `{ ran: false }` at once when
+ * another run holds the lock. A failure of the lock transaction itself after the run finished (its
+ * connection dropped) is logged and the finished run's result still returned: the journals are
+ * committed on their own connections. */
+export async function runPostingExclusive(db: Database, options: PostingRunOptions): Promise<ExclusivePostingRun> {
+  let finished: { result: PostingRunResult; staleRunsClosed: number } | null = null;
+  try {
+    return await db.transaction(async (lockTx) => {
+      await lockTx.execute(sql`set local idle_in_transaction_session_timeout = 0`);
+      const [row] = await lockTx.execute<{ locked: boolean }>(sql`select pg_try_advisory_xact_lock(${POSTING_RUN_LOCK_SQL}) as locked`);
+      if (!row?.locked) return { ran: false } as const;
+      // In a test the caller's db is already a transaction (the same connection as lockTx); the
+      // run then works inside the lock transaction, which is what such a caller wants anyway.
+      const workDb: Database = db instanceof PgTransaction ? lockTx : db;
+      const staleRunsClosed = await closeStalePostingRuns(workDb);
+      const result = await runPosting(workDb, options);
+      finished = { result, staleRunsClosed };
+      return { ran: true, result, staleRunsClosed } as const;
+    });
+  } catch (error) {
+    if (finished === null) throw error;
+    console.warn("[accounting] posting run lock transaction failed after the run finished; its result stands", { message: errorMessage(error) });
+    const done = finished as { result: PostingRunResult; staleRunsClosed: number };
+    return { ran: true, result: done.result, staleRunsClosed: done.staleRunsClosed };
+  }
+}
+
+/** The run's own row may have been closed as stale meanwhile (its lock connection dropped mid-run
+ * and a later run took the lock after STALE_POSTING_RUN_MINUTES): the finished run still records
+ * its real outcome over that "interrupted" mark, and never fails on it. */
+function runStillOurs() {
+  return or(eq(postingRuns.status, "running"), and(eq(postingRuns.status, "failed"), eq(postingRuns.error, STALE_POSTING_RUN_ERROR)));
 }
 
 function counts(result: PostingRunResult) {

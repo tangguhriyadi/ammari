@@ -15,6 +15,7 @@
     "test:e2e:refresh-screens": "REFRESH_VISUAL_SCREENS=true playwright test visual-screenshots.spec.ts"
   },
   "dependencies": {
+    "@ammari/accounting": "workspace:*",
     "@ammari/auth": "workspace:*",
     "@ammari/commerce": "workspace:*",
     "@ammari/content-sanitize": "workspace:*",

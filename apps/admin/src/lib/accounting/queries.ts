@@ -22,6 +22,7 @@ import { resolvePagination, type Pagination } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
 import type { JournalFilters, LedgerFilters } from "./filters";
 import { IS_OPENING_SQL } from "./trial-balance";
+import { postingStatus, type PostingRunInfo, type PostingStatus } from "./posting-status";
 
 // Reads for Jurnal umum and Buku besar (docs/plans/accounting.md §6, Session 2). Read-only: the
 // journal tables are written by the posting runner (packages/accounting) and, since Session 4, by
@@ -222,19 +223,32 @@ export async function listOpenPostingIssues(limit = 20, db: Database = defaultDb
   return { rows, totalCount: countRow?.totalCount ?? 0 };
 }
 
-export interface LastPostingRun {
-  status: "running" | "succeeded" | "failed";
-  startedAt: Date;
-  finishedAt: Date | null;
-}
+export type LastPostingRun = PostingRunInfo;
 
 export async function getLastPostingRun(db: Database = defaultDb): Promise<LastPostingRun | null> {
   const [row] = await db
-    .select({ status: postingRuns.status, startedAt: postingRuns.startedAt, finishedAt: postingRuns.finishedAt })
+    .select({ status: postingRuns.status, trigger: postingRuns.trigger, startedAt: postingRuns.startedAt, finishedAt: postingRuns.finishedAt })
     .from(postingRuns)
     .orderBy(desc(postingRuns.startedAt))
     .limit(1);
   return row ?? null;
+}
+
+/** When the automatic posting (the cron, Session 12) last finished successfully, or null. */
+export async function getLastCronPostingSuccess(db: Database = defaultDb): Promise<Date | null> {
+  const [row] = await db
+    .select({ finishedAt: postingRuns.finishedAt })
+    .from(postingRuns)
+    .where(and(eq(postingRuns.trigger, "cron"), eq(postingRuns.status, "succeeded")))
+    .orderBy(desc(postingRuns.startedAt))
+    .limit(1);
+  return row?.finishedAt ?? null;
+}
+
+/** The posting status line and warning (posting-status.ts) for Jurnal umum and Rekonsiliasi. */
+export async function getPostingStatus(db: Database = defaultDb, now: Date = new Date()): Promise<PostingStatus> {
+  const [lastRun, lastCron] = await Promise.all([getLastPostingRun(db), getLastCronPostingSuccess(db)]);
+  return postingStatus(lastRun, lastCron, now);
 }
 
 // ---------- Buku besar ----------

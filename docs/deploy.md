@@ -145,7 +145,9 @@ run. It will:
    migrations..." then exited 1, with the real Postgres error nowhere in the log, even attached
    to a TTY), this prints the actual error — message, Postgres `code`/`detail`/`hint` when
    present, or the underlying connection error's `code`/`address`/`port` for a connectivity
-   failure — and never the connection string.
+   failure — and never the connection string. It connects with `env/migrator.env` (the table owner) once
+   that file exists, else `env/admin.env`; then the app database role check runs (fails the deploy once
+   `env/migrator.env` has `APP_DB_ROLE`, only warns before; docs/plans/accounting.md runbook R1).
 4. Bring up `caddy`/`admin`/`web` via `docker compose up -d`, reload Caddy's config, then poll
    `/api/health` on both apps before declaring success. On a failure here, the Actions log now
    includes that container's last 80 log lines and Docker's own `HEALTHCHECK` log (`deploy/
@@ -398,7 +400,9 @@ the next deploy syncs it to the server and reloads Caddy automatically.
 Added in docs/plans/cart-checkout.md session 12. The `cron` service in
 `deploy/docker-compose.yml` (pinned `curlimages/curl`, script `deploy/cron/cron.sh`, no ports)
 calls the web container directly on the internal network: `POST
-http://web:3000/api/internal/payments/sweep` every 5 minutes, then `POST
+http://web:3000/api/internal/payments/sweep` every 5 minutes, `POST
+http://web:3000/api/internal/accounting/posting` every 15 minutes (the accounting posting run,
+docs/plans/accounting.md Session 12 and runbook R2; journals only, same run lock as admin's "Posting sekarang"), then `POST
 http://web:3000/api/internal/emails/dispatch` (order emails: retries and the "Pesanan dikirim" email
 after staff's "Tandai dikirim"; session 13), and `POST http://web:3000/api/internal/retention` once at
 start and then every 24 hours. All need

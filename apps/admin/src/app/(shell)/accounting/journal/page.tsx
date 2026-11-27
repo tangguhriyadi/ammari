@@ -1,15 +1,15 @@
 import Link from "next/link";
 import { Breadcrumb, Button, Input, Label, PageHeader, Pagination, Select } from "@ammari/ui";
-import { formatDateTime } from "@ammari/ui/lib";
 import { jakartaDate } from "@ammari/commerce/jakarta-day";
 import { JOURNAL_ENTRY_KINDS } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { parseJournalFilters, toSearchParams, type RawJournalParams } from "@/lib/accounting/filters";
 import { JOURNAL_KIND_LABELS, JOURNAL_SOURCE_TYPE_LABELS } from "@/lib/accounting/labels";
-import { getLastPostingRun, listJournalEntries, listOpenPostingIssues, listPostableAccounts } from "@/lib/accounting/queries";
+import { getPostingStatus, listJournalEntries, listOpenPostingIssues, listPostableAccounts } from "@/lib/accounting/queries";
 import { JournalList } from "../_components/journal-list";
 import { PostingIssues } from "../_components/posting-issues";
+import { PostingStatusNotice } from "../_components/posting-status-notice";
 import { RunPostingButton } from "../_components/run-posting-button";
 
 // Jurnal umum (docs/plans/accounting.md §6, Session 2): every journal in a date range, newest
@@ -26,11 +26,11 @@ export default async function JournalPage({ searchParams }: { searchParams: Prom
   const isDefault =
     filters.from === defaults.from && filters.to === defaults.to && !filters.sourceType && !filters.kind && !filters.accountCode;
 
-  const [{ rows, pagination }, issues, accountOptions, lastRun] = await Promise.all([
+  const [{ rows, pagination }, issues, accountOptions, postingStatus] = await Promise.all([
     listJournalEntries(filters, raw.page, raw.perPage),
     listOpenPostingIssues(),
     listPostableAccounts(),
-    getLastPostingRun(),
+    getPostingStatus(),
   ]);
 
   return (
@@ -39,9 +39,7 @@ export default async function JournalPage({ searchParams }: { searchParams: Prom
       <PageHeader
         title="Jurnal Umum"
         description={
-          lastRun?.finishedAt
-            ? `Jurnal dibuat otomatis dari biaya dan pembayaran supplier; jurnal manual untuk yang tidak dicatat aplikasi. Posting terakhir ${formatDateTime(lastRun.finishedAt)} WIB.`
-            : "Jurnal dibuat otomatis dari biaya dan pembayaran supplier; jurnal manual untuk yang tidak dicatat aplikasi."
+          `Jurnal dibuat otomatis dari transaksi yang dicatat aplikasi (setiap 15 menit, atau dengan Posting sekarang); jurnal manual untuk yang tidak dicatat aplikasi. ${postingStatus.summary}`
         }
         actions={
           canManage ? (
@@ -54,6 +52,7 @@ export default async function JournalPage({ searchParams }: { searchParams: Prom
           ) : undefined
         }
       />
+      <PostingStatusNotice status={postingStatus} />
       <PostingIssues rows={issues.rows} totalCount={issues.totalCount} />
       <form method="GET" className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6 lg:items-end" aria-label="Filter jurnal">
         {raw.perPage && <input type="hidden" name="perPage" value={raw.perPage} />}

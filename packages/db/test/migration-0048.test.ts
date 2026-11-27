@@ -1,7 +1,5 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
@@ -14,6 +12,7 @@ import {
   MARKETING_EXPENSE_CATEGORIES,
 } from "../src/schema/constants";
 import { seed } from "../src/seed";
+import { migrationsFolder, migrationsUpTo } from "./scratch-database";
 
 // Migration 0048 (Kategori Biaya master data, docs/plans/expense-master-data.md session S1):
 // expense_categories, expense_items and business_expenses.item_id; the three CHECKs over the fixed
@@ -24,8 +23,6 @@ import { seed } from "../src/seed";
 //
 // Runs against a disposable database of its own, never `ammari` or `ammari_test`.
 
-const packageRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
-const migrationsFolder = path.join(packageRoot, "drizzle");
 const SCRATCH_DATABASE = "ammari_migration_0048_upgrade";
 const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
@@ -49,16 +46,6 @@ async function recreateDatabase(): Promise<void> {
   } finally {
     await admin.end();
   }
-}
-
-function migrationsUpTo(lastIdx: number): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "ammari-migrations-"));
-  cpSync(migrationsFolder, dir, { recursive: true });
-  const journalPath = path.join(dir, "meta", "_journal.json");
-  const journal = JSON.parse(readFileSync(journalPath, "utf8")) as { entries: { idx: number }[] };
-  journal.entries = journal.entries.filter((entry) => entry.idx <= lastIdx);
-  writeFileSync(journalPath, JSON.stringify(journal));
-  return dir;
 }
 
 /** The migration's own seed INSERT, so re-running it can be proven a no-op. */
@@ -321,7 +308,9 @@ describe("migration 0048 (expense categories and items)", () => {
       expect(migrationsAfter).toBe(migrationsBefore);
       await client.unsafe(seedInsertStatement());
       // seed.ts is always the current code and writes tables later migrations add (0049:
-      // accounts), so it runs against the latest schema; no later migration touches categories.
+      // accounts), so it runs against the latest schema. Comparing categories after the latest
+      // migrations holds only while no later migration changes expense_categories (true through
+      // 0056); a later one that does must adjust this expectation.
       await migrate(drizzle(client), { migrationsFolder });
       await seed(drizzle(client));
       expect(await categoriesSql()).toEqual(categoriesBeforeRerun);

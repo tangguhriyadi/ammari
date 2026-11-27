@@ -60,8 +60,40 @@ docker pull "$REGISTRY/ammari-migrator:$MIGRATOR_IMAGE_TAG"
 # Migrations run as a separate step BEFORE the new app containers start, and a non-zero exit
 # here aborts the whole deploy — the running containers (old images, old schema expectations)
 # are never touched if this fails (docs/SPEC.md §2.3).
-echo "==> Running migrations"
-docker run --rm --env-file env/admin.env "$REGISTRY/ammari-migrator:$MIGRATOR_IMAGE_TAG"
+
+# The apps' database role (docs/plans/accounting.md, Session 12 runbook R1). Once the owner has split
+# the roles, env/migrator.env holds the TABLE OWNER's DATABASE_URL (migrations run as it) plus
+# APP_DB_ROLE, and admin.env/web.env connect as that app role, which cannot TRUNCATE (row triggers
+# never fire on TRUNCATE, so it would bypass every append-only guard). Before the split there is no
+# env/migrator.env: migrations keep using env/admin.env and the check below only warns. After it, a
+# failed check (the app role can TRUNCATE, owns a table, lacks DML on a new table, ...) stops the
+# deploy here, before any app container is touched. An older migrator image (a rollback to a
+# release before Session 12) has no check script: skipped with a note.
+if [ -f env/migrator.env ]; then
+  MIGRATOR_ENV_FILE=env/migrator.env
+else
+  MIGRATOR_ENV_FILE=env/admin.env
+fi
+echo "==> Running migrations ($MIGRATOR_ENV_FILE)"
+docker run --rm --env-file "$MIGRATOR_ENV_FILE" "$REGISTRY/ammari-migrator:$MIGRATOR_IMAGE_TAG"
+
+if [ -f env/migrator.env ] && grep -q '^APP_DB_ROLE=.' env/migrator.env; then
+  echo "==> Checking the app database role (no TRUNCATE, owns nothing, DML on every table; admin and web log in as it)"
+  # admin's and web's own DATABASE_URL go to the check through the environment only (`-e NAME`
+  # without a value reads it from this shell), never on a command line; the check never prints them.
+  if ! APP_DATABASE_URL_ADMIN="$(sed -n 's/^DATABASE_URL=//p' env/admin.env | head -n 1)" \
+    APP_DATABASE_URL_WEB="$(sed -n 's/^DATABASE_URL=//p' env/web.env | head -n 1)" \
+    docker run --rm --env-file env/migrator.env -e APP_DATABASE_URL_ADMIN -e APP_DATABASE_URL_WEB \
+    --entrypoint sh "$REGISTRY/ammari-migrator:$MIGRATOR_IMAGE_TAG" -c \
+    'if [ -f src/ops/check-app-role.ts ]; then exec node_modules/.bin/tsx src/ops/check-app-role.ts; else echo "check-app-role: not in this image (an older release); skipped"; fi'; then
+    echo "==> App database role check FAILED: aborting the deploy before touching any app container (docs/plans/accounting.md runbook R1)" >&2
+    exit 1
+  fi
+elif [ -f env/migrator.env ]; then
+  echo "==> WARNING: env/migrator.env has no APP_DB_ROLE: the app database role is not checked (docs/plans/accounting.md runbook R1)"
+else
+  echo "==> WARNING: env/migrator.env is missing: the apps still connect as the table owner, which can TRUNCATE the ledger (docs/plans/accounting.md runbook R1)"
+fi
 
 echo "==> Updating image tags"
 {

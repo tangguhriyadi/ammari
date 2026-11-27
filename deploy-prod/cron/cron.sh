@@ -10,6 +10,9 @@
 # Once when the container starts and then every 3 hours: POST /api/internal/shipping/poll (courier
 # tracking, Phase K: re-reads open shipments within the daily Biteship read budget and flags stale
 # ones; docs/plans/cart-checkout.md decision 48).
+# Every 15 minutes (the first call 30 s after start): POST /api/internal/accounting/posting (the
+# accounting posting run, docs/plans/accounting.md §2 and Session 12: reads source records, writes
+# journals only; the same run as admin's "Posting sekarang", under the same run lock).
 # All straight at the web
 # container over the internal Docker network (`web` is the dev service name and prod's floating
 # alias for the active slot, deploy-prod/remote-deploy.sh point_web_alias), never through Caddy,
@@ -29,6 +32,14 @@ set -u
 TARGET="http://web:3000"
 SWEEP_EVERY=300
 RETENTION_EVERY=86400
+# Accounting posting (docs/plans/accounting.md Session 12). The run re-checks every source; at
+# today's volume it takes seconds. Its max time stays below SWEEP_EVERY so a slow run delays the next
+# sweep by at most that long (the web route keeps running after curl gives up, holding the cron
+# lock, so the sweep is then skipped once with `skipped: running` rather than racing it).
+POSTING_EVERY=900
+POSTING_MAX_TIME=240
+# This many failed posting runs in a row (about 45 minutes) logs an ALERT line on every further one.
+POSTING_ALERT_AFTER=3
 # Below SWEEP_EVERY; the sweep itself stops starting new orders after 4 minutes.
 SWEEP_MAX_TIME=280
 # The email pass stops starting new orders after 150 seconds; each send times out after 10.
@@ -63,7 +74,7 @@ pause() {
 # Whitespace or a CR from the env file would never match the web side (which trims): drop it.
 INTERNAL_CRON_SECRET="$(printf '%s' "${INTERNAL_CRON_SECRET:-}" | tr -d ' \t\r\n')"
 if [ -z "$INTERNAL_CRON_SECRET" ]; then
-  log "INTERNAL_CRON_SECRET is not set in env/cron.env; idle (no sweep, no emails, no retention, no tracking poll)"
+  log "INTERNAL_CRON_SECRET is not set in env/cron.env; idle (no sweep, no emails, no retention, no tracking poll, no accounting posting)"
   while :; do pause 3600; done
 fi
 
@@ -96,6 +107,8 @@ call() {
 pause 30
 last_retention=0
 last_poll=0
+last_posting=0
+posting_failures=0
 sweep_failures=0
 email_failures=0
 while :; do
@@ -133,6 +146,21 @@ while :; do
       [1-5][0-9][0-9]) [ "$status" = "000" ] && last_poll=$((now - POLL_EVERY + POLL_RETRY_AFTER)) || last_poll="$now" ;;
       *) last_poll=$((now - POLL_EVERY + POLL_RETRY_AFTER)) ;;
     esac
+  fi
+  # Accounting posting. A failed run (500: a key failed to post or the run failed; no answer: web
+  # restarting) is retried on the next 5-minute tick, not 15 minutes later.
+  now="$(date +%s)"
+  if [ $((now - last_posting)) -ge "$POSTING_EVERY" ]; then
+    if call /api/internal/accounting/posting "$POSTING_MAX_TIME"; then
+      last_posting="$now"
+      posting_failures=0
+    else
+      last_posting=$((now - POSTING_EVERY + SWEEP_EVERY))
+      posting_failures=$((posting_failures + 1))
+      if [ "$posting_failures" -ge "$POSTING_ALERT_AFTER" ]; then
+        log "ALERT: the accounting posting run has failed $posting_failures times in a row; journals are not being posted (see web's logs and Akuntansi > Jurnal umum)"
+      fi
+    fi
   fi
   pause "$SWEEP_EVERY"
 done

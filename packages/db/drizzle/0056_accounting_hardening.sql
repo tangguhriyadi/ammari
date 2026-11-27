@@ -1,0 +1,2 @@
+ALTER TABLE "journal_entries" ADD CONSTRAINT "journal_entries_entry_no_month_check" CHECK (substr("journal_entries"."entry_no", 4, 6) = (extract(year from "journal_entries"."entry_date")::int * 100 + extract(month from "journal_entries"."entry_date")::int)::text);--> statement-breakpoint
+ALTER TABLE "journal_entries" ADD CONSTRAINT "journal_entries_entry_date_floor_check" CHECK ("journal_entries"."entry_date" >= '2026-12-01');

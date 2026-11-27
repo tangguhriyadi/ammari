@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs ON THE OWNER'S OWN MAC, after deploy-prod/make-prod-env.sh (docs/plans/prod-deploy.md §4
-# step 12). Copies the four prod secrets files (plus the optional cron one) from ~/ammari-secrets onto the VPS at
+# step 12). Copies the four prod secrets files (plus the optional cron and migrator ones) from ~/ammari-secrets onto the VPS at
 # /opt/ammari-prod/env/ over scp, using the prod deploy SSH key, then chmod 600s them remotely.
 # Never run on anything but your own Mac; never touches any other host.
 #
@@ -26,7 +26,9 @@ local_to_remote_names="prod-admin.env:admin.env prod-web.env:web.env prod-db.env
 # Optional (docs/plans/cart-checkout.md session 12): the cron service's INTERNAL_CRON_SECRET.
 # Uploaded when it exists locally, skipped otherwise; remote-deploy.sh keeps an empty one on the
 # server until then, which only idles the cron service.
-optional_local_to_remote_names="prod-cron.env:cron.env"
+# Optional (docs/plans/accounting.md Session 12, runbook R1): the migrator's own env file (the
+# table owner's DATABASE_URL + APP_DB_ROLE), once the apps connect as their own role.
+optional_local_to_remote_names="prod-cron.env:cron.env prod-migrator.env:migrator.env"
 
 remote_paths=""
 for pair in $local_to_remote_names; do

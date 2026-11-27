@@ -60,6 +60,12 @@ async function runPosting(page: Page): Promise<void> {
 async function checkJournal(page: Page, layout: Layout): Promise<void> {
   await page.goto(`/accounting/journal?${DECEMBER}`);
   await expect(page.getByRole("heading", { name: "Jurnal Umum" })).toBeVisible();
+  // Session 12: the last run is named in the description (the e2e stack has no cron, so the manual
+  // run is the last one) and the page warns that the automatic posting has not run, at this width.
+  await expect(page.getByText(/Posting terakhir .* WIB \(manual\)\./)).toBeVisible();
+  const cronWarning = page.getByTestId("posting-status-warning");
+  await expect(cronWarning).toBeVisible();
+  await expect(cronWarning).toContainText("Posting otomatis belum");
 
   const expense = page.locator(layout.journalRow).filter({ hasText: E2E_ACCOUNTING_EXPENSE_NO });
   await expect(expense).toHaveCount(1);

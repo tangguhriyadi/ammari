@@ -36,6 +36,9 @@ As of 2026-10-25 (marketplace import session 6).
   built and tested; on dev only after `docs/launch/checkout-dev.md`; prod still runs the release
   from before the checkout sessions (migration 0029) with the flag off.
 - Dev and prod deploy pipelines, backups, monitoring (`docs/deploy.md`, `docs/deploy-prod.md`).
+- Accounting ledger (§5.4; docs/plans/accounting.md): sessions 1 to 4 and 6 to 12 (migrations 0049 to 0056).
+  Session 5 (real marketplace ship dates) is blocked on real export headers; MDR posting waits for the Midtrans fee
+  feature.
 
 **Next:**
 
@@ -695,9 +698,8 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - `sales_goal` — one row (`id = 1`, migration 0039): the first-year revenue target and its start
   date (Asia/Jakarta). The row ships in the migration.
 - `cost_assumptions` — dated by `effective_from`; see §7 for the initial row.
-- Defect disposal proceeds (`defect_movements.proceeds_amount`, Lelang) are **not** finance data
-  yet: stored, visible on the source document and audit-logged, but booked nowhere (no journal,
-  no Overview metric). A known gap until a double-entry accounting module exists (§5.1a).
+- Defect disposal proceeds (`defect_movements.proceeds_amount`, Lelang) are not in the Overview
+  metrics; the accounting ledger books them (rule A2: Dr Kas tunai / Cr 7-1101 Hasil lelang, §5.4).
 
 ### 5.3 Customers & vouchers
 
@@ -727,6 +729,28 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - `resellers` — later (not v1).
 - `staff_users` — full RBAC columns in §9.
 - `audit_log`
+
+### 5.4 Accounting (double-entry ledger, `packages/accounting`)
+
+Full plan, rules and runbook: **[docs/plans/accounting.md](plans/accounting.md)**; policy decisions D-1..D-25:
+[docs/plans/accounting-decisions.md](plans/accounting-decisions.md). Summary:
+
+- SAK EMKM, accrual, whole rupiah; periods are Asia/Jakarta months. December 2026 is the trial month (posted, never
+  closed); the official books start 1 Jan 2027 with one opening journal (D-22).
+- **Derived ledger:** a posting runner reads existing source records (orders, payments, shipments, stock, purchases,
+  receipts, production, expenses, fixed assets) and writes only `journal_entries` / `journal_lines` (append-only,
+  balanced, period-locked by triggers) and `posting_runs` / `posting_issues`. No checkout, payment, order, stock,
+  purchase, production or shipping write path calls it. Unpostable sources become posting issues, never guesses.
+- Runs every 15 minutes from the internal cron (`POST /api/internal/accounting/posting` on web) and from "Posting
+  sekarang" in admin, one run at a time (run lock), idempotent.
+- Tables: `accounts`, `account_mappings`, `fiscal_periods`, `journal_entries`, `journal_lines`, `posting_runs`,
+  `posting_issues`, `tax_settings`, `fixed_asset_groups`, `fixed_asset_settings`, `fixed_assets` (migrations 0049 to
+  0056), `order_manual_payments` (0053, the manual-order payment record, D-3).
+- Pages under Akuntansi: Jurnal umum, Buku besar, Neraca saldo, Neraca, Laba rugi, Arus kas (PDF/Excel), Rekonsiliasi,
+  Saldo awal, Tutup buku, Aset tetap, Data Master Akun, Pemetaan akun, Pengaturan pajak. Permissions
+  `accounting.view` / `accounting.manage` / `accounting.close` (§9).
+- The apps connect to Postgres as their own role, which cannot TRUNCATE or own tables; only the migrator connects as
+  the table owner (`env/migrator.env`; plan runbook R1).
 
 ## 6. Overview dashboard metrics
 

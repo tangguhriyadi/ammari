@@ -1,11 +1,9 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { rmSync } from "node:fs";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, describe, expect, test } from "vitest";
+import { migrationsFolder, migrationsUpTo } from "./scratch-database";
 
 // Migration 0027 (docs/plans/suppliers-goods-receipt.md S6): re-open columns on purchases and
 // production_batches, the reject receipt-item ⇔ source-line composite FKs, and the trigger that
@@ -16,8 +14,6 @@ import { afterAll, describe, expect, test } from "vitest";
 //
 // Runs against two disposable databases of its own, never `ammari` or `ammari_test`.
 
-const packageRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
-const migrationsFolder = path.join(packageRoot, "drizzle");
 const SCRATCH_DATABASES = ["ammari_migration_0027_fresh", "ammari_migration_0027_upgrade"] as const;
 
 function urlFor(database: string): string {
@@ -39,16 +35,6 @@ async function recreateDatabase(database: (typeof SCRATCH_DATABASES)[number]): P
   } finally {
     await admin.end();
   }
-}
-
-function migrationsUpTo(lastIdx: number): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "ammari-migrations-"));
-  cpSync(migrationsFolder, dir, { recursive: true });
-  const journalPath = path.join(dir, "meta", "_journal.json");
-  const journal = JSON.parse(readFileSync(journalPath, "utf8")) as { entries: { idx: number }[] };
-  journal.entries = journal.entries.filter((entry) => entry.idx <= lastIdx);
-  writeFileSync(journalPath, JSON.stringify(journal));
-  return dir;
 }
 
 async function migrateTo(client: postgres.Sql, folder: string): Promise<void> {

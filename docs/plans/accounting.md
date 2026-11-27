@@ -1,6 +1,7 @@
 # Accounting module (double-entry general ledger)
 
-Status: **PLAN, not approved for implementation.** No code written. Investigation date 2026-11-26
+Status: **Sessions 1-4 and 6-12 implemented** (migrations 0049-0056); Session 5 blocked (marketplace dates, §8); MDR
+W2/W5 off until fee work A/B. Originally: plan, Investigation date 2026-11-26
 (branch `dev`, HEAD `aa2147f`). Revised 2026-11-26 with the owner's answers (Midtrans fee "A+B",
 Biteship, no credit sales — §10), then with the **final policy decisions D-1..D-25 (owner +
 accountant, 26 Nov 2026)**. The decisions live in
@@ -374,7 +375,7 @@ Dr 5-1101 / Cr 1-1505: the goods left the shelf at to_ship but stay in inventory
 | W4 | Refund recorded (`payment`,id,`refunded`) | `audit_log.created_at` of `record_refund` (manual) or `payments.updated_at` (gateway `partially_refunded`/`chargeback`) | Manual refund: Dr 2-1202 / Cr 1-1201 Bank utama [D-9] (the accountant reclasses by manual journal if it actually went through the Midtrans dashboard). Gateway refund/chargeback: Dr 2-1202 / Cr 1-1301. Amount = `refunded_amount` delta (the full amount the buyer paid back; the MDR is **not** returned, so W2 stays [D-8]). |
 | W5 | Midtrans settlement (`order_settlement`,id,`settled`) — fee work **B** fills `order_settlements` | `settled_at` | Dr Bank (mapping `cash.midtrans_payout`, default 1-1201) `net_amount` / Cr 1-1301 Piutang Midtrans `net_amount`. D-1's "settlement → Dr Bank + Biaya payment gateway / Cr Piutang Midtrans" is W2 + W5 together; per D-8 the fee half is dated at payment (W2), so W5 books only the net, and the fee is never taken from `order_settlements.fee_amount` (no double count). After W2(actual) + W5 the order's 1-1301 balance is 0; any rest shows on the Rekonsiliasi page. Before B ships: manual journal Dr Bank / Cr 1-1301 from the Midtrans payout email, with the difference to 6-1203. |
 | W6 | Buyer ongkir at recognition (inside S3) | `shipped_at` | [D-6] buyer's `shipping_amount` → Cr 2-1203 Titipan ongkir pembeli (liability, never revenue). |
-| W9 | Biteship booking charged (`shipment`,id,`charged`) — a shipment attempt with `cost_amount` set and `booked_at` set | `booked_at` | Dr 2-1203 Titipan ongkir the order's `shipping_amount` (at most `cost_amount`) · Dr 6-1302 Subsidi ongkir website the order's `shipping_subsidy_amount` (at most what is left) · Dr/Cr 6-1301 Beban ongkos kirim the rest (courier price above or below the quote) / Cr 1-1603 Saldo Biteship `cost_amount`. A later change of `cost_amount` → reverse + repost. A manual order booked through Biteship has no subsidy: everything above its `shipping_amount` → 6-1301 [D-10]. |
+| W9 | Biteship booking charged (`shipment`,id,`charged`) — a shipment attempt with `cost_amount` set and `booked_at` set | `booked_at` | Dr 2-1203 Titipan ongkir the order's whole `shipping_amount` · Dr 6-1302 Subsidi ongkir website the order's `shipping_subsidy_amount` · Dr/Cr 6-1301 Beban ongkos kirim the rest, `cost_amount − shipping_amount − subsidy`, either sign (courier price above or below the quote) / Cr 1-1603 Saldo Biteship `cost_amount`. **Decided (owner, 27 Nov 2026): no "at most" caps**; the buyer's whole titipan is used at booking (Session 9). A later change of `cost_amount` → reverse + repost. A manual order booked through Biteship has no subsidy: everything above its `shipping_amount` → 6-1301 [D-10]. |
 | W10 | Biteship booking cancelled after it was charged (`shipment`,id,`cancelled`) | `cancelled_at` | Exact negation of W9 (Biteship puts the money back on the balance). The re-booked next attempt posts its own W9. |
 | W11 | Biteship top-up, subscription, return charges | — | Top-up: **manual journal** (template "Top-up Biteship") Dr 1-1603 / Cr Bank — the system has no record of top-ups ([D-10]). Subscription (Grow ≈ Rp149.000/month): a business expense (E1) with item "Biteship Grow" → 6-2501. Return-shipping or other deductions not in `shipments`: found when reconciling 1-1603 with the Biteship dashboard, booked by manual journal Dr 6-1301 / Cr 1-1603. |
 | W7 | Voucher | at S3 | Contra revenue 4-1201 (the `discount_amount` in S3) [D-4]. No entry at issue, void or restore. |
@@ -816,7 +817,7 @@ A's `source` column and lands with Session 11.
 - **W9 uses up the buyer's titipan in full** at booking: Dr 2-1203 `shipping_amount` · Dr 6-1302 subsidy ·
   Dr/Cr 6-1301 `cost − shipping − subsidy` (D-10: the difference between the real and the checkout tariff is Beban
   ongkos kirim, either sign; check 3c expects 0). The §4.2 "(at most …)" caps are not applied: with them a courier
-  cheaper than the quote could never credit 6-1301. To confirm with the owner/accountant.
+  cheaper than the quote could never credit 6-1301. **Decided (owner, 27 Nov 2026): approved as built**, no caps; §4.2 W9 updated.
 - **Held events:** S2 after shipping, S4 and M2 wait behind S3 while S3 is a posting issue (today every marketplace
   order shipped on/after the start: `marketplace_ship_date_missing`, Session 5 is blocked); the manual cancel waits
   behind S6 while it is `manual_payment_missing`. New runner flag `requiresActiveJournalAcrossBooks`: unlike a
@@ -941,39 +942,88 @@ A's `source` column and lands with Session 11.
   exemption, rate end, rate change, re-close, year close zeroes P&L), `packages/db/test/migration-0055.test.ts`, e2e
   `accounting-fixed-assets.spec.ts` at 390/1280.
 
-**Session 12 (cron, Rekonsiliasi polish, docs and runbook):**
-- **Runbook: revoke TRUNCATE.** Row-level triggers do not fire on `TRUNCATE`, so `TRUNCATE
-  journal_lines` (or `journal_entries CASCADE`) bypasses every append-only guard; the same holds for
-  the existing append-only tables. Decided (26 Nov 2026): no TRUNCATE triggers (e2e-db.ts resets
-  its own database with TRUNCATE). Instead, on prod and dev, `REVOKE TRUNCATE` from the app's
-  database role on every ledger and append-only table: `accounts`, `account_mappings`,
-  `fiscal_periods`, `journal_entries`, `journal_lines`, `posting_runs`, `posting_issues`,
-  `tax_settings`, `stock_movements`, `fabric_stock_movements`, `accessory_movements`,
-  `defect_movements`, `goods_receipts`, `goods_receipt_items`, `supplier_payments`,
-  `purchase_attachments`, `private_files`, `business_expenses`, `audit_log` (re-check the list
-  against the schema when writing the runbook). The app role must not own these tables (an owner
-  always keeps TRUNCATE and can disable triggers). Add a **verification check** run by the deploy
-  pipeline or a health endpoint: `has_table_privilege(<app role>, '<table>', 'TRUNCATE')` is false
-  for every table in the list, failing loudly otherwise.
-- Runbook notes for data-only restores: `journal_entries_guard_insert` forces `created_at = now()`
-  and lines are refused outside the entry's own transaction, so a data-only restore/`COPY` into the
-  journal tables needs triggers disabled by the owner (a full `pg_restore` is fine: triggers are
-  created after the data).
-- Multi-month close (year end): lock months in ascending order, post the closing entries before
-  setting `status = 'closed'`; two closers that both already hold a shared lock on the same month
-  would deadlock (Postgres resolves it by aborting one). Document in the close code (Session 4
-  builds it; record the rule there). *Done in Session 4: recorded in apps/admin/src/lib/accounting/periods.ts (one month per transaction today).*
-- Constraint hardening: tie `entry_no`'s `YYYYMM` to `entry_date`; a lower bound on `entry_date`
-  (the trial month start); the trial-month CHECK hardcodes `2026-12-01` (fine while D-22 stands).
-- Indexes, once real volume exists: `journal_lines (account_code) INCLUDE (entry_id, debit,
-  credit)` for index-only ledger/trial-balance scans; partial (`WHERE ... IS NOT NULL`) dimension
-  indexes on `channel_id`, `supplier_id`, `order_id`, `cash_account_code`.
-- Test hygiene: `migrationsUpTo` is duplicated in each `migration-00xx.test.ts` (move them to
-  `packages/db/test/scratch-database.ts`); `accounting-ledger.test.ts` copies the whole migrations
-  folder via `migrationsUpTo(Number.MAX_SAFE_INTEGER)` where `migrationsFolder` would do; its
-  "nothing is left behind by a refused entry" test counts across the whole scratch database and
-  passes vacuously when run alone with `-t`; `migration-0048.test.ts`'s comment "no later migration
-  touches categories" is only true today.
+**Done in Session 12 (migration 0056; cron, run lock, constraint hardening, app database role, docs):**
+- **Run-level posting lock** (`runPostingExclusive` in `packages/accounting/src/runner.ts`): the cron route and
+  "Posting sekarang" each take one transaction-scoped try-lock (`hashtext('ammari.posting_run'), 0`), held by an idle
+  transaction on its own connection for the whole run (the idiom of commerce's `withExclusiveRun`); a second caller is
+  told at once, never waits. The button then says "Posting sedang berjalan (otomatis atau dari staf lain) ...". The
+  per-key locks stay the backstop (two runs that bypass the run lock still post a key once; tested).
+- **Stuck "running" runs:** while holding the run lock, a run still `running` more than 10 minutes after it started
+  (`STALE_POSTING_RUN_MINUTES`) belongs to a dead process (or a pre-Session-12 release mid-deploy, which is what the
+  margin covers) and is closed as `failed` with `interrupted: the process stopped before the run finished`.
+- **Posting cron** `POST /api/internal/accounting/posting` in apps/web (the repo's cron pattern: `authorizeCronRequest`
+  (secret, refused through Caddy/Cloudflare), the shared cron lock `withExclusiveRun(..., "accountingPosting")` so it
+  never overlaps the sweep or the email pass, then the posting run lock; `[accounting]` log lines, no error text in the
+  answer). 200 with the counts, 200 `{ skipped: "running" | "posting_in_progress" }` when a lock is busy, 500 when a key
+  failed to post (`posting_failed`) or the run failed. Ordinary posting issues are 200 (the bookkeeper's queue, not a
+  cron failure). `deploy/cron/cron.sh` (= `deploy-prod/cron/cron.sh`) calls it every 15 minutes (`POSTING_EVERY=900`,
+  max 240 s), retries a failed call on the next 5-minute tick and logs `ALERT` after 3 failures in a row. The plan's
+  "nightly + every 15 minutes" is one job: every run re-checks every source, so a separate nightly run adds nothing.
+  apps/web gains the `@ammari/accounting` dependency (server-only code; it reads sources and writes journal tables only,
+  no existing write path changes).
+- **Posting status** (`apps/admin/src/lib/accounting/posting-status.ts`) on Jurnal umum and Rekonsiliasi: the last
+  run (otomatis/manual, running/failed) in the description, and a warning when the last run failed or no automatic run
+  succeeded within the hour ("Posting otomatis belum berhasil sejak ..."), so a broken cron is visible to the bookkeeper.
+- **Constraint hardening, migration 0056** (two CHECKs on `journal_entries`, nothing else):
+  `journal_entries_entry_no_month_check` (the number's `YYYYMM` = the entry_date's month; `nextEntryNo` always numbered
+  that way) and `journal_entries_entry_date_floor_check` (`entry_date >= 2026-12-01`, the trial month; the app already
+  refused earlier dates). Validated on ADD: a database holding a violating row refuses the migration (the deploy then
+  stops before any app container; runbook R0 has the read-only pre-check). Backward compatible: the previous release
+  writes only rows that pass. The trial-month CHECK on `fiscal_periods` keeps its hard-coded `2026-12-01` (fine while
+  D-22 stands). Applied to the local dev database only.
+- **TRUNCATE: a separate app database role** (`packages/db/src/ops/app-role.ts`). Re-checked while writing the runbook:
+  a `REVOKE TRUNCATE` alone would do nothing today, because admin, web and the migrator all connect with ONE
+  `DATABASE_URL`, the role that owns every table (on prod the Postgres container's superuser); an owner (and a
+  superuser) always keeps TRUNCATE and can disable triggers. So the apps move to their own role (`ammari_app`: LOGIN, no
+  superuser/createdb/createrole/bypassrls, never a member of the owner, SELECT/INSERT/UPDATE/DELETE on every table in
+  `public` and nothing else, default privileges so tables of later migrations get the same), and only the migrator keeps
+  the owner, through a new `env/migrator.env`. `setup-app-role.ts` (idempotent, run by hand, runbook R1) and
+  `check-app-role.ts` (the verification) run from the migrator image. The check covers EVERY table in `public` (no
+  TRUNCATE, TRIGGER or REFERENCES; plain DML present, so a migration that forgot the grants fails the deploy instead of
+  breaking the app), the role's attributes, owner membership (MEMBER, so a NOINHERIT member that could `SET ROLE` is
+  caught) and that the plan's protected tables still exist (`PROTECTED_TABLES`: the plan's list re-checked against the
+  schema plus `fixed_asset_*`, `order_manual_payments`, `payments`, `payment_notifications`, `order_channel_fees`,
+  `order_settlements`). `deploy/remote-deploy.sh` and `deploy-prod/remote-deploy.sh` run migrations with
+  `env/migrator.env` when it exists (else `env/admin.env`, as before), then the check: it **fails the deploy** once
+  `env/migrator.env` has `APP_DB_ROLE`, and only **warns** before the split (so nothing breaks until R1 is done); an
+  older migrator image (a rollback) has no check script and is skipped with a note. `deploy-prod/upload-prod-env.sh`
+  uploads `prod-migrator.env` when it exists.
+- **Year-end close lock ordering:** done in Session 4/11 and re-checked: one month per transaction, the previous month's
+  lock then this month's exclusive lock (ascending), the PPh and year-end closing journals posted before
+  `status = 'closed'`, reopen only newest first. Recorded in `apps/admin/src/lib/accounting/periods.ts`; nothing to run.
+- **Data-only restore notes, index suggestions:** runbook R4 and R5 (not built: indexes wait for real volume).
+- **Test hygiene:** the 23 copies of `migrationsUpTo` (and their local `migrationsFolder`) in `migration-00xx.test.ts`
+  now import `packages/db/test/scratch-database.ts`'s (also exported as `@ammari/db/test-scratch`);
+  `accounting-ledger.test.ts` migrates from `migrationsFolder` directly, numbers its fixture entries by their own month
+  (0056), and "nothing is left behind by a refused entry" refuses its own entry and looks for its number (no longer
+  vacuous with `-t`); `migration-0048.test.ts`'s comment states the condition it relies on.
+- **After the Session 12 review** (`typescript-reviewer`, `database-reviewer`, `security-reviewer`; no critical/high):
+  fixed: `setup-app-role.ts` sends only a SCRAM-SHA-256 verifier (`scramSha256Verifier`), never the plaintext password,
+  so a server log of DDL cannot capture it; the check also logs in with admin's and web's own `DATABASE_URL` (passed by
+  the deploy through the environment, never argv) and fails unless `current_user` is the app role, so "role fine, apps
+  still on the owner" cannot pass; membership in ANY role is refused (a NOINHERIT member reaches another role's rights
+  with SET ROLE, e.g. `pg_write_all_data`) and setup removes them; views, materialized views and foreign tables are
+  checked for TRUNCATE/TRIGGER/REFERENCES; on prod's `--skip-migrate` rollback path a failed check only warns (a rollback
+  must stay possible); a run closed as stale while still working (its lock connection dropped) records its real outcome
+  at the end instead of failing on the CHECK; runbook R1 writes the URL file under `umask 077`, asserts the rewrite and
+  logs in with the new URL (pre-flight) before any app uses it, and the R1 rollback also removes `APP_DB_ROLE`.
+  Not changed, by design: the posting cron runs inside the shared cron lock, so while a run lasts the sweep and the
+  email pass answer `skipped: running` (seconds at today's volume; the plain reason for the shared lock is the web
+  pool's 5 connections: cron work holds at most the two idle lock transactions plus the run's own queries); revisit
+  (posting lock only, or a dedicated small pool) if a run ever takes minutes. A key failing every run answers 500, so the
+  cron retries every 5 minutes and alerts after 3 (intended). Dev's deploy has no rollback flag, so a failed check there
+  stops a dev rollback too (dev only; fix the grant or remove `APP_DB_ROLE`). The check covers schema `public` only (the
+  apps use nothing else).
+- Docs: SPEC §5.4 (accounting summary), docs/deploy.md internal cron section, this runbook (§12) and the go-live
+  checklist (§13).
+- Tests: `packages/accounting/test/posting-run-lock.test.ts` (scratch database, real commits: second run skipped at
+  once, lock released after a failure, stale runs closed and a recent one kept, per-key backstop),
+  `apps/web/src/app/api/internal/accounting/posting/route.test.ts` (auth gate, counts, 500 on failed keys or a throw,
+  skipped under either lock), `apps/admin/src/app/(shell)/accounting/actions.test.ts` (busy message),
+  `apps/admin/src/lib/accounting/posting-status.test.ts`, `packages/db/test/migration-0056.test.ts`,
+  `packages/db/test/app-role.test.ts` (a real login as the app role: reads/writes, TRUNCATE refused on every protected
+  table, no DISABLE TRIGGER, no CREATE TABLE, later tables granted, every check failure, setup repairs), e2e
+  `accounting.spec.ts` (posting status at 390/1280).
 
 ---
 
@@ -1067,3 +1117,187 @@ The full text (the rule, plus the rejected alternative), in Indonesian for the a
 | D-23 | Month close | By the 10th; late corrections to the first open month; reopen only owner/accountant with written reason | §2, §7 |
 | D-24 | Becoming a PT | Close the sole-proprietor books; open the PT with its own opening balances | §5.8 |
 | D-25 | Expense category mapping | One account per category (item override); new categories must be mapped (warning); liability payments map to the liability | §3, E1 |
+
+---
+
+## 12. Runbook (Session 12): for the owner to run by hand
+
+Nothing here was run by an agent: no agent session connects to the dev or prod servers. Order: **dev first, then
+prod**, each step on dev before the same step on prod. `<sha>` is the deployed commit (`cat .env` / the deploy log).
+Every command prints no secret; never paste a password or a `DATABASE_URL` into a terminal or a chat.
+
+### R0. Deploy Session 12 (migration 0056)
+
+1. **Pre-check 0056** (read-only, prod; on dev the migration itself is the check). Prod, in `/opt/ammari-prod`:
+   `docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) filter (where substr(entry_no,4,6) <> (extract(year from entry_date)::int*100+extract(month from entry_date)::int)::text), count(*) filter (where entry_date < date '"'"'2026-12-01'"'"') from journal_entries"'`
+   Expect `0|0` (every journal so far was numbered by `nextEntryNo` and dated from 1 Dec 2026). If 0056 ever meets a
+   violating row (dev or prod), the migrator fails with `journal_entries_entry_no_month_check` or
+   `journal_entries_entry_date_floor_check`, nothing is applied and the deploy stops before touching any app container:
+   send me the counts (not the rows).
+2. Deploy as usual (dev: push to `dev`; prod: fast-forward `main`, run "Deploy (prod)"). The log shows
+   `==> WARNING: env/migrator.env with APP_DB_ROLE is missing ...` until R1 is done: expected, the deploy goes on.
+3. The cron container is recreated by every deploy and picks up the new `cron.sh`; R2 checks it.
+
+### R1. The apps' own database role (TRUNCATE revoked)
+
+Why: row-level triggers never fire on `TRUNCATE`, so `TRUNCATE journal_lines` would bypass every append-only guard.
+The apps today connect as the role that owns the tables (prod: the Postgres container superuser), which can always
+TRUNCATE and disable triggers. After R1 the apps connect as `ammari_app` (no TRUNCATE, owns nothing) and only the
+migrator connects as the owner, through `env/migrator.env`. Takes about 15 minutes per server; the apps restart once.
+
+**Dev: not done for now (owner, 27 Nov 2026).** R1 is prod-only; dev keeps the owner URL and its deploys keep printing
+the `env/migrator.env is missing` warning. The dev steps below stay for later.
+
+**Dev** (as `deploy`, in `/opt/ammari`; the database is the managed Sumopod instance):
+
+1. `(umask 077 && grep '^DATABASE_URL=' env/admin.env > env/migrator.env && echo 'APP_DB_ROLE=ammari_app' >> env/migrator.env)`
+   (the owner's URL, copied, never printed).
+2. `(umask 077 && openssl rand -hex 32 > /tmp/app-db-pw)`
+3. `APP_DB_PASSWORD="$(cat /tmp/app-db-pw)" docker run --rm --env-file env/migrator.env -e APP_DB_PASSWORD ghcr.io/tangguhriyadi/ammari-migrator:<sha> node_modules/.bin/tsx src/ops/setup-app-role.ts`
+   Expect `setup-app-role: PASS ammari_app is ready`. `failed: permission denied to create role` means the managed
+   instance does not let this user create roles: `rm env/migrator.env /tmp/app-db-pw`, stop here for dev (the deploy keeps
+   warning, nothing breaks) and tell me; prod (step list below) does not depend on dev.
+4. Build the app role's URL (owner-only file, value never on a command line or a terminal):
+   `(umask 077 && PW="$(cat /tmp/app-db-pw)" awk -F= '/^DATABASE_URL=/{ sub(/^DATABASE_URL=/, ""); sub(/^postgres(ql)?:\/\/[^@]*@/, "postgresql://ammari_app:" ENVIRON["PW"] "@"); print; exit }' env/migrator.env > /tmp/app-db-url)`, then
+   `grep -q '^postgresql://ammari_app:' /tmp/app-db-url && echo REWRITTEN || echo STOP` must say `REWRITTEN` (STOP: the
+   URL has an unexpected shape; `rm /tmp/app-db-url /tmp/app-db-pw` and tell me, nothing has changed yet).
+5. **Pre-flight login** with the new URL, before any app uses it:
+   `APP_DATABASE_URL_ADMIN="$(cat /tmp/app-db-url)" docker run --rm --env-file env/migrator.env -e APP_DATABASE_URL_ADMIN ghcr.io/tangguhriyadi/ammari-migrator:<sha> node_modules/.bin/tsx src/ops/check-app-role.ts`
+   must print `check-app-role: PASS ... admin log in as it`. A `cannot log in` line (e.g. the provider wants a different
+   username form): stop, `rm /tmp/app-db-url /tmp/app-db-pw`, tell me the line; the apps are untouched.
+6. Point admin and web at it: `./set-env-var.sh env/admin.env DATABASE_URL < /tmp/app-db-url` and
+   `./set-env-var.sh env/web.env DATABASE_URL < /tmp/app-db-url`, then `docker compose up -d --force-recreate admin web`
+   (env is read only at start) and `rm /tmp/app-db-pw /tmp/app-db-url` (also if any step fails).
+7. Check: `APP_DATABASE_URL_ADMIN="$(sed -n 's/^DATABASE_URL=//p' env/admin.env)" APP_DATABASE_URL_WEB="$(sed -n 's/^DATABASE_URL=//p' env/web.env)" docker run --rm --env-file env/migrator.env -e APP_DATABASE_URL_ADMIN -e APP_DATABASE_URL_WEB ghcr.io/tangguhriyadi/ammari-migrator:<sha> node_modules/.bin/tsx src/ops/check-app-role.ts`
+   prints `check-app-role: PASS ... admin and web log in as it` (the deploy runs exactly this from now on); open admin
+   (Pesanan, Akuntansi > Jurnal umum, "Posting sekarang") and the storefront; `docker compose logs --tail 50 web admin`
+   has no `permission denied`. The next deploy log shows `==> Checking the app database role ...` and PASS.
+
+Exposure notes: the password exists only in the 600 files, in the shell variable of one command, and, while a
+`docker run -e` container runs (seconds), in `docker inspect` for users of the docker group (on these servers only
+`deploy`). Postgres receives only a SCRAM verifier, never the plaintext, so a server log of DDL cannot leak it. Rotate:
+a new password file, step 3 with it, steps 4 to 7.
+
+**Prod** (env files live on your Mac in `~/ammari-secrets`, uploaded by `deploy-prod/upload-prod-env.sh`; never re-run
+`make-prod-env.sh` for admin/web afterwards without carrying the new `DATABASE_URL` over, it would put the owner back):
+
+1. On the Mac: `(umask 077 && grep '^DATABASE_URL=' ~/ammari-secrets/prod-admin.env > ~/ammari-secrets/prod-migrator.env && echo 'APP_DB_ROLE=ammari_app' >> ~/ammari-secrets/prod-migrator.env)`
+   and `(umask 077 && openssl rand -hex 32 > ~/ammari-secrets/prod-app-db-password)`.
+2. `deploy-prod/upload-prod-env.sh` (uploads `prod-migrator.env` as `env/migrator.env`; the admin/web files are still
+   the old ones, so nothing changes yet; until step 6 the deploy check would FAIL on admin/web, so do not deploy
+   between steps 2 and 6, or finish R1 in one sitting).
+3. Create the role, the password going over ssh stdin only:
+   `ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 'cd /opt/ammari-prod && APP_DB_PASSWORD="$(cat)" docker run --rm --network ammari-prod_internal --env-file env/migrator.env -e APP_DB_PASSWORD ghcr.io/tangguhriyadi/ammari-migrator:<sha> node_modules/.bin/tsx src/ops/setup-app-role.ts' < ~/ammari-secrets/prod-app-db-password`
+   Expect `PASS ammari_app is ready`.
+4. On the Mac: `(umask 077 && PW="$(cat ~/ammari-secrets/prod-app-db-password)" awk -F= '/^DATABASE_URL=/{ sub(/^DATABASE_URL=/, ""); sub(/^postgres(ql)?:\/\/[^@]*@/, "postgresql://ammari_app:" ENVIRON["PW"] "@"); print; exit }' ~/ammari-secrets/prod-migrator.env > /tmp/app-db-url)` and the same `grep ... REWRITTEN` test as on dev.
+5. **Pre-flight login** over ssh stdin:
+   `ssh -i ~/ammari-secrets/ammari_prod_deploy_key deploy@43.173.52.121 'cd /opt/ammari-prod && APP_DATABASE_URL_ADMIN="$(cat)" docker run --rm --network ammari-prod_internal --env-file env/migrator.env -e APP_DATABASE_URL_ADMIN ghcr.io/tangguhriyadi/ammari-migrator:<sha> node_modules/.bin/tsx src/ops/check-app-role.ts' < /tmp/app-db-url`
+   must print `PASS ... admin log in as it`.
+6. `deploy/set-env-var.sh ~/ammari-secrets/prod-admin.env DATABASE_URL < /tmp/app-db-url`,
+   `deploy/set-env-var.sh ~/ammari-secrets/prod-web.env DATABASE_URL < /tmp/app-db-url`, `rm /tmp/app-db-url` (also if a
+   step fails). Keep `prod-app-db-password` in `~/ammari-secrets` (needed to rebuild the URL).
+   Then `deploy-prod/upload-prod-env.sh`, and on the VPS `./recreate-active-slot.sh admin` and `./recreate-active-slot.sh web`
+   (a few seconds of restart per app; the inactive slots pick the new env up at the next deploy).
+7. Check as on dev step 7 (with `--network ammari-prod_internal`, on the VPS), plus `deploy-prod/go-live-check.sh` from
+   the Mac.
+8. `db.env` and the backup are unchanged: `pg-backup.sh` dumps as the container superuser, not as either app role.
+
+**Rollback of R1** (an app error that names a permission): put the owner URL back (dev: `sed -n 's/^DATABASE_URL=//p'
+env/migrator.env | ./set-env-var.sh env/admin.env DATABASE_URL`, the same for web.env; prod: the same on the Mac files,
+then upload) and recreate admin/web, AND remove the `APP_DB_ROLE=` line from `migrator.env` (dev on the server, prod in
+`prod-migrator.env` + upload), or the next deploy's check fails because admin/web log in as the owner. Keep the file
+itself (migrations keep running as the owner); never delete it while admin.env holds the app role's URL (migrations
+would then run as the app role and fail). Send me the error line; a missing grant is a bug in `setup-app-role.ts`.
+A prod rollback deploy (`--skip-migrate`) only warns on a failed check, so a release can always be rolled back.
+
+**Later migrations:** tables a migration creates as the owner get the app role's grants through the default
+privileges; the deploy's check fails (before any app container is touched) if one did not. Fix: re-run step 3
+without `APP_DB_PASSWORD` (it re-applies the grants), then deploy again. Renaming or dropping a table in
+`PROTECTED_TABLES` (packages/db/src/ops/app-role.ts) needs that list updated in the same release.
+
+### R2. Posting cron
+
+No setup: the cron service uses the existing `INTERNAL_CRON_SECRET` (docs/deploy.md "Internal cron service") and the
+deploy recreates it with the new `cron.sh`. Check on each server, about 30 s after a deploy:
+`docker compose logs --tail 50 cron | grep accounting` shows `/api/internal/accounting/posting -> 200 {"runId":...}`,
+then one line every 15 minutes. `200 {"skipped":"running"}` or `{"skipped":"posting_in_progress"}` is fine (another
+cron job or a staff "Posting sekarang" was running). `ERROR ... 500` means a key failed to post or the run failed (see
+`docker compose logs web | grep accounting` and Akuntansi > Jurnal umum, "Perlu dicek"); retried every 5 minutes;
+`ALERT: the accounting posting run has failed 3 times in a row` after about 45 minutes of failures. In admin, Jurnal
+umum shows "Posting terakhir ... (otomatis)" and no "Posting otomatis belum ..." warning once the cron has run.
+
+### R3. Verification checks
+
+- App role: `check-app-role.ts` (R1 step 7), run automatically by every deploy once `env/migrator.env` has
+  `APP_DB_ROLE`; a failure stops the deploy before any app container is touched.
+- Posting completeness: Akuntansi > Rekonsiliasi, check 5 ("no gaps" after a posting run); month close refuses while
+  it has gaps (Session 11).
+
+### R4. Data-only restores
+
+A full `pg_restore` of a `pg_dump` (what `pg-backup.sh` makes and `restore-drill-local.sh` proves) is fine: the dump
+creates the triggers after loading the data. A **data-only** restore or a hand `COPY` into the journal tables is not:
+`journal_entries_guard_insert` forces `created_at = now()` and lines are refused outside their entry's own
+transaction, so the restored rows would be refused or re-stamped. If one is ever needed, it runs as the owner (never
+as `ammari_app`, which cannot disable triggers), inside one transaction with `SET session_replication_role = replica`
+(skips the ordinary triggers) and the deferred balance check verified afterwards with the Neraca saldo; ask me first.
+Never on the live database: restore into a scratch database and compare.
+
+### R5. Index suggestions (only once real volume exists)
+
+Not built: at today's volume (thousands of lines a month) the existing indexes are enough. Revisit when Buku besar or
+Neraca saldo takes more than about a second, or `journal_lines` passes about 200.000 rows
+(`select count(*) from journal_lines`). Then, as a normal reviewed migration (`CREATE INDEX` in a migration file, never
+by hand on the server):
+- `journal_lines (account_code) INCLUDE (entry_id, debit, credit)`: index-only scans for the ledger and trial balance.
+- Partial dimension indexes: `journal_lines (channel_id) WHERE channel_id IS NOT NULL`, and the same for
+  `supplier_id`, `order_id` and `cash_account_code` (Laba rugi per saluran, the per-order and per-supplier
+  reconciliation checks).
+
+### R6. Year-end close
+
+Nothing to run: one month per close, months locked in ascending order, the PPh final and year-end closing journals
+posted before the month is set closed (apps/admin/src/lib/accounting/periods.ts). Close December 2027 only after
+January to November 2027 are closed; reopen only newest first.
+
+---
+
+## 13. Go-live checklist (before 1 Jan 2027)
+
+**Must be done on prod before 1 January 2027:**
+
+1. **Deploy** the Session 12 release (migrations 0049 to 0056) to dev, test there, then to prod through the normal
+   release (fast-forward `main`, "Deploy (prod)"); R0 pre-check first.
+2. **Backup:** confirm the nightly backup ran after the deploy (`deploy-prod/go-live-check.sh`, backup freshness), and run
+   `deploy-prod/restore-drill-local.sh` once against a post-0056 backup.
+3. **Migrations** 0049 to 0056 applied on prod (the deploy log `Migrations applied successfully`; Akuntansi pages open).
+4. **Cron:** R2 on prod; Jurnal umum shows "(otomatis)" and no cron warning.
+5. **TRUNCATE revoke:** R1 on prod (dev stays on the owner for now, owner 27 Nov 2026; its deploys keep warning); the
+   next prod deploy log shows the app role check PASS.
+6. **December 2026 trial month:** let the engine post December, work through "Perlu dicek" and Rekonsiliasi weekly
+   (December is never closed and is not part of the official books).
+7. **Saldo Awal** (opening balance as of 31 Dec 2026, dated 1 Jan 2027): from 1 January, in Akuntansi > Saldo awal:
+   confirm each system-proposed line and type Kas, Bank (bank statements), Saldo Penjual Shopee/TikTok, Piutang
+   Midtrans and Saldo Biteship (dashboards on 31 Dec), fixed assets; post it while January is open, then close Ekuitas
+   saldo awal into Modal pemilik once approved.
+8. **Pengaturan Pajak:** the initial row ends on 2026-12-31 (original PP 55/2022). Once the PP 55 revision is
+   confirmed, the accountant adds a row effective 2027-01-01 with the new `rate_valid_until`; until then every 2027
+   close warns and proposes no PPh final (D-20). If no extension materialises, the accrual design must be revisited (§9).
+9. **Mapping review by the accountant:** Akuntansi > Pemetaan akun (every expense category and item, methods, channels)
+   and Data Master Akun (codes, names, Kas & Bank list); no category left unmapped (D-25).
+10. **Manual journals the system cannot make** start in January: Biteship top-ups, marketplace withdrawals (M3),
+   Midtrans payouts (W5 until fee work B), refunds that went through Midtrans.
+11. January 2027 closes by 10 February 2027 (D-23).
+
+**Stays pending (not blockers for 1 January, but known gaps):**
+
+- **Session 5 (real marketplace ship/complete dates, D-2): blocked** until real Shopee/TikTok export headers are
+  checked (§8). Until then every marketplace order shipped from 1 Dec is the posting issue
+  `marketplace_ship_date_missing` (no revenue journal is guessed) and the opening 1-1505 proposal reads the import time.
+  January cannot close cleanly without either Session 5 or a reasoned close override.
+- **MDR fee work A/B (D-8):** not built. W2/W5 and Rekonsiliasi check 3a stay off and the MDR "still an estimate" close
+  warning is dormant; Midtrans payouts and fees go in by manual journal (W5 note in §4.2). Turning them on is part of that
+  feature (add the loaders to `defaultPostingSources`, the warning to `periodWarnings`), plus the check 4 fix noted in
+  Session 10.
+- The full TikTok column mapping (prerequisite for any TikTok import).
+- The accountant's open items in §10: the PP 55 revision, the mapping review, the PT's accounting standard (D-24).

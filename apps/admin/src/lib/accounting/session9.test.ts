@@ -27,7 +27,27 @@ function setNow(iso: string) {
 
 const START = "2020-01-01";
 
+/** Migration 0056's journal_entries_entry_date_floor_check refuses entries before 1 Dec 2026. These
+ * tests go through the real write paths, which stamp some times with the DATABASE clock (`now()`:
+ * a sale movement's created_at, a payment's paid_at) that the fake JS timers cannot move. While the
+ * real clock is still before the books start, those fixtures would be dated before them, so the
+ * floor alone is lifted inside this rolled-back transaction (DDL is transactional: the rollback
+ * restores it; files run serially, so the table lock blocks no other suite). From 1 Dec 2026 on
+ * this is a no-op and the full constraint applies. The floor itself is tested in
+ * packages/db/test/migration-0056.test.ts. */
+async function liftDateFloorBeforeBooksStart(tx: TestTx) {
+  await tx.execute(sql`set constraints all immediate`);
+  await tx.execute(sql`set constraints all deferred`);
+  await tx.execute(sql`
+    do $$ begin
+      if now() < date '2026-12-01' then
+        alter table journal_entries drop constraint if exists journal_entries_entry_date_floor_check;
+      end if;
+    end $$`);
+}
+
 async function postAll(tx: TestTx) {
+  await liftDateFloorBeforeBooksStart(tx);
   const result = await runPosting(tx as unknown as LedgerDatabase, { trigger: "cron", postingStartDate: START });
   await tx.execute(sql`set constraints all immediate`);
   await tx.execute(sql`set constraints all deferred`);

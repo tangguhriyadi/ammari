@@ -393,6 +393,13 @@
       "when": 1795739954173,
       "tag": "0055_accounting_fixed_assets",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1795757127381,
+      "tag": "0056_accounting_hardening",
+      "breakpoints": true
     }
   ]
 }

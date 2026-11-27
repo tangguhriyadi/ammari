@@ -1,11 +1,9 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { rmSync } from "node:fs";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, describe, expect, test } from "vitest";
+import { migrationsFolder, migrationsUpTo } from "./scratch-database";
 
 // Migration 0036 (per-product discount, docs/plans/product-discount.md §4): adds products.discount_*
 // and order_items.list_unit_price with their CHECKs. Upgrades a database sitting at 0035 with a
@@ -15,8 +13,6 @@ import { afterAll, describe, expect, test } from "vitest";
 //
 // Runs against a disposable database of its own, never `ammari` or `ammari_test`.
 
-const packageRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
-const migrationsFolder = path.join(packageRoot, "drizzle");
 const SCRATCH_DATABASE = "ammari_migration_0036_upgrade";
 
 function urlFor(database: string): string {
@@ -38,16 +34,6 @@ async function recreateDatabase(): Promise<void> {
   } finally {
     await admin.end();
   }
-}
-
-function migrationsUpTo(lastIdx: number): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "ammari-migrations-"));
-  cpSync(migrationsFolder, dir, { recursive: true });
-  const journalPath = path.join(dir, "meta", "_journal.json");
-  const journal = JSON.parse(readFileSync(journalPath, "utf8")) as { entries: { idx: number }[] };
-  journal.entries = journal.entries.filter((entry) => entry.idx <= lastIdx);
-  writeFileSync(journalPath, JSON.stringify(journal));
-  return dir;
 }
 
 afterAll(async () => {

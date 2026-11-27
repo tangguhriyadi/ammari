@@ -161,17 +161,54 @@ wait_for_db_healthy() {
 }
 wait_for_db_healthy
 
+# The apps' database role (docs/plans/accounting.md, Session 12 runbook R1). Once the owner has split
+# the roles, env/migrator.env holds the TABLE OWNER's DATABASE_URL (migrations run as it) plus
+# APP_DB_ROLE, and admin.env/web.env connect as that app role, which cannot TRUNCATE (row triggers
+# never fire on TRUNCATE, so it would bypass every append-only guard). Before the split there is no
+# env/migrator.env: migrations keep using env/admin.env and the check below only warns. After it, a
+# failed check (the app role can TRUNCATE, owns a table, lacks DML on a new table, ...) stops the
+# deploy here, before any app container is touched. An older migrator image (a rollback to a
+# release before Session 12) has no check script: skipped with a note.
+if [ -f env/migrator.env ]; then
+  MIGRATOR_ENV_FILE=env/migrator.env
+else
+  MIGRATOR_ENV_FILE=env/admin.env
+fi
+
 if [ "$SKIP_MIGRATE" = true ]; then
   echo "==> --skip-migrate set: NOT running the migrator (rollback path — never re-run migrations on rollback, CLAUDE.md)"
 else
-  echo "==> Running migrations against db (network: $NETWORK)"
+  echo "==> Running migrations against db (network: $NETWORK, $MIGRATOR_ENV_FILE)"
   # Foreground, no --rm race with `set -e`: a non-zero exit here aborts the whole deploy before
   # any app container is touched, same guarantee as dev's own migrator step (docs/deploy.md).
-  if ! docker run --rm --network "$NETWORK" --env-file env/admin.env \
+  if ! docker run --rm --network "$NETWORK" --env-file "$MIGRATOR_ENV_FILE" \
     "$REGISTRY/ammari-migrator:$TARGET_SHA"; then
     echo "==> Migrator FAILED — aborting the whole deploy before touching any app container" >&2
     exit 1
   fi
+fi
+
+if [ -f env/migrator.env ] && grep -q '^APP_DB_ROLE=.' env/migrator.env; then
+  echo "==> Checking the app database role (no TRUNCATE, owns nothing, DML on every table; admin and web log in as it)"
+  # admin's and web's own DATABASE_URL go to the check through the environment only (`-e NAME`
+  # without a value reads it from this shell), never on a command line; the check never prints them.
+  if ! APP_DATABASE_URL_ADMIN="$(sed -n 's/^DATABASE_URL=//p' env/admin.env | head -n 1)" \
+    APP_DATABASE_URL_WEB="$(sed -n 's/^DATABASE_URL=//p' env/web.env | head -n 1)" \
+    docker run --rm --network "$NETWORK" --env-file env/migrator.env -e APP_DATABASE_URL_ADMIN -e APP_DATABASE_URL_WEB \
+    --entrypoint sh "$REGISTRY/ammari-migrator:$TARGET_SHA" -c \
+    'if [ -f src/ops/check-app-role.ts ]; then exec node_modules/.bin/tsx src/ops/check-app-role.ts; else echo "check-app-role: not in this image (an older release); skipped"; fi'; then
+    if [ "$SKIP_MIGRATE" = true ]; then
+      # A rollback must stay possible: on --skip-migrate the check only warns.
+      echo "==> WARNING: app database role check FAILED on the rollback path; deploying anyway (fix it after: docs/plans/accounting.md runbook R1)" >&2
+    else
+      echo "==> App database role check FAILED: aborting the deploy before touching any app container (docs/plans/accounting.md runbook R1)" >&2
+      exit 1
+    fi
+  fi
+elif [ -f env/migrator.env ]; then
+  echo "==> WARNING: env/migrator.env has no APP_DB_ROLE: the app database role is not checked (docs/plans/accounting.md runbook R1)"
+else
+  echo "==> WARNING: env/migrator.env is missing: the apps still connect as the table owner, which can TRUNCATE the ledger (docs/plans/accounting.md runbook R1)"
 fi
 
 echo "==> Bringing up caddy (no-op if already running)"

@@ -1,11 +1,9 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { rmSync } from "node:fs";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, describe, expect, test } from "vitest";
+import { migrationsFolder, migrationsUpTo } from "./scratch-database";
 
 // Migration 0026 (docs/plans/suppliers-goods-receipt.md S5): the defect ledger. Applies on a fresh
 // database, and on a database sitting at 0025 with purchase and production receipts already posted
@@ -15,8 +13,6 @@ import { afterAll, describe, expect, test } from "vitest";
 //
 // Runs against two disposable databases of its own, never `ammari` or `ammari_test`.
 
-const packageRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
-const migrationsFolder = path.join(packageRoot, "drizzle");
 const SCRATCH_DATABASES = ["ammari_migration_0026_fresh", "ammari_migration_0026_upgrade"] as const;
 
 function urlFor(database: string): string {
@@ -38,18 +34,6 @@ async function recreateDatabase(database: (typeof SCRATCH_DATABASES)[number]): P
   } finally {
     await admin.end();
   }
-}
-
-/** A copy of the migrations folder whose journal stops at `lastIdx` — drizzle's migrator applies
- * exactly what the journal lists. */
-function migrationsUpTo(lastIdx: number): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "ammari-migrations-"));
-  cpSync(migrationsFolder, dir, { recursive: true });
-  const journalPath = path.join(dir, "meta", "_journal.json");
-  const journal = JSON.parse(readFileSync(journalPath, "utf8")) as { entries: { idx: number }[] };
-  journal.entries = journal.entries.filter((entry) => entry.idx <= lastIdx);
-  writeFileSync(journalPath, JSON.stringify(journal));
-  return dir;
 }
 
 async function migrateTo(client: postgres.Sql, folder: string): Promise<void> {

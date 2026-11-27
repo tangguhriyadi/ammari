@@ -323,6 +323,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@ammari/accounting':
+        specifier: workspace:*
+        version: link:../../packages/accounting
       '@ammari/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -427,6 +430,9 @@ importers:
       '@types/node':
         specifier: 26.6.3
         version: 26.6.3
+      postgres:
+        specifier: 3.4.9
+        version: 3.4.9
       typescript:
         specifier: 6.0.3
         version: 6.0.3

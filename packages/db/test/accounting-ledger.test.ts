@@ -1,11 +1,10 @@
-import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { EXPENSE_LIKE_ACCOUNT_TYPES, PURCHASE_SIDE_JOURNAL_SOURCES } from "../src/schema/constants";
-import { dropScratchDatabase, migrationsUpTo, recreateScratchDatabase, scratchUrl } from "./scratch-database";
+import { dropScratchDatabase, migrationsFolder, recreateScratchDatabase, scratchUrl } from "./scratch-database";
 
 // The ledger's database rules (docs/plans/accounting.md §2.1, Session 1), against migration 0049's
 // triggers: balanced entries with at least two lines, append-only journals (reversal stamp only),
@@ -22,7 +21,6 @@ const SCRATCH_DATABASE = "ammari_scratch_accounting_ledger";
 type Client = ReturnType<typeof postgres>;
 type Tx = postgres.TransactionSql;
 let client: Client;
-let migrationsDir: string;
 let staffId: string;
 let entryCounter = 0;
 
@@ -42,13 +40,18 @@ interface EntryInput {
   lines: LineInput[];
 }
 
-async function insertEntry(tx: Tx | Client, entry: EntryInput): Promise<string> {
+/** A fresh number in the entry's own month (migration 0056 ties JU-YYYYMM to entry_date). */
+function entryNoFor(date: string): string {
   entryCounter += 1;
+  return `JU-${date.slice(0, 4)}${date.slice(5, 7)}-${String(entryCounter).padStart(4, "0")}`;
+}
+
+async function insertEntry(tx: Tx | Client, entry: EntryInput): Promise<string> {
   const kind = entry.kind ?? (entry.source ? "system" : "manual");
   const [row] = await tx`
     insert into journal_entries (entry_no, entry_date, source_type, source_id, source_event, rule_version, kind,
                                  reverses_entry_id, description, posted_by_staff_user_id)
-    values (${`JU-202701-${String(entryCounter).padStart(4, "0")}`}, ${entry.date},
+    values (${entryNoFor(entry.date)}, ${entry.date},
             ${entry.source?.type ?? null}, ${entry.source ? (entry.source.id ?? randomUUID()) : null}, ${entry.source?.event ?? null},
             ${kind === "system" ? 1 : null}, ${kind}, ${entry.reverses ?? null}, 'Jurnal uji', ${kind === "system" ? null : staffId})
     returning id`;
@@ -149,8 +152,7 @@ function started<T>(promise: Promise<T>): Promise<T> {
 beforeAll(async () => {
   await recreateScratchDatabase(SCRATCH_DATABASE);
   client = postgres(scratchUrl(SCRATCH_DATABASE), { max: 4, onnotice: () => {} });
-  migrationsDir = migrationsUpTo(Number.MAX_SAFE_INTEGER);
-  await migrate(drizzle(client), { migrationsFolder: migrationsDir });
+  await migrate(drizzle(client), { migrationsFolder });
   const [ownerRole] = await client`select id from roles where key = 'owner'`;
   const [staff] = await client`insert into staff_users (name, email, role_id) values ('Owner', 'owner@example.test', ${ownerRole!.id}) returning id`;
   staffId = staff!.id as string;
@@ -158,7 +160,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await client?.end();
-  rmSync(migrationsDir, { recursive: true, force: true });
   await dropScratchDatabase(SCRATCH_DATABASE);
 });
 
@@ -198,6 +199,14 @@ describe("balance (deferred to commit)", () => {
   });
 
   test("nothing is left behind by a refused entry", async () => {
+    // Self-contained (it used to count line-less entries across the whole database, which passed
+    // vacuously when run alone with -t): refuse one entry here and look for its own number.
+    const before = entryCounter;
+    await expect(post({ date: "2027-01-10", lines: [{ account: "1-1201", debit: 7 }, { account: "3-1001", credit: 6 }] })).rejects.toThrow(/does not balance/);
+    expect(entryCounter).toBe(before + 1);
+    const refusedNo = `JU-202701-${String(entryCounter).padStart(4, "0")}`;
+    const rows = await client`select id from journal_entries where entry_no = ${refusedNo}`;
+    expect(rows).toHaveLength(0);
     const [{ count }] = (await client`
       select count(*)::int as count from journal_entries e
       where not exists (select 1 from journal_lines l where l.entry_id = e.id)`) as unknown as [{ count: number }];

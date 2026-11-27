@@ -243,6 +243,14 @@ export const journalEntries = pgTable(
     index("journal_entries_source_idx").on(table.sourceType, table.sourceId),
     index("journal_entries_posted_by_staff_user_id_idx").on(table.postedByStaffUserId),
     check("journal_entries_entry_no_check", sql`${table.entryNo} ~ '^JU-[0-9]{6}-[0-9]{4,}$'`),
+    // Session 12 (migration 0056): the number's YYYYMM is the entry's own month (nextEntryNo always
+    // numbers by entry_date), and nothing is dated before the books start (the December 2026 trial
+    // month, D-22; the app refuses earlier dates already). extract() on a date is immutable.
+    check(
+      "journal_entries_entry_no_month_check",
+      sql`substr(${table.entryNo}, 4, 6) = (extract(year from ${table.entryDate})::int * 100 + extract(month from ${table.entryDate})::int)::text`,
+    ),
+    check("journal_entries_entry_date_floor_check", sql`${table.entryDate} >= ${sql.raw(`'${ACCOUNTING_TRIAL_MONTH}'`)}`),
     check("journal_entries_kind_check", checkIn(table.kind, JOURNAL_ENTRY_KINDS)),
     check(
       "journal_entries_source_key_check",

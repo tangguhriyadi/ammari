@@ -7,7 +7,7 @@ const { getStaffSessionMock, runPostingMock } = vi.hoisted(() => ({
 vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMock }));
 // The runner itself is covered against a real database (packages/accounting/test/runner.test.ts);
 // here only the gate in front of it and the result shape.
-vi.mock("@ammari/accounting/runner", () => ({ runPosting: runPostingMock }));
+vi.mock("@ammari/accounting/runner", () => ({ runPostingExclusive: runPostingMock }));
 vi.mock("@/lib/admin-revalidate", () => ({ revalidateAdmin: vi.fn() }));
 
 const { runPostingAction } = await import("./actions");
@@ -44,9 +44,17 @@ describe("runPostingAction", () => {
 
   test("view + manage runs a manual posting run attributed to the staff member", async () => {
     getStaffSessionMock.mockResolvedValue(sessionWithPermissions(["accounting.view", "accounting.manage"]));
-    runPostingMock.mockResolvedValue(RESULT);
+    runPostingMock.mockResolvedValue({ ran: true, result: RESULT, staleRunsClosed: 0 });
     expect(await runPostingAction()).toEqual({ ok: true, data: { insertedCount: 3, reversedCount: 1, issueCount: 2 } });
     expect(runPostingMock).toHaveBeenCalledWith(expect.anything(), { trigger: "manual", triggeredByStaffUserId: "staff-1" });
+  });
+
+  test("while another run holds the posting lock, the button says so and posts nothing", async () => {
+    getStaffSessionMock.mockResolvedValue(sessionWithPermissions(["accounting.view", "accounting.manage"]));
+    runPostingMock.mockResolvedValue({ ran: false });
+    const result = await runPostingAction();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/^Posting sedang berjalan/);
   });
 
   test("a failed run returns a plain Indonesian message, never the database error", async () => {
