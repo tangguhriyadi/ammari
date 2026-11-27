@@ -344,6 +344,9 @@ importers:
       '@ammari/email':
         specifier: workspace:*
         version: link:../../packages/email
+      '@ammari/tiktok-shop':
+        specifier: workspace:*
+        version: link:../../packages/tiktok-shop
       '@ammari/ui':
         specifier: workspace:*
         version: link:../../packages/ui

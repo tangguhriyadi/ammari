@@ -1,6 +1,6 @@
 import "server-only";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { tiktokOauthStates, tiktokShopConnections, type TikTokConnectionStatus } from "@ammari/db/schema";
 import {
   Secret,
@@ -33,6 +33,17 @@ const STATE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 /** Expired states are kept a day (debugging a failed connect), then removed on the next start. */
 const STATE_CLEANUP_AFTER_MS = 24 * 60 * 60 * 1000;
 const LOCK_TIMEOUT = "20s";
+/** Topics 6/7 wait at most this long behind a token refresh holding the row (its TikTok call); a
+ * timeout (55P03) is retried by the inbox, never queued on the shared pool. */
+const EVENT_LOCK_TIMEOUT = "3s";
+/** TikTok's event `timestamp` has one-second resolution and its own clock: an event up to this much
+ * before `connected_at` still counts as being about the current authorization. */
+export const TIKTOK_EVENT_CLOCK_TOLERANCE_MS = 60_000;
+
+/** The latest `connected_at` an event at `at` may act on (see TIKTOK_EVENT_CLOCK_TOLERANCE_MS). */
+export function tiktokEventConnectedBefore(at: Date): Date {
+  return new Date(at.getTime() + TIKTOK_EVENT_CLOCK_TOLERANCE_MS);
+}
 
 type ConnectionRow = typeof tiktokShopConnections.$inferSelect;
 
@@ -241,19 +252,34 @@ export async function disconnectTikTokShop(db: Database, input: { staffUserId: s
 
 /** Topic 6 (SELLER_DEAUTHORIZATION): wipe the tokens, `deauthorized`, sync stops, red banner.
  * Idempotent: a redelivered event changes nothing. False when the shop is unknown or already
- * stopped. */
+ * stopped, or when the shop was (re)connected after `at` (beyond TIKTOK_EVENT_CLOCK_TOLERANCE_MS): a
+ * deauthorization delivered late (TikTok retries for up to 12 hours, the inbox retries too) must
+ * never wipe a newer authorization. Waits at most EVENT_LOCK_TIMEOUT for the row. */
 export async function deauthorizeTikTokShop(db: Database, input: { shopId: string; at: Date }): Promise<boolean> {
   return db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`set local lock_timeout = '${EVENT_LOCK_TIMEOUT}'`));
     const [before] = await tx
       .select()
       .from(tiktokShopConnections)
-      .where(and(eq(tiktokShopConnections.shopId, input.shopId), inArray(tiktokShopConnections.status, ["active", "reauth_required"])))
+      .where(
+        and(
+          eq(tiktokShopConnections.shopId, input.shopId),
+          inArray(tiktokShopConnections.status, ["active", "reauth_required"]),
+          lte(tiktokShopConnections.connectedAt, tiktokEventConnectedBefore(input.at)),
+        ),
+      )
       .for("update");
     if (!before) return false;
     const [row] = await tx
       .update(tiktokShopConnections)
       .set({ status: "deauthorized", accessTokenCt: null, refreshTokenCt: null, deauthorizedAt: input.at })
-      .where(and(eq(tiktokShopConnections.id, before.id), inArray(tiktokShopConnections.status, ["active", "reauth_required"])))
+      .where(
+        and(
+          eq(tiktokShopConnections.id, before.id),
+          inArray(tiktokShopConnections.status, ["active", "reauth_required"]),
+          lte(tiktokShopConnections.connectedAt, tiktokEventConnectedBefore(input.at)),
+        ),
+      )
       .returning();
     if (!row) return false;
     await writeAuditLog(tx, {
@@ -269,9 +295,11 @@ export async function deauthorizeTikTokShop(db: Database, input: { shopId: strin
 }
 
 /** Topic 7 (UPCOMING_AUTHORIZATION_EXPIRATION): records when it arrived, so the banner asks for a
- * reconnect. A reconnect clears it. Only a newer warning is recorded (redeliveries are no-ops). */
+ * reconnect. A reconnect clears it. Only a newer warning is recorded (redeliveries are no-ops), and
+ * never one from before the current authorization (a late delivery about the old one). */
 export async function recordTikTokExpiryWarning(db: Database, input: { shopId: string; at: Date }): Promise<boolean> {
   return db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`set local lock_timeout = '${EVENT_LOCK_TIMEOUT}'`));
     const [row] = await tx
       .update(tiktokShopConnections)
       .set({ expiryWarningAt: input.at })
@@ -279,6 +307,7 @@ export async function recordTikTokExpiryWarning(db: Database, input: { shopId: s
         and(
           eq(tiktokShopConnections.shopId, input.shopId),
           inArray(tiktokShopConnections.status, ["active", "reauth_required"]),
+          lte(tiktokShopConnections.connectedAt, tiktokEventConnectedBefore(input.at)),
           or(isNull(tiktokShopConnections.expiryWarningAt), lt(tiktokShopConnections.expiryWarningAt, input.at)),
         ),
       )

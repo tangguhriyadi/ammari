@@ -1,7 +1,7 @@
 import "server-only";
 
 // TikTok Shop write paths (docs/plans/tiktok-shop-integration.md §2): the connection, OAuth state and
-// tokens (T2). Later sessions add snapshots, order apply and finance here.
+// tokens (T2), the webhook inbox (T3). Later sessions add snapshots, order apply and finance here.
 
 export {
   consumeTikTokOAuthState,
@@ -36,3 +36,20 @@ export {
   type TikTokBanner,
   type TikTokBannerInput,
 } from "./status";
+export {
+  TIKTOK_WEBHOOK_ALLOWLIST,
+  TIKTOK_WEBHOOK_MAX_ATTEMPTS,
+  TIKTOK_WEBHOOK_MAX_BODY_BYTES,
+  TIKTOK_WEBHOOK_TOPICS,
+  parseTikTokWebhookBody,
+  processDueTikTokConnectionEvents,
+  processTikTokWebhookEvent,
+  recordTikTokWebhookEvent,
+  tiktokWebhookInitialStatus,
+  tiktokWebhookRetryDelayMs,
+  touchTikTokLastWebhook,
+  type ParseTikTokWebhookResult,
+  type ProcessTikTokWebhookResult,
+  type RecordTikTokWebhookResult,
+  type TikTokWebhookEvent,
+} from "./webhook";

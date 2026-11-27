@@ -1,6 +1,7 @@
 # TikTok Shop integration (Indonesia, ROW seller): in-house API sync in admin
 
-Status: **T1 built** (`d6b82d2`); **T2 built** 27 Nov 2026 (connection + OAuth, migration 0057, runbook §7.4). T3-T9 not started.
+Status: **T1 built** (`d6b82d2`); **T2 built** (`e2ec0a5`, connection + OAuth, migration 0057, runbook §7.4);
+**T3 built** 27 Nov 2026 (webhook receiver, no migration, runbook §7.5). T4-T9 not started.
 Every session below needs its own `/plan` approval first (CLAUDE.md Workflow 1). **Owner decisions of
 27 Nov 2026 are recorded in §12** and folded into the sections and sessions they affect. Q1, Q3, Q6 and
 Q13 are verified in T0 on the development shop.
@@ -643,6 +644,64 @@ T2 built the connection; nothing reaches TikTok until the owner sets these. Valu
 6. **Key rotation:** add `TIKTOK_TOKEN_ENC_KEY_V2` (same command, new file), set
    `TIKTOK_TOKEN_ENC_KEY_CURRENT=2`, restart, reconnect (or let the next refresh re-encrypt with V2),
    then remove `_V1` once `token_key_version` is 2 on the connection row.
+
+### 7.5 Runbook: the webhook (T3, owner)
+
+1. **web.env** (dev `/opt/ammari/set-env-var.sh env/web.env NAME < file`; prod `deploy/set-env-var.sh`
+   into `~/ammari-secrets/prod-web.env`, then `deploy-prod/upload-prod-env.sh`): `TIKTOK_APP_KEY`,
+   `TIKTOK_APP_SECRET`, `TIKTOK_TOKEN_ENC_KEY_V1` and `TIKTOK_TOKEN_ENC_KEY_CURRENT`, **the same values
+   as admin.env** (§7.4 step 3). Names as in `deploy/env/web.env.example` /
+   `deploy-prod/env/web.env.example`. Restart web. Without them the webhook answers 503 and logs
+   `[tiktok] webhook not configured` with the variable names (never values).
+2. **Partner Center > Kelola Webhook** (per app, Q5): `https://ammari.id/api/integrations/tiktok/webhook`.
+   Dev, if T0 shows the Draf app can point a webhook at dev: `https://ammari.my.id/api/integrations/tiktok/webhook`.
+3. **Caddy:** nothing to change. The public web block routes every path except `/api/internal/*`,
+   `/api/test/*` and `/api/revalidate`, so this path reaches web on both hosts.
+4. **Cloudflare Access (dev only):** if `https://ammari.my.id` shows an Access login, add a
+   Self-hosted application for domain `ammari.my.id`, path `api/integrations/tiktok/webhook`, one
+   policy, action **Bypass**, include **Everyone**: exactly that path, as for Midtrans and Biteship
+   (`docs/launch/checkout-dev.md` A5). Bot Fight Mode: same advice as there (A5.2), with this path.
+5. **Check:** the Integrasi page shows "Webhook terakhir" after TikTok's first delivery; the web log
+   has one `[tiktok] webhook` line per post with `result` (`stored`, `duplicate`, `bad_signature`,
+   `unknown_shop`, `db_failed`, ...). A run of `bad_signature` means the App Secret in web.env differs
+   from Partner Center; `unknown_shop` means no shop is connected yet (TikTok's events are refused
+   until §7.4 step 4).
+
+**T3 build notes.**
+- Answers (all with an empty body): 200 stored or duplicate, or signed but unusable (malformed JSON,
+  no `tts_notification_id`/`shop_id`: logged, left to the poll); 401 bad/missing signature or a shop
+  with no connection row (any status: a late event for a deauthorized shop is stored and acts on
+  nothing); 400 body not complete within 2 s (slow-drip sender); 413 over 64 KB; **415 anything but
+  `application/json`** (not in §8.1; TikTok posts JSON); 503 not configured, database error, or no
+  database answer within 2.5 s of the request's start. A signed but unusable body is logged at
+  `error` (it is TikTok's own and lost for good).
+- The request does one statement (`recordTikTokWebhookEvent`: shop check + `INSERT ... ON CONFLICT
+  (tts_notification_id) DO NOTHING`). Topic 3 and unknown topics are stored `ignored`; 1, 6, 7, 11, 12
+  `pending`. The inbox payload is the body after `TIKTOK_WEBHOOK_ALLOWLIST` (ids, statuses, times
+  only); a payload over half the 16 KB column cap is stored as NULL with `last_error_code`
+  `payload_too_large`, one jsonb would refuse (NUL, lone surrogate, a huge number) as NULL with
+  `payload_unstorable`, so a signed delivery never fails the insert.
+- After the answer (`after()`, each step isolated): "last webhook" (skips a row a token refresh
+  holds), topics 6/7 through T2's `deauthorizeTikTokShop` / `recordTikTokExpiryWarning` dated by the
+  event's `timestamp` (never later than receipt), then any pending 6/7 event that is due
+  (`processDueTikTokConnectionEvents`, one sweep per process at a time, one event's failure never
+  stops the others). A **duplicate** delivery runs that sweep too, so TikTok's redelivery of an event
+  whose processing was lost (restart before `after()`, or an insert that committed after a 503)
+  applies it. Both T2 writes now wait at most 3 s for the row (`lock_timeout`; a refresh holds it
+  during its TikTok call) and refuse an event more than 60 s older than the connection's
+  `connected_at` (second-resolution timestamps and clock skew), so a late deauthorization never wipes
+  a newer reconnect; such a skip is logged as a warning (`stale`). A failing write retries with
+  backoff (1, 2, 4 ... min, ≤ 6 h) and is `failed` after 10 attempts (logged at `error`).
+  Orders (1, 11, 12) stay `pending` for T4.
+- **Left for T4** (review notes): until the sync cron exists, a due 6/7 retry runs only on the next
+  delivery; T4's cron must call `processDueTikTokConnectionEvents`, and its settings-page health (§8.3)
+  must show `failed` inbox events. The inbox is a hint only: T4-T6 re-fetch the order and never trust
+  the body (a delivery replayed after the 12-month purge is re-inserted as `pending`). A request that
+  hits the 2.5 s budget leaves its statement running until Postgres finishes it (no
+  `statement_timeout` on the shared pool); the late commit is deduped on TikTok's retry.
+- No migration: the 0057 indexes (`pending_idx` on `next_attempt_at` where pending, `received_at_idx`)
+  already serve the sweep and the 12-month retention rule (`tiktok_webhook_events` in
+  `maintenance/retention.ts`).
 
 ---
 

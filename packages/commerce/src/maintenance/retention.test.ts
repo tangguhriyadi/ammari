@@ -3,7 +3,7 @@ import { inArray } from "drizzle-orm";
 import { describe, expect, test, vi } from "vitest";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { insertCustomer, insertOrder, insertProductVariant } from "@ammari/db/test-fixtures";
-import { cartItems, carts, claimRateLimits, customerLoginLinks, orderAccessTokens, paymentNotifications, shippingRateCache, shippingWebhookEvents } from "@ammari/db/schema";
+import { cartItems, carts, claimRateLimits, customerLoginLinks, orderAccessTokens, paymentNotifications, shippingRateCache, shippingWebhookEvents, tiktokWebhookEvents } from "@ammari/db/schema";
 import { runRetention } from "./retention";
 
 // docs/plans/cart-checkout.md §11, session 12: each rule deletes exactly the rows past their
@@ -16,7 +16,7 @@ async function ids<T extends { id: string }>(rows: Promise<T[]>): Promise<string
   return (await rows).map((row) => row.id);
 }
 
-async function remaining(db: TestDatabase, table: typeof paymentNotifications | typeof claimRateLimits | typeof shippingRateCache | typeof carts | typeof orderAccessTokens | typeof customerLoginLinks | typeof shippingWebhookEvents, wanted: string[]) {
+async function remaining(db: TestDatabase, table: typeof paymentNotifications | typeof claimRateLimits | typeof shippingRateCache | typeof carts | typeof orderAccessTokens | typeof customerLoginLinks | typeof shippingWebhookEvents | typeof tiktokWebhookEvents, wanted: string[]) {
   return (await db.select({ id: table.id }).from(table).where(inArray(table.id, wanted))).map((row) => row.id).sort();
 }
 
@@ -108,6 +108,19 @@ describe("runRetention", () => {
           .returning({ id: shippingWebhookEvents.id }),
       );
 
+      // TikTok webhook inbox (tiktok-shop-integration.md §3.2, T3): 12 months, whatever the status.
+      const tiktokRows = await ids(
+        tx
+          .insert(tiktokWebhookEvents)
+          .values([
+            { ttsNotificationId: `ret-old-${randomUUID()}`, type: 1, shopId: "S", status: "pending", receivedAt: ago(370 * DAY) },
+            { ttsNotificationId: `ret-oldp-${randomUUID()}`, type: 6, shopId: "S", status: "processed", receivedAt: ago(366 * DAY) },
+            { ttsNotificationId: `ret-new-${randomUUID()}`, type: 1, shopId: "S", status: "pending", receivedAt: ago(360 * DAY) },
+            { ttsNotificationId: `ret-now-${randomUUID()}`, type: 3, shopId: "S", status: "ignored", receivedAt: ago(DAY) },
+          ])
+          .returning({ id: tiktokWebhookEvents.id }),
+      );
+
       const summary = await runRetention(tx);
       expect(summary.failed).toEqual([]);
       expect(summary.truncated).toEqual([]);
@@ -128,6 +141,7 @@ describe("runRetention", () => {
       expect(await remaining(tx, orderAccessTokens, [oldToken!, youngToken!])).toEqual([youngToken]);
       expect(await remaining(tx, customerLoginLinks, [oldLink!, oldUsedLink!, youngLink!])).toEqual([youngLink]);
       expect(await remaining(tx, shippingWebhookEvents, [oldWebhook!, newWebhook!])).toEqual([newWebhook]);
+      expect(await remaining(tx, tiktokWebhookEvents, tiktokRows)).toEqual(tiktokRows.slice(2).sort());
 
       // A second run has nothing of these left to delete.
       await runRetention(tx);
