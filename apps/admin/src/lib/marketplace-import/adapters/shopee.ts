@@ -2,12 +2,13 @@ import type { MarketplaceAdapter } from "./types";
 
 /**
  * The single switch behind Shopee "Simpan" (owner decision 14, docs/plans/marketplace-import.md
- * §2.1, §19). The columns below are mapped from the owner's real "Pesanan Saya" export of 27 Nov
- * 2026 (§19.2), but scopes (O1-b), multi-item shape (O1-a) and the price check (O1-d) are still
- * hypotheses until a second real export with shipped, cancelled and multi-item orders is checked
- * (§19.10). Until then the preview works but nothing can be saved. Unlocking is session 7c.
+ * §2.1, §19). Unlocked in session 7c (28 Nov 2026) as a GUARDED unlock (owner): the 49 columns are
+ * mapped from two real "Pesanan Saya" exports (27 and 28 Nov 2026, §19.1, §19.10), and every case no
+ * real file has shown yet keeps its own hold in the planner (unverified status spellings, any col 2
+ * value, returned goods, blank SKU, price check, multi-row orders with discounts, §19.9). Holds are
+ * relaxed one by one as real exports prove them ("Relaxing a guard", §19.9).
  */
-export const SHOPEE_MAPPING_VERIFIED = false;
+export const SHOPEE_MAPPING_VERIFIED = true;
 
 /** The exact header row of the real export (27 Nov 2026), in order, 49 columns (plan §19.2). The
  * space after the slash in columns 2 and 5 is part of the text. Columns 40-47 are buyer data: they
@@ -100,14 +101,24 @@ export const shopeeAdapter: MarketplaceAdapter = {
     { field: "shopeeProductDiscount", label: "Diskon Dari Shopee", aliases: ["Diskon Dari Shopee"], required: false },
     { field: "sellerVoucher", label: "Voucher Ditanggung Penjual", aliases: ["Voucher Ditanggung Penjual"], required: true, scope: "order" },
     { field: "sellerBundleDiscount", label: "Paket Diskon (Diskon dari Penjual)", aliases: ["Paket Diskon (Diskon dari Penjual)"], required: true, scope: "order" },
+    // Read ONLY for the multi-row discount guard (7c, O1-a/O1-b unverified): Shopee-funded, so they
+    // count in revenue (Q3) and are never subtracted. Optional: a file without one already carries the
+    // header-signature save blocker.
+    { field: "shopeeVoucher", label: "Voucher Ditanggung Shopee", aliases: ["Voucher Ditanggung Shopee"], required: false },
+    { field: "bundleFlag", label: "Paket Diskon", aliases: ["Paket Diskon"], required: false },
+    { field: "shopeeBundleDiscount", label: "Paket Diskon (Diskon dari Shopee)", aliases: ["Paket Diskon (Diskon dari Shopee)"], required: false },
+    { field: "shopeeCoinDiscount", label: "Potongan Koin Shopee", aliases: ["Potongan Koin Shopee"], required: false },
     // Stored only on Selesai (§19.3), for reference and reconciliation (recognition is at shipping).
     { field: "completedAt", label: "Waktu Pesanan Selesai", aliases: ["Waktu Pesanan Selesai"], required: true },
-    // Deliberately absent (§19.2): fees (the order export has none), every Shopee-funded voucher,
-    // coin and bundle discount (they count in revenue, Q3), buyer ongkir and Total Pembayaran (not
+    // Deliberately absent (§19.2): fees (the order export has none), Cashback Koin and Diskon Kartu
+    // Kredit (Shopee-funded, count in revenue, Q3; not guarded), buyer ongkir and Total Pembayaran (not
     // revenue), shipping/courier/weight columns, and buyer columns 40-47 (decision 9, Q7).
   ],
+  // seenInRealFile is ENFORCED since 7c: a mapped status not yet seen in a real export holds its order
+  // ("status_unverified", plan.ts) until a real file shows the exact spelling.
   statusMap: {
-    "belum bayar": { rule: { kind: "unpaid" }, seenInRealFile: false },
+    // Seen 28 Nov 2026 (second real export): skipped when new, held when already in admin (§19.4).
+    "belum bayar": { rule: { kind: "unpaid" }, seenInRealFile: true },
     "perlu dikirim": { rule: { kind: "status", status: "to_ship" }, seenInRealFile: true },
     dikirim: { rule: { kind: "status", status: "shipped" }, seenInRealFile: false },
     "sedang dikirim": { rule: { kind: "status", status: "shipped" }, seenInRealFile: false },

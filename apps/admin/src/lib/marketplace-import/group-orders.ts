@@ -3,7 +3,7 @@ import { fileError, type FileResult } from "./errors";
 import { normalizeHeader } from "./headers";
 import { MAX_DATA_ROWS, MAX_ORDERS } from "./limits";
 import type { Cell } from "./read-sheet";
-import { parseChannelOrderNo, parseCountText, parseJakartaMinuteText, parseQtyText, MAX_RUPIAH_CELL, parseRupiahText, parseSkuText, type ParseResult } from "./values";
+import { parseChannelOrderNo, parseCountText, parseJakartaMinuteText, parseQtyText, MAX_RUPIAH_CELL, parseRupiahText, parseSkuText, parseYesNoText, type ParseResult } from "./values";
 
 // Rows -> orders (docs/plans/marketplace-import.md §4, §19.2). Marketplace exports have one row per
 // item, with order-level values (status, time, voucher) repeated on every row. Each column's scope
@@ -56,6 +56,11 @@ export interface ImportOrder {
   priceMismatchRows: number[];
   /** Subtotal Pesanan per row, as in the file (scope unverified, O1-b): display only. */
   fileSubtotals: number[];
+  /** Rows where any guarded discount column is non-zero (Total Diskon, Diskon Dari Penjual, Diskon
+   * Dari Shopee, Voucher Ditanggung Penjual, Voucher Ditanggung Shopee, Paket Diskon = Y, both Paket
+   * Diskon amounts, Potongan Koin Shopee). On an order of more than one row this holds the order
+   * (plan §19.9 7c): whether order-level amounts repeat per row is unverified (O1-a/O1-b). */
+  discountedRowNumbers: number[];
   /** Waktu Pengiriman Diatur (Jakarta, as its UTC instant), null when blank. Carried whatever the
    * status: the planner stores it only once the marketplace says shipped (plan §19.3). */
   shippedAt: Date | null;
@@ -125,6 +130,7 @@ interface OrderDraft {
   returnedQty: number;
   priceMismatchRows: number[];
   fileSubtotals: number[];
+  discountedRowNumbers: number[];
 }
 
 interface Column {
@@ -201,6 +207,7 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
         returnedQty: 0,
         priceMismatchRows: [],
         fileSubtotals: [],
+        discountedRowNumbers: [],
       };
       drafts.set(orderNo.value, draft);
     }
@@ -242,6 +249,13 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
     const returnedColumn = columnOf("returnedQty");
     const returned = take(returnedColumn, (cell) => parseCountText(cell, returnedColumn!.spec.label));
     const fileSubtotal = money(columnOf("fileSubtotal"));
+    // Guard-only columns (7c): read once here, never written.
+    const shopeeVoucher = money(columnOf("shopeeVoucher"));
+    const shopeeBundleDiscount = money(columnOf("shopeeBundleDiscount"));
+    const shopeeCoinDiscount = money(columnOf("shopeeCoinDiscount"));
+    const bundleFlagColumn = columnOf("bundleFlag");
+    const bundleFlag = take(bundleFlagColumn, (cell) => parseYesNoText(cell, bundleFlagColumn!.spec.label));
+    let rowDiscounted = bundleFlag === true || [totalDiscount, shopeeDiscount, shopeeVoucher, shopeeBundleDiscount, shopeeCoinDiscount].some((amount) => (amount ?? 0) > 0);
     let lineTotal: number | undefined;
     if (qty !== undefined && listUnitPrice !== undefined) {
       lineTotal = listUnitPrice * qty;
@@ -266,6 +280,7 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
         const amount = money(column) ?? 0;
         lineDiscounts[DISCOUNT_KEY[spec.field]] += amount;
         if (spec.field === "sellerProductDiscount") sellerLineDiscount = amount;
+        if (amount > 0) rowDiscounted = true;
       }
     }
 
@@ -289,6 +304,7 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
         if (typeof value === "number") rowTimes[spec.field] = { value, column };
       } else if ((isSellerDiscount(spec) || spec.field === "fee") && spec.scope === "order") {
         value = money(column);
+        if (isSellerDiscount(spec) && typeof value === "number" && value > 0) rowDiscounted = true;
       } else {
         continue;
       }
@@ -317,6 +333,7 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
       if (lineTotal - total !== unitPriceAfterDiscount * qty || total !== sellerLineDiscount + (shopeeDiscount ?? 0)) draft.priceMismatchRows.push(rowNumber);
     }
     draft.returnedQty += returned ?? 0;
+    if (rowDiscounted) draft.discountedRowNumbers.push(rowNumber);
     if (fileSubtotal !== null && fileSubtotal !== undefined) draft.fileSubtotals.push(fileSubtotal);
 
     const lineKey = sku ?? "";
@@ -419,6 +436,7 @@ function finishOrder(draft: OrderDraft, mapped: readonly Column[]): { order: Imp
       returnedQty: draft.returnedQty,
       priceMismatchRows: draft.priceMismatchRows,
       fileSubtotals: draft.fileSubtotals,
+      discountedRowNumbers: draft.discountedRowNumbers,
       shippedAt: timeOf(single("shippedAt")),
       completedAt: timeOf(single("completedAt")),
       fees,

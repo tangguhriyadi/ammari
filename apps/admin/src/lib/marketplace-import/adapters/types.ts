@@ -26,6 +26,9 @@ export type ColumnSpec =
   // Per-row values read only for the price check (plan §19.2), the returned-goods hold, or display
   // (Subtotal Pesanan, whose scope is unverified, O1-b). Never written.
   | (ColumnSpecBase & { field: "unitPriceAfterDiscount" | "totalDiscount" | "shopeeProductDiscount" | "returnedQty" | "fileSubtotal"; required: boolean })
+  // Read only for the multi-row discount guard (plan §19.9 7c): Voucher Ditanggung Shopee, Paket
+  // Diskon (N/Y), Paket Diskon (Diskon dari Shopee), Potongan Koin Shopee. Never written.
+  | (ColumnSpecBase & { field: "shopeeVoucher" | "bundleFlag" | "shopeeBundleDiscount" | "shopeeCoinDiscount"; required: false })
   // Seller-funded money: every one of these is added to the order's discount_amount (D-4).
   | (ColumnSpecBase & { field: "sellerVoucher" | "sellerProductDiscount" | "sellerBundleDiscount"; required: boolean; scope: ColumnScope })
   // Status Pembatalan/ Pengembalian: order-level text; any non-blank value holds the order (§19.4).
@@ -53,8 +56,8 @@ export type StatusRule =
 
 export interface StatusMapEntry {
   rule: StatusRule;
-  /** Seen by the owner in a real export (plan §3). The others are Seller Center tab names whose
-   * exact spelling in the export is unverified. Documentation only; both kinds map. */
+  /** Seen in a real export (plan §3, §19.4). The others are Seller Center tab names whose exact
+   * spelling in the export is unverified: since 7c such an order is held ("status_unverified"). */
   seenInRealFile: boolean;
 }
 

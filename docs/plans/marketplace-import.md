@@ -825,7 +825,7 @@ map, tests 11/12 flipped to "accepts", one e2e run).
 
 ## 19. Real Shopee export (27 Nov 2026): mapping, income import, sessions 7a to 7f
 
-Status: **sessions 7a and 7b implemented** (28 Nov 2026: real order mapping, real ship/complete dates; lock still on); 7c-7f plan. **Owner decisions Q1-Q8 recorded 28 Nov 2026 (19.10).** Supersedes the article-based mapping of section 2.1, decision 11
+Status: **sessions 7a, 7b and 7c implemented** (28 Nov 2026: real order mapping, real ship/complete dates, guarded unlock: Simpan works, every unproven case is held); 7d-7f plan. **Owner decisions Q1-Q8 recorded 28 Nov 2026 (19.10).** Supersedes the article-based mapping of section 2.1, decision 11
 ("fees come from the order export") and session 7. TikTok no longer uses a file
 (tiktok-shop-integration.md T1-T9), so everything below is **Shopee only**. Accounting side:
 accounting.md Session 5.
@@ -845,6 +845,24 @@ shapes were copied, no buyer data.
 - **There are no fee columns** (no admin, service, commission or AMS fee). Fees and releases are only
   in the separate **"Penghasilan Saya"** (income) report (19.5).
 - The shop's listings have an **empty "Nomor Referensi SKU"** today.
+
+**Second real file (28 Nov 2026, "Order.unpaid", 1 row).** The owner checked one more export; only
+facts were copied, no buyer data. What it proved:
+
+- The header row is **identical** to the 49 headers of 19.2 (same order, same spelling).
+- `Status Pesanan` = **`Belum Bayar`** (now seen). `Waktu Pembayaran Dilakukan` (col 9) is **`-`** (a
+  dash, not blank) on an unpaid order. Cols 2, 3, 5, 6, 7, 10, 12 (`SKU Induk`) and 48 are `""`.
+- Order number `261128FUGHDG5C`: 14 characters, starts with `yymmdd` (part of O1-h).
+- Col 14 `Nomor Referensi SKU` = `HAURA-FZ-TAUPE-M`, the variant SKU the owner typed into Shopee "Kode
+  Variasi": **col 14 is confirmed as the variant seller SKU**. Col 15 `Nama Variasi` = `Taupe,M` (comma,
+  no space). Col 13 is the product name. Col 4 `Instant Prioritas`, col 11 `Online Payment`.
+- Value shapes as in the first file: `"229.000"`, `"0"`, `"1"`, `"700 gr"`, `N`.
+- **Col 38 `Total Pembayaran` (240.000) = 229.000 goods + 8.000 buyer ongkir + 3.000**: a buyer-paid
+  fee that has no column of its own. Recorded only: col 38 is never read and never used for revenue
+  (19.2), so nothing is mapped for it.
+
+Still open after it: O1-a, O1-b, O1-c, O1-d, O1-e, O1-f (except `Belum Bayar` and that col 2 is blank on
+an unpaid order), O1-g, and O1-h for paid orders (19.10).
 
 ### 19.2 Column mapping (replaces section 2.1)
 
@@ -887,7 +905,7 @@ dropped: they were never seen and could only match a different file.
 | # | Header | Field | Read | Scope | Rule |
 |---|---|---|---|---|---|
 | 0 | No. Pesanan | `channelOrderNo` | yes, required | key | As today (`^[A-Z0-9]{6,32}$` after uppercasing). |
-| 1 | Status Pesanan | `status` | yes, required | order | Section 3 map. Only `Perlu Dikirim` has been seen in this file. |
+| 1 | Status Pesanan | `status` | yes, required | order | Section 3 map. Seen in real files: `Perlu Dikirim` (27 Nov), `Belum Bayar` (28 Nov); `Selesai`, `Batal`, `Dalam Pengembalian` seen by the owner earlier. `Dikirim` / `Sedang Dikirim` are held until seen (7c). |
 | 2 | Status Pembatalan/ Pengembalian | `cancelReturnStatus` (new) | yes, required column | order | Raw text, max 64. **Blank** means nothing is in progress. **Any non-blank value that is not in the new `cancelReturnMap`** sends the order to Perlu dicek ("Status pembatalan/pengembalian 'X' belum dikenal"). It is never imported or updated, and never guessed. The map starts **empty**: values are added only once seen in a real file (19.4). |
 | 7 | Waktu Pengiriman Diatur | `shippedAt` (new) | yes, required column | order | Into `orders.marketplace_shipped_at` (19.3). Blank = not shipped yet. |
 | 8 | Waktu Pesanan Dibuat | `orderedAt` | yes, required | order | As today (decision 13). |
@@ -905,12 +923,13 @@ dropped: they were never seen and could only match a different file.
 | 23 | Diskon Dari Shopee | check | yes | line? | Shopee-funded: **counts in revenue** (Q3), so it is never subtracted. Read only for the price check. |
 | 27 | Voucher Ditanggung Penjual | `sellerVoucher` | yes, required | order | Into `discount_amount`, as today. |
 | 32 | Paket Diskon (Diskon dari Penjual) | `sellerBundleDiscount` (new) | yes, required column | order? | **Added to `discount_amount`** (seller-funded bundle discount, D-4). Its scope is checked by the double-count rule. |
-| 31 | Paket Diskon (Diskon dari Shopee) | none | no | | Shopee-funded: counts in revenue (Q3), so it is never subtracted. |
+| 31 | Paket Diskon (Diskon dari Shopee) | `shopeeBundleDiscount` (7c) | check only | order? | Shopee-funded: counts in revenue (Q3), so it is never subtracted. Read only for the multi-row discount guard (7c). |
+| 29, 30, 33 | Voucher Ditanggung Shopee, Paket Diskon (N/Y), Potongan Koin Shopee | `shopeeVoucher`, `bundleFlag`, `shopeeCoinDiscount` (7c) | check only | order? | Never subtracted (Q3). Read only for the multi-row discount guard (7c): a non-zero amount, or `Y`, flags the row. `Paket Diskon` other than `N`, `Y` or blank is a row error. |
 | 48 | Waktu Pesanan Selesai | `completedAt` (new) | yes, required column | order | Into `orders.marketplace_completed_at` (19.3). |
-| 28, 29, 33, 34 | Cashback Koin, Voucher Ditanggung Shopee, Potongan Koin Shopee, Diskon Kartu Kredit | none | no | | Shopee-funded and paid to the seller by Shopee: **counts in revenue (Q3)**, which is why it is never subtracted. Not read. |
+| 28, 34 | Cashback Koin, Diskon Kartu Kredit | none | no | | Shopee-funded and paid to the seller by Shopee: **counts in revenue (Q3)**, which is why it is never subtracted. Not read. |
 | 35-37, 39 | Ongkos Kirim Dibayar oleh Pembeli, Estimasi Potongan Biaya Pengiriman, Ongkos Kirim Pengembalian Barang, Perkiraan Ongkos Kirim | none | no | | Buyer ongkir is pass-through (`shipping_amount = 0`, section 4). The seller's real shipping and return-shipping costs come from the income report (19.5). |
 | 38 | Total Pembayaran | none | no | | What the buyer paid, including platform-funded money. It is not our revenue. |
-| 3-6, 9-11, 24-26, 30 | resi, courier, pick-up, ship-by, payment time, order type, payment method, weights, Paket Diskon N/Y | none | no | | Not needed. The ship-by deadline (col 6) could later feed Packing, but it is out of scope here. |
+| 3-6, 9-11, 24-26 | resi, courier, pick-up, ship-by, payment time, order type, payment method, weights | none | no | | Not needed. Col 9 is `-` on an unpaid order (second real file); it is never read, so a dash is never a row error. The ship-by deadline (col 6) could later feed Packing, but it is out of scope here. |
 | 40-47 | Catatan dari Pembeli, Catatan, Username (Pembeli), Nama Penerima, No. Telepon, Alamat Pengiriman, Kota/Kabupaten, Provinsi | none | **never** | | Buyer data. Never read past the header row, never stored (decision 9; same rule as TikTok §6). Packing uses Shopee's own label. **Decided Q7: no buyer note is stored for Shopee.** |
 
 **Price check** (per row, only when cols 16, 21, 22, 23 are all present): `Harga Awal × Jumlah −
@@ -1050,8 +1069,20 @@ The columns already exist (`orders.marketplace_shipped_at`, `marketplace_complet
 ### 19.4 Statuses, cancellations and returns from the order export
 
 - `statusMap`: `perlu dikirim` becomes `seenInRealFile: true`. Nothing else changes until seen
-  (`Belum Bayar`, `Dikirim`/`Sedang Dikirim` spellings are still unverified; `Selesai`, `Batal` and
+  (`Dikirim`/`Sedang Dikirim` spellings are still unverified; `Selesai`, `Batal` and
   `Dalam Pengembalian` were seen by the owner earlier).
+- **As built in 7c (28 Nov 2026):** `belum bayar` is seen (second real file). `seenInRealFile` is
+  **enforced**: an order whose status is mapped but not yet seen (`Dikirim`, `Sedang Dikirim`) is held,
+  "Status 'X' belum pernah terlihat di file asli Shopee" (`status_unverified`), new or existing. The
+  parse carries the keys (`ParsedImport.unverifiedStatusKeys`), so the commit's re-plan holds them too.
+  The test/e2e-only `assumeMappingVerified` (e2e-unlock.ts) empties that list for shipped-path tests;
+  it no longer has a lock to lift and never lifts any other hold.
+- **Belum Bayar (7c):** a new order is **skipped**: never created or updated, no stock, no journal.
+  The preview counts them ("N pesanan belum dibayar (dilewati)"); a later export where the order is
+  paid imports it normally. An order **already in admin** that a file shows as `Belum Bayar` (any
+  admin status, including cancelled/returned) is **held** (`unpaid_in_admin`, "Pesanan ini sudah ada
+  di admin, tapi di file Shopee statusnya Belum Bayar ...") and never reverted. Before 7c such an order
+  was silently "unchanged".
 - `cancelReturnStatus` (col 2) starts as an **empty** map, so every non-blank value is Perlu dicek.
   For each value seen in a real file, the owner decides with the technical admin which of these it
   is: (a) cancellation in progress, no effect; (b) return requested, `return_pending` flag;
@@ -1171,10 +1202,48 @@ Every fixture uses the exact 49 headers in the real order, all cells text.
 |---|---|---|---|---|---|
 | **7a** | Real order mapping (lock stays). **Done 28 Nov 2026.** | Adapter rewritten to 19.2: new fields, computed row amount (Harga Awal × Jumlah), discount = seller product discount + voucher + seller bundle (cols 22 + 27 + 32, Q3), fee specs removed, 49-header signature save blocker, holds (blank SKU, unknown col 2 value, returned qty > 0, price check), revenue grain per Q3, preview counts | none | Unit: the exact real header row maps every field, with the 49 columns in order and 40-47 never in the serialized output (fake buyer values); all-text cells `"229.000"`/`"0"`/`""`; `"700 gr"` never parsed; row amount = `Harga Awal × Jumlah` (2 rows of 1 SKU merged); discount = 22 + 27 + 32; Shopee-funded cols 23/29/31/33 > 0 change neither subtotal nor discount (Q3); one header renamed or missing → save blocker naming it; "Jumlah Produk di Pesan" never taken for Jumlah; blank SKU → "SKU kosong" hold with no manual match offered; `SKU Induk` filled + col 14 blank still held; col 2 non-blank → hold; returned qty 1 → hold; price check broken → hold; old article headers ("Total Harga Produk") → missing-column error. Existing lock tests unchanged. | typescript, security, silent-failure |
 | **7b** | Real dates (accounting Session 5, D-2). **Done 28 Nov 2026.** | 19.3: planner + commit write `marketplace_shipped_at`/`_completed_at` write-once, status-gated, validated; preview counts and warnings; order detail block. Check that the opening-balance 1-1505 proposal (`sales-balances.ts`) uses the recognition date, not `shipped_at`; switch it if not. | none | Unit: `Perlu Dikirim` + col 7 → not stored; `Dikirim` + col 7 → stored as Jakarta → UTC (23:30 WIB stays that date); blank → NULL; malformed → row error; ship < order or > now+1h → row error; completed only on `Selesai`. DB (TDD): create fills the dates; re-import fills an empty one; re-import never clears or overwrites (a different value → warning, stored value kept); concurrent fill is safe (conditional update); posting: a Shopee order's `marketplace_ship_date_missing` issue clears after import, M1/M2 dated by col 7's Jakarta date. | typescript, database, silent-failure |
-| **7c** | Unlock (after the owner's checklist 19.10 passes) | Adjust scopes (`Subtotal Pesanan`, discount columns) and statuses to what the second real file showed, add the seen col 2 values (each with its owner decision), drop holds the file proved unnecessary, flip `SHOPEE_MAPPING_VERIFIED`, update the lock tests | none | Lock tests flipped; one fixture per newly mapped status/col-2 value; the 2-item-order fixture in the real shape. (O1-c is recorded, not a gate: Q1.) e2e (390 + 1280): upload → preview → Simpan → order in `/orders`. | typescript, silent-failure |
+| **7c** | Unlock. **Done 28 Nov 2026 as a guarded unlock (owner decision):** `SHOPEE_MAPPING_VERIFIED = true` now; every case no real file has shown yet keeps a named hold (below), relaxed one by one as real post-launch exports prove it. | Built: `Belum Bayar` seen (skip new + count, hold existing), unverified statuses held, col 2 map still empty (every value held), returned qty / blank SKU / price check unchanged, new multi-row discount hold, Subtotal Pesanan still display only, lock tests flipped. Originally planned: adjust scopes (`Subtotal Pesanan`, discount columns) and statuses to what the second real file showed, add the seen col 2 values (each with its owner decision), drop holds the file proved unnecessary, flip `SHOPEE_MAPPING_VERIFIED`, update the lock tests | none | Lock tests flipped; one fixture per newly mapped status/col-2 value; the 2-item-order fixture in the real shape. (O1-c is recorded, not a gate: Q1.) e2e (390 + 1280): upload → preview → Simpan → order in `/orders`. | typescript, silent-failure |
 | **7d** | Income parser (preview only, `SHOPEE_INCOME_MAPPING_VERIFIED = false`) | Needs a real 2026 income file (O4). Sheet selection, preamble skip, fee column → component table (accountant reviewed), sum check, signed money for the marked columns, kind toggle "Pesanan / Penghasilan" on `/import` | none | Unit: preamble rows ignored; header on row 6; missing `income` sheet refused; unknown money column → save blocker; sum mismatch → hold; buyer username never in output; signed parse only where allowed. | typescript, security, silent-failure |
 | **7e** | Income commit (TDD, money) | 19.5 writes: fees `actual`, `order_settlements`, `marketplace_refunds`, `marketplace_returned_at` from the refund date (Q5); revenue cross-check (Q3); holds; history and batch detail; unlock once a real file passes | **0064** only if 7d's real file needs a new fee component (CHECK widen, expand-only); else none | DB: fees replace nothing they should not (order import never writes fees again; income re-import of the same file → all unchanged); a component changed by a later file → conditional update + accounting M2 reverse + repost (closed month → first open month); refund-only row → `marketplace_refunds` once (replay no-op) → S7 posts Dr 4-1301 / Cr 1-1302; returned order + refund row → `marketplace_returned_at` set once, S4 dated by it; S4 already posted on the import-time fallback → reverse + repost on the refund date (closed month → first open month); revenue mismatch → hold; order not imported → hold; concurrent order + income Simpan serialise. e2e at 390/1280: income preview + Simpan. | typescript, database, security, silent-failure |
 | **7f** | Shopee accounting | Accounting Session 5 part 2: close warning (orders without fees, Q2), Rekonsiliasi "Shopee", opening 1-1302 hint. Withdrawals stay manual (Q4) | none expected (no new reference data); the withdrawal import is a later item (19.8) | See accounting.md Session 5. | database, typescript, react |
+
+**7c as built: the guarded unlock (28 Nov 2026).** The owner chose to unlock now instead of waiting for
+the full O1 checklist. Every hold reason is in Indonesian and listed with the others on the order:
+
+| Hold (code) | When | Why it stays |
+|---|---|---|
+| `unknown_status` | `Status Pesanan` not in the map | Never guessed (section 3). |
+| `status_unverified` | `Dikirim` / `Sedang Dikirim` | Spelling never seen in a real export. |
+| `cancel_return_unknown` | Any non-blank col 2 | The `cancelReturnStatus` map stays **empty** until the owner decides each value (19.4 a-d). |
+| `returned_qty` | Returned quantity > 0 | Full vs partial return undecided (O2). |
+| `blank_sku` | Blank col 14 | 19.6. |
+| `price_inconsistent` | Price check fails | O1-d unverified. |
+| `unpaid_in_admin` | Admin order, file says `Belum Bayar` | Never revert an order. |
+| `multi_row_discount` | More than one row for one order number (two rows of one SKU count) **and** any row has a non-zero col 21, 22, 23, 27, 29, 31, 32 or 33, or col 30 = `Y`: "Pesanan multi-barang dengan diskon belum terverifikasi (baris N, M) ..." | O1-a/O1-b: order-level amounts may repeat on every row and be counted twice. Multi-row orders with every one of those columns zero import normally. |
+
+The multi-row hold applies to orders already in admin too, even ones that would otherwise be
+unchanged: an update would rewrite `discount_amount` from scopes not yet verified, so it fails closed.
+The guard-only columns 29, 31 and 33 are parsed as strictly as every other money cell (`229.000`
+shape), and col 30 only accepts `N`, `Y` or blank, so an unexpected value becomes a row error that
+holds that order, never a silent zero.
+
+Col 20 (`Subtotal Pesanan`) is not part of the multi-row guard (it is the goods amount, never zero on a
+real row); it stays display only ("Subtotal di file") until O1-b. Cols 28 and 34 are not guarded (not in
+the owner's list). The header signature save blocker is unchanged.
+
+**Relaxing a guard** (each needs a real export showing the case, the facts recorded in 19.1/19.10, a
+fixture in the real shape, and its own commit):
+
+- `status_unverified`: a real file with a shipped order shows the exact spelling → mark it
+  `seenInRealFile: true` (a different spelling is added to the map, the unseen one removed).
+- `cancel_return_unknown`: each col 2 value seen, with the owner's a-d decision (19.4) → one
+  `cancelReturnMap` entry per value.
+- `returned_qty`: O1-g + O2 (a full return in a real file) → map full returns to `returned`; partial stays held.
+- `price_inconsistent`: O1-d on a real discounted order confirms or corrects the formula.
+- `multi_row_discount`: O1-a + O1-b on a real 2-item discounted order (checked against Seller Center)
+  → fix each column's scope (`line` vs `order`), then drop the hold.
+- Subtotal Pesanan display only → O1-b gives its scope → becomes the Σ check of 19.2.
+- `unpaid_in_admin`: stays (an admin order must never be reverted by a file).
 
 ### 19.10 Open checks for the owner's next real export, and questions
 
@@ -1197,6 +1266,11 @@ cancelled and multi-item orders. Send the header plus these answers only, no buy
 - **O1-g** For a returned order, what `Returned quantity` shows, and whether `Waktu Pesanan Selesai`
   is filled.
 - **O1-h** 2 or 3 order numbers checked against the Seller Center order page (format, length).
+
+**Second real file (28 Nov 2026):** proved `Belum Bayar`, col 9 `-`, col 14 as the variant seller SKU,
+the 14-character `yymmdd...` order number, and the unchanged 49-header row (details in 19.1). It had one
+unpaid single-item order, so **O1-a to O1-g stay open** (O1-f only for statuses other than `Belum
+Bayar`, O1-h for paid orders). Col 38 includes a 3.000 buyer fee with no column: recorded, not mapped.
 
 **O4, a real 2026 "Penghasilan Saya" export:**
 

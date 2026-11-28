@@ -128,6 +128,10 @@ describe("locateHeader", () => {
       "Subtotal Pesanan",
       "Total Diskon",
       "Diskon Dari Shopee",
+      "Voucher Ditanggung Shopee",
+      "Paket Diskon",
+      "Paket Diskon (Diskon dari Shopee)",
+      "Potongan Koin Shopee",
     ]);
   });
 });

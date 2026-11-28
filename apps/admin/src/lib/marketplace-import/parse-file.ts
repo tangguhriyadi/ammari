@@ -39,6 +39,9 @@ export interface ParsedImport {
   problems: OrderProblem[];
   rowErrors: RowError[];
   rowErrorCount: number;
+  /** statusMap keys mapped but never seen in a real export (seenInRealFile false): the planner holds
+   * every order carrying one ("status_unverified", plan §19.9 7c). Empty under the test/e2e unlock. */
+  unverifiedStatusKeys: string[];
   /** Status texts the adapter does not know, with how many orders carry each (plan §3). */
   unknownStatuses: { rawStatus: string; orderCount: number }[];
   warnings: string[];
@@ -50,9 +53,11 @@ export interface ParseFileInput {
   channelId: string;
   fileName: string;
   bytes: Uint8Array;
-  /** E2E ONLY: treat the channel's mapping as verified for this one request, so the save path can be
-   * exercised end to end while the adapter constant stays false. Set solely from
-   * `e2eMappingUnlocked` (e2e-unlock.ts), which refuses outside a local e2e run. */
+  /** TEST/E2E ONLY: treat the channel's whole mapping as verified for this one request: the lock
+   * (when the adapter constant is false) and the status spellings never seen in a real export
+   * (Shopee Dikirim / Sedang Dikirim since 7c), so shipped-path tests can run. Never lifts the header
+   * signature or any other hold. Set in the app solely from `e2eMappingUnlocked` (e2e-unlock.ts),
+   * which refuses outside a local e2e run. */
   assumeMappingVerified?: boolean;
   /** The upload time; a ship or complete time more than an hour after it is a row error (plan
    * §19.3). Defaults to the clock. */
@@ -164,6 +169,13 @@ export function parseMarketplaceFile(input: ParseFileInput): FileResult<ParsedIm
       problems,
       rowErrors: rowErrors.slice(0, MAX_LISTED_ROW_ERRORS),
       rowErrorCount: rowErrors.length,
+      unverifiedStatusKeys:
+        input.assumeMappingVerified === true
+          ? []
+          : Object.entries(adapter.statusMap)
+              .filter(([, entry]) => !entry.seenInRealFile)
+              .map(([key]) => key)
+              .sort(),
       unknownStatuses: [...unknown.values()],
       warnings,
       orderedAtRange,

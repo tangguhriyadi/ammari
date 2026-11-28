@@ -1,6 +1,8 @@
-// The e2e-only way past the Shopee mapping lock (docs/plans/marketplace-import.md §2.1, session 5).
-// SHOPEE_MAPPING_VERIFIED stays false in code; an e2e test that exercises Simpan sets this cookie in
-// its own setup, and the import actions honour it only in a local e2e run. Same fail-closed
+// The e2e-only `assumeMappingVerified` switch (docs/plans/marketplace-import.md §2.1, session 5).
+// Since 7c SHOPEE_MAPPING_VERIFIED is true, so the cookie no longer has a lock to lift: it only treats
+// the status spellings no real export has shown yet (Dikirim / Sedang Dikirim, held in production)
+// as seen, for an e2e test of the shipped path. It never lifts the header signature or any other hold.
+// The import actions honour it only in a local e2e run. Same fail-closed
 // conditions as the e2e sign-in backdoor (e2e-login-gate.ts): never in production, never without
 // E2E_TEST_LOGIN=true (set only by playwright.config.ts's webServer env, whose server binds to
 // 127.0.0.1). A real deployment can never see the cookie take effect.

@@ -390,6 +390,11 @@ export function ImportPreview({ preview, overrides, busy, onMatch, onUnmatch }: 
             , lalu export ulang.
           </p>
         )}
+        {preview.unpaidSkippedCount > 0 && (
+          <p className="text-sm text-neutral-700" data-testid="import-unpaid-skipped">
+            {formatNumber(preview.unpaidSkippedCount)} pesanan belum dibayar (dilewati). Pesanan ini masuk otomatis di impor berikutnya setelah dibayar.
+          </p>
+        )}
         <MarketplaceDates preview={preview} />
         {preview.unknownStatuses.length > 0 && (
           <p className="text-sm text-neutral-700">

@@ -132,7 +132,12 @@ export interface FixtureOrder {
   sellerVoucher?: FixtureMoney;
   /** Paket Diskon (Diskon dari Penjual). */
   sellerBundleDiscount?: FixtureMoney;
-  /** Shopee-funded columns: count in revenue (owner Q3), never read. */
+  /** Waktu Pembayaran Dilakukan (col 9, never read); the real unpaid export writes "-" (plan §19.10). */
+  paymentTime?: string;
+  /** Paket Diskon (col 30), "N" by default; "Y" counts as a discount for the multi-row guard (7c). */
+  bundleFlag?: string;
+  /** Shopee-funded columns: count in revenue (owner Q3), never subtracted. Read only for the 7c
+   * multi-row discount guard (cols 29, 31, 33), so every default is 0. */
   shopeeVoucher?: number;
   shopeeBundleDiscount?: number;
   shopeeCoins?: number;
@@ -176,7 +181,7 @@ export function shopeeRows(orders: readonly FixtureOrder[]): FixtureCell[][] {
         "2026-10-25 23:59",
         order.shippedAt ?? "",
         order.orderedAt ?? "2026-10-23 14:05",
-        "2026-10-23 14:06",
+        order.paymentTime ?? "2026-10-23 14:06",
         "Normal",
         "ShopeePay",
         line.parentSku ?? "INDUK-UJI",
@@ -196,8 +201,8 @@ export function shopeeRows(orders: readonly FixtureOrder[]): FixtureCell[][] {
         `${700 * orderPieces} gr`,
         moneyCell(order.sellerVoucher === undefined ? 0 : order.sellerVoucher),
         rupiahText(order.coinCashback ?? 0),
-        rupiahText(order.shopeeVoucher ?? 5_000),
-        "N",
+        rupiahText(order.shopeeVoucher ?? 0),
+        order.bundleFlag ?? "N",
         rupiahText(order.shopeeBundleDiscount ?? 0),
         moneyCell(order.sellerBundleDiscount === undefined ? 0 : order.sellerBundleDiscount),
         rupiahText(order.shopeeCoins ?? 0),

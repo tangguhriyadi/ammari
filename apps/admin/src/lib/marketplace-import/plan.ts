@@ -49,7 +49,14 @@ export type ReviewCode =
   | "blank_sku"
   | "cancel_return_unknown"
   | "returned_qty"
-  | "price_inconsistent";
+  | "price_inconsistent"
+  // Guarded unlock (plan §19.9 7c): cases no real file has shown yet.
+  | "unpaid_in_admin"
+  | "status_unverified"
+  | "multi_row_discount";
+
+/** The start of the multi-row discount hold, as the owner's 7c brief words it. */
+export const MULTI_ROW_DISCOUNT_MESSAGE_PREFIX = "Pesanan multi-barang dengan diskon belum terverifikasi";
 
 export interface ReviewReason {
   code: ReviewCode;
@@ -198,6 +205,8 @@ export interface ImportPlan {
   unknownSkus: UnknownSkuGroup[];
   /** Orders held because a variant SKU cell is blank ("N pesanan tertahan karena SKU kosong"). */
   blankSkuOrderCount: number;
+  /** New orders skipped as unpaid ("N pesanan belum dibayar (dilewati)", plan §19.4 7c). */
+  unpaidSkippedCount: number;
   /** Ship and complete dates (plan §19.3), over the orders Simpan saves or leaves unchanged (held and
    * skipped ones are not counted): how many get a date; how many carry a ship time the status gate
    * keeps out (arranged, not shipped yet); how many are shipped per the marketplace but have neither
@@ -514,8 +523,21 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
     if (decision.kind === "skip") return { ...base, action: "skip", reason: decision.reason, rawStatus: order.rawStatus };
 
     const reasons: ReviewReason[] = [];
-    if (decision.kind === "review") reasons.push({ code: decision.reason, message: decision.message });
+    if (decision.kind === "review" && decision.reason === "unpaid_in_admin") {
+      reasons.push({
+        code: decision.reason,
+        message: `Pesanan ini sudah ada di admin, tapi di file ${channelLabel} statusnya ${shorten(order.rawStatus)}. Status di admin tidak diubah; periksa manual.`,
+      });
+    } else if (decision.kind === "review") reasons.push({ code: decision.reason, message: decision.message });
     else if (order.rawStatus.length > MAX_CHANNEL_STATUS_CHARS) reasons.push({ code: "unknown_status", message: "Status pesanan ini terlalu panjang, jadi pesanan belum diimpor." });
+
+    // A mapped status whose exact spelling no real export has shown yet (plan §19.9 7c).
+    if (parsed.unverifiedStatusKeys.includes(order.statusKey)) {
+      reasons.push({
+        code: "status_unverified",
+        message: `Status '${shorten(order.rawStatus)}' belum pernah terlihat di file asli ${channelLabel}, jadi pesanan belum diimpor. Kirim baris judul dan nilai status ini ke admin teknis.`,
+      });
+    }
 
     // Shopee holds (plan §19.2, §19.4): facts from the file, never guessed.
     if (order.cancelReturnStatus !== null) {
@@ -532,6 +554,16 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
       reasons.push({
         code: "price_inconsistent",
         message: `Harga di file tidak konsisten (baris ${order.priceMismatchRows.join(", ")}): Harga Awal, Harga Setelah Diskon dan kolom diskon tidak cocok. Pesanan belum diimpor.`,
+      });
+    }
+
+    // More than one ROW (two rows of one SKU count too) with any discount: order-level amounts may
+    // repeat on every row and be counted twice (O1-a/O1-b unverified, plan §19.9 7c). Existing orders
+    // too: an update would rewrite discount_amount from unverified scopes.
+    if (order.rowNumbers.length > 1 && order.discountedRowNumbers.length > 0) {
+      reasons.push({
+        code: "multi_row_discount",
+        message: `${MULTI_ROW_DISCOUNT_MESSAGE_PREFIX} (baris ${order.discountedRowNumbers.join(", ")}). Pesanan belum diimpor sampai pola diskon file ${channelLabel} terverifikasi.`,
       });
     }
 
@@ -711,6 +743,7 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
     .sort((a, b) => compareText(a.fileSku, b.fileSku));
   const blankSkuOrderCount = entries.filter((entry) => entry.action === "review" && entry.reasons.some((reason) => reason.code === "blank_sku")).length;
   const skuMatches = [...matchUse.values()].sort((a, b) => compareText(a.fileSku, b.fileSku));
+  const unpaidSkippedCount = entries.filter((entry) => entry.action === "skip" && entry.reason === "unpaid").length;
 
   return {
     ok: true,
@@ -721,6 +754,7 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
       totals,
       unknownSkus,
       blankSkuOrderCount,
+      unpaidSkippedCount,
       marketplaceDates,
       skuMatches,
       saveBlockers: parsed.saveBlockers,

@@ -12,7 +12,7 @@ export type StatusDecision =
   | { kind: "skip"; reason: "unpaid" | "undone_before_import" }
   | { kind: "update"; transitions: OrderStatus[]; setReturnPending: boolean; clearReturnPending: boolean }
   | { kind: "unchanged" }
-  | { kind: "review"; reason: "unknown_status" | "final_in_admin"; message: string };
+  | { kind: "review"; reason: "unknown_status" | "final_in_admin" | "unpaid_in_admin"; message: string };
 
 const FINAL_STATUSES: readonly OrderStatus[] = ["cancelled", "returned"];
 const UNDONE_STATUSES: readonly OrderStatus[] = ["cancelled", "returned"];
@@ -59,9 +59,14 @@ export function decideStatus(rule: StatusRule | undefined, current: { status: Or
     return { kind: "create", transitions: forwardPath("to_ship", rule.status)!, setReturnPending: false };
   }
 
+  // Already in admin but unpaid on the marketplace (plan §19.4, 7c): never reverted, never ignored
+  // silently. Whatever the admin status, a person looks at it. The planner words the message (it
+  // names the channel and the file's own status text).
+  if (rule.kind === "unpaid") return { kind: "review", reason: "unpaid_in_admin", message: "Pesanan ini sudah ada di admin, tapi di marketplace belum dibayar. Periksa manual." };
+
   if (FINAL_STATUSES.includes(current.status)) {
     const marketplaceUndone = rule.kind === "status" && UNDONE_STATUSES.includes(rule.status);
-    if (marketplaceUndone || rule.kind === "unpaid") {
+    if (marketplaceUndone) {
       // Already undone in admin (e.g. marked Retur by hand): a leftover return flag has nothing left to wait for.
       return current.returnPending ? { kind: "update", transitions: [], setReturnPending: false, clearReturnPending: true } : { kind: "unchanged" };
     }
@@ -71,8 +76,6 @@ export function decideStatus(rule: StatusRule | undefined, current: { status: Or
       message: "Pesanan ini sudah dibatalkan atau diretur di admin, tapi statusnya di marketplace berbeda. Periksa manual.",
     };
   }
-
-  if (rule.kind === "unpaid") return { kind: "unchanged" };
 
   const target = rule.kind === "return_pending" ? "shipped" : targetFor(rule, current.status);
   const transitions = forwardPath(current.status, target) ?? [];

@@ -164,6 +164,17 @@ export function parseCountText(cell: Cell, label: string): ParseResult<number | 
   return ok(value);
 }
 
+/** Shopee's "Paket Diskon" flag: exactly "N" or "Y" as text (trimmed); blank is "N". Anything else
+ * is refused, never guessed (plan §19.9 7c). */
+export function parseYesNoText(cell: Cell, label: string): ParseResult<boolean> {
+  if (isBlank(cell)) return ok(false);
+  if (typeof cell !== "string") return notText(label);
+  const text = cell.trim();
+  if (text === "N") return ok(false);
+  if (text === "Y") return ok(true);
+  return fail(`${label} harus N atau Y.`);
+}
+
 /** Jumlah as text, 1 to MAX_LINE_QTY. Never blank. */
 export function parseQtyText(cell: Cell): ParseResult<number> {
   if (typeof cell === "number") return notText("Jumlah");

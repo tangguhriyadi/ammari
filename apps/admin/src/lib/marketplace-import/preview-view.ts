@@ -90,6 +90,8 @@ export interface ImportPreview {
   unknownSkus: UnknownSkuGroup[];
   /** Orders held because the variant SKU is blank in the file (plan §19.6). */
   blankSkuOrderCount: number;
+  /** New orders skipped as unpaid ("N pesanan belum dibayar (dilewati)", plan §19.4). */
+  unpaidSkippedCount: number;
   /** Ship and complete dates (plan §19.3). */
   marketplaceDates: ImportPlan["marketplaceDates"];
   /** Unchanged orders that still carry a warning (a ship date that differs from the stored one, an
@@ -217,6 +219,7 @@ export function toImportPreview(parsed: ParsedImport, plan: ImportPlan, options:
     rows: plan.entries.map((entry) => rowFor(entry, canViewProfit, fileSubtotals.get(entry.channelOrderNo), parsed.channelLabel)),
     unknownSkus: plan.unknownSkus,
     blankSkuOrderCount: plan.blankSkuOrderCount,
+    unpaidSkippedCount: plan.unpaidSkippedCount,
     marketplaceDates: plan.marketplaceDates,
     unchangedWithWarnings: plan.entries.flatMap((entry) =>
       entry.action === "unchanged" && entry.warnings.length > 0

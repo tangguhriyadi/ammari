@@ -68,25 +68,28 @@ describe("toImportPreview", () => {
       const preview = await previewFor(
         tx,
         async (sku, no) => [
+          // Two rows without any discount (a discounted multi-row order is held since 7c).
           {
             orderNo: no("A"),
             status: "Selesai",
-            sellerVoucher: 5_000,
             lines: [
               { sku: sku("M"), qty: 1, listUnitPrice: 249_000 },
               { sku: sku("M"), qty: 1, listUnitPrice: 249_001 },
             ],
           },
+          { orderNo: no("B"), status: "Selesai", sellerVoucher: 5_000, lines: [{ sku: sku("M"), qty: 1, listUnitPrice: 249_000 }] },
         ],
         true,
       );
-      // 498.001 over 2 pieces: unit price 249.001 (rounded), subtotal 498.002, one rupiah of rounding.
-      expect(preview.totals).toEqual({ newOrderCount: 1, newPieces: 2, newOmzetAmount: 493_002, newVoucherAmount: 5_000, newFeeAmount: 0 });
-      const created = preview.rows.find((row) => row.action === "create");
-      expect(created).toMatchObject({ omzetAmount: 493_002, targetStatus: "completed", pieces: 2, fileSubtotals: [249_000, 249_001] });
+      // 498.001 over 2 pieces: unit price 249.001 (rounded), subtotal 498.002, one rupiah of rounding;
+      // plus 249.000 - 5.000 voucher.
+      expect(preview.totals).toEqual({ newOrderCount: 2, newPieces: 3, newOmzetAmount: 742_002, newVoucherAmount: 5_000, newFeeAmount: 0 });
+      const created = preview.rows.find((row) => row.action === "create" && row.channelOrderNo.endsWith("A"));
+      expect(created).toMatchObject({ omzetAmount: 498_002, targetStatus: "completed", pieces: 2, fileSubtotals: [249_000, 249_001] });
       expect(created?.warnings).toEqual([`Selisih pembulatan ${formatRupiah(1)}`]);
-      expect(preview.canSave).toBe(false);
-      expect(preview.saveBlockers[0]).toContain("Pemetaan kolom Shopee belum diverifikasi");
+      expect(preview.rows.find((row) => row.channelOrderNo.endsWith("B"))).toMatchObject({ action: "create", omzetAmount: 244_000 });
+      expect(preview.canSave).toBe(true);
+      expect(preview.saveBlockers).toEqual([]);
     });
   });
 

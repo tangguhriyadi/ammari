@@ -28,8 +28,9 @@ import { planImport, type ImportPlan, type PlanOptions } from "./plan";
 // Commit (docs/plans/marketplace-import.md §6, §7, session 4, tests 33 to 43). TDD for the stock
 // path. Synthetic fixtures only; every test runs inside withRollback against ammari_test, except the
 // concurrency test, which needs real commits on separate connections and cleans up after itself.
-// The Shopee mapping stays locked in code (SHOPEE_MAPPING_VERIFIED = false): these tests parse with
-// the e2e/test-only `assumeMappingVerified`, and test 43 asserts the lock without it.
+// The Shopee mapping is unlocked since 7c (SHOPEE_MAPPING_VERIFIED = true). These tests still parse
+// with the test-only `assumeMappingVerified`, which now only treats the unverified Dikirim / Sedang
+// Dikirim spellings as seen; test 43 parses as production does.
 
 interface Seeded {
   sku: (suffix: string) => string;
@@ -57,13 +58,15 @@ async function seedVariants(tx: TestDatabase, suffixes: readonly string[], stock
   };
 }
 
-function parseRows(rows: FixtureCell[][], options: { locked?: boolean } = {}): ParsedImport {
-  const result = parseMarketplaceFile({ channelId: "shopee", fileName: "pesanan.xlsx", bytes: xlsxBytes(rows), assumeMappingVerified: !options.locked });
+/** `production`: without the test-only unlock (since 7c it only lifts the unverified Dikirim /
+ * Sedang Dikirim spellings, which several shipped-path tests here use). */
+function parseRows(rows: FixtureCell[][], options: { production?: boolean } = {}): ParsedImport {
+  const result = parseMarketplaceFile({ channelId: "shopee", fileName: "pesanan.xlsx", bytes: xlsxBytes(rows), assumeMappingVerified: !options.production });
   if (!result.ok) throw new Error(result.error.message);
   return result.value;
 }
 
-const parse = (orders: readonly FixtureOrder[], options: { locked?: boolean } = {}) => parseRows(shopeeRows(orders), options);
+const parse = (orders: readonly FixtureOrder[], options: { production?: boolean } = {}) => parseRows(shopeeRows(orders), options);
 
 async function plan(db: TestDatabase, parsed: ParsedImport, options: PlanOptions = {}): Promise<ImportPlan> {
   const result = await planImport(parsed, options, db);
@@ -123,7 +126,7 @@ describe("commitImport: a new Selesai order (test 33)", () => {
           orderNo: s.orderNo("A"),
           status: "Selesai",
           orderedAt: "2026-10-22 09:15",
-          sellerVoucher: 10_000,
+          // No discount: a discounted multi-row order is held since 7c (shopee-7c.test.ts).
           lines: [
             { sku: s.sku("M"), qty: 1, lineTotal: 249_000 },
             { sku: s.sku("L"), qty: 2, lineTotal: 518_000 },
@@ -139,9 +142,9 @@ describe("commitImport: a new Selesai order (test 33)", () => {
       expect(order).toMatchObject({
         status: "completed",
         subtotalAmount: 767_000,
-        discountAmount: 10_000,
+        discountAmount: 0,
         shippingAmount: 0,
-        totalAmount: 757_000,
+        totalAmount: 767_000,
         importBatchId: outcome.batchId,
         createdByStaffUserId: null,
         buyerUsername: null,
@@ -180,7 +183,7 @@ describe("commitImport: a new Selesai order (test 33)", () => {
       const [batch] = await tx.select().from(importBatches).where(eq(importBatches.id, outcome.batchId));
       expect(batch).toMatchObject({ channelId: "shopee", kind: "orders", status: "committed", uploadedBy: staff.id, filename: "pesanan.xlsx", fileSha256: parsed.fileSha256, rowCount: 2 });
       expect(batch!.committedAt).not.toBeNull();
-      expect(batch!.summary).toMatchObject({ counts: { create: 1, update: 0, unchanged: 0, review: 0, skip: 0 }, totals: { newOrderCount: 1, newPieces: 3, newOmzetAmount: 757_000 } });
+      expect(batch!.summary).toMatchObject({ counts: { create: 1, update: 0, unchanged: 0, review: 0, skip: 0 }, totals: { newOrderCount: 1, newPieces: 3, newOmzetAmount: 767_000 } });
 
       const history = await tx.select().from(importBatchOrders).where(eq(importBatchOrders.importBatchId, outcome.batchId));
       expect(history).toHaveLength(1);
@@ -454,19 +457,31 @@ describe("commitImport: drift and refusals (tests 40, 42, 43)", () => {
     });
   });
 
-  test("the Shopee lock: refused on the server while SHOPEE_MAPPING_VERIFIED is false, whatever digest is sent (test 43)", async () => {
-    expect(SHOPEE_MAPPING_VERIFIED).toBe(false);
+  test("the Shopee lock is off since 7c: a clean file parsed exactly as production does saves (test 43)", async () => {
+    expect(SHOPEE_MAPPING_VERIFIED).toBe(true);
     await withRollback(async (tx) => {
       const s = await seedVariants(tx, ["M"]);
       const staff = await insertStaffUser(tx);
-      const parsed = parse([{ orderNo: s.orderNo("A"), status: "Selesai", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }], { locked: true });
-      expect(parsed.mappingVerified).toBe(false);
+      const parsed = parse([{ orderNo: s.orderNo("A"), status: "Selesai", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }], { production: true });
+      expect(parsed.mappingVerified).toBe(true);
+      expect(parsed.saveBlockers).toEqual([]);
+      expect(committed(await previewAndCommit(tx, parsed, staff.id))).toMatchObject({ created: 1 });
+    });
+  });
+
+  test("any save blocker (e.g. a lock) is still refused on the server, whatever digest is sent (test 43)", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const staff = await insertStaffUser(tx);
+      const clean = parse([{ orderNo: s.orderNo("A"), status: "Selesai", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }], { production: true });
+      const lock = "Pemetaan kolom Shopee belum diverifikasi dengan file asli, jadi pesanan belum bisa disimpan.";
+      const parsed: ParsedImport = { ...clean, mappingVerified: false, lockedMessage: lock, saveBlockers: [lock] };
       const preview = await plan(tx, parsed);
       expect(preview.counts.create).toBe(1);
       const before = await tableCounts(tx);
       const outcome = await commitImport({ parsed, fileName: "pesanan.xlsx", options: {}, expectedDigest: preview.digest, actorStaffUserId: staff.id }, tx);
       expect(outcome.kind).toBe("blocked");
-      if (outcome.kind === "blocked") expect(outcome.blockers[0]).toContain("Pemetaan kolom Shopee belum diverifikasi");
+      if (outcome.kind === "blocked") expect(outcome.blockers).toEqual([lock]);
       expect(await tableCounts(tx)).toEqual(before);
     });
   });

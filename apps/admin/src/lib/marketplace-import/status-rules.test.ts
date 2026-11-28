@@ -40,6 +40,13 @@ describe("a marketplace order not yet in admin", () => {
 });
 
 describe("an order already in admin", () => {
+  test("Belum Bayar is held whatever the admin status: never reverted, never silently unchanged (plan §19.4, 7c)", () => {
+    for (const status of ["awaiting_payment", "to_ship", "shipped", "completed", "cancelled", "returned"] as const) {
+      expect(decideStatus(rule("belum bayar"), existing(status))).toMatchObject({ kind: "review", reason: "unpaid_in_admin" });
+      expect(decideStatus(rule("belum bayar"), existing(status, true))).toMatchObject({ kind: "review", reason: "unpaid_in_admin" });
+    }
+  });
+
   test("moves forward only, one allowed step at a time", () => {
     expect(decideStatus(rule("dikirim"), existing("to_ship"))).toEqual({ kind: "update", transitions: ["shipped"], setReturnPending: false, clearReturnPending: false });
     expect(decideStatus(rule("selesai"), existing("to_ship"))).toEqual({
@@ -54,7 +61,6 @@ describe("an order already in admin", () => {
   test("an older file never moves an order back", () => {
     expect(decideStatus(rule("perlu dikirim"), existing("shipped"))).toEqual({ kind: "unchanged" });
     expect(decideStatus(rule("dikirim"), existing("completed"))).toEqual({ kind: "unchanged" });
-    expect(decideStatus(rule("belum bayar"), existing("to_ship"))).toEqual({ kind: "unchanged" });
     expect(decideStatus(rule("selesai"), existing("completed"))).toEqual({ kind: "unchanged" });
   });
 

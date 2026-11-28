@@ -57,29 +57,25 @@ describe("parseMarketplaceFile: Shopee", () => {
     const result = parse(xlsxBytes(shopeeRows(ORDERS)));
     const serialized = JSON.stringify(result);
     for (const value of Object.values(FAKE_BUYER)) expect(serialized).not.toContain(value);
-    // Nor do the shipping/ongkir or platform-voucher columns' values (12.000 and 5.000 per row).
+    // Nor do the shipping/ongkir columns' values (12.000 per row).
     expect(serialized).not.toContain("12000");
     expect(serialized).not.toContain("12.000");
   });
 
-  test("Simpan stays locked until the real header is verified (owner decision 14)", () => {
+  test("Simpan is unlocked since 7c (guarded unlock, owner decision 14 met by two real exports)", () => {
     const result = parse(xlsxBytes(shopeeRows(ORDERS)));
-    expect(SHOPEE_MAPPING_VERIFIED).toBe(false);
-    expect(result.ok && result.value.mappingVerified).toBe(false);
-    expect(result.ok && result.value.lockedMessage).toBe(
-      "Pemetaan kolom Shopee belum diverifikasi dengan file asli, jadi pesanan belum bisa disimpan. Pratinjau tetap bisa dipakai untuk mengecek file.",
-    );
+    expect(SHOPEE_MAPPING_VERIFIED).toBe(true);
+    expect(result.ok && result.value.mappingVerified).toBe(true);
+    expect(result.ok && result.value.lockedMessage).toBeNull();
   });
 
-  test("save blockers: the lock always, plus rows that belong to no order", () => {
-    expect(parse(xlsxBytes(shopeeRows(ORDERS))).ok && (parse(xlsxBytes(shopeeRows(ORDERS))) as { value: { saveBlockers: string[] } }).value.saveBlockers).toEqual([
-      "Pemetaan kolom Shopee belum diverifikasi dengan file asli, jadi pesanan belum bisa disimpan. Pratinjau tetap bisa dipakai untuk mengecek file.",
-    ]);
+  test("save blockers: none on a clean file; rows that belong to no order block it", () => {
+    expect(parse(xlsxBytes(shopeeRows(ORDERS))).ok && (parse(xlsxBytes(shopeeRows(ORDERS))) as { value: { saveBlockers: string[] } }).value.saveBlockers).toEqual([]);
     const rows = shopeeRows(ORDERS);
     rows[2]![0] = "";
     const result = parse(xlsxBytes(rows));
     expect(result.ok && result.value.unattributedRowCount).toBe(1);
-    expect(result.ok && result.value.saveBlockers[1]).toBe(
+    expect(result.ok && result.value.saveBlockers[0]).toBe(
       "1 baris berisi data tapi nomor pesanannya kosong atau tidak valid, jadi tidak jelas milik pesanan mana. Perbaiki atau export ulang file, lalu periksa lagi.",
     );
   });
@@ -109,7 +105,7 @@ describe("parseMarketplaceFile: Shopee", () => {
     const rows = shopeeRows(ORDERS).map((row) => row.filter((_, index) => index !== shopeeColumn("Total Diskon")));
     const result = parse(xlsxBytes(rows));
     expect(result.ok && result.value.warnings).toEqual([]);
-    expect(result.ok && result.value.saveBlockers[1]).toContain('kolom "Total Diskon" tidak ada');
+    expect(result.ok && result.value.saveBlockers[0]).toContain('kolom "Total Diskon" tidak ada');
   });
 
   test("a missing required column refuses the file, naming it", () => {

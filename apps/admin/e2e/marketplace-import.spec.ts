@@ -7,15 +7,12 @@ import { E2E_IMPORT_EMAIL, E2E_IMPORT_NO_FINANCE_EMAIL, E2E_IMPORT_SKU_L, E2E_IM
 // project's default 1280px (tables), CLAUDE.md. Fixtures are synthetic, built in memory from the
 // same builder the unit tests use, and handed to the file input as a buffer (nothing on disk).
 //
-// SHOPEE_MAPPING_VERIFIED stays false in code. The save-path test unlocks it for its own browser
-// context only, through the e2e-only cookie (lib/marketplace-import/e2e-unlock.ts, honoured only
-// with E2E_TEST_LOGIN in a non-production build). The lock test runs without it and asserts the
-// notice and the disabled Simpan.
+// SHOPEE_MAPPING_VERIFIED is true since session 7c (guarded unlock, plan §19.9): every test here
+// runs exactly as production does, without the e2e-only unlock cookie.
 //
 // Every uploaded order is dated January 2026 and Selesai, so Ringkasan's periods, the oldest Siap
-// Kirim order and Packing, which other specs assert, never move.
-
-const UNLOCK_COOKIE = "e2e_marketplace_mapping_verified";
+// Kirim order and Packing, which other specs assert, never move. The one Perlu Dikirim order (the 7c
+// test) is cancelled again by a Batal export inside the same test, which returns its stock.
 
 interface Layout {
   rowTag: "li" | "tr";
@@ -37,9 +34,11 @@ function fixtureOrders(prefix: string, tag: string): FixtureOrder[] {
   return [
     { orderNo: `${prefix}${tag}001`, status: "Selesai", orderedAt: "2026-01-15 10:00", lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }] },
     // Ship and complete times (plan §19.3): stored on Simpan, shown on the order page.
-    { orderNo: `${prefix}${tag}002`, status: "Selesai", orderedAt: "2026-01-15 11:30", shippedAt: "2026-01-16 08:00", completedAt: "2026-01-18 10:00", sellerVoucher: 10_000, lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }, { sku: E2E_IMPORT_SKU_L, qty: 1, lineTotal: 249_000 }] },
+    // Two rows, no discount (a discounted multi-row order is held since 7c).
+    { orderNo: `${prefix}${tag}002`, status: "Selesai", orderedAt: "2026-01-15 11:30", shippedAt: "2026-01-16 08:00", completedAt: "2026-01-18 10:00", lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }, { sku: E2E_IMPORT_SKU_L, qty: 1, lineTotal: 249_000 }] },
     { orderNo: `${prefix}${tag}003`, status: "Selesai", orderedAt: "2026-01-16 09:00", lines: [{ sku: UNKNOWN_SKU, qty: 1, lineTotal: 249_000, productName: "Gamis Uji Impor", variationName: "Sage,L" }] },
-    { orderNo: `${prefix}${tag}004`, status: "Belum Bayar", orderedAt: "2026-01-16 09:30", lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }] },
+    // As the real unpaid export writes it: "-" in Waktu Pembayaran Dilakukan (plan §19.10).
+    { orderNo: `${prefix}${tag}004`, status: "Belum Bayar", orderedAt: "2026-01-16 09:30", paymentTime: "-", lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }] },
   ];
 }
 
@@ -76,7 +75,7 @@ async function matchUnknownSku(page: Page) {
 }
 
 for (const layout of [MOBILE, DESKTOP]) {
-  test(`Impor: lock notice, refusals and no money without finance (${layout.label})`, async ({ page }) => {
+  test(`Impor: refusals, preview and no money without finance (${layout.label})`, async ({ page }) => {
     await page.setViewportSize({ width: layout.width, height: layout.height });
     await loginAs(page, E2E_IMPORT_NO_FINANCE_EMAIL);
     await page.goto("/import");
@@ -92,15 +91,17 @@ for (const layout of [MOBILE, DESKTOP]) {
     await upload(page, "Shopee", { name: "tanpa-jumlah.csv", mimeType: "text/csv", buffer: Buffer.from(csvBytes(rows as (string | number | null)[][])) });
     await expect(page.getByTestId("import-error")).toContainText("Kolom wajib tidak ditemukan: Jumlah");
 
-    // The real preview, with the lock on: counts, Perlu dicek in this layout, the notice, Simpan disabled (test 47).
+    // The real preview (test 47): counts, Perlu dicek in this layout; no lock notice since 7c, so
+    // Simpan is enabled (not clicked here: the save path is the next tests).
     await upload(page, "Shopee", xlsxFile("pesanan.xlsx", fixtureOrders(layout.prefix, "L")));
     await expectCounts(page, { create: 2, update: 0, unchanged: 0, review: 1, skip: 1 });
     const review = page.getByTestId("section-review");
     const reviewRow = await visibleRow(review, layout, `${layout.prefix}L003`);
     await expect(reviewRow).toContainText(`SKU tidak dikenal: ${UNKNOWN_SKU}`);
     await expect(page.getByTestId("unknown-skus")).toContainText("Gamis Uji Impor");
-    await expect(page.getByTestId("import-save-blockers")).toContainText("Pemetaan kolom Shopee belum diverifikasi dengan file asli");
-    await expect(page.getByRole("button", { name: "Simpan 2 pesanan" })).toBeDisabled();
+    await expect(page.getByTestId("import-save-blockers")).toHaveCount(0);
+    await expect(page.getByTestId("import-unpaid-skipped")).toContainText("1 pesanan belum dibayar (dilewati)");
+    await expect(page.getByRole("button", { name: "Simpan 2 pesanan" })).toBeEnabled();
     // No finance.view_profit: no rupiah anywhere in the preview.
     await expect(page.getByTestId("import-new-totals")).toHaveText("Pesanan baru: 3 pcs");
     await expect(page.getByTestId("import-preview")).not.toContainText("Rp");
@@ -124,10 +125,8 @@ for (const layout of [MOBILE, DESKTOP]) {
     await expect(page.getByTestId("unknown-skus")).toHaveCount(0);
   });
 
-  test(`Impor: match, Simpan, history, orders, then the same file again (${layout.label})`, async ({ page, context }) => {
+  test(`Impor: match, Simpan, history, orders, then the same file again (${layout.label})`, async ({ page }) => {
     await page.setViewportSize({ width: layout.width, height: layout.height });
-    // Unlocks Shopee Simpan for THIS browser context only (see the header comment).
-    await context.addCookies([{ name: UNLOCK_COOKIE, value: "shopee", domain: "localhost", path: "/" }]);
     await loginAs(page, E2E_IMPORT_EMAIL);
     await page.goto("/import");
 
@@ -183,5 +182,57 @@ for (const layout of [MOBILE, DESKTOP]) {
     await matchUnknownSku(page);
     await expectCounts(page, { create: 0, update: 0, unchanged: 3, review: 0, skip: 1 });
     await expect(page.getByRole("button", { name: "Simpan 0 pesanan" })).toBeDisabled();
+  });
+
+  test(`Impor 7c: a clean Perlu Dikirim file saves, stock leaves; a held order stays in Perlu dicek (${layout.label})`, async ({ page }) => {
+    await page.setViewportSize({ width: layout.width, height: layout.height });
+    await loginAs(page, E2E_IMPORT_EMAIL);
+    const stockOfM = async () => {
+      await page.goto(`/stock/${E2E_IMPORT_SKU_M}`);
+      const text = await page.getByText(/^\d[\d.]* pcs$/).first().textContent();
+      return Number((text ?? "").replace(/\D/g, ""));
+    };
+    const before = await stockOfM();
+
+    const ready = `${layout.prefix}P001`;
+    const held = `${layout.prefix}H001`;
+    const unpaid = `${layout.prefix}U001`;
+    const orders: FixtureOrder[] = [
+      { orderNo: ready, status: "Perlu Dikirim", orderedAt: "2026-01-19 10:00", lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }] },
+      // Two rows with a seller voucher: held (O1-a/O1-b unverified).
+      { orderNo: held, status: "Perlu Dikirim", orderedAt: "2026-01-19 10:05", sellerVoucher: 10_000, lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }, { sku: E2E_IMPORT_SKU_L, qty: 1, lineTotal: 249_000 }] },
+      { orderNo: unpaid, status: "Belum Bayar", orderedAt: "2026-01-19 10:10", paymentTime: "-", lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }] },
+    ];
+    await page.goto("/import");
+    await upload(page, "Shopee", xlsxFile(`perlu-dikirim-${layout.label}.xlsx`, orders));
+    await expectCounts(page, { create: 1, update: 0, unchanged: 0, review: 1, skip: 1 });
+    await expect(page.getByTestId("import-save-blockers")).toHaveCount(0);
+    await expect(page.getByTestId("import-unpaid-skipped")).toContainText("1 pesanan belum dibayar (dilewati)");
+    const heldRow = await visibleRow(page.getByTestId("section-review"), layout, held);
+    await expect(heldRow).toContainText("Pesanan multi-barang dengan diskon belum terverifikasi");
+
+    await page.getByRole("button", { name: "Simpan 1 pesanan" }).click();
+    await expect(page.getByTestId("import-notice")).toContainText("1 pesanan disimpan (1 baru, 0 diperbarui).");
+    const historyRow = await visibleRow(page.getByRole("region", { name: "Riwayat impor" }), layout, `perlu-dikirim-${layout.label}.xlsx`);
+    await expect(historyRow).toContainText("1 baru, 0 diperbarui, 1 perlu dicek");
+
+    // In /orders as Siap Kirim; the held and the unpaid order are not.
+    await page.goto(`/orders?q=${ready}`);
+    const orderRow = page.locator(layout.rowTag).filter({ hasText: "Shopee" });
+    await expect(orderRow).toBeVisible();
+    await expect(orderRow).toContainText("Siap Kirim");
+    for (const absent of [held, unpaid]) {
+      await page.goto(`/orders?q=${absent}`);
+      await expect(page.locator(layout.rowTag).filter({ hasText: "Shopee" })).toHaveCount(0);
+    }
+    expect(await stockOfM()).toBe(before - 1);
+
+    // Clean-up through the real flow: Shopee reports it Batal, the order is cancelled, stock returns.
+    await page.goto("/import");
+    await upload(page, "Shopee", xlsxFile(`batal-${layout.label}.xlsx`, [{ ...orders[0]!, status: "Batal" }]));
+    await expectCounts(page, { create: 0, update: 1, unchanged: 0, review: 0, skip: 0 });
+    await page.getByRole("button", { name: "Simpan 1 pesanan" }).click();
+    await expect(page.getByTestId("import-notice")).toContainText("1 pesanan disimpan (0 baru, 1 diperbarui).");
+    expect(await stockOfM()).toBe(before);
   });
 }

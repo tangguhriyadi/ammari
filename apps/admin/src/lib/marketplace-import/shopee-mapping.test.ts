@@ -7,7 +7,6 @@ import { parseMarketplaceFile, type ParsedImport } from "./parse-file";
 // fixture is synthetic, built in code with the exact 49 headers of the 27 Nov 2026 export and text
 // cells only. Buyer columns 40-47 carry obviously fake values that must never leave the parser.
 
-const LOCKED = shopeeAdapter.lockedMessage!;
 
 function parseRows(rows: FixtureCell[][], fileName = "pesanan.xlsx"): ParsedImport {
   const result = parseMarketplaceFile({ channelId: "shopee", fileName, bytes: xlsxBytes(rows) });
@@ -43,7 +42,7 @@ describe("the real header row (plan §19.2)", () => {
 
   test("every read field maps to its column", () => {
     const parsed = parse([ONE]);
-    expect(parsed.saveBlockers).toEqual([LOCKED]);
+    expect(parsed.saveBlockers).toEqual([]);
     expect(parsed.problems).toEqual([]);
     expect(parsed.rowErrors).toEqual([]);
     expect(parsed.orders).toEqual([
@@ -139,7 +138,7 @@ describe("header signature: any change previews but blocks saving (plan §19.2)"
 
   test("trailing blank header cells are not columns", () => {
     const rows = shopeeRows([ONE]).map((row, r) => [...row, r === 0 ? "" : null]);
-    expect(parseRows(rows).saveBlockers).toEqual([LOCKED]);
+    expect(parseRows(rows).saveBlockers).toEqual([]);
   });
 
   test("the e2e unlock never lifts the signature blocker", () => {
@@ -157,8 +156,9 @@ describe("header signature: any change previews but blocks saving (plan §19.2)"
     ]);
   });
 
-  test("SHOPEE_MAPPING_VERIFIED stays false", () => {
-    expect(SHOPEE_MAPPING_VERIFIED).toBe(false);
+  test("SHOPEE_MAPPING_VERIFIED is true since 7c (guarded unlock): no lock blocker", () => {
+    expect(SHOPEE_MAPPING_VERIFIED).toBe(true);
+    expect(shopeeAdapter.mappingVerified).toBe(true);
   });
 });
 
@@ -228,7 +228,7 @@ describe("cells are text, parsed strictly (plan §19.1, §2.2)", () => {
   test("a csv of the same export reads the same", () => {
     const rows = shopeeRows([ONE]).map((row) => row.map((cell) => (cell === null || typeof cell === "object" ? null : String(cell))));
     const result = parseMarketplaceFile({ channelId: "shopee", fileName: "pesanan.csv", bytes: csvBytes(rows) });
-    expect(result.ok && [result.value.orders[0]!.subtotalAmount, result.value.saveBlockers]).toEqual([229_000, [LOCKED]]);
+    expect(result.ok && [result.value.orders[0]!.subtotalAmount, result.value.saveBlockers]).toEqual([229_000, []]);
   });
 });
 
