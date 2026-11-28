@@ -28,6 +28,8 @@ export {
 export { tiktokConfigFromEnv, type TikTokConfig, type TikTokConfigOptions, type TikTokConfigResult, type TikTokEnv } from "./config";
 export {
   ORDER_DETAIL_MAX_IDS,
+  SEARCH_AFTER_SALES_MAX_ORDER_IDS,
+  SEARCH_AFTER_SALES_MAX_PAGE_SIZE,
   SEARCH_ORDERS_MAX_PAGE_SIZE,
   TIKTOK_API_BASE_URL,
   TIKTOK_AUTH_BASE_URL,
@@ -50,6 +52,17 @@ export {
   type TikTokOrderDetailsResult,
   type TikTokOrderProjection,
 } from "./orders";
+export {
+  TIKTOK_CANCELLATION_ALLOWLIST,
+  TIKTOK_RETURN_ALLOWLIST,
+  projectTikTokAfterSale,
+  searchTikTokAfterSales,
+  type ProjectTikTokAfterSaleResult,
+  type SearchTikTokAfterSalesInput,
+  type SearchTikTokAfterSalesPage,
+  type TikTokAfterSaleKind,
+  type TikTokAfterSaleProjection,
+} from "./returns";
 export { TikTokMoneyFormatError, parseRupiah, type ParseRupiahOptions } from "./rupiah";
 export { Secret } from "./secret";
 export { getAuthorizedShops, type TikTokAuthorizedShop } from "./shops";

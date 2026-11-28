@@ -1,4 +1,5 @@
 import "server-only";
+import { listTikTokRequestsForOrder, type TikTokRequestRow } from "@/lib/orders/tiktok-returns";
 import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
   CHANNEL_FEE_COMPONENTS,
@@ -269,6 +270,8 @@ export interface TikTokOrderDetail {
   buyerMessage: string | null;
   /** TikTok's ship-by deadline. */
   rtsSlaTime: Date | null;
+  /** Its cancellation and return requests (T6), newest first. */
+  requests: TikTokRequestRow[];
 }
 
 export interface CheckoutPaymentAttempt {
@@ -644,7 +647,8 @@ async function getTikTokOrderDetail(orderId: string, db: Database): Promise<TikT
     .where(eq(tiktokOrders.orderId, orderId))
     .limit(1);
   if (!row) return null;
-  return { status: row.status, packing: tiktokPackingState(row, new Date()), buyerMessage: row.buyerMessage, rtsSlaTime: row.rtsSlaTime };
+  const requests = await listTikTokRequestsForOrder(orderId, db);
+  return { status: row.status, packing: tiktokPackingState(row, new Date()), buyerMessage: row.buyerMessage, rtsSlaTime: row.rtsSlaTime, requests };
 }
 
 /** Cost data (unit_cost) is gated by finance.view_profit, same discipline every other cost field

@@ -14,6 +14,7 @@ import { createCustomer, searchCustomers, type CustomerOption } from "@/lib/cust
 import { revalidateAdmin } from "@/lib/admin-revalidate";
 import { revalidateStorefrontForSkus, skusForOrder } from "@/lib/storefront-stock";
 import { manualPaymentSchema } from "@/lib/orders/manual-payment-input";
+import { receiveMarketplaceReturn } from "@ammari/commerce/tiktok";
 import { assertPlainTransitionAllowed, confirmManualOrderPayment, createOrderWithManualPayment, recordManualOrderPayment } from "@/lib/orders/manual-payment";
 
 // An order and its status show on the orders pages, the packing queue, and SKU stock.
@@ -91,6 +92,23 @@ export async function transitionOrderStatusAction(input: z.input<typeof transiti
     const movesStock = parsed.data.toStatus === "to_ship" || parsed.data.toStatus === "cancelled" || parsed.data.toStatus === "returned";
     const storefront = movesStock ? await revalidateStorefrontForSkus(() => skusForOrder(parsed.data.orderId)) : { ok: true };
     return { status: order.status, storefrontOk: storefront.ok };
+  });
+}
+
+const receiveReturnSchema = z.object({ orderId: z.string().uuid() });
+
+/** "Retur diterima" (docs/plans/tiktok-shop-integration.md §4.5, Q11, Q18): the parcel coming back
+ * (`marketplace_return_in_transit`) is physically received. orders.manage on the server; the order
+ * goes to Retur through transitionOrderStatus, which puts the stock back and clears the flags. */
+export async function receiveMarketplaceReturnAction(input: z.input<typeof receiveReturnSchema>): Promise<ActionResult<{ orderNo: string; storefrontOk: boolean }>> {
+  const session = await requirePermission("orders.manage");
+  const parsed = receiveReturnSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Input tidak valid." };
+  return runAction(async () => {
+    const result = await receiveMarketplaceReturn(defaultDb, parsed.data.orderId, session.staffUser.id);
+    revalidateAdmin(...ORDER_SECTIONS);
+    const storefront = await revalidateStorefrontForSkus(() => skusForOrder(parsed.data.orderId));
+    return { orderNo: result.orderNo, storefrontOk: storefront.ok };
   });
 }
 

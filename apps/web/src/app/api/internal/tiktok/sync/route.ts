@@ -10,7 +10,8 @@ import { authorizeCronRequest, cronJson } from "@/lib/internal/cron-auth";
 // the shared cron lock (withExclusiveRun "tiktokSync"), so it never overlaps the payment sweep, the
 // email pass, the tracking poll or the posting run. T4 is READ ONLY: due topic 6/7 events, the token
 // refresh, the inbox drain (topics 1/11/12 re-fetch their order) and the reconciliation poll store
-// allowlisted snapshots; no admin order, stock or journal changes (T5).
+// allowlisted snapshots; no admin order, stock or journal changes (T5). T5 applies orders and T6
+// returns/cancellations (Search Returns/Cancellations, read only) behind the kill switch.
 //
 // Answers: 200 with the run's counts (also when no shop is connected: `{ skipped: "not_connected" }`,
 // or the lock is held: `{ skipped: "running" }`; a run that ran out of its 150-s budget is 200 too,
@@ -30,6 +31,8 @@ function statusFor(summary: TikTokSyncSummary): number {
   // T5: an order whose apply failed with a database or programming error (not a hold, not a busy
   // row) is retried every run, so it must show as an ERROR line and reach the ALERT count.
   if (!summary.error && summary.apply.failed > 0) return 500;
+  // T6: the same for a return or cancellation request.
+  if (!summary.error && summary.afterSales.failed > 0) return 500;
   if (!summary.error) return 200;
   switch (summary.error.kind) {
     case "rate_limited":
@@ -70,10 +73,10 @@ export async function POST(request: Request): Promise<Response> {
     // Not failures of this run, but nothing else would show them: a refresh that keeps failing
     // until the token expires, a deauthorization not applied, two versions with the same time, a
     // run that could not catch up (behind, not failing: the next run carries on).
-    const attention = summary.tokenRefresh?.startsWith("failed") || summary.connectionEvents.notApplied > 0 || summary.orders.conflicts > 0 || summary.budgetExhausted || summary.inbox.failed > 0 || summary.apply.busy > 0 || summary.apply.notFound > 0 || summary.apply.recheckIncomplete;
+    const attention = summary.tokenRefresh?.startsWith("failed") || summary.connectionEvents.notApplied > 0 || summary.orders.conflicts > 0 || summary.budgetExhausted || summary.inbox.failed > 0 || summary.apply.busy > 0 || summary.apply.notFound > 0 || summary.apply.recheckIncomplete || summary.afterSales.busy > 0 || summary.afterSales.notFound > 0 || summary.afterSales.conflicts > 0 || summary.afterSales.recheckIncomplete || summary.afterSales.invalid > 0 || summary.afterSales.storeFailed > 0 || summary.inbox.retried > 0;
     if (status !== 200) console.error("[tiktok] sync stopped; the next run retries", summary);
     else if (attention) console.warn("[tiktok] sync done, needs a look", summary);
-    else if (summary.orders.fetched > 0 || summary.inbox.claimed > 0 || summary.apply.created + summary.apply.updated > 0) console.info("[tiktok] sync done", summary);
+    else if (summary.orders.fetched > 0 || summary.inbox.claimed > 0 || summary.apply.created + summary.apply.updated > 0 || summary.afterSales.fetched + summary.afterSales.applied > 0) console.info("[tiktok] sync done", summary);
     return cronJson(status, summary);
   } catch (error) {
     console.error("[tiktok] sync failed; retried on the next run", errorLogFields(error));

@@ -223,6 +223,12 @@ async function afterDelivery(runtime: TikTokRuntime, shopId: string, receivedAt:
         if (apply.failed > 0) console.error("[tiktok] webhook order stored, apply failed; the sync cron retries", { eventId: stored.id, problems: apply.problems });
         else if (apply.held + apply.busy + apply.notFound > 0) console.warn("[tiktok] webhook order stored, not applied yet", { eventId: stored.id, held: apply.held, busy: apply.busy, problems: apply.problems });
         else if (apply.created + apply.updated > 0) console.info("[tiktok] webhook order applied", { eventId: stored.id, created: apply.created, updated: apply.updated });
+        // T6: the order's returns/cancellations (topics 11/12). Same rules: a failure is retried by
+        // the cron's re-check, and is never left without a line.
+        const { afterSales } = outcome;
+        if (afterSales.failed > 0) console.error("[tiktok] webhook request stored, apply failed; the sync cron retries", { eventId: stored.id, problems: afterSales.problems });
+        else if (afterSales.busy + afterSales.notFound + afterSales.conflicts > 0) console.warn("[tiktok] webhook request not applied yet", { eventId: stored.id, busy: afterSales.busy, conflicts: afterSales.conflicts, problems: afterSales.problems });
+        else if (afterSales.applied > 0) console.info("[tiktok] webhook request applied", { eventId: stored.id, applied: afterSales.applied, refundsRecorded: afterSales.refundsRecorded });
       } else console.info("[tiktok] webhook order refresh left to the sync cron", { eventId: stored.id, reason: outcome.kind });
     } catch (error) {
       console.error("[tiktok] webhook order refresh failed; the sync cron retries", { eventId: stored.id, type: stored.type, ...errorLogFields(error) });

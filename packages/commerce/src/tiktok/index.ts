@@ -3,7 +3,7 @@ import "server-only";
 // TikTok Shop write paths (docs/plans/tiktok-shop-integration.md §2): the connection, OAuth state and
 // tokens (T2), the webhook inbox (T3), the order read side: snapshots, projection, SKU mapping, the
 // sync run and its dry-run preview (T4), applying orders to admin orders and stock behind the kill
-// switch (T5). Later sessions add returns (T6) and finance (T7) here.
+// switch (T5), cancellations and returns (T6). T7 adds finance here.
 
 export {
   consumeTikTokOAuthState,
@@ -27,6 +27,25 @@ export {
   type TikTokCredentialsResult,
   type TikTokReauthReason,
 } from "./connection";
+export {
+  RETURN_RECEIVED_MESSAGES,
+  TIKTOK_AFTER_SALE_RECHECK_LIMIT,
+  applyTikTokAfterSale,
+  ingestTikTokAfterSale,
+  listTikTokAfterSalesToApply,
+  receiveMarketplaceReturn,
+  type ApplyTikTokAfterSaleResult,
+  type IngestTikTokAfterSaleResult,
+} from "./after-sale";
+export {
+  TIKTOK_RESPONSE_WINDOW_MS,
+  decideTikTokAfterSale,
+  tiktokAfterSaleFlags,
+  tiktokAfterSaleIsFinal,
+  tiktokAfterSaleResponseDue,
+  type AfterSaleDecideInput,
+  type AfterSaleDecision,
+} from "./after-sale-rules";
 export {
   applyTikTokOrder,
   listTikTokOrdersToApply,
@@ -92,6 +111,7 @@ export {
   drainTikTokWebhookOrderEvent,
   runTikTokSync,
   type DrainTikTokWebhookEventResult,
+  type TikTokAfterSaleCounts,
   type TikTokApplyCounts,
   type TikTokSyncDeps,
   type TikTokSyncSummary,

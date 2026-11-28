@@ -1,6 +1,6 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
-import { auditLog, orders, productVariants, stockMovements, tiktokOrderSnapshots, tiktokOrders, tiktokShopConnections, tiktokSkuMappings, tiktokSyncCursors, tiktokWebhookEvents } from "@ammari/db/schema";
+import { auditLog, marketplaceRefunds, orders, productVariants, stockMovements, tiktokOrderSnapshots, tiktokOrders, tiktokReturns, tiktokShopConnections, tiktokSkuMappings, tiktokSyncCursors, tiktokWebhookEvents } from "@ammari/db/schema";
 import { insertOrder, insertProductVariant, insertStaffUser } from "@ammari/db/test-fixtures";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { Secret, createTikTokClient, projectTikTokOrder, type FetchLike, type TikTokAuthClient, type TikTokOrderProjection, type TikTokTokenSet, type TokenKeyring } from "@ammari/tiktok-shop";
@@ -82,6 +82,10 @@ async function snapshotCount(db: TestDatabase, id: string) {
 interface FakeTikTok {
   fetch: FetchLike;
   orders: Map<string, Record<string, unknown>>;
+  /** T6: requests by id, answered by Search Returns / Search Cancellations. */
+  returns: Map<string, Record<string, unknown>>;
+  cancellations: Map<string, Record<string, unknown>>;
+  afterSaleSearches: { path: string; body: Record<string, unknown> }[];
   searches: { ge: number; lt: number; pageToken: string | null }[];
   detailCalls: string[][];
   /** Replies served before normal behaviour (status + envelope). */
@@ -96,6 +100,9 @@ const PAGE_SIZE = 2;
 function fakeTikTok(clock: { ms: number }): FakeTikTok {
   const fake: FakeTikTok = {
     orders: new Map(),
+    returns: new Map(),
+    cancellations: new Map(),
+    afterSaleSearches: [],
     searches: [],
     detailCalls: [],
     failures: [],
@@ -122,6 +129,16 @@ function fakeTikTok(clock: { ms: number }): FakeTikTok {
         const nextOffset = offset + PAGE_SIZE - 1;
         const next = offset + PAGE_SIZE < matching.length ? `p+/${Buffer.from(String(nextOffset)).toString("base64")}` : "";
         return ok({ orders: page.map((order) => ({ id: order.id, recipient_address: { phone_number: BUYER_PHONE } })), next_page_token: next });
+      }
+      if (url.pathname === "/return_refund/202309/returns/search" || url.pathname === "/return_refund/202309/cancellations/search") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        fake.afterSaleSearches.push({ path: url.pathname, body });
+        const isReturn = url.pathname.includes("/returns/");
+        const store = isReturn ? fake.returns : fake.cancellations;
+        const matching = [...store.values()].filter((record) =>
+          Array.isArray(body.order_ids) ? (body.order_ids as string[]).includes(String(record.order_id)) : (record.update_time as number) >= (body.update_time_ge as number) && (record.update_time as number) < (body.update_time_lt as number),
+        );
+        return ok({ [isReturn ? "return_orders" : "cancellations"]: matching, next_page_token: "" });
       }
       if (url.pathname === "/order/202507/orders") {
         const ids = (url.searchParams.get("ids") ?? "").split(",");
@@ -696,6 +713,196 @@ describe("runTikTokSync applying orders (T5)", () => {
       expect(second.apply).toMatchObject({ rechecked: 1, created: 1 });
       expect(fake.detailCalls).toHaveLength(0);
       expect(await projection(tx, "k-held")).toMatchObject({ applyState: "applied" });
+    });
+  });
+});
+
+describe("runTikTokSync: cancellations and returns (T6)", () => {
+  async function shippedOrder(tx: TestDatabase, id: string, updateTime: Date) {
+    const { variant } = await insertProductVariant(tx);
+    await tx.insert(tiktokSkuMappings).values({ tiktokSkuId: `sku-${id}`, variantSku: variant.sku, source: "auto_seller_sku", sellerSku: variant.sku });
+    await tx.insert(stockMovements).values({ sku: variant.sku, qty: 3, valueAmount: 300_000, type: "production", refType: "manual" });
+    return {
+      sku: variant.sku,
+      raw: {
+        ...rawOrder(id, updateTime, { status: "DELIVERED", paid_time: seconds(updateTime) - 30 * 3600, collection_time: seconds(updateTime) - 20 * 3600 }),
+        payment: { currency: "IDR", sub_total: "259000", seller_discount: "0", total_amount: "259000" },
+        line_items: [{ id: `${id}-li`, sku_id: `sku-${id}`, seller_sku: variant.sku, product_name: "Gamis", original_price: "259000" }],
+      },
+    };
+  }
+
+  function refundOnly(orderId: string, requestId: string, updateTime: Date) {
+    return {
+      return_id: requestId,
+      order_id: orderId,
+      return_type: "REFUND",
+      return_status: "RETURN_OR_REFUND_REQUEST_COMPLETE",
+      create_time: seconds(updateTime) - 3600,
+      update_time: seconds(updateTime),
+      return_reason_text: "pesan rahasia pembeli",
+      refund_amount: { currency: "IDR", refund_total: "59000" },
+      return_line_items: [{ order_line_item_id: `${orderId}-li` }],
+    };
+  }
+
+  async function afterSaleCursor(tx: TestDatabase, resource: "returns" | "cancellations") {
+    const [row] = await tx.select().from(tiktokSyncCursors).where(eq(tiktokSyncCursors.resource, resource));
+    return row;
+  }
+
+  test("switch on: the returns poll stores the request (no buyer text), fetches its order first, records the refund; both cursors advance", async () => {
+    await withRollback(async (tx) => {
+      await connect(tx);
+      const staff = await insertStaffUser(tx);
+      await setTikTokOrdersApply(tx, { enabled: true, staffUserId: staff.id });
+      const clock = { ms: NOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await setCursor(tx, new Date(NOW.getTime() - 30 * MIN));
+      for (const resource of ["returns", "cancellations"] as const) await tx.insert(tiktokSyncCursors).values({ resource, windowEnd: new Date(NOW.getTime() - 30 * MIN) });
+      const { raw, sku } = await shippedOrder(tx, "r-1", new Date(NOW.getTime() - 20 * MIN));
+      fake.orders.set("r-1", raw);
+      fake.returns.set("rt-1", refundOnly("r-1", "rt-1", new Date(NOW.getTime() - 10 * MIN)));
+
+      const summary = await runTikTokSync(tx, deps(fake));
+      expect(summary.error).toBeNull();
+      expect(summary.afterSales).toMatchObject({ fetched: 1, applied: 1, refundsRecorded: 1, failed: 0 });
+      expect(summary.afterSales.poll.return).toMatchObject({ caughtUp: true, slicesDone: 1 });
+      expect(summary.afterSales.poll.cancellation.caughtUp).toBe(true);
+      const [order] = await tx.select().from(orders).where(and(eq(orders.channelId, "tiktok"), eq(orders.channelOrderNo, "r-1")));
+      expect(order?.status).toBe("shipped");
+      const refunds = await tx.select().from(marketplaceRefunds).where(eq(marketplaceRefunds.orderId, order!.id));
+      expect(refunds).toMatchObject([{ amount: 59_000, kind: "refund_only", channelRefundId: "rt-1" }]);
+      const [{ qty } = { qty: 0 }] = await tx.execute<{ qty: number }>(sql`select coalesce(sum(qty), 0)::int as qty from stock_movements where sku = ${sku}`);
+      expect(qty).toBe(2);
+      const snapshots = await tx.select().from(tiktokOrderSnapshots).where(and(eq(tiktokOrderSnapshots.tiktokOrderId, "r-1"), eq(tiktokOrderSnapshots.kind, "return")));
+      expect(snapshots).toHaveLength(1);
+      expect(JSON.stringify(snapshots[0]!.payload)).not.toContain("rahasia");
+      for (const resource of ["returns", "cancellations"] as const) {
+        const row = await afterSaleCursor(tx, resource);
+        expect(row?.windowEnd?.getTime()).toBe(NOW.getTime() - TIKTOK_POLL_LAG_MS);
+        expect(row?.lastOkAt).not.toBeNull();
+      }
+      // A second run: replayed, still one refund.
+      clock.ms += 5 * MIN;
+      const again = await runTikTokSync(tx, deps(fake));
+      expect(again.afterSales.refundsRecorded).toBe(0);
+      expect(await tx.select().from(marketplaceRefunds).where(eq(marketplaceRefunds.orderId, order!.id))).toHaveLength(1);
+    });
+  });
+
+  test("switch off: the request is stored and listed, nothing reaches the order", async () => {
+    await withRollback(async (tx) => {
+      await connect(tx);
+      const clock = { ms: NOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await setCursor(tx, new Date(NOW.getTime() - 30 * MIN));
+      fake.returns.set("rt-off", refundOnly("r-off", "rt-off", new Date(NOW.getTime() - 10 * MIN)));
+      const summary = await runTikTokSync(tx, deps(fake));
+      expect(summary.afterSales).toMatchObject({ fetched: 1, applied: 0 });
+      const [row] = await tx.select().from(tiktokReturns).where(eq(tiktokReturns.requestId, "rt-off"));
+      expect(row).toMatchObject({ state: null, status: "RETURN_OR_REFUND_REQUEST_COMPLETE", tiktokOrderId: "r-off" });
+      expect(await tx.select().from(marketplaceRefunds).where(eq(marketplaceRefunds.channelRefundId, "rt-off"))).toHaveLength(0);
+    });
+  });
+
+  test("a request TikTok returns without a usable id holds the returns cursor (incomplete)", async () => {
+    await withRollback(async (tx) => {
+      await connect(tx);
+      const clock = { ms: NOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await setCursor(tx, new Date(NOW.getTime() - 30 * MIN));
+      await tx.insert(tiktokSyncCursors).values({ resource: "returns", windowEnd: new Date(NOW.getTime() - 30 * MIN) });
+      fake.returns.set("bad", { ...refundOnly("r-bad", "x", new Date(NOW.getTime() - 10 * MIN)), return_id: undefined });
+      const summary = await runTikTokSync(tx, deps(fake));
+      expect(summary.error).toEqual({ kind: "incomplete", code: "order_invalid" });
+      expect((await afterSaleCursor(tx, "returns"))?.windowEnd?.getTime()).toBe(NOW.getTime() - 30 * MIN);
+    });
+  });
+
+  test("a failing cancellation search never settles a return event of the same batch", async () => {
+    await withRollback(async (tx) => {
+      await connect(tx);
+      const clock = { ms: NOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await setCursor(tx, new Date(NOW.getTime() - 3 * MIN));
+      for (const id of ["f-a", "f-b"]) fake.orders.set(id, (await shippedOrder(tx, id, new Date(NOW.getTime() - 60 * MIN))).raw);
+      const ids: string[] = [];
+      for (const [type, id, orderId] of [[11, "n-fa", "f-a"], [12, "n-fb", "f-b"]] as const) {
+        const parsed = parseTikTokWebhookBody(JSON.stringify({ type, tts_notification_id: id, shop_id: SHOP_ID, timestamp: seconds(NOW), data: { order_id: orderId } }));
+        if (!parsed.ok) throw new Error(parsed.reason);
+        const stored = await recordTikTokWebhookEvent(tx, parsed.event);
+        if (stored.kind !== "stored") throw new Error(stored.kind);
+        ids.push(stored.id);
+      }
+      // Detail call answers; the first after-sale search (cancellations) fails.
+      const realFetch = fake.fetch;
+      let failed = false;
+      fake.fetch = async (input, init) => {
+        if (!failed && new URL(input).pathname.includes("/cancellations/search")) {
+          failed = true;
+          return new Response(JSON.stringify({ code: 12345, message: "bad", request_id: "b" }), { status: 400 });
+        }
+        return realFetch(input, init);
+      };
+      const summary = await runTikTokSync(tx, deps(fake));
+      expect(summary.error).toEqual({ kind: "api", code: "api:12345" });
+      const events = await tx.select().from(tiktokWebhookEvents).where(inArray(tiktokWebhookEvents.id, ids));
+      expect(events.map((event) => event.status)).toEqual(["pending", "pending"]);
+    });
+  });
+
+  test("a stuck returns slice holds only its own cursor: the cancellations poll still runs and advances", async () => {
+    await withRollback(async (tx) => {
+      await connect(tx);
+      const clock = { ms: NOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await setCursor(tx, new Date(NOW.getTime() - 30 * MIN));
+      for (const resource of ["returns", "cancellations"] as const) await tx.insert(tiktokSyncCursors).values({ resource, windowEnd: new Date(NOW.getTime() - 30 * MIN) });
+      fake.returns.set("bad", { ...refundOnly("s-1", "x", new Date(NOW.getTime() - 10 * MIN)), return_id: undefined });
+      const summary = await runTikTokSync(tx, deps(fake));
+      expect(summary.error).toEqual({ kind: "incomplete", code: "order_invalid" });
+      expect(summary.afterSales.poll.cancellation.caughtUp).toBe(true);
+      expect((await afterSaleCursor(tx, "returns"))).toMatchObject({ windowEnd: new Date(NOW.getTime() - 30 * MIN), lastErrorCode: "order_invalid" });
+      const cancellations = await afterSaleCursor(tx, "cancellations");
+      expect(cancellations?.windowEnd?.getTime()).toBe(NOW.getTime() - TIKTOK_POLL_LAG_MS);
+      expect(cancellations?.lastErrorCode).toBeNull();
+      expect((await cursor(tx))?.lastErrorCode).toBeNull();
+    });
+  });
+
+  test("topics 12 and 11 fetch the order's requests by order id; the events are processed", async () => {
+    await withRollback(async (tx) => {
+      await connect(tx);
+      const staff = await insertStaffUser(tx);
+      await setTikTokOrdersApply(tx, { enabled: true, staffUserId: staff.id });
+      const clock = { ms: NOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await setCursor(tx, new Date(NOW.getTime() - 3 * MIN));
+      const { raw } = await shippedOrder(tx, "w-1", new Date(NOW.getTime() - 60 * MIN));
+      fake.orders.set("w-1", raw);
+      fake.returns.set("rt-w", { ...refundOnly("w-1", "rt-w", new Date(NOW.getTime() - 60 * MIN)), return_status: "RETURN_OR_REFUND_REQUEST_PENDING" });
+      fake.cancellations.set("c-w", { cancel_id: "c-w", order_id: "w-1", cancel_type: "BUYER_CANCEL", cancel_status: "CANCELLATION_REQUEST_CANCEL", create_time: seconds(NOW) - 4000, update_time: seconds(NOW) - 3600 });
+      const ids: string[] = [];
+      for (const [type, id] of [[12, "n-r"], [11, "n-c"]] as const) {
+        const parsed = parseTikTokWebhookBody(JSON.stringify({ type, tts_notification_id: id, shop_id: SHOP_ID, timestamp: seconds(NOW), data: { order_id: "w-1" } }));
+        if (!parsed.ok) throw new Error(parsed.reason);
+        const stored = await recordTikTokWebhookEvent(tx, parsed.event);
+        if (stored.kind !== "stored") throw new Error(stored.kind);
+        ids.push(stored.id);
+      }
+      const summary = await runTikTokSync(tx, deps(fake));
+      expect(summary.inbox).toMatchObject({ claimed: 2, processed: 2 });
+      expect(fake.afterSaleSearches.filter((search) => Array.isArray(search.body.order_ids))).toHaveLength(2);
+      const rows = await tx.select().from(tiktokReturns).where(eq(tiktokReturns.tiktokOrderId, "w-1"));
+      expect(rows.map((row) => [row.kind, row.state]).sort()).toEqual([
+        ["cancellation", "closed"],
+        ["return", "open"],
+      ]);
+      const [order] = await tx.select().from(orders).where(and(eq(orders.channelId, "tiktok"), eq(orders.channelOrderNo, "w-1")));
+      expect(order?.needsAttention).toEqual(expect.arrayContaining(["marketplace_return_pending", "tiktok_return_response_due"]));
+      const events = await tx.select().from(tiktokWebhookEvents).where(inArray(tiktokWebhookEvents.id, ids));
+      expect(events.every((event) => event.status === "processed")).toBe(true);
     });
   });
 });

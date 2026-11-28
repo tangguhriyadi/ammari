@@ -58,8 +58,8 @@ export async function ingestTikTokOrder(db: Database, order: TikTokOrderProjecti
     const updateTime = order.updateTime.toISOString();
 
     const inserted = await tx.execute<{ id: string }>(sql`
-      insert into tiktok_order_snapshots (tiktok_order_id, update_time, content_sha256, payload, source, fetched_at)
-      values (${order.tiktokOrderId}, ${updateTime}::timestamptz, ${order.contentSha256}, ${JSON.stringify(order.payload)}::jsonb, ${source}, ${now.toISOString()}::timestamptz)
+      insert into tiktok_order_snapshots (tiktok_order_id, update_time, content_sha256, payload, source, kind, fetched_at)
+      values (${order.tiktokOrderId}, ${updateTime}::timestamptz, ${order.contentSha256}, ${JSON.stringify(order.payload)}::jsonb, ${source}, 'order', ${now.toISOString()}::timestamptz)
       on conflict (tiktok_order_id, update_time, content_sha256) do nothing
       returning id
     `);
@@ -70,7 +70,7 @@ export async function ingestTikTokOrder(db: Database, order: TikTokOrderProjecti
     const [conflict] = await tx.execute<{ conflict: boolean }>(sql`
       select exists (
         select 1 from tiktok_order_snapshots
-        where tiktok_order_id = ${order.tiktokOrderId} and update_time = ${updateTime}::timestamptz and content_sha256 <> ${order.contentSha256}
+        where tiktok_order_id = ${order.tiktokOrderId} and kind = 'order' and update_time = ${updateTime}::timestamptz and content_sha256 <> ${order.contentSha256}
       ) as conflict
     `);
     const isConflict = conflict?.conflict === true;

@@ -421,6 +421,13 @@
       "when": 1795783365174,
       "tag": "0059_tiktok_apply",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1795817698302,
+      "tag": "0060_tiktok_returns",
+      "breakpoints": true
     }
   ]
 }

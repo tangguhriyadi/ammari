@@ -41,11 +41,17 @@ export default async function OrdersPage({
         title="Pesanan"
         description="Daftar pesanan dari semua kanal penjualan."
         actions={
-          canManage ? (
-            <Link href="/orders/new">
-              <Button>Catat pesanan</Button>
+          <div className="flex flex-wrap gap-2">
+            {/* T6: requests to answer in Seller Center and parcels coming back. */}
+            <Link href="/orders/tiktok-returns">
+              <Button variant="secondary">Retur TikTok</Button>
             </Link>
-          ) : undefined
+            {canManage && (
+              <Link href="/orders/new">
+                <Button>Catat pesanan</Button>
+              </Link>
+            )}
+          </div>
         }
       />
       <div className="flex flex-col gap-3">

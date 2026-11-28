@@ -100,7 +100,7 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
 /** What Postgres jsonb refuses in a string (NUL, a lone surrogate) is removed or replaced, so one
  * odd product name can never make an order unstorable. Numbers that are not safe integers become
  * strings of their own spelling: jsonb would otherwise write 1e300 out in full. */
-function storable(value: AllowlistedValue): AllowlistedValue {
+export function storable(value: AllowlistedValue): AllowlistedValue {
   if (typeof value === "string") return value.replaceAll("\u0000", "").replace(LONE_SURROGATE, "\uFFFD");
   if (typeof value === "number") return Number.isSafeInteger(value) || (Number.isFinite(value) && Math.abs(value) < 1e15) ? value : String(value);
   if (Array.isArray(value)) return value.map((item) => storable(item as AllowlistedValue)) as AllowlistedValue;

@@ -115,7 +115,8 @@ export const ATTENTION_FLAG_COPY: Record<OrderAttentionFlag, AttentionFlagCopy> 
   },
   marketplace_review: {
     label: "Perlu dicek di marketplace",
-    meaning: "Pesanan dikirim dalam beberapa paket atau baru sebagian dikirim. Cek di Seller Center dan selesaikan status pesanan secara manual, lalu tandai beres.",
+    meaning:
+      "Pesanan dikirim dalam beberapa paket, atau ada permintaan retur yang tidak bisa diproses otomatis (lihat Retur dan pembatalan TikTok). Cek di Seller Center dan selesaikan secara manual, lalu tandai beres.",
   },
   marketplace_partial_return: {
     label: "Retur sebagian",
@@ -123,11 +124,11 @@ export const ATTENTION_FLAG_COPY: Record<OrderAttentionFlag, AttentionFlagCopy> 
   },
   tiktok_return_response_due: {
     label: "Tanggapi retur di TikTok",
-    meaning: "Pembeli mengajukan retur atau pengembalian dana. Tanggapi di Seller Center sebelum batas waktu, lalu tandai beres.",
+    meaning: "Pembeli mengajukan pembatalan, retur, atau pengembalian dana. Jawab di Seller Center sebelum batas waktu (lihat Retur dan pembatalan TikTok). Tanda ini hilang sendiri setelah dijawab atau batas waktunya lewat.",
   },
   marketplace_return_in_transit: {
     label: "Paket kembali ke toko",
-    meaning: "Paket gagal dikirim atau dikembalikan pembeli dan sedang dalam perjalanan kembali. Stok belum dikembalikan. Setelah paket diterima, ubah status ke Retur.",
+    meaning: "Paket gagal dikirim atau dikembalikan pembeli dan sedang dalam perjalanan kembali. Stok belum dikembalikan. Setelah paket sampai di toko, tekan Retur diterima.",
   },
 };
 

@@ -22,6 +22,7 @@ import {
   STALE_MANUAL_PAYMENT_HOURS,
   type ActionOrderRow,
 } from "@/lib/overview/needs-action";
+import { countTikTokResponsesDue } from "@/lib/orders/tiktok-returns";
 import { getSupplierDebtSummary } from "@/lib/supplier-payments/supplier-balance";
 import { PAYMENT_STATUS_LABELS } from "@/lib/supplier-payments/status";
 
@@ -148,20 +149,35 @@ function OrderItem({ order, aside, note }: { order: ActionOrderRow; aside?: Reac
 }
 
 async function AttentionBlock({ tiktok }: { tiktok: boolean }) {
-  const [{ count, rows }, heldTikTok] = await Promise.all([getAttentionOrders(), tiktok ? getHeldTikTokOrderCount() : Promise.resolve(0)]);
+  // The response count is not gated by integrations.manage like the held count: answering in Seller
+  // Center is day-to-day order work (orders.view), and with no shop connected the table is empty.
+  const [{ count, rows }, heldTikTok, responsesDue] = await Promise.all([getAttentionOrders(), tiktok ? getHeldTikTokOrderCount() : Promise.resolve(0), countTikTokResponsesDue()]);
+  // Only TikTok requests to answer (applying still off flags no order): the block shows those and
+  // links to their page, never an empty Perlu dicek list.
+  const onlyResponses = count + heldTikTok === 0 && responsesDue > 0;
   return (
     <Block
       title="Perlu dicek"
       // Held TikTok orders have no admin order yet, so they are not in `count`; they still keep the
       // block open (a collapsed "Tidak ada" would hide them).
-      count={count + heldTikTok}
-      href="/orders?status=perlu-dicek"
+      count={onlyResponses ? responsesDue : count + heldTikTok}
+      href={onlyResponses ? "/orders/tiktok-returns" : "/orders?status=perlu-dicek"}
       testId="action-attention"
       extraLinks={
-        heldTikTok > 0 ? (
-          <Link href="/settings/integrations/tiktok/orders" className="inline-flex min-h-11 items-center text-sm text-danger-700 underline underline-offset-4" data-testid="action-tiktok-held">
-            {formatNumber(heldTikTok)} pesanan TikTok ditahan
-          </Link>
+        heldTikTok > 0 || responsesDue > 0 ? (
+          <>
+            {/* T6: TikTok requests to answer in Seller Center before TikTok approves them itself. */}
+            {responsesDue > 0 && (
+              <Link href="/orders/tiktok-returns" className="inline-flex min-h-11 items-center text-sm text-danger-700 underline underline-offset-4" data-testid="action-tiktok-responses-due">
+                {formatNumber(responsesDue)} permintaan TikTok perlu dijawab
+              </Link>
+            )}
+            {heldTikTok > 0 && (
+              <Link href="/settings/integrations/tiktok/orders" className="inline-flex min-h-11 items-center text-sm text-danger-700 underline underline-offset-4" data-testid="action-tiktok-held">
+                {formatNumber(heldTikTok)} pesanan TikTok ditahan
+              </Link>
+            )}
+          </>
         ) : undefined
       }
     >

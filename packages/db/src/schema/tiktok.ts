@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigint, boolean, check, customType, index, integer, jsonb, pgTable, smallint, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, customType, index, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { productVariants } from "./catalog";
 import { checkArraySubset, checkIn, createdAtOnly, timestamps } from "./columns";
 import { orders } from "./orders";
@@ -297,5 +297,98 @@ export const tiktokSkuMappings = pgTable(
     check("tiktok_sku_mappings_actor_check", sql`(${table.source} = 'manual') = (${table.mappedByStaffUserId} is not null)`),
     index("tiktok_sku_mappings_variant_sku_idx").on(table.variantSku),
     index("tiktok_sku_mappings_mapped_by_idx").on(table.mappedByStaffUserId),
+  ],
+);
+
+// ---- Cancellations and returns (plan §4.5, T6, migration 0060) ------------------------------------
+
+export const TIKTOK_AFTER_SALE_KINDS = ["return", "cancellation"] as const;
+export type TikTokAfterSaleKind = (typeof TIKTOK_AFTER_SALE_KINDS)[number];
+
+/** What the sync last made of a request (commerce/tiktok/after-sale-rules.ts). NULL until applied
+ * (the T5 kill switch off: stored only, a dry run). */
+export const TIKTOK_AFTER_SALE_STATES = [
+  // No admin order to act on yet (not applied, held, skipped): re-checked every run.
+  "waiting_order",
+  // The request is open (seller may have to answer in Seller Center).
+  "open",
+  // Approved; goods not shipped back yet, or the refund is on its way.
+  "approved",
+  // The buyer shipped the goods back: the parcel is on its way (Q18).
+  "goods_coming",
+  // RETURN_OR_REFUND_REQUEST_COMPLETE with every item coming back: stock waits for "Retur diterima".
+  "completed_goods",
+  // RETURN_OR_REFUND_REQUEST_COMPLETE refund-only: one marketplace_refunds row (Q10).
+  "completed_refund",
+  // A cancellation TikTok completed: the order's own status path cancels it.
+  "cancel_completed",
+  // Rejected or withdrawn without a refund.
+  "closed",
+  // Some items only, with goods: marketplace_partial_return, settled by hand.
+  "partial",
+  // Nothing the rules can classify: a person decides (review_reason).
+  "review",
+] as const;
+export type TikTokAfterSaleState = (typeof TIKTOK_AFTER_SALE_STATES)[number];
+
+export const TIKTOK_AFTER_SALE_REVIEW_REASONS = [
+  "unknown_status",
+  "unknown_type",
+  "replacement",
+  "lines_unknown",
+  "money_format",
+  "refund_over_total",
+  "before_shipping",
+  "after_return",
+  "package_rejected",
+  "closed_after_goods",
+] as const;
+export type TikTokAfterSaleReviewReason = (typeof TIKTOK_AFTER_SALE_REVIEW_REASONS)[number];
+
+/** The current state of each TikTok return or cancellation request (plan §4.5). Moves forward only
+ * (`latest_update_time < $new`), like `tiktok_orders`. Its versions are snapshots of kind `return` /
+ * `cancellation` in `tiktok_order_snapshots`, keyed by the TikTok order id. */
+export const tiktokReturns = pgTable(
+  "tiktok_returns",
+  {
+    kind: text("kind", { enum: TIKTOK_AFTER_SALE_KINDS }).notNull(),
+    // TikTok's `return_id` / `cancel_id`.
+    requestId: text("request_id").notNull(),
+    tiktokOrderId: text("tiktok_order_id").notNull(),
+    status: text("status").notNull(),
+    requestType: text("request_type"),
+    createTime: timestamp("create_time", { withTimezone: true, mode: "date" }),
+    latestUpdateTime: timestamp("latest_update_time", { withTimezone: true, mode: "date" }).notNull(),
+    latestSnapshotId: uuid("latest_snapshot_id")
+      .notNull()
+      .references(() => tiktokOrderSnapshots.id, { onDelete: "restrict" }),
+    // When the seller must answer in Seller Center (TikTok's deadline, else create_time + 48 h, §0);
+    // NULL once the request no longer waits for the seller.
+    responseDueAt: timestamp("response_due_at", { withTimezone: true, mode: "date" }),
+    // The `update_time` of the first RETURN_OR_REFUND_REQUEST_COMPLETE version (written once).
+    completedAt: timestamp("completed_at", { withTimezone: true, mode: "date" }),
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "restrict" }),
+    state: text("state", { enum: TIKTOK_AFTER_SALE_STATES }),
+    reviewReason: text("review_reason", { enum: TIKTOK_AFTER_SALE_REVIEW_REASONS }),
+    appliedUpdateTime: timestamp("applied_update_time", { withTimezone: true, mode: "date" }),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    ...timestamps(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.kind, table.requestId] }),
+    check("tiktok_returns_kind_check", checkIn(table.kind, TIKTOK_AFTER_SALE_KINDS)),
+    check("tiktok_returns_state_check", sql`${table.state} is null or ${checkIn(table.state, TIKTOK_AFTER_SALE_STATES)}`),
+    check("tiktok_returns_review_reason_check", sql`${table.reviewReason} is null or ${checkIn(table.reviewReason, TIKTOK_AFTER_SALE_REVIEW_REASONS)}`),
+    // A reason only with the review state, and the review state always with one.
+    check("tiktok_returns_review_pair_check", sql`(${table.state} is not distinct from 'review') = (${table.reviewReason} is not null)`),
+    check("tiktok_returns_request_id_check", sql`char_length(${table.requestId}) between 1 and 128`),
+    check("tiktok_returns_order_id_text_check", sql`char_length(${table.tiktokOrderId}) between 1 and 128`),
+    check("tiktok_returns_status_check", sql`char_length(${table.status}) between 1 and 64`),
+    check("tiktok_returns_request_type_check", sql`${table.requestType} is null or char_length(${table.requestType}) between 1 and 64`),
+    index("tiktok_returns_tiktok_order_id_idx").on(table.tiktokOrderId),
+    index("tiktok_returns_order_id_idx").on(table.orderId),
+    index("tiktok_returns_latest_snapshot_id_idx").on(table.latestSnapshotId),
+    // The 48-hour list in admin.
+    index("tiktok_returns_response_due_idx").on(table.responseDueAt).where(sql`${table.responseDueAt} is not null`),
   ],
 );

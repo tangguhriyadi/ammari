@@ -29,6 +29,11 @@ const SECRET = randomBytes(24).toString("hex");
 const APP_SECRET = `dummy-secret-${randomBytes(8).toString("hex")}`;
 const ENV_NAMES = ["TIKTOK_APP_KEY", "TIKTOK_APP_SECRET", "TIKTOK_TOKEN_ENC_KEY_V1", "TIKTOK_TOKEN_ENC_KEY_CURRENT", "TIKTOK_PROVIDER"];
 
+function afterSales(overrides: Partial<TikTokSyncSummary["afterSales"]> = {}): TikTokSyncSummary["afterSales"] {
+  const poll = { slices: 1, slicesDone: 1, pages: 1, caughtUp: true, windowEnd: null };
+  return { poll: { return: poll, cancellation: poll }, fetched: 0, snapshotsInserted: 0, replays: 0, conflicts: 0, invalid: 0, storeFailed: 0, applied: 0, unchanged: 0, refundsRecorded: 0, busy: 0, failed: 0, notFound: 0, rechecked: 0, recheckIncomplete: false, problems: [], ...overrides };
+}
+
 function summary(overrides: Partial<TikTokSyncSummary> = {}): TikTokSyncSummary {
   return {
     connection: "active",
@@ -38,6 +43,7 @@ function summary(overrides: Partial<TikTokSyncSummary> = {}): TikTokSyncSummary 
     poll: { slices: 1, slicesDone: 1, pages: 1, orderIds: 0, caughtUp: true, windowEnd: null },
     orders: { fetched: 0, snapshotsInserted: 0, replays: 0, conflicts: 0, projectionsAdvanced: 0, missing: 0, invalid: 0, storeFailed: 0, autoMapped: 0 },
     apply: { enabled: false, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 0, rechecked: 0, recheckIncomplete: false, notFound: 0, problems: [] },
+    afterSales: afterSales(),
     budgetExhausted: false,
     error: null,
     problems: [],
@@ -120,6 +126,9 @@ describe("POST /api/internal/tiktok/sync", () => {
       // T5: a held or busy apply is not a failure; an apply that threw is (retried every run).
       [summary({ apply: { enabled: true, created: 0, updated: 0, unchanged: 0, held: 3, skipped: 0, busy: 1, failed: 0, rechecked: 4, recheckIncomplete: false, notFound: 0, problems: [] } }), 200],
       [summary({ apply: { enabled: true, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 1, rechecked: 1, recheckIncomplete: false, notFound: 0, problems: [{ id: "o-1", kind: "failed", code: "sqlstate:23505" }] } }), 500],
+      // T6: a return/cancellation apply that threw is a failure too; a busy one is not.
+      [summary({ afterSales: afterSales({ busy: 1 }) }), 200],
+      [summary({ afterSales: afterSales({ failed: 1, problems: [{ id: "return:r-1", kind: "failed", code: "sqlstate:23505" }] }) }), 500],
       [summary({ error: { kind: "incomplete", code: "order_missing" }, problems: [{ id: "o-1", problem: "order_missing" }] }), 500],
     ];
     for (const [value, status] of cases) {

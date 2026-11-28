@@ -3,7 +3,9 @@
 Status: **T1 built** (`d6b82d2`); **T2 built** (`e2ec0a5`, connection + OAuth, migration 0057, runbook §7.4);
 **T3 built** 27 Nov 2026 (webhook receiver, no migration, runbook §7.5); **T4 built** 27 Nov 2026 (order
 read side in dry run, migration 0058, build notes §9.1); **T5 built** 27 Nov 2026 (apply to orders and stock
-behind a kill switch that is off by default, migration 0059, build notes §9.2). T6-T9 not started.
+behind a kill switch that is off by default, migration 0059, build notes §9.2); **T6 built** 28 Nov 2026
+(cancellations and returns, read only, migration 0060, build notes §9.3). T7-T9 not started. T6 took
+migration 0060, so T7 is now **0061** and T8 **0062** (renumbered below).
 Every session below needs its own `/plan` approval first (CLAUDE.md Workflow 1). **Owner decisions of
 27 Nov 2026 are recorded in §12** and folded into the sections and sessions they affect. Q1, Q3, Q6 and
 Q13 are verified in T0 on the development shop.
@@ -138,7 +140,7 @@ Decisions behind the layout:
 
 ---
 
-## 3. Data model (migrations 0057-0061, expand-only)
+## 3. Data model (migrations 0057-0062, expand-only)
 
 Every table is new, and every change to an existing table is a nullable column or a CHECK widened to
 a superset. The previously deployed release never reads them, so rollback stays safe (CLAUDE.md
@@ -283,7 +285,7 @@ Writing a row leaves the order's status and its stock **untouched**. Rows are ap
 TikTok-side correction of a completed refund is recorded is decided in T6's `/plan`; v1 does not
 expect corrections.
 
-### 3.5 Finance (0060)
+### 3.5 Finance (0061; was 0060 before T6 took that number)
 
 - `tiktok_statements`: `statement_id text pk`, `statement_time`, `settlement_amount bigint`,
   `revenue_amount`, `fee_amount`, `adjustment_amount`, `payment_status text`, `payment_id text null`,
@@ -304,7 +306,7 @@ expect corrections.
 (accounting.md §1.2). This plan deliberately does not add one, so the two features cannot collide.
 Provenance lives in `tiktok_order_fee_lines`.
 
-### 3.6 Accounting reference data (0061)
+### 3.6 Accounting reference data (0062; was 0061)
 
 - Mapping key `cash.tiktok_payout` → 1-1201 Bank utama. **Decided (Q17): payouts always go to Bank
   utama.** The key exists so the accountant can point it at a sub-account. It is inserted with
@@ -882,6 +884,91 @@ T2 built the connection; nothing reaches TikTok until the owner sets these. Valu
   (T8; `SALES_RULE_VERSION` untouched); returns/refunds (T6); courier/resi from TikTok are not copied onto
   the admin order.
 
+
+### 9.3 T6 build notes (28 Nov 2026)
+
+- **Read only towards TikTok (Q15).** `packages/tiktok-shop/src/returns.ts`: Search Returns
+  (`POST /return_refund/202309/returns/search`) and Search Cancellations
+  (`POST /return_refund/202309/cancellations/search`), by `update_time` window (both bounds, ASC,
+  `page_size` 50) or by up to 20 `order_ids`. No approve/reject call exists. Allowlists
+  `TIKTOK_RETURN_ALLOWLIST` / `TIKTOK_CANCELLATION_ALLOWLIST`: ids, statuses, types, times,
+  `seller_next_action_response` (action, deadline), `refund_amount`, line ids; the buyer's reason text
+  and contact never survive (tested).
+- **Migration 0060** (`tiktok_returns`, new table only): the forward-only projection per request (`kind`
+  + `request_id`), with `response_due_at`, `completed_at` (first COMPLETE version, written once),
+  `state` / `review_reason` (CHECK pair) and `order_id`. Versions are snapshots of kind `return` /
+  `cancellation` in `tiktok_order_snapshots`, keyed by the TikTok order id. T4's same-`update_time`
+  conflict check now compares order snapshots only (`kind = 'order'`).
+- **Rules** (`commerce/tiktok/after-sale-rules.ts`, pure, table-tested): states `open`, `approved`,
+  `goods_coming`, `completed_goods`, `completed_refund`, `cancel_completed`, `closed`, `partial`,
+  `review`, `waiting_order`. Refund-only (`REFUND`) complete → one `marketplace_refunds` row
+  (`refund_total`, dated by the first COMPLETE version), status/stock untouched, pending cleared. Return
+  with goods (`RETURN_AND_REFUND`) covering every order line → pending; `BUYER_SHIPPED_ITEM` or COMPLETE →
+  + `marketplace_return_in_transit`, COMPLETE also writes `marketplace_returned_at` once; stock waits for
+  "Retur diterima". Some lines only → `marketplace_partial_return`. **Review** (flag
+  `marketplace_review`, reason on the request): replacement, unknown type or status, lines that cannot be
+  matched by `order_line_item_id`, money not whole rupiah / absent / ≤ 0, refund above the order total, a
+  return on an order admin never shipped, a refund-only on an order already returned, a rejected parcel,
+  a return closed after the goods were on their way. Cancellations only set the response deadline; the
+  order's own status path (T5) cancels the order.
+- **Response deadline:** TikTok's earliest `seller_next_action_response.deadline`, else (a request still
+  pending its first answer) `create_time` + 48 h (§0); none for a final status, never invented without a
+  create time. Stored at ingest, so the list works with the kill switch off. `tiktok_return_response_due`
+  is fully derived (set while a request waits and its deadline is ahead; removed by the re-check once it
+  passes) and cannot be cleared by "Tandai beres" while applying is on. Pending / in transit /
+  partial / review are added only when a request enters that state (a person's "Hapus tanda retur"
+  sticks); pending is removed once no return of the order needs it, except while TikTok reports the order
+  CANCELLED (T5's failed-delivery path owns it). In transit is never removed by the sync.
+- **Commit** (`after-sale.ts`): advisory lock `tiktok-order:<order id>` (the key T4/T5 take), re-read under
+  the lock, admin order `FOR UPDATE`, refund `INSERT ... ON CONFLICT (channel_id, channel_refund_id) DO
+  NOTHING`, flags through the same `needs_attention` expression as T5. A replay writes nothing. Audit:
+  `tiktok_return_update` (order, or `tiktok_order` while no admin order), `tiktok_refund_record`,
+  `marketplace_return_received` (staff). Concurrency tested with real commits (one refund row).
+- **"Retur diterima"** (`receiveMarketplaceReturn`, action `receiveMarketplaceReturnAction`,
+  `orders.manage` on the server): refused without `marketplace_return_in_transit`; runs
+  `transitionOrderStatus(→ returned)` (exact-negation movements, flags cleared). On the order page
+  (Marketplace block) and on the new list page.
+- **Sync:** steps added to `runTikTokSync`: a re-check of requests (≤ ¼ budget: not applied, newer version,
+  waiting for their order every 15 min, passed deadlines), then after the order poll a returns poll and a
+  cancellations poll on their own cursors (`returns`, `cancellations`; same window mechanics). Each
+  request's order is fetched first when this run has not stored it. Topics 12/11 now also search the
+  order's returns/cancellations by order id; the event is settled only once both are stored. Kill switch
+  off → stored only (state NULL). An invalid or unstorable request holds its cursor (`incomplete`). The
+  route answers 500 for a request apply that threw, warns on busy/not found/conflict.
+- **Admin:** `/orders/tiktok-returns` "Retur dan pembatalan TikTok" (orders.view): Perlu direspons di Seller
+  Center (soonest first, "Segera" under 6 h), Paket dalam perjalanan kembali (oldest first, Retur diterima
+  with orders.manage), Perlu dicek. Linked from the orders page header ("Retur TikTok"), the home page's
+  Perlu dicek block ("N permintaan TikTok perlu dijawab") and each request on the order page. e2e at
+  390/1280.
+- **Assumptions to check in T0** (built on a stated assumption, never guessed silently): the 202309
+  return/cancellation status and type names listed in `after-sale-rules.ts`; the list keys
+  `return_orders` / `cancellations`; `order_line_item_id` matching the order's `line_items[].id`; the
+  refund-only amount being `refund_amount.refund_total` (T8 reconciles it against the statement's refund
+  transaction); `page_size` 50 and 20 order ids per call. A name TikTok spells differently becomes a
+  `review` request, never a silent action.
+- **Review fixes (code review, 28 Nov 2026):** the three polls hold only their own cursor on an
+  `incomplete` slice (a stuck returns slice no longer stops the cancellations poll; finished cursors get
+  `last_ok_at`); a failing topic 11/12 search leaves every after-sale event of the batch pending; a
+  decision that depended on the admin order (`before_shipping`, `after_return`, `lines_unknown`, or
+  closed because the order was skipped) is decided again on the re-check (every 15 min) once the order
+  moved; refund-only amounts are checked per order (all refunds together ≤ total) and a completed refund
+  whose amount later differs goes to review (never rewritten); closed after a recorded refund → review;
+  an older COMPLETE version arriving late still dates the return; a request TikTok names under another
+  order is never re-pointed (`order_mismatch`, holds the cursor); a page whose list sits under another
+  key than assumed is refused (`invalid_response`), never read as empty; the webhook route logs the
+  after-sale outcome; the in-transit list is TikTok only; 0060 sets `lock_timeout`.
+- **Rollback note:** the previous release's order store compares a snapshot's `update_time` with every
+  snapshot of the order, not only order snapshots. Run against a database where 0060 code stored return
+  snapshots, it can flag `tiktok_snapshot_conflict` when a return and an order version share an
+  `update_time`. After a rollback, check those flags on the dry-run page before acting on them.
+- **Known limits, left as they are:** a request that stays invalid holds its cursor until fixed (as
+  orders, §9.1; visible as `incomplete` + ALERT); the re-check query scans `tiktok_returns` (fine at
+  Ammari's volume); a refund row whose `channel_refund_id` already exists under another order is not
+  compared (the unique key keeps one row).
+- **Not done here:** corrections of a completed refund (v1 does not expect them; a later COMPLETE version
+  never writes a second row); `marketplace_returned_at` is not written for refund-only (S7 uses
+  `refunded_at`, §5.2); writing off a parcel that never comes back stays a stock adjustment by the owner.
+
 ---
 
 ## 10. Sessions
@@ -900,9 +987,9 @@ migration is read before it is committed. Test DBs are `ammari_e2e`/scratch data
 | **T3** | Webhook receiver in apps/web (`/api/integrations/tiktok/webhook`, registered per app in Kelola Webhook, Q5): capped body, verify, shop check, inbox insert, 200 empty / 401 / 503; `after()` drain hook (no-op until T4); topics 6/7 wired to T2; retention entry; Cloudflare Access bypass + Caddy note in the runbook. | none | Route tests: **the official webhook vector** (T1 fixture) posted as the raw body with its `Authorization` → verified (with that test's app key/secret injected), stored, 200 with an empty body; replay of the same `tts_notification_id` → 200, still one row; bad signature → 401, no row; oversized → 413/401, no row; DB down → 503; unknown topic → `ignored`; response time with the DB stubbed slow stays < 3 s (no API call in the request path). Retention deletes > 12 months only. |
 | **T4** | Order read side: 0058 tables (snapshots, `tiktok_orders` incl. `buyer_message` + purge date, SKU mappings 1→1, Q12); allowlists; order search poll with cursors and slicing; Get Order Detail batches of ≤ 50; snapshot versioning; `buyer_message` purge in the retention job (Q14); `/api/internal/tiktok/sync` + `CRON_JOBS` + `cron.sh`; **Pemetaan SKU TikTok** page; **no admin order writes yet** (dry-run view "Akan dibuat / ditahan"). | **0058** | Unit: window math (overlap ≥ 5 min, both bounds set, ≤ 6-h slices, lag), pagination, cursor advances only after a full slice. DB: the same snapshot twice → one row; an older `update_time` after a newer one → projection unchanged; same `update_time` with different content → conflict flag. PII: buyer-field fixture through every allowlist → nothing survives, and `buyer_message` is absent from snapshots and the inbox but present in `tiktok_orders`; purge: NULL at COMPLETED/CANCELLED + 30 days, kept at + 29 days, never purged for an open order. Mapping: one TikTok SKU can map to one variant only (PK), two TikTok SKUs to one variant allowed; auto-map exact seller SKU and not a near miss (case/whitespace handled, `POKA-FZ-SAGE-M` ≠ `POKA-FZ-SAGE-L`). Cron lock skip. e2e: SKU mapping page at 390/1280. |
 | **T5** | **Apply to orders and stock** (TDD, stock): 0059 (`marketplace_shipped_at/_completed_at/_returned_at`, attention flags incl. `marketplace_return_in_transit`, snapshot `kind`, `marketplace_refunds`); `decideTikTokOrder` + `commitTikTokOrder` in commerce; amounts per Q7 (seller item discounts → `discount_amount`); matching hand-typed TikTok orders; `tiktokReadyToShip` gate on `/packing` and the order list badges; `buyer_message` on packing; multi-package → review flag only (Q2); Perlu dicek reasons. | **0059** | Unit (pure decide, table-driven): every row of §4.3 for new and existing orders; **both ON_HOLD flows** (an `ON_HOLD` status, and `AWAITING_SHIPMENT` + `is_on_hold_order`); gate truth table (on hold true/false × before/after 1 h since `paid_time`); terminal stays terminal; COMPLETED never clears a return; `PARTIALLY_SHIPPING` → flag, no transition; cancel after shipping → flags only, no `returned`; unknown status held. Amounts: item seller discount + seller voucher → `discount_amount`, platform discount ignored, `total = subtotal − discount`. DB through `transitionOrderStatus` fixtures: create at first paid status → one sale movement per line; paid → cancelled in the hold window → exact return, stock net 0; IN_TRANSIT sets `marketplace_shipped_at` once and a later different value is flagged, not overwritten; short stock held, then applied after a receipt; unknown SKU held, then applied after mapping; a hand-typed order is matched, not duplicated, and its different lines are held; **concurrency:** the webhook drain and the poll apply the same order at once → one order, one set of movements (advisory lock + ON CONFLICT); a replayed snapshot → no writes. e2e: orders list and `/packing` show a TikTok order, its badge, its buyer message and its packable state at 390/1280. |
-| **T6** | Cancellations and returns: polls + topics 11/12; refund recorded at `RETURN_OR_REFUND_REQUEST_COMPLETE` with `marketplace_returned_at`; **return with goods and failed delivery wait for physical receipt** (Q11; Q18) via "Retur diterima" → `returned`; **refund-only → `marketplace_refunds` row**, no status or stock change (Q10); pre-ship → `cancelled`; pending flag and 48-h deadline list (responses stay in Seller Center, Q15); partial return with goods → `marketplace_partial_return`. | none | Unit: return/cancellation state → decision. DB: failed delivery → flags, stock unchanged until "Retur diterima", then exact-negation return movements and flags cleared; "Retur diterima" refused without the flag and for staff without `orders.manage`; a refund in transit on a COMPLETED order → the matching path (refund-only → refund row; with goods → waits for receipt); refund-only → one refund row, **no stock movement**, status unchanged; a replayed refund → still one row (unique); repeated return snapshots → idempotent. e2e: Perlu dicek deadline list and "Retur diterima" at 390/1280. |
-| **T7** | Finance read side (TDD, money): 0060 tables; unsettled transactions → `estimate` fee lines (Q9); statements + transactions + per-order SKU-level fees → `actual`; payouts; aggregation into `order_channel_fees` by the §5.3 fee-type table, rows filled from the fee types seen on the development shop and reviewed once by the accountant. | **0060** | Unit: `parseRupiah` on real response shapes (non-integer → `money_format`, never rounded); fee-type table complete for every type in the fixtures, and only `seller_shipping_subsidy` outside the 6-1201 components; an unknown type → held, not `other`. DB: estimate then actual → the actual replaces it with one upsert per component; no estimate yet → no fee rows (never zero); statement re-fetch → idempotent; Σ transactions = settlement per statement; payout ↔ statements link. |
-| **T8** | Accounting: loader reads the new columns (no `SALES_RULE_VERSION` bump); new rules S7 `marketplace_refund`, M3 `tiktok_payout` (→ Bank utama, Q17) and M5 `tiktok_adjustment`; 0061 mapping key `cash.tiktok_payout`; Pemetaan Akun lists unmapped TikTok adjustment types (Q8, ads → 6-1101 suggested); close warning for estimated TikTok fees (Q9); **Ringkasan / `revenue-sql.ts` subtract refund-only amounts** (Q19) and check 4 maps S7 to that component; Rekonsiliasi "TikTok Shop" checks (a)-(d) plus the M4/M5 ads pair list; opening 1-1303 proposal; accounting.md updated (Session 5 split, §9, §13). | **0061** | Unit: M1 dated by Jakarta `collection_time` (23:30 UTC → next Jakarta day); M2 on the same date, discount on 4-1201 (Q7); estimate → actual into a closed month → first open month; S7 Dr 4-1301 / Cr 1-1303 on `refunded_at` with no HPP line; S7 held while M1 is an issue; S4 dated `marketplace_returned_at`, S2 dated by the receipt movement; M3 Dr 1-1201 / Cr 1-1303; M5 unmapped → issue, mapped ads type → 6-1101. DB: **existing journals unchanged** after the loader change (a run on a fixture DB with posted journals → zero new rows); a TikTok order through paid → shipped → completed → settled → paid out leaves 1-1303 at 0 for that order; refund-only order → 1-1303 at 0 after settlement, 1-1505/HPP unchanged; Ringkasan revenue for the refund's month is lower by the refund amount and **check 4 shows no difference** (the existing `getExpenseSummary().net` equality test extended with a refund-only fixture). e2e: Rekonsiliasi TikTok section and Pemetaan Akun adjustment types at 390/1280. |
+| **T6** | Cancellations and returns: polls + topics 11/12; refund recorded at `RETURN_OR_REFUND_REQUEST_COMPLETE` with `marketplace_returned_at`; **return with goods and failed delivery wait for physical receipt** (Q11; Q18) via "Retur diterima" → `returned`; **refund-only → `marketplace_refunds` row**, no status or stock change (Q10); pre-ship → `cancelled`; pending flag and 48-h deadline list (responses stay in Seller Center, Q15); partial return with goods → `marketplace_partial_return`. | **0060** (`tiktok_returns`, built; §9.3) | Unit: return/cancellation state → decision. DB: failed delivery → flags, stock unchanged until "Retur diterima", then exact-negation return movements and flags cleared; "Retur diterima" refused without the flag and for staff without `orders.manage`; a refund in transit on a COMPLETED order → the matching path (refund-only → refund row; with goods → waits for receipt); refund-only → one refund row, **no stock movement**, status unchanged; a replayed refund → still one row (unique); repeated return snapshots → idempotent. e2e: Perlu dicek deadline list and "Retur diterima" at 390/1280. |
+| **T7** | Finance read side (TDD, money): 0061 tables; unsettled transactions → `estimate` fee lines (Q9); statements + transactions + per-order SKU-level fees → `actual`; payouts; aggregation into `order_channel_fees` by the §5.3 fee-type table, rows filled from the fee types seen on the development shop and reviewed once by the accountant. | **0061** | Unit: `parseRupiah` on real response shapes (non-integer → `money_format`, never rounded); fee-type table complete for every type in the fixtures, and only `seller_shipping_subsidy` outside the 6-1201 components; an unknown type → held, not `other`. DB: estimate then actual → the actual replaces it with one upsert per component; no estimate yet → no fee rows (never zero); statement re-fetch → idempotent; Σ transactions = settlement per statement; payout ↔ statements link. |
+| **T8** | Accounting: loader reads the new columns (no `SALES_RULE_VERSION` bump); new rules S7 `marketplace_refund`, M3 `tiktok_payout` (→ Bank utama, Q17) and M5 `tiktok_adjustment`; 0062 mapping key `cash.tiktok_payout`; Pemetaan Akun lists unmapped TikTok adjustment types (Q8, ads → 6-1101 suggested); close warning for estimated TikTok fees (Q9); **Ringkasan / `revenue-sql.ts` subtract refund-only amounts** (Q19) and check 4 maps S7 to that component; Rekonsiliasi "TikTok Shop" checks (a)-(d) plus the M4/M5 ads pair list; opening 1-1303 proposal; accounting.md updated (Session 5 split, §9, §13). | **0062** | Unit: M1 dated by Jakarta `collection_time` (23:30 UTC → next Jakarta day); M2 on the same date, discount on 4-1201 (Q7); estimate → actual into a closed month → first open month; S7 Dr 4-1301 / Cr 1-1303 on `refunded_at` with no HPP line; S7 held while M1 is an issue; S4 dated `marketplace_returned_at`, S2 dated by the receipt movement; M3 Dr 1-1201 / Cr 1-1303; M5 unmapped → issue, mapped ads type → 6-1101. DB: **existing journals unchanged** after the loader change (a run on a fixture DB with posted journals → zero new rows); a TikTok order through paid → shipped → completed → settled → paid out leaves 1-1303 at 0 for that order; refund-only order → 1-1303 at 0 after settlement, 1-1505/HPP unchanged; Ringkasan revenue for the refund's month is lower by the refund amount and **check 4 shows no difference** (the existing `getExpenseSummary().net` equality test extended with a refund-only fixture). e2e: Rekonsiliasi TikTok section and Pemetaan Akun adjustment types at 390/1280. |
 | **T9** | Cut-over and backfill: backfill orders, returns and finance from `backfill_from` (proposal 1 Dec 2026, limited by what T0 found for Q13) in "enrich" mode (fills `marketplace_shipped_at` and fees on orders that already exist, moves status forward, creates missing ones); **a warning only** on `/orders/new` when channel `tiktok` is picked while TikTok is connected (decided, Q16: never blocked; "Pesanan TikTok masuk otomatis dari TikTok Shop. Buat manual hanya jika pesanan ini tidak muncul."); runbook (connect, webhook URL in Kelola Webhook, env vars incl. `TIKTOK_SERVICE_ID`, Access bypass, alerts, reconnect, key rotation, disconnect); SPEC §5.x updated. | none | DB: backfill over orders already in admin → no duplicate orders and no stock movements, dates filled; a re-run → no-op. e2e: the `/orders/new` warning shows for `tiktok` and does not block saving, at 390/1280. Runbook dry-run on dev with the stubbed TikTok. |
 
 Order: T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9. T5 must not start before T4 has run in dry-run

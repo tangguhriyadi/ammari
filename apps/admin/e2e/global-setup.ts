@@ -382,6 +382,18 @@ export const E2E_TIKTOK_WAITING_ORDER_NO = "ORD-E2E-TIKTOK-TUNGGU";
 export const E2E_TIKTOK_READY_ORDER_ID = "579000000000000102";
 export const E2E_TIKTOK_READY_ORDER_NO = "ORD-E2E-TIKTOK-SIAP";
 export const E2E_TIKTOK_BUYER_MESSAGE = "Tolong bungkus rapi, untuk hadiah";
+// tiktok-returns.spec.ts (docs/plans/tiktok-shop-integration.md T6): on its own product
+// (E2E_TIKTOK_RETURN_SKU, 5 made, one sale per order below), so no other spec's stock moves:
+//   - two shipped TikTok orders whose parcel is on its way back (pending + in transit, one per
+//     viewport, each pressed "Retur diterima" once);
+//   - one delivered TikTok order with two open requests waiting for the seller: a return due in 3 h
+//     (urgent) and a cancellation due in 30 h, so the list order (soonest first) is visible;
+//   - one request the rules could not classify (a replacement) on that order.
+export const E2E_TIKTOK_RETURN_SKU = "E2E-RETUR-TT-L";
+export const E2E_TIKTOK_RETURN_390_ORDER_NO = "ORD-E2E-TT-RETUR-390";
+export const E2E_TIKTOK_RETURN_1280_ORDER_NO = "ORD-E2E-TT-RETUR-1280";
+export const E2E_TIKTOK_REQUEST_ORDER_NO = "ORD-E2E-TT-MINTA";
+export const E2E_TIKTOK_REQUEST_ORDER_ID = "579000000000000201";
 export const E2E_ACTIVITY_LOG_ADMIN_EMAIL = "activity-log-admin@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_OWNER_EMAIL = "activity-log-owner@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_SUPPLIER_NAME = "E2E Log Supplier Baru";
@@ -506,6 +518,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     vouchers,
     tiktokOrderSnapshots,
     tiktokOrders,
+    tiktokReturns,
   } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
 
@@ -851,6 +864,79 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         appliedUpdateTime: updateTime,
         buyerMessage: E2E_TIKTOK_BUYER_MESSAGE,
       });
+    }
+
+    // T6: TikTok cancellations and returns (see E2E_TIKTOK_RETURN_SKU).
+    {
+      const [returnFabric] = await tx.insert(fabrics).values({ name: "E2E Retur TikTok Fabric" }).returning({ id: fabrics.id });
+      const [returnColor] = await tx.insert(fabricColors).values({ fabricId: returnFabric!.id, name: "Hitam" }).returning({ id: fabricColors.id });
+      const [returnProduct] = await tx
+        .insert(products)
+        .values({ name: "E2E Gamis Retur TikTok", code: "E2ERETURTT", slug: "e2e-gamis-retur-tiktok", fabricId: returnFabric!.id, closure: "front_zip", sizeMode: "sized", basePrice: 259_000 })
+        .returning({ id: products.id, closure: products.closure });
+      await tx.insert(productVariants).values({ productId: returnProduct!.id, fabricId: returnFabric!.id, fabricColorId: returnColor!.id, closure: returnProduct!.closure, sku: E2E_TIKTOK_RETURN_SKU, size: "L" });
+      await tx.insert(stockMovements).values({ sku: E2E_TIKTOK_RETURN_SKU, qty: 5, valueAmount: 500_000, type: "production", refType: "manual" });
+
+      const shippedAt = new Date(Date.now() - 3 * 86_400_000);
+      const seedOrder = async (fixture: { tiktokOrderId: string; orderNo: string; channelStatus: string; flags: ("marketplace_return_pending" | "marketplace_return_in_transit" | "tiktok_return_response_due" | "marketplace_review")[]; returnedAt: Date | null }) => {
+        const [order] = await tx
+          .insert(orders)
+          .values({
+            channelId: "tiktok",
+            orderNo: fixture.orderNo,
+            channelOrderNo: fixture.tiktokOrderId,
+            status: "shipped",
+            orderDate: shippedAt,
+            shippedAt,
+            marketplaceShippedAt: shippedAt,
+            marketplaceReturnedAt: fixture.returnedAt,
+            subtotalAmount: 259_000,
+            shippingAmount: 0,
+            discountAmount: 0,
+            totalAmount: 259_000,
+            needsAttention: fixture.flags,
+            channelStatus: fixture.channelStatus,
+            channelSyncedAt: new Date(),
+          })
+          .returning({ id: orders.id });
+        const [item] = await tx.insert(orderItems).values({ orderId: order!.id, sku: E2E_TIKTOK_RETURN_SKU, qty: 1, unitPrice: 259_000, unitCost: 100_000 }).returning({ id: orderItems.id });
+        await tx.insert(stockMovements).values({ sku: E2E_TIKTOK_RETURN_SKU, qty: -1, valueAmount: -100_000, type: "sale", refType: "order_item", refId: item!.id });
+        const updateTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+        const payload = { id: fixture.tiktokOrderId, status: fixture.channelStatus, update_time: Math.floor(updateTime.getTime() / 1000), line_items: [{ id: `${fixture.tiktokOrderId}-li`, sku_id: `${fixture.tiktokOrderId}-sku` }] };
+        const [snapshot] = await tx.insert(tiktokOrderSnapshots).values({ tiktokOrderId: fixture.tiktokOrderId, updateTime, contentSha256: "2".repeat(64), payload, source: "poll" }).returning({ id: tiktokOrderSnapshots.id });
+        await tx.insert(tiktokOrders).values({ tiktokOrderId: fixture.tiktokOrderId, orderId: order!.id, status: fixture.channelStatus, latestUpdateTime: updateTime, latestSnapshotId: snapshot!.id, applyState: "applied", appliedUpdateTime: updateTime });
+        return order!.id;
+      };
+      await seedOrder({ tiktokOrderId: "579000000000000211", orderNo: E2E_TIKTOK_RETURN_390_ORDER_NO, channelStatus: "CANCELLED", flags: ["marketplace_return_pending", "marketplace_return_in_transit"], returnedAt: new Date(Date.now() - 2 * 86_400_000) });
+      await seedOrder({ tiktokOrderId: "579000000000000212", orderNo: E2E_TIKTOK_RETURN_1280_ORDER_NO, channelStatus: "CANCELLED", flags: ["marketplace_return_pending", "marketplace_return_in_transit"], returnedAt: new Date(Date.now() - 86_400_000) });
+      const requestOrderId = await seedOrder({ tiktokOrderId: E2E_TIKTOK_REQUEST_ORDER_ID, orderNo: E2E_TIKTOK_REQUEST_ORDER_NO, channelStatus: "DELIVERED", flags: ["marketplace_return_pending", "tiktok_return_response_due", "marketplace_review"], returnedAt: null });
+      const requestRows = [
+        { kind: "return" as const, requestId: "4035000000000000201", status: "RETURN_OR_REFUND_REQUEST_PENDING", requestType: "RETURN_AND_REFUND", dueMs: 3 * 3_600_000, state: "open" as const, reviewReason: null },
+        { kind: "cancellation" as const, requestId: "4036000000000000201", status: "CANCELLATION_REQUEST_PENDING", requestType: "BUYER_CANCEL", dueMs: 30 * 3_600_000, state: "open" as const, reviewReason: null },
+        { kind: "return" as const, requestId: "4035000000000000202", status: "RETURN_OR_REFUND_REQUEST_PENDING", requestType: "REPLACEMENT", dueMs: null, state: "review" as const, reviewReason: "replacement" as const },
+      ];
+      for (const [index, row] of requestRows.entries()) {
+        const updateTime = new Date(Math.floor(Date.now() / 1000) * 1000 - (index + 1) * 1000);
+        const [snapshot] = await tx
+          .insert(tiktokOrderSnapshots)
+          .values({ tiktokOrderId: E2E_TIKTOK_REQUEST_ORDER_ID, updateTime, contentSha256: String(index + 3).repeat(64), payload: { order_id: E2E_TIKTOK_REQUEST_ORDER_ID }, source: "poll", kind: row.kind })
+          .returning({ id: tiktokOrderSnapshots.id });
+        await tx.insert(tiktokReturns).values({
+          kind: row.kind,
+          requestId: row.requestId,
+          tiktokOrderId: E2E_TIKTOK_REQUEST_ORDER_ID,
+          status: row.status,
+          requestType: row.requestType,
+          createTime: updateTime,
+          latestUpdateTime: updateTime,
+          latestSnapshotId: snapshot!.id,
+          responseDueAt: row.dueMs === null ? null : new Date(Date.now() + row.dueMs),
+          orderId: requestOrderId,
+          state: row.state,
+          reviewReason: row.reviewReason,
+          appliedUpdateTime: updateTime,
+        });
+      }
     }
 
     const now = Date.now();

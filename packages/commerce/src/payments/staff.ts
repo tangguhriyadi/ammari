@@ -356,7 +356,8 @@ export const FLAG_MESSAGES = {
   stockShortOpen: "Pesanan ini masih menunggu. Proses pesanan (setelah stok ditambah) atau batalkan dan kembalikan dananya.",
   refundOwed: "Dana pembeli masih tercatat belum dikembalikan. Kembalikan dananya, lalu pakai Catat dana dikembalikan.",
   tiktokOnHold: "Tanda ini hilang sendiri setelah pesanan TikTok boleh dikemas (dicek tiap 5 menit).",
-  returnInTransit: "Paket masih dalam perjalanan kembali. Tanda ini hilang setelah status diubah ke Retur saat paket diterima.",
+  returnInTransit: "Paket masih dalam perjalanan kembali. Tanda ini hilang setelah paket diterima dan Retur diterima ditekan.",
+  responseDue: "Tanda ini hilang sendiri setelah permintaan dijawab di Seller Center atau batas waktunya lewat (dicek tiap 5 menit).",
 } as const;
 
 /** Paid attempts whose money Ammari still holds but must give back: every paid attempt of a
@@ -385,8 +386,10 @@ export async function clearAttentionFlag(db: Database, orderId: string, flag: Or
     // (the sync clears it; a click would be re-set), and a parcel on its way back ends only with the
     // return that puts its stock back (Q11), never by a click.
     // While applying is off (the kill switch) nothing clears the hold, so a person may.
-    if (flag === "tiktok_on_hold" && (await tx.execute<{ on: boolean }>(sql`select exists (select 1 from tiktok_shop_connections where status = 'active' and orders_apply_enabled) as on`))[0]?.on) {
-      throw new ActionError(FLAG_MESSAGES.tiktokOnHold);
+    // The response deadline (T6) is derived from TikTok's requests the same way: a click would be
+    // re-set while a request still waits.
+    if ((flag === "tiktok_on_hold" || flag === "tiktok_return_response_due") && (await tx.execute<{ on: boolean }>(sql`select exists (select 1 from tiktok_shop_connections where status = 'active' and orders_apply_enabled) as on`))[0]?.on) {
+      throw new ActionError(flag === "tiktok_on_hold" ? FLAG_MESSAGES.tiktokOnHold : FLAG_MESSAGES.responseDue);
     }
     if (flag === "marketplace_return_in_transit") throw new ActionError(FLAG_MESSAGES.returnInTransit);
     // Money still owed never drops out of "Perlu dicek" by a click: it ends with a recorded refund

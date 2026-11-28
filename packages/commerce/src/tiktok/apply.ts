@@ -148,7 +148,7 @@ async function activeMappings(tx: Tx, payload: AllowlistedObject): Promise<Map<s
 
 /** `needs_attention` with `add` added (each once, in order) and `remove` removed, computed from the
  * row as locked. */
-function flagsExpression(add: readonly OrderAttentionFlag[], remove: readonly OrderAttentionFlag[]): SQL {
+export function flagsExpression(add: readonly OrderAttentionFlag[], remove: readonly OrderAttentionFlag[]): SQL {
   const list = (flags: readonly string[]) =>
     flags.length === 0
       ? sql`array[]::text[]`

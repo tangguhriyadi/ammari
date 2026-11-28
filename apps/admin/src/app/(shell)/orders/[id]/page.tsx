@@ -231,6 +231,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 marketplace={detail.marketplace}
                 canViewProfit={canViewProfit}
                 canViewImports={session.permissionKeys.includes("orders.import")}
+                receiveReturn={canManage && detail.needsAttention.includes("marketplace_return_in_transit") ? { orderId: detail.id, orderNo: detail.orderNo } : null}
                 className="order-2 lg:order-none"
               />
             )}

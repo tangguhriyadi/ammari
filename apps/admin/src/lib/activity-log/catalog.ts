@@ -62,6 +62,10 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       import_update: { label: "Pesanan diperbarui dari impor", area: "import" },
       tiktok_create: { label: "Pesanan masuk dari TikTok Shop" },
       tiktok_update: { label: "Pesanan diperbarui dari TikTok Shop" },
+      // docs/plans/tiktok-shop-integration.md T6 (packages/commerce/src/tiktok/after-sale.ts).
+      tiktok_return_update: { label: "Retur atau pembatalan TikTok diperbarui" },
+      tiktok_refund_record: { label: "Pengembalian dana TikTok dicatat (barang tetap di pembeli)" },
+      marketplace_return_received: { label: "Retur diterima, stok dikembalikan" },
       cancel_checkout_order: { label: "Pesanan toko online dibatalkan", area: "payments" },
       record_refund: { label: "Pengembalian dana dicatat", area: "payments" },
       record_manual_payment: { label: "Cara bayar pesanan manual dicatat", area: "payments" },
@@ -521,6 +525,8 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
     actions: {
       tiktok_hold: { label: "Pesanan TikTok ditahan" },
       tiktok_skip: { label: "Pesanan TikTok dilewati" },
+      // T6: a return or cancellation request for an order not in admin yet (or skipped).
+      tiktok_return_update: { label: "Retur atau pembatalan TikTok diperbarui" },
     },
   },
   tiktok_sku_mapping: {
