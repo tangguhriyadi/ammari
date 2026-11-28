@@ -73,6 +73,14 @@ function Reasons({ row }: { row: PreviewRow }) {
       {row.reasons.map((reason, index) => (
         <li key={`${reason.code}-${index}`} className="text-sm text-neutral-700">
           {reason.message}
+          {reason.skuListLink && (
+            <>
+              {" "}
+              <Link href="/stock/sku-list" className="whitespace-nowrap text-neutral-900 underline underline-offset-4">
+                Buka Daftar SKU
+              </Link>
+            </>
+          )}
           {reason.stockSku && (
             <>
               {" "}
@@ -96,6 +104,7 @@ function ReviewList({ rows }: { rows: PreviewRow[] }) {
             <Card className="flex flex-col gap-1">
               <span className="font-mono text-base break-all text-neutral-900">{row.channelOrderNo}</span>
               <Reasons row={row} />
+              <FileSubtotal row={row} />
               <span className="text-sm text-neutral-600">{rowsText(row.rowNumbers)}</span>
               <ExistingLink row={row} />
             </Card>
@@ -115,6 +124,7 @@ function ReviewList({ rows }: { rows: PreviewRow[] }) {
               <Td className="font-mono text-neutral-900">{row.channelOrderNo}</Td>
               <Td>
                 <Reasons row={row} />
+                <FileSubtotal row={row} />
               </Td>
               <Td className="text-sm text-neutral-600">{rowsText(row.rowNumbers)}</Td>
               <Td>
@@ -177,8 +187,21 @@ function NewList({ rows, canViewProfit }: { rows: PreviewRow[]; canViewProfit: b
   );
 }
 
+/** "Subtotal Pesanan" as in the file, per row: its scope is not verified yet (plan §19.2, O1-b), so
+ * it is shown for checking against the omzet, never used. Finance only (null otherwise). */
+function fileSubtotalText(row: PreviewRow): string | null {
+  if (!row.fileSubtotals) return null;
+  return `Subtotal di file: ${row.fileSubtotals.map((amount) => formatRupiah(amount)).join(", ")}${row.fileSubtotals.length > 1 ? " (per baris)" : ""}`;
+}
+
+function FileSubtotal({ row }: { row: PreviewRow }) {
+  const text = fileSubtotalText(row);
+  return text ? <span className="text-sm text-neutral-600">{text}</span> : null;
+}
+
 function RowNotes({ row }: { row: PreviewRow }) {
-  const notes = [...row.warnings, ...row.skuMatches.map((match) => `Dicocokkan: ${match.fileSku} ke ${match.adminSku}`)];
+  const subtotal = fileSubtotalText(row);
+  const notes = [...row.warnings, ...row.skuMatches.map((match) => `Dicocokkan: ${match.fileSku} ke ${match.adminSku}`), ...(subtotal ? [subtotal] : [])];
   if (notes.length === 0) return null;
   return (
     <ul className="flex flex-col gap-0.5">
@@ -252,20 +275,18 @@ function UnknownSkus({ groups, overrides, busy, onMatch, onUnmatch, channelLabel
       {groups.length > 0 && (
         <ul className="flex flex-col gap-2">
           {groups.map((group) => (
-            <li key={group.fileSku ?? ""} className="flex flex-col gap-2 rounded-md bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+            <li key={group.fileSku} className="flex flex-col gap-2 rounded-md bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="font-mono text-base break-all text-neutral-900">{group.fileSku ?? "(SKU kosong)"}</span>
+                <span className="font-mono text-base break-all text-neutral-900">{group.fileSku}</span>
                 {group.nameHints.length > 0 && <span className="text-sm text-neutral-600">Di file: {group.nameHints.join(", ")}</span>}
                 <span className="text-sm text-neutral-600">
                   {group.orders.length} pesanan: {group.orders.slice(0, 3).map((order) => `${order.channelOrderNo} (${rowsText(order.rowNumbers)})`).join("; ")}
                   {group.orders.length > 3 ? "; ..." : ""}
                 </span>
               </div>
-              {group.fileSku !== null && (
-                <Button type="button" variant="secondary" disabled={busy} onClick={() => onMatch(group)} className="shrink-0">
-                  Cocokkan ke varian
-                </Button>
-              )}
+              <Button type="button" variant="secondary" disabled={busy} onClick={() => onMatch(group)} className="shrink-0">
+                Cocokkan ke varian
+              </Button>
             </li>
           ))}
         </ul>
@@ -317,7 +338,7 @@ export function ImportPreview({ preview, overrides, busy, onMatch, onUnmatch }: 
             Pesanan baru: {formatNumber(totals.newPieces)} pcs
             {preview.canViewProfit && totals.newOmzetAmount !== null && (
               <>
-                , omzet {formatRupiah(totals.newOmzetAmount)}, voucher {formatRupiah(totals.newVoucherAmount ?? 0)}, biaya platform {formatRupiah(totals.newFeeAmount ?? 0)}
+                , omzet {formatRupiah(totals.newOmzetAmount)}, diskon penjual {formatRupiah(totals.newVoucherAmount ?? 0)}
               </>
             )}
           </p>
@@ -328,6 +349,15 @@ export function ImportPreview({ preview, overrides, busy, onMatch, onUnmatch }: 
             {warning}
           </p>
         ))}
+        {preview.blankSkuOrderCount > 0 && (
+          <p className="text-sm text-neutral-700" data-testid="import-blank-sku-count">
+            {formatNumber(preview.blankSkuOrderCount)} pesanan tertahan karena SKU kosong di {preview.channelLabel}. Isi SKU penjual dari{" "}
+            <Link href="/stock/sku-list" className="text-neutral-900 underline underline-offset-4">
+              Daftar SKU
+            </Link>
+            , lalu export ulang.
+          </p>
+        )}
         {preview.unknownStatuses.length > 0 && (
           <p className="text-sm text-neutral-700">
             Status belum dikenal: {preview.unknownStatuses.map((status) => `"${status.rawStatus}" (${status.orderCount} pesanan)`).join(", ")}. Beri tahu admin teknis supaya statusnya dipasang.

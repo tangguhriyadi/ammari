@@ -104,7 +104,7 @@ describe("planImport: actions for a mixed file (test 27)", () => {
       await insertFees(tx, unchanged.id, ZERO_FEES);
 
       const parsed = parse([
-        { orderNo: s.orderNo("A"), status: "Selesai", orderedAt: "2026-10-22 09:15", sellerVoucher: 10_000, adminFee: 4_500, serviceFee: 3_000, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }, { sku: s.sku("L"), qty: 2, lineTotal: 518_000 }] },
+        { orderNo: s.orderNo("A"), status: "Selesai", orderedAt: "2026-10-22 09:15", sellerVoucher: 10_000, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }, { sku: s.sku("L"), qty: 2, lineTotal: 518_000 }] },
         { orderNo: s.orderNo("B"), status: "Selesai", orderedAt: "2026-10-22 09:15", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] },
         { orderNo: s.orderNo("C"), status: "Selesai", orderedAt: "2026-10-22 09:15", lines: [{ sku: s.sku("L"), qty: 2, lineTotal: 518_000 }] },
         { orderNo: s.orderNo("D"), status: "Menunggu Konfirmasi", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] },
@@ -126,7 +126,8 @@ describe("planImport: actions for a mixed file (test 27)", () => {
         subtotalAmount: 767_000,
         discountAmount: 10_000,
         totalAmount: 757_000,
-        fees: { admin_fee: 4_500, service_fee: 3_000, affiliate_commission: 0 },
+        // The order export has no fee columns (plan §19.2): fees only come from Penghasilan Saya.
+        fees: {},
         lines: [
           { sku: s.sku("L"), qty: 2, unitPrice: 259_000 },
           { sku: s.sku("M"), qty: 1, unitPrice: 249_000 },
@@ -139,11 +140,7 @@ describe("planImport: actions for a mixed file (test 27)", () => {
         transitions: ["shipped", "completed"],
         channelStatus: { before: "Perlu Dikirim", after: "Selesai" },
         discount: null,
-        fees: [
-          { component: "admin_fee", before: null, after: 0 },
-          { component: "service_fee", before: null, after: 0 },
-          { component: "affiliate_commission", before: null, after: 0 },
-        ],
+        fees: [],
       });
       expect(entry(planned, s.orderNo("C"))).toMatchObject({ action: "unchanged", existing: { orderId: unchanged.id, status: "completed" } });
       expect(entry(planned, s.orderNo("D"))).toMatchObject({ action: "review", reasons: [{ code: "unknown_status" }] });
@@ -152,14 +149,14 @@ describe("planImport: actions for a mixed file (test 27)", () => {
       // A parse problem stays in Perlu dicek with its own reason.
       expect(entry(planned, s.orderNo("G"))).toMatchObject({ action: "review", reasons: [{ code: "invalid_rows" }] });
 
-      expect(planned.totals).toEqual({ newOrderCount: 1, newPieces: 3, newOmzetAmount: 757_000, newVoucherAmount: 10_000, newFeeAmount: 7_500 });
+      expect(planned.totals).toEqual({ newOrderCount: 1, newPieces: 3, newOmzetAmount: 757_000, newVoucherAmount: 10_000, newFeeAmount: 0 });
       expect(planned.digest).toMatch(/^[0-9a-f]{64}$/);
       // The lock of the unverified Shopee mapping passes through untouched.
       expect(planned.saveBlockers).toEqual(parsed.saveBlockers);
     });
   });
 
-  test("a re-import updates voucher, total and fees, keeps the shipping, and never touches lines or the order date", async () => {
+  test("a re-import updates the seller discount and total, leaves stored fees alone, keeps the shipping, and never touches lines or the order date", async () => {
     await withRollback(async (tx) => {
       const s = await seedVariants(tx, ["M"]);
       const existing = await insertExisting(tx, {
@@ -173,7 +170,7 @@ describe("planImport: actions for a mixed file (test 27)", () => {
       });
       await insertFees(tx, existing.id, { admin_fee: 4_000, service_fee: 0, affiliate_commission: 0, platform_commission: 900 });
 
-      const planned = await plan(tx, parse([{ orderNo: s.orderNo("V"), status: "Selesai", orderedAt: "2026-10-22 09:15", sellerVoucher: 8_000, adminFee: 4_500, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }]));
+      const planned = await plan(tx, parse([{ orderNo: s.orderNo("V"), status: "Selesai", orderedAt: "2026-10-22 09:15", sellerVoucher: 8_000, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }]));
       const updated = entry(planned, s.orderNo("V"));
       expect(updated).toMatchObject({
         action: "update",
@@ -181,8 +178,8 @@ describe("planImport: actions for a mixed file (test 27)", () => {
         discount: { before: 5_000, after: 8_000 },
         totalAmount: { before: 256_000, after: 253_000 },
         channelStatus: null,
-        // Only what changed; platform_commission is not in the file and is left as is.
-        fees: [{ component: "admin_fee", before: 4_000, after: 4_500 }],
+        // No fee column in the order file: the stored fee rows are never touched.
+        fees: [],
       });
       expect(updated.action === "update" && updated.warnings).toEqual([expect.stringContaining("Tanggal pesanan di file")]);
     });
@@ -252,12 +249,135 @@ describe("planImport: unknown SKUs (test 28)", () => {
     });
   });
 
-  test("a blank SKU cell is unknown too, and cannot be matched by hand", async () => {
+  test("a blank SKU cell is its own hold, never offered for a manual match (plan §19.6)", async () => {
     await withRollback(async (tx) => {
       const s = await seedVariants(tx, ["M"]);
-      const planned = await plan(tx, parse([{ orderNo: s.orderNo("BL"), status: "Selesai", lines: [{ sku: null, qty: 1, lineTotal: 249_000 }] }]));
-      expect(entry(planned, s.orderNo("BL"))).toMatchObject({ action: "review", reasons: [{ code: "unknown_sku", sku: null }] });
-      expect(planned.unknownSkus).toEqual([{ fileSku: null, nameHints: ["Gamis Uji", "Sage,M"], orders: [{ channelOrderNo: s.orderNo("BL"), rowNumbers: [2] }] }]);
+      const planned = await plan(
+        tx,
+        parse([
+          { orderNo: s.orderNo("BL"), status: "Selesai", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }, { sku: null, qty: 1, lineTotal: 249_000, productName: "Gamis Poka", variationName: "Sage,L" }] },
+          // SKU Induk filled, the variant SKU blank: still held, SKU Induk is never a fallback.
+          { orderNo: s.orderNo("BI"), status: "Selesai", lines: [{ sku: null, qty: 1, lineTotal: 249_000, parentSku: s.sku("M") }] },
+        ]),
+      );
+      expect(entry(planned, s.orderNo("BL"))).toMatchObject({
+        action: "review",
+        reasons: [
+          {
+            code: "blank_sku",
+            sku: null,
+            message: "SKU kosong di Shopee (Nomor Referensi SKU) untuk Gamis Poka, Sage,L (baris 3). Isi SKU penjual di Shopee dari Daftar SKU, lalu export ulang.",
+          },
+        ],
+      });
+      expect(entry(planned, s.orderNo("BI"))).toMatchObject({ action: "review", reasons: [{ code: "blank_sku" }] });
+      expect(planned.unknownSkus).toEqual([]);
+      expect(planned.blankSkuOrderCount).toBe(2);
+      // A manual match keyed by a blank SKU is refused outright.
+      const refused = await planImport(parse([{ orderNo: s.orderNo("BL"), lines: [{ sku: null, qty: 1, lineTotal: 249_000 }] }]), { skuOverrides: { "": s.sku("M") } }, tx);
+      expect(refused.ok).toBe(false);
+    });
+  });
+});
+
+describe("planImport: Shopee holds and amounts (plan §19.2, §19.4, session 7a)", () => {
+  test("a non-blank Status Pembatalan/ Pengembalian holds the order, new or existing, and is never guessed", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const existing = await insertExisting(tx, { channelOrderNo: s.orderNo("CE"), status: "to_ship", lines: [{ sku: s.sku("M"), qty: 1, unitPrice: 249_000 }], channelStatus: "Perlu Dikirim" });
+      const planned = await plan(
+        tx,
+        parse([
+          { orderNo: s.orderNo("CN"), status: "Perlu Dikirim", cancelReturnStatus: "Pembatalan Diajukan", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] },
+          { orderNo: s.orderNo("CE"), status: "Selesai", cancelReturnStatus: "Pengembalian Dana Disetujui", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] },
+        ]),
+      );
+      expect(entry(planned, s.orderNo("CN"))).toMatchObject({
+        action: "review",
+        reasons: [{ code: "cancel_return_unknown", message: "Status pembatalan/pengembalian 'Pembatalan Diajukan' belum dikenal. Beri tahu admin teknis supaya statusnya dipasang." }],
+      });
+      expect(entry(planned, s.orderNo("CE"))).toMatchObject({ action: "review", existing: { orderId: existing.id }, reasons: [{ code: "cancel_return_unknown" }] });
+    });
+  });
+
+  test("Returned quantity above 0 holds the order", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const planned = await plan(tx, parse([{ orderNo: s.orderNo("RQ"), status: "Selesai", lines: [{ sku: s.sku("M"), qty: 2, lineTotal: 498_000, returnedQty: 1 }] }]));
+      expect(entry(planned, s.orderNo("RQ"))).toMatchObject({
+        action: "review",
+        reasons: [{ code: "returned_qty", message: "Ada barang diretur di Shopee (Returned quantity 1), jadi pesanan belum diimpor." }],
+      });
+    });
+  });
+
+  test("prices that do not add up hold the order", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const planned = await plan(
+        tx,
+        parse([{ orderNo: s.orderNo("PC"), status: "Selesai", lines: [{ sku: s.sku("M"), qty: 1, listUnitPrice: 249_000, unitPriceAfterDiscount: 239_000, totalDiscount: 5_000, sellerDiscount: 5_000 }] }]),
+      );
+      expect(entry(planned, s.orderNo("PC"))).toMatchObject({
+        action: "review",
+        reasons: [{ code: "price_inconsistent", message: "Harga di file tidak konsisten (baris 2): Harga Awal, Harga Setelah Diskon dan kolom diskon tidak cocok. Pesanan belum diimpor." }],
+      });
+    });
+  });
+
+  test("every hold of one order is listed together", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const planned = await plan(tx, parse([{ orderNo: s.orderNo("AL"), status: "Selesai", cancelReturnStatus: "Retur", lines: [{ sku: null, qty: 1, lineTotal: 249_000, returnedQty: 1 }] }]));
+      const held = entry(planned, s.orderNo("AL"));
+      expect(held.action === "review" && held.reasons.map((reason) => reason.code)).toEqual(["cancel_return_unknown", "returned_qty", "blank_sku"]);
+    });
+  });
+
+  test("a new order: discount = seller product discount + seller voucher + seller bundle; Shopee-funded money stays in revenue; no fee rows", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M", "L"]);
+      const planned = await plan(
+        tx,
+        parse([
+          {
+            orderNo: s.orderNo("AM"),
+            status: "Selesai",
+            sellerVoucher: 10_000,
+            sellerBundleDiscount: 7_000,
+            shopeeVoucher: 25_000,
+            shopeeCoins: 3_000,
+            shopeeBundleDiscount: 4_000,
+            lines: [
+              { sku: s.sku("M"), qty: 2, listUnitPrice: 249_000, sellerDiscount: 20_000, shopeeDiscount: 6_000 },
+              { sku: s.sku("L"), qty: 1, listUnitPrice: 259_000, sellerDiscount: 9_000 },
+            ],
+          },
+        ]),
+      );
+      expect(entry(planned, s.orderNo("AM"))).toMatchObject({
+        action: "create",
+        lines: [
+          { sku: s.sku("L"), qty: 1, unitPrice: 259_000, lineTotal: 259_000 },
+          { sku: s.sku("M"), qty: 2, unitPrice: 249_000, lineTotal: 498_000 },
+        ],
+        subtotalAmount: 757_000,
+        discountAmount: 46_000,
+        totalAmount: 711_000,
+        roundingDifference: 0,
+        fees: {},
+      });
+      expect(planned.totals).toMatchObject({ newOmzetAmount: 711_000, newVoucherAmount: 46_000, newFeeAmount: 0 });
+    });
+  });
+
+  test("a re-import never writes or changes fees: stored fee rows stay as they are", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const order = await insertExisting(tx, { channelOrderNo: s.orderNo("FE"), status: "completed", lines: [{ sku: s.sku("M"), qty: 1, unitPrice: 249_000 }], channelStatus: "Selesai" });
+      await insertFees(tx, order.id, { admin_fee: 4_000 });
+      const planned = await plan(tx, parse([{ orderNo: s.orderNo("FE"), status: "Selesai", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }]));
+      expect(entry(planned, s.orderNo("FE")).action).toBe("unchanged");
     });
   });
 });

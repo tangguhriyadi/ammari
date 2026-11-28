@@ -11,6 +11,7 @@ export const tiktokAdapter: MarketplaceAdapter = {
   columns: null,
   mappingVerified: false,
   statusMap: {},
+  headerSignature: null,
   notReadyMessage:
     "Format export TikTok Shop belum dikonfirmasi, jadi file belum bisa diimpor. Kirim contoh baris judul kolom (tanpa data pembeli) ke admin teknis untuk dipasang dulu.",
 };

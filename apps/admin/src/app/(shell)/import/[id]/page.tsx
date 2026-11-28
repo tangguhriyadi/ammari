@@ -28,7 +28,7 @@ function changeText(change: ImportedChange): string {
     case "voucher": {
       const before = money(change.before);
       const after = money(change.after);
-      return before !== null || after !== null ? `Voucher penjual: ${before ?? "belum ada"} → ${after ?? "-"}` : "Voucher penjual berubah";
+      return before !== null || after !== null ? `Diskon penjual: ${before ?? "belum ada"} → ${after ?? "-"}` : "Diskon penjual berubah";
     }
     case "fee": {
       const label = FEE_COMPONENT_LABELS[change.component as ChannelFeeComponent] ?? change.component;

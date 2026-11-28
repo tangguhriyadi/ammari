@@ -24,7 +24,7 @@ describe("import history", () => {
       const staff = await insertStaffUser(tx);
       const lines = [{ sku, qty: 1, lineTotal: 249_000 }];
       const commit = async (status: string, sellerVoucher: number) => {
-        const parsed = parseMarketplaceFile({ channelId: "shopee", fileName: `pesanan-${status}.xlsx`, bytes: xlsxBytes(shopeeRows([{ orderNo: `${marker}A`, status, sellerVoucher, adminFee: 1_000, lines }])), assumeMappingVerified: true });
+        const parsed = parseMarketplaceFile({ channelId: "shopee", fileName: `pesanan-${status}.xlsx`, bytes: xlsxBytes(shopeeRows([{ orderNo: `${marker}A`, status, sellerVoucher, lines }])), assumeMappingVerified: true });
         if (!parsed.ok) throw new Error(parsed.error.message);
         const planned = await planImport(parsed.value, {}, tx);
         if (!planned.ok) throw new Error(planned.error.message);

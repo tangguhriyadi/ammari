@@ -34,6 +34,8 @@ export interface PreviewReason {
   message: string;
   /** stock_short: the admin SKU, for "Lihat stok". */
   stockSku: string | null;
+  /** blank_sku: link to Daftar SKU, where the owner copies the seller SKUs to fill in (plan §19.6). */
+  skuListLink: boolean;
 }
 
 export interface PreviewRow {
@@ -46,8 +48,11 @@ export interface PreviewRow {
   /** The admin status the order ends at (create), or moves to (update); null when it stays. */
   targetStatus: OrderStatus | null;
   pieces: number | null;
-  /** Omzet of a new order (subtotal - voucher). Finance only. */
+  /** Omzet of a new order (subtotal - seller discounts). Finance only. */
   omzetAmount: number | null;
+  /** "Subtotal Pesanan" per row, as in the file (scope unverified, plan §19.2 O1-b): shown, never
+   * used. Finance only; null without finance or when the file has none. */
+  fileSubtotals: number[] | null;
   existing: PreviewExistingOrder | null;
   /** Indonesian, one line per change (update). Money lines finance only. */
   changes: string[];
@@ -82,6 +87,8 @@ export interface ImportPreview {
   previousCommitAt: string | null;
   rows: PreviewRow[];
   unknownSkus: UnknownSkuGroup[];
+  /** Orders held because the variant SKU is blank in the file (plan §19.6). */
+  blankSkuOrderCount: number;
   skuMatches: ImportPlan["skuMatches"];
   /** New + updated: what Simpan writes. */
   saveCount: number;
@@ -96,7 +103,7 @@ function rupiahOrNone(amount: number | null): string {
   return amount === null ? "belum ada" : formatRupiah(amount);
 }
 
-function rowFor(entry: PlanEntry, canViewProfit: boolean): PreviewRow {
+function rowFor(entry: PlanEntry, canViewProfit: boolean, fileSubtotals: readonly number[] | undefined): PreviewRow {
   const base: PreviewRow = {
     channelOrderNo: entry.channelOrderNo,
     action: entry.action,
@@ -106,6 +113,7 @@ function rowFor(entry: PlanEntry, canViewProfit: boolean): PreviewRow {
     targetStatus: null,
     pieces: null,
     omzetAmount: null,
+    fileSubtotals: canViewProfit && fileSubtotals && fileSubtotals.length > 0 ? [...fileSubtotals] : null,
     existing: null,
     changes: [],
     reasons: [],
@@ -137,7 +145,7 @@ function rowFor(entry: PlanEntry, canViewProfit: boolean): PreviewRow {
       if (target) changes.push(`Status: ${arrow(ORDER_STATUS_LABELS[entry.existing.status], ORDER_STATUS_LABELS[target])}`);
       if (entry.setReturnPending) changes.push("Ditandai retur di marketplace");
       if (entry.clearReturnPending) changes.push("Tanda retur di marketplace dihapus");
-      if (entry.discount) changes.push(canViewProfit ? `Voucher penjual: ${arrow(formatRupiah(entry.discount.before), formatRupiah(entry.discount.after))}` : "Voucher penjual berubah");
+      if (entry.discount) changes.push(canViewProfit ? `Diskon penjual: ${arrow(formatRupiah(entry.discount.before), formatRupiah(entry.discount.after))}` : "Diskon penjual berubah");
       for (const fee of entry.fees) {
         const label = FEE_COMPONENT_LABELS[fee.component];
         changes.push(canViewProfit ? `${label}: ${arrow(rupiahOrNone(fee.before), formatRupiah(fee.after))}` : `${label} berubah`);
@@ -148,7 +156,15 @@ function rowFor(entry: PlanEntry, canViewProfit: boolean): PreviewRow {
     case "unchanged":
       return { ...base, warnings: entry.warnings };
     case "review":
-      return { ...base, reasons: entry.reasons.map((reason) => ({ code: reason.code, message: reason.message, stockSku: reason.code === "stock_short" ? (reason.sku ?? null) : null })) };
+      return {
+        ...base,
+        reasons: entry.reasons.map((reason) => ({
+          code: reason.code,
+          message: reason.message,
+          stockSku: reason.code === "stock_short" ? (reason.sku ?? null) : null,
+          skuListLink: reason.code === "blank_sku",
+        })),
+      };
     case "skip":
       return { ...base, rawStatus: entry.rawStatus, skipReason: entry.reason };
   }
@@ -157,6 +173,7 @@ function rowFor(entry: PlanEntry, canViewProfit: boolean): PreviewRow {
 export function toImportPreview(parsed: ParsedImport, plan: ImportPlan, options: { canViewProfit: boolean }): ImportPreview {
   const { canViewProfit } = options;
   const saveCount = plan.counts.create + plan.counts.update;
+  const fileSubtotals = new Map(parsed.orders.map((order) => [order.channelOrderNo, order.fileSubtotals]));
   return {
     digest: plan.digest,
     channelId: parsed.channelId,
@@ -185,8 +202,9 @@ export function toImportPreview(parsed: ParsedImport, plan: ImportPlan, options:
     warnings: parsed.warnings,
     unknownStatuses: parsed.unknownStatuses,
     previousCommitAt: plan.previousCommit?.committedAt.toISOString() ?? null,
-    rows: plan.entries.map((entry) => rowFor(entry, canViewProfit)),
+    rows: plan.entries.map((entry) => rowFor(entry, canViewProfit, fileSubtotals.get(entry.channelOrderNo))),
     unknownSkus: plan.unknownSkus,
+    blankSkuOrderCount: plan.blankSkuOrderCount,
     skuMatches: plan.skuMatches,
     saveCount,
     canSave: plan.saveBlockers.length === 0 && saveCount > 0,

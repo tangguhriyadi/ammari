@@ -21,11 +21,22 @@ interface ColumnSpecBase {
 }
 
 export type ColumnSpec =
-  | (ColumnSpecBase & { field: "channelOrderNo" | "status" | "orderedAt" | "sku" | "qty" | "lineTotal"; required: true })
-  | (ColumnSpecBase & { field: "sellerVoucher"; required: boolean; scope: ColumnScope })
+  // Harga Awal: the revenue basis per piece (owner Q3); the row's goods amount is Harga Awal x Jumlah.
+  | (ColumnSpecBase & { field: "channelOrderNo" | "status" | "orderedAt" | "sku" | "qty" | "listUnitPrice"; required: true })
+  // Per-row values read only for the price check (plan §19.2), the returned-goods hold, or display
+  // (Subtotal Pesanan, whose scope is unverified, O1-b). Never written.
+  | (ColumnSpecBase & { field: "unitPriceAfterDiscount" | "totalDiscount" | "shopeeProductDiscount" | "returnedQty" | "fileSubtotal"; required: boolean })
+  // Seller-funded money: every one of these is added to the order's discount_amount (D-4).
+  | (ColumnSpecBase & { field: "sellerVoucher" | "sellerProductDiscount" | "sellerBundleDiscount"; required: boolean; scope: ColumnScope })
+  // Status Pembatalan/ Pengembalian: order-level text; any non-blank value holds the order (§19.4).
+  | (ColumnSpecBase & { field: "cancelReturnStatus"; required: boolean })
+  // Platform fees read from an order file. Shopee's order export has none (plan §19.2): its fees come
+  // only from the Penghasilan Saya import (sessions 7d/7e). Kept for an adapter that does.
   | (ColumnSpecBase & { field: "fee"; component: ChannelFeeComponent; required: false; scope: ColumnScope })
   // Display-only hints next to an unknown SKU; never stored, never used to match (owner addition A).
   | (ColumnSpecBase & { field: "productName" | "variationName"; required: false });
+
+export type SellerDiscountField = "sellerVoucher" | "sellerProductDiscount" | "sellerBundleDiscount";
 
 export function columnSpecId(spec: ColumnSpec): string {
   return spec.field === "fee" ? `fee:${spec.component}` : spec.field;
@@ -57,4 +68,8 @@ export interface MarketplaceAdapter {
   notReadyMessage?: string;
   /** Shown in the preview, and by the server on Simpan, while `mappingVerified` is false. */
   lockedMessage?: string;
+  /** The exact header row of the verified export, in order. Any difference (a column renamed, added,
+   * removed or moved) keeps the preview but blocks Simpan, so a silent format change can never
+   * write (plan §19.2). null: no signature. */
+  headerSignature: { headers: readonly string[]; since: string } | null;
 }

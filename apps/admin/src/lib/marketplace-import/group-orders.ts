@@ -1,23 +1,28 @@
-import { columnSpecId, type ChannelFeeComponent, type ColumnSpec, type FeeAmounts } from "./adapters/types";
+import { columnSpecId, type ChannelFeeComponent, type ColumnSpec, type FeeAmounts, type SellerDiscountField } from "./adapters/types";
 import { fileError, type FileResult } from "./errors";
 import { normalizeHeader } from "./headers";
 import { MAX_DATA_ROWS, MAX_ORDERS } from "./limits";
 import type { Cell } from "./read-sheet";
-import { parseChannelOrderNo, parseJakartaDateTime, parseMoney, parseQty, parseSku, type ParseResult } from "./values";
+import { parseChannelOrderNo, parseCountText, parseJakartaMinuteText, parseQtyText, MAX_RUPIAH_CELL, parseRupiahText, parseSkuText, type ParseResult } from "./values";
 
-// Rows -> orders (docs/plans/marketplace-import.md §4). Marketplace exports have one row per item,
-// with order-level values (status, time, voucher, most fees) repeated on every row. Each column's
-// scope says how it is combined: `order` values are taken ONCE and must agree across the order's
-// rows (blanks ignored); `line` values are summed. Rows of one order with the same SKU are merged
-// into one line (SPEC §5.2). Only mapped columns are ever read, so buyer data never leaves here.
+// Rows -> orders (docs/plans/marketplace-import.md §4, §19.2). Marketplace exports have one row per
+// item, with order-level values (status, time, voucher) repeated on every row. Each column's scope
+// says how it is combined: `order` values are taken ONCE and must agree across the order's rows
+// (blanks ignored); `line` values are summed. Rows of one order with the same SKU are merged into
+// one line (SPEC §5.2). Only mapped columns are ever read, so buyer data never leaves here.
+//
+// Cells are parsed as the real Shopee export writes them, text only (§19.1): a number cell, a
+// decimal or a time with seconds is a row error. Nothing here decides whether an order is held for
+// a cancel/return status, returned goods or prices that do not add up: those facts are carried to
+// the planner (plan.ts), which lists every reason an order waits in Perlu dicek.
 
 export interface ImportLine {
   /** Uppercased marketplace SKU; null when the cell was blank (always an unknown SKU later). */
   sku: string | null;
   qty: number;
-  /** round(lineTotal / qty), the weighted average of merged rows. */
+  /** round(lineTotal / qty), the weighted average of merged rows' Harga Awal. */
   unitPrice: number;
-  /** Sum of the rows' charged amounts, as in the file. */
+  /** Sum of the rows' Harga Awal x Jumlah (the revenue basis, owner Q3), computed in integers. */
   lineTotal: number;
   rowNumbers: number[];
   /** Product / variation names from the file, display only (owner addition A): never stored, never
@@ -37,12 +42,35 @@ export interface ImportOrder {
   subtotalAmount: number;
   /** sum(lineTotal) - subtotalAmount; a few rupiah from merged-line rounding. */
   roundingDifference: number;
-  sellerVoucherAmount: number;
+  /** Seller-funded money only (D-4): Diskon Dari Penjual (summed over rows), Voucher Ditanggung
+   * Penjual and Paket Diskon (Diskon dari Penjual), each taken per its scope. Shopee-funded money is
+   * never read: it counts in revenue (owner Q3). */
+  sellerDiscounts: { product: number; voucher: number; bundle: number };
+  /** product + voucher + bundle: what discount_amount becomes. */
+  sellerDiscountAmount: number;
+  /** Status Pembatalan/ Pengembalian (trimmed), null when blank. Any value holds the order (§19.4). */
+  cancelReturnStatus: string | null;
+  /** Sum of Returned quantity over the order's rows (blank = 0). Above 0 holds the order. */
+  returnedQty: number;
+  /** Rows whose prices do not add up (§19.2 price check). Any holds the order; never repaired. */
+  priceMismatchRows: number[];
+  /** Subtotal Pesanan per row, as in the file (scope unverified, O1-b): display only. */
+  fileSubtotals: number[];
   fees: FeeAmounts;
   rowNumbers: number[];
 }
 
 export type OrderProblemCode = "invalid_rows" | "inconsistent_values" | "missing_value" | "voucher_exceeds_subtotal";
+
+const DISCOUNT_KEY: Record<SellerDiscountField, keyof ImportOrder["sellerDiscounts"]> = {
+  sellerProductDiscount: "product",
+  sellerVoucher: "voucher",
+  sellerBundleDiscount: "bundle",
+};
+
+function isSellerDiscount(spec: ColumnSpec): spec is Extract<ColumnSpec, { field: SellerDiscountField }> {
+  return spec.field === "sellerVoucher" || spec.field === "sellerProductDiscount" || spec.field === "sellerBundleDiscount";
+}
 
 /** An order kept out of the import, with why. The rest of the file is unaffected. */
 export interface OrderProblem {
@@ -72,6 +100,8 @@ export interface GroupedOrders {
   unattributedRowCount: number;
 }
 
+export const SELLER_DISCOUNT_EXCEEDS_SUBTOTAL = "Diskon penjual (voucher, diskon produk dan paket diskon) lebih besar dari total harga produk, jadi pesanan belum diimpor.";
+
 const MAX_NAME_HINTS = 3;
 const MAX_NAME_HINT_CHARS = 120;
 
@@ -85,8 +115,11 @@ interface OrderDraft {
   orderValues: Map<string, { values: Set<OrderValue>; first: OrderValue }>;
   lines: Map<string, ImportLine>;
   lineFees: FeeAmounts;
-  /** A line-scope voucher column's rows, summed (none for Shopee). */
-  lineVoucher: number;
+  /** Line-scope seller discount columns, summed over the rows. */
+  lineDiscounts: ImportOrder["sellerDiscounts"];
+  returnedQty: number;
+  priceMismatchRows: number[];
+  fileSubtotals: number[];
 }
 
 interface Column {
@@ -144,7 +177,18 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
     }
     let draft = drafts.get(orderNo.value);
     if (!draft) {
-      draft = { channelOrderNo: orderNo.value, rowNumbers: [], invalidRows: [], orderValues: new Map(), lines: new Map(), lineFees: {}, lineVoucher: 0 };
+      draft = {
+        channelOrderNo: orderNo.value,
+        rowNumbers: [],
+        invalidRows: [],
+        orderValues: new Map(),
+        lines: new Map(),
+        lineFees: {},
+        lineDiscounts: { product: 0, voucher: 0, bundle: 0 },
+        returnedQty: 0,
+        priceMismatchRows: [],
+        fileSubtotals: [],
+      };
       drafts.set(orderNo.value, draft);
     }
     draft.rowNumbers.push(rowNumber);
@@ -166,24 +210,50 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
     const columnFor = (predicate: (spec: ColumnSpec) => boolean) => mapped.find((column) => predicate(column.spec));
 
     // Line values.
-    const sku = take(columnFor((spec) => spec.field === "sku"), parseSku);
-    const qty = take(columnFor((spec) => spec.field === "qty"), parseQty);
-    const lineTotalColumn = columnFor((spec) => spec.field === "lineTotal");
-    const lineTotal = take(lineTotalColumn, parseMoney);
-    if (lineTotalColumn && lineTotal === null) reject(lineTotalColumn, "Total harga produk kosong.");
+    const money = (column: Column | undefined) => take(column, (cell) => parseRupiahText(cell, column!.spec.label));
+    const requiredMoney = (column: Column | undefined) => {
+      const value = money(column);
+      if (column && value === null) reject(column, `${column.spec.label} kosong.`);
+      return value ?? undefined;
+    };
+    const columnOf = (field: ColumnSpec["field"]) => columnFor((spec) => spec.field === field);
+    const sku = take(columnOf("sku"), parseSkuText);
+    const qty = take(columnOf("qty"), parseQtyText);
+    const listUnitPrice = requiredMoney(columnOf("listUnitPrice"));
+    const afterColumn = columnOf("unitPriceAfterDiscount");
+    const unitPriceAfterDiscount = requiredMoney(afterColumn);
+    const totalDiscountColumn = columnOf("totalDiscount");
+    const totalDiscount = money(totalDiscountColumn);
+    const shopeeDiscountColumn = columnOf("shopeeProductDiscount");
+    const shopeeDiscount = money(shopeeDiscountColumn);
+    const returnedColumn = columnOf("returnedQty");
+    const returned = take(returnedColumn, (cell) => parseCountText(cell, returnedColumn!.spec.label));
+    const fileSubtotal = money(columnOf("fileSubtotal"));
+    let lineTotal: number | undefined;
+    if (qty !== undefined && listUnitPrice !== undefined) {
+      lineTotal = listUnitPrice * qty;
+      // Capped like one cell, so merged lines and order sums stay exact (MAX_RUPIAH_CELL).
+      if (lineTotal > MAX_RUPIAH_CELL) {
+        reject(columnOf("listUnitPrice")!, "Angka uang terlalu besar.");
+        lineTotal = undefined;
+      }
+    }
     const hints = mapped
       .filter((column) => column.spec.field === "productName" || column.spec.field === "variationName")
       .map((column) => row[column.index])
       .filter((cell): cell is string => typeof cell === "string" && cell.trim() !== "")
       .map((cell) => cell.trim().slice(0, MAX_NAME_HINT_CHARS));
     const lineFees: FeeAmounts = {};
-    let lineVoucher = 0;
+    const lineDiscounts = { product: 0, voucher: 0, bundle: 0 };
+    let sellerLineDiscount: number | null = null;
     for (const column of mapped) {
       const { spec } = column;
-      if ((spec.field !== "fee" && spec.field !== "sellerVoucher") || spec.scope !== "line") continue;
-      const amount = take(column, parseMoney) ?? 0;
-      if (spec.field === "fee") addFee(lineFees, spec.component, amount);
-      else lineVoucher += amount;
+      if (spec.field === "fee" && spec.scope === "line") addFee(lineFees, spec.component, money(column) ?? 0);
+      if (isSellerDiscount(spec) && spec.scope === "line") {
+        const amount = money(column) ?? 0;
+        lineDiscounts[DISCOUNT_KEY[spec.field]] += amount;
+        if (spec.field === "sellerProductDiscount") sellerLineDiscount = amount;
+      }
     }
 
     // Order values, kept as canonical values to compare across rows.
@@ -195,26 +265,40 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
         // A text that normalizes to nothing (e.g. "(Rp)") has no status key: invalid, not blank.
         value = isBlankCell(cell) ? null : typeof cell === "string" && normalizeHeader(cell) !== null ? cell.trim() : undefined;
         if (value === undefined) reject(column, "Status pesanan tidak valid.");
+      } else if (spec.field === "cancelReturnStatus") {
+        const cell = row[column.index];
+        value = isBlankCell(cell) ? null : typeof cell === "string" && normalizeHeader(cell) !== null ? cell.trim() : undefined;
+        if (value === undefined) reject(column, `${spec.label} tidak valid.`);
       } else if (spec.field === "orderedAt") {
         const cell = row[column.index] ?? null;
-        value = isBlankCell(cell) ? null : take(column, (c) => parseJakartaDateTime(c, input.date1904))?.getTime();
-      } else if ((spec.field === "sellerVoucher" || spec.field === "fee") && spec.scope === "order") {
-        value = take(column, parseMoney);
+        value = isBlankCell(cell) ? null : take(column, (c) => parseJakartaMinuteText(c, spec.label))?.getTime();
+      } else if ((isSellerDiscount(spec) || spec.field === "fee") && spec.scope === "order") {
+        value = money(column);
       } else {
         continue;
       }
       if (value === null || value === undefined) continue;
       const id = columnSpecId(spec);
       const seen = draft.orderValues.get(id);
-      const key = spec.field === "status" ? normalizeHeader(value as string)! : value;
+      const key = spec.field === "status" || spec.field === "cancelReturnStatus" ? normalizeHeader(value as string)! : value;
       if (seen) seen.values.add(key);
       else draft.orderValues.set(id, { values: new Set([key]), first: value });
     }
 
-    if (!rowValid || qty === undefined || lineTotal === undefined || lineTotal === null || sku === undefined) {
+    if (!rowValid || qty === undefined || lineTotal === undefined || sku === undefined || listUnitPrice === undefined || (afterColumn && unitPriceAfterDiscount === undefined)) {
       draft.invalidRows.push(rowNumber);
       return;
     }
+
+    // Price check (§19.2), only when every column it needs is in the file. A hypothesis until O1-d
+    // confirms it on a discounted order; a row that breaks it is recorded, never repaired.
+    if (unitPriceAfterDiscount !== undefined && totalDiscountColumn && shopeeDiscountColumn && sellerLineDiscount !== null) {
+      const total = totalDiscount ?? 0;
+      if (lineTotal - total !== unitPriceAfterDiscount * qty || total !== sellerLineDiscount + (shopeeDiscount ?? 0)) draft.priceMismatchRows.push(rowNumber);
+    }
+    draft.returnedQty += returned ?? 0;
+    if (fileSubtotal !== null && fileSubtotal !== undefined) draft.fileSubtotals.push(fileSubtotal);
+
     const lineKey = sku ?? "";
     const line = draft.lines.get(lineKey);
     if (line) {
@@ -226,7 +310,7 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
       draft.lines.set(lineKey, { sku, qty, unitPrice: 0, lineTotal, rowNumbers: [rowNumber], nameHints: hints.slice(0, MAX_NAME_HINTS) });
     }
     for (const [component, amount] of Object.entries(lineFees) as [ChannelFeeComponent, number][]) addFee(draft.lineFees, component, amount);
-    draft.lineVoucher += lineVoucher;
+    for (const key of Object.keys(lineDiscounts) as (keyof typeof lineDiscounts)[]) draft.lineDiscounts[key] += lineDiscounts[key];
   });
 
   if (drafts.size > MAX_ORDERS) {
@@ -255,7 +339,7 @@ function finishOrder(draft: OrderDraft, mapped: readonly Column[]): { order: Imp
     return problem("inconsistent_values", `Nilai ${inconsistent.map((column) => column.spec.label).join(", ")} berbeda antar baris pesanan ini, jadi pesanan belum diimpor.`);
   }
 
-  const single = (field: "status" | "orderedAt" | "sellerVoucher") => draft.orderValues.get(field)?.first;
+  const single = (id: string) => draft.orderValues.get(id)?.first;
   const rawStatus = single("status");
   const orderedAt = single("orderedAt");
   if (rawStatus === undefined || orderedAt === undefined) {
@@ -266,11 +350,17 @@ function finishOrder(draft: OrderDraft, mapped: readonly Column[]): { order: Imp
   const lines = [...draft.lines.values()].map((line) => ({ ...line, unitPrice: Math.round(line.lineTotal / line.qty) }));
   const subtotalAmount = lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0);
   const roundingDifference = lines.reduce((sum, line) => sum + line.lineTotal, 0) - subtotalAmount;
-  // A present voucher column with blank cells means no voucher (the column itself is required for
+  // A present discount column with blank cells means no discount (the columns are required for
   // Shopee, so a missing one never reaches this point).
-  const sellerVoucherAmount = ((single("sellerVoucher") as number | undefined) ?? 0) + draft.lineVoucher;
-  if (sellerVoucherAmount > subtotalAmount) {
-    return problem("voucher_exceeds_subtotal", "Voucher penjual lebih besar dari total harga produk, jadi pesanan belum diimpor.");
+  const sellerDiscounts = { ...draft.lineDiscounts };
+  for (const column of mapped) {
+    if (isSellerDiscount(column.spec) && column.spec.scope === "order") {
+      sellerDiscounts[DISCOUNT_KEY[column.spec.field]] += (single(columnSpecId(column.spec)) as number | undefined) ?? 0;
+    }
+  }
+  const sellerDiscountAmount = sellerDiscounts.product + sellerDiscounts.voucher + sellerDiscounts.bundle;
+  if (sellerDiscountAmount > subtotalAmount) {
+    return problem("voucher_exceeds_subtotal", SELLER_DISCOUNT_EXCEEDS_SUBTOTAL);
   }
 
   const fees: FeeAmounts = { ...draft.lineFees };
@@ -291,7 +381,12 @@ function finishOrder(draft: OrderDraft, mapped: readonly Column[]): { order: Imp
       lines,
       subtotalAmount,
       roundingDifference,
-      sellerVoucherAmount,
+      sellerDiscounts,
+      sellerDiscountAmount,
+      cancelReturnStatus: (single("cancelReturnStatus") as string | undefined) ?? null,
+      returnedQty: draft.returnedQty,
+      priceMismatchRows: draft.priceMismatchRows,
+      fileSubtotals: draft.fileSubtotals,
       fees,
       rowNumbers: draft.rowNumbers,
     },

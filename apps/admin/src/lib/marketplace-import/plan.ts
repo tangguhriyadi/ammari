@@ -17,7 +17,7 @@ import { formatDate } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
 import { adapterFor } from "./adapters";
 import type { FeeAmounts } from "./adapters/types";
-import type { ImportLine, ImportOrder, OrderProblemCode } from "./group-orders";
+import { SELLER_DISCOUNT_EXCEEDS_SUBTOTAL, type ImportLine, type ImportOrder, type OrderProblemCode } from "./group-orders";
 import type { ParsedImport } from "./parse-file";
 import { decideStatus } from "./status-rules";
 import { parseSku } from "./values";
@@ -37,13 +37,26 @@ export const MAX_SKU_OVERRIDES = 500;
  * practice; a longer text waits in Perlu dicek rather than failing the commit. */
 const MAX_CHANNEL_STATUS_CHARS = 64;
 
-export type ReviewCode = OrderProblemCode | "unknown_status" | "final_in_admin" | "unknown_sku" | "ambiguous_match" | "lines_differ" | "stock_short";
+export type ReviewCode =
+  | OrderProblemCode
+  | "unknown_status"
+  | "final_in_admin"
+  | "unknown_sku"
+  | "ambiguous_match"
+  | "lines_differ"
+  | "stock_short"
+  // Shopee holds (plan §19.4, §19.6, §19.2): never guessed, never imported or updated.
+  | "blank_sku"
+  | "cancel_return_unknown"
+  | "returned_qty"
+  | "price_inconsistent";
 
 export interface ReviewReason {
   code: ReviewCode;
-  /** Indonesian, shown as is. Never cell contents beyond SKUs and our own numbers. */
+  /** Indonesian, shown as is. Never cell contents beyond SKUs, our own numbers and the order's own
+   * marketplace status text (cancel_return_unknown, cut to 40 characters); never buyer data. */
   message: string;
-  /** The SKU the reason is about (unknown_sku: the file's, null for a blank cell; stock_short: the admin's). */
+  /** The SKU the reason is about (unknown_sku: the file's; blank_sku: null; stock_short: the admin's). */
   sku?: string | null;
 }
 
@@ -86,7 +99,7 @@ export interface CreateEntry extends EntryBase {
   orderedAt: Date;
   lines: PlannedLine[];
   subtotalAmount: number;
-  /** The seller voucher. */
+  /** Every seller-funded discount (product discount + voucher + bundle, plan §19.2). */
   discountAmount: number;
   /** subtotal - discount (no shipping: buyer ongkir is not ours, plan §4). */
   totalAmount: number;
@@ -159,8 +172,9 @@ export type PlanEntry = CreateEntry | UpdateEntry | UnchangedEntry | ReviewEntry
 export type PlanAction = PlanEntry["action"];
 
 export interface UnknownSkuGroup {
-  /** Uppercased as in the file; null for blank SKU cells (cannot be matched by hand). */
-  fileSku: string | null;
+  /** Uppercased as in the file. A blank SKU is never here: it is its own hold (`blank_sku`), with no
+   * manual match (plan §19.6). */
+  fileSku: string;
   /** Product / variation names from the file, display only (never stored, never matched). */
   nameHints: string[];
   orders: { channelOrderNo: string; rowNumbers: number[] }[];
@@ -175,6 +189,8 @@ export interface ImportPlan {
   totals: { newOrderCount: number; newPieces: number; newOmzetAmount: number; newVoucherAmount: number; newFeeAmount: number };
   /** Distinct unknown SKUs still unmatched, for "Cocokkan ke varian". */
   unknownSkus: UnknownSkuGroup[];
+  /** Orders held because a variant SKU cell is blank ("N pesanan tertahan karena SKU kosong"). */
+  blankSkuOrderCount: number;
   /** Manual matches this plan used (audit + batch summary at Simpan). */
   skuMatches: (SkuMatch & { channelOrderNos: string[] })[];
   /** From the parse: while not empty nothing may be saved. NOT part of the digest: the commit must
@@ -275,6 +291,10 @@ function resolveLines(
   return { lines: resolved, unknown, matches };
 }
 
+function shorten(text: string): string {
+  return text.length > 40 ? `${text.slice(0, 40)}...` : text;
+}
+
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -307,6 +327,7 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
   const adapter = adapterFor(parsed.channelId);
   if (!adapter) throw new Error(`planImport: no adapter for channel ${parsed.channelId}`);
   const { statusMap, label: channelLabel } = adapter;
+  const skuLabel = adapter.columns?.find((spec) => spec.field === "sku")?.label ?? "SKU";
   const rawOverrides = options.skuOverrides ?? {};
   if (Object.keys(rawOverrides).length > MAX_SKU_OVERRIDES) return overrideError(`Terlalu banyak pencocokan SKU (maks. ${MAX_SKU_OVERRIDES}).`);
 
@@ -449,26 +470,51 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
     if (decision.kind === "review") reasons.push({ code: decision.reason, message: decision.message });
     else if (order.rawStatus.length > MAX_CHANNEL_STATUS_CHARS) reasons.push({ code: "unknown_status", message: "Status pesanan ini terlalu panjang, jadi pesanan belum diimpor." });
 
+    // Shopee holds (plan §19.2, §19.4): facts from the file, never guessed.
+    if (order.cancelReturnStatus !== null) {
+      reasons.push({
+        code: "cancel_return_unknown",
+        // The map of known values starts empty (§19.4): every value waits for the owner's decision.
+        message: `Status pembatalan/pengembalian '${shorten(order.cancelReturnStatus)}' belum dikenal. Beri tahu admin teknis supaya statusnya dipasang.`,
+      });
+    }
+    if (order.returnedQty > 0) {
+      reasons.push({ code: "returned_qty", message: `Ada barang diretur di ${channelLabel} (Returned quantity ${order.returnedQty}), jadi pesanan belum diimpor.` });
+    }
+    if (order.priceMismatchRows.length > 0) {
+      reasons.push({
+        code: "price_inconsistent",
+        message: `Harga di file tidak konsisten (baris ${order.priceMismatchRows.join(", ")}): Harga Awal, Harga Setelah Diskon dan kolom diskon tidak cocok. Pesanan belum diimpor.`,
+      });
+    }
+
     const resolved = resolveLines(order.lines, knownSkus, overrides);
     for (const line of resolved.unknown) {
-      const key = line.sku ?? "";
-      const group = unknownGroups.get(key) ?? { fileSku: line.sku, nameHints: [], orders: [] };
+      if (line.sku === null) {
+        // No manual match for a blank SKU (§19.6): a blank key would send every blank line of every
+        // order to one variant. The only fix is filling the seller SKU on the marketplace.
+        const names = line.nameHints.length > 0 ? ` untuk ${line.nameHints.join(", ")}` : "";
+        reasons.push({
+          code: "blank_sku",
+          sku: null,
+          message: `SKU kosong di ${channelLabel} (${skuLabel})${names} (baris ${line.rowNumbers.join(", ")}). Isi SKU penjual di ${channelLabel} dari Daftar SKU, lalu export ulang.`,
+        });
+        continue;
+      }
+      const group = unknownGroups.get(line.sku) ?? { fileSku: line.sku, nameHints: [], orders: [] };
       for (const hint of line.nameHints) if (!group.nameHints.includes(hint) && group.nameHints.length < 3) group.nameHints.push(hint);
       group.orders.push({ channelOrderNo: order.channelOrderNo, rowNumbers: line.rowNumbers });
-      unknownGroups.set(key, group);
+      unknownGroups.set(line.sku, group);
       reasons.push({
         code: "unknown_sku",
         sku: line.sku,
-        message:
-          line.sku === null
-            ? `SKU kosong di baris ${line.rowNumbers.join(", ")}.`
-            : `SKU tidak dikenal: ${line.sku} (baris ${line.rowNumbers.join(", ")}). Perbaiki SKU di ${channelLabel} supaya impor berikutnya cocok otomatis, atau cocokkan ke varian.`,
+        message: `SKU tidak dikenal: ${line.sku} (baris ${line.rowNumbers.join(", ")}). Perbaiki SKU di ${channelLabel} supaya impor berikutnya cocok otomatis, atau cocokkan ke varian.`,
       });
     }
 
     const subtotalAmount = resolved.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0);
-    if (resolved.unknown.length === 0 && order.sellerVoucherAmount > subtotalAmount) {
-      reasons.push({ code: "voucher_exceeds_subtotal", message: "Voucher penjual lebih besar dari total harga produk, jadi pesanan belum diimpor." });
+    if (resolved.unknown.length === 0 && order.sellerDiscountAmount > subtotalAmount) {
+      reasons.push({ code: "voucher_exceeds_subtotal", message: SELLER_DISCOUNT_EXCEEDS_SUBTOTAL });
     }
 
     if (current && resolved.unknown.length === 0) {
@@ -503,8 +549,8 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
         orderedAt: order.orderedAt,
         lines: resolved.lines,
         subtotalAmount,
-        discountAmount: order.sellerVoucherAmount,
-        totalAmount: subtotalAmount - order.sellerVoucherAmount,
+        discountAmount: order.sellerDiscountAmount,
+        totalAmount: subtotalAmount - order.sellerDiscountAmount,
         roundingDifference: resolved.lines.reduce((sum, line) => sum + line.lineTotal, 0) - subtotalAmount,
         fees: Object.fromEntries(feesInCanonicalOrder(order.fees)),
         transitions: decision.transitions,
@@ -522,9 +568,9 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
     if (jakartaDate(order.orderedAt) !== jakartaDate(existing.orderDate)) {
       warnings.push(`Tanggal pesanan di file (${formatDate(order.orderedAt)}) berbeda dengan di admin (${formatDate(existing.orderDate)}); tanggal di admin tidak diubah.`);
     }
-    const discount = order.sellerVoucherAmount !== existing.discountAmount ? { before: existing.discountAmount, after: order.sellerVoucherAmount } : null;
+    const discount = order.sellerDiscountAmount !== existing.discountAmount ? { before: existing.discountAmount, after: order.sellerDiscountAmount } : null;
     const totalAmount = discount
-      ? { before: existing.totalAmount, after: existing.subtotalAmount + existing.shippingAmount - order.sellerVoucherAmount }
+      ? { before: existing.totalAmount, after: existing.subtotalAmount + existing.shippingAmount - order.sellerDiscountAmount }
       : null;
     const stored = storedFees.get(existing.id);
     const fees: FeeChange[] = feesInCanonicalOrder(order.fees).flatMap(([component, after]) => {
@@ -591,7 +637,8 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
 
   const unknownSkus = [...unknownGroups.values()]
     .map((group) => ({ ...group, orders: [...group.orders].sort((a, b) => compareText(a.channelOrderNo, b.channelOrderNo)) }))
-    .sort((a, b) => compareText(a.fileSku ?? "", b.fileSku ?? ""));
+    .sort((a, b) => compareText(a.fileSku, b.fileSku));
+  const blankSkuOrderCount = entries.filter((entry) => entry.action === "review" && entry.reasons.some((reason) => reason.code === "blank_sku")).length;
   const skuMatches = [...matchUse.values()].sort((a, b) => compareText(a.fileSku, b.fileSku));
 
   return {
@@ -602,6 +649,7 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
       counts,
       totals,
       unknownSkus,
+      blankSkuOrderCount,
       skuMatches,
       saveBlockers: parsed.saveBlockers,
       previousCommit: previous && previous.committedAt ? { batchId: previous.batchId, committedAt: previous.committedAt } : null,

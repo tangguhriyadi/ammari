@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseChannelOrderNo, parseJakartaDateTime, parseMoney, parseQty, parseSku } from "./values";
+import { MAX_RUPIAH_CELL, parseChannelOrderNo, parseCountText, parseSkuText, parseJakartaDateTime, parseJakartaMinuteText, parseMoney, parseQty, parseQtyText, parseRupiahText, parseSku } from "./values";
 
 describe("parseMoney", () => {
   test.each([
@@ -109,4 +109,71 @@ describe("parseJakartaDateTime", () => {
       expect(parseJakartaDateTime(input, false).ok).toBe(false);
     },
   );
+});
+
+describe("text-only parsers (the real Shopee export, plan §19.1)", () => {
+  test.each([
+    ["0", 0],
+    ["8.000", 8_000],
+    ["229.000", 229_000],
+    ["999", 999],
+    ["1.250.000", 1_250_000],
+    [" 229.000 ", 229_000],
+  ])("rupiah %j -> %j", (cell, value) => {
+    expect(parseRupiahText(cell, "Harga Awal")).toEqual({ ok: true, value });
+  });
+
+  test("blank is null", () => {
+    expect(parseRupiahText("", "Harga Awal")).toEqual({ ok: true, value: null });
+    expect(parseRupiahText(null, "Harga Awal")).toEqual({ ok: true, value: null });
+  });
+
+  test.each(["229.000,00", "229,000", "1,5", "229.00", "22.9000", "1000", "0229", "00", "Rp229.000", "Rp 229.000", "-5.000", "229.000-", "2 29.000", "abc", "-", "."])(
+    "rupiah %j is refused",
+    (cell) => {
+      expect(parseRupiahText(cell, "Harga Awal")).toEqual({ ok: false, message: `"${cell}" bukan angka rupiah dengan format 229.000.` });
+    },
+  );
+
+  test("a number cell is refused: the real file is text", () => {
+    expect(parseRupiahText(229000, "Harga Awal")).toEqual({ ok: false, message: "Harga Awal harus berupa teks seperti di export Shopee." });
+    expect(parseRupiahText(true, "Harga Awal").ok).toBe(false);
+  });
+
+  test("a value above the cell cap is refused, so no sum of a file can lose precision", () => {
+    expect(MAX_RUPIAH_CELL).toBe(10_000_000_000);
+    expect(parseRupiahText("10.000.000.000", "Harga Awal")).toEqual({ ok: true, value: 10_000_000_000 });
+    expect(parseRupiahText("10.000.000.001", "Harga Awal")).toEqual({ ok: false, message: "Angka uang terlalu besar." });
+    expect(parseRupiahText("9.007.199.254.740.993", "Harga Awal")).toEqual({ ok: false, message: "Angka uang terlalu besar." });
+  });
+
+  test("sku: text only (a number cell may already have lost leading zeros)", () => {
+    expect(parseSkuText(" poka-m ")).toEqual({ ok: true, value: "POKA-M" });
+    expect(parseSkuText("")).toEqual({ ok: true, value: null });
+    expect(parseSkuText(123)).toEqual({ ok: false, message: "Nomor Referensi SKU harus berupa teks seperti di export Shopee." });
+  });
+
+  test("count: whole number text >= 0, blank null", () => {
+    expect(parseCountText("0", "Returned quantity")).toEqual({ ok: true, value: 0 });
+    expect(parseCountText("2", "Returned quantity")).toEqual({ ok: true, value: 2 });
+    expect(parseCountText("", "Returned quantity")).toEqual({ ok: true, value: null });
+    for (const bad of ["-1", "1.5", "1,0", "satu", "1001"]) expect(parseCountText(bad, "Returned quantity").ok, bad).toBe(false);
+    expect(parseCountText(1, "Returned quantity")).toEqual({ ok: false, message: "Returned quantity harus berupa teks seperti di export Shopee." });
+  });
+
+  test("qty: text only", () => {
+    expect(parseQtyText("2")).toEqual({ ok: true, value: 2 });
+    expect(parseQtyText(2)).toEqual({ ok: false, message: "Jumlah harus berupa teks seperti di export Shopee." });
+    expect(parseQtyText("0").ok).toBe(false);
+  });
+
+  test("time: YYYY-MM-DD HH:MM Jakarta only", () => {
+    expect(parseJakartaMinuteText("2026-11-27 23:30", "Waktu Pesanan Dibuat")).toEqual({ ok: true, value: new Date("2026-11-27T16:30:00.000Z") });
+    expect(parseJakartaMinuteText("2026-11-28 00:05", "Waktu Pesanan Dibuat")).toEqual({ ok: true, value: new Date("2026-11-27T17:05:00.000Z") });
+    for (const bad of ["2026-11-27 23:30:00", "2026-11-27T23:30", "27/11/2026 23:30", "2026-11-27"]) {
+      expect(parseJakartaMinuteText(bad, "Waktu Pesanan Dibuat").ok, bad).toBe(false);
+    }
+    expect(parseJakartaMinuteText("2026-02-30 10:00", "Waktu Pesanan Dibuat")).toEqual({ ok: false, message: "Tanggal pesanan tidak ada di kalender." });
+    expect(parseJakartaMinuteText(46318.5, "Waktu Pesanan Dibuat")).toEqual({ ok: false, message: "Waktu Pesanan Dibuat harus berupa teks seperti di export Shopee." });
+  });
 });

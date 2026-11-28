@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { shopeeRows, type FixtureOrder } from "../../../test/marketplace-fixtures";
+import { shopeeColumn, shopeeRows, type FixtureOrder } from "../../../test/marketplace-fixtures";
 import { shopeeAdapter } from "./adapters/shopee";
 import type { ColumnSpec } from "./adapters/types";
 import { groupOrders } from "./group-orders";
@@ -17,13 +17,12 @@ function group(rows: Cell[][], specs: readonly ColumnSpec[] = shopeeAdapter.colu
 const shopee = (orders: FixtureOrder[]) => group(shopeeRows(orders) as Cell[][]);
 
 describe("the double-count rule", () => {
-  test("voucher and fees repeated on every row of a 3-row order are counted once", () => {
+  test("voucher and seller bundle discount repeated on every row of a 3-row order are counted once", () => {
     const { orders, problems } = shopee([
       {
         orderNo: "2410AAA111",
         sellerVoucher: 10000,
-        adminFee: 4500,
-        serviceFee: 3000,
+        sellerBundleDiscount: 3000,
         lines: [
           { sku: "POKA-FZ-SAGE-M", qty: 1, lineTotal: 249000 },
           { sku: "POKA-FZ-SAGE-L", qty: 1, lineTotal: 249000 },
@@ -33,7 +32,7 @@ describe("the double-count rule", () => {
     ]);
     expect(problems).toEqual([]);
     expect(orders).toHaveLength(1);
-    expect(orders[0]).toMatchObject({ subtotalAmount: 996000, sellerVoucherAmount: 10000, fees: { admin_fee: 4500, service_fee: 3000 }, rowNumbers: [2, 3, 4] });
+    expect(orders[0]).toMatchObject({ subtotalAmount: 996000, sellerDiscounts: { product: 0, voucher: 10000, bundle: 3000 }, sellerDiscountAmount: 13000, fees: {}, rowNumbers: [2, 3, 4] });
   });
 
   test("an order-level value only on the first row is still counted once", () => {
@@ -41,17 +40,17 @@ describe("the double-count rule", () => {
       {
         orderNo: "2410BBB222",
         sellerVoucher: 15000,
-        adminFee: 2000,
+        sellerBundleDiscount: 2000,
         lines: [
           { sku: "POKA-FZ-SAGE-M", qty: 1, lineTotal: 249000 },
           { sku: "POKA-FZ-SAGE-L", qty: 1, lineTotal: 249000 },
         ],
       },
     ]) as Cell[][];
-    rows[2]![10] = null; // Voucher Ditanggung Penjual, second item row
-    rows[2]![13] = ""; // Biaya Administrasi
+    rows[2]![shopeeColumn("Voucher Ditanggung Penjual")] = null; // second item row
+    rows[2]![shopeeColumn("Paket Diskon (Diskon dari Penjual)")] = "";
     const { orders } = group(rows);
-    expect(orders[0]).toMatchObject({ sellerVoucherAmount: 15000, fees: { admin_fee: 2000 } });
+    expect(orders[0]).toMatchObject({ sellerDiscounts: { voucher: 15000, bundle: 2000 }, sellerDiscountAmount: 17000 });
   });
 
   test("an order-level value that differs between rows keeps the order out, naming the column", () => {
@@ -65,7 +64,7 @@ describe("the double-count rule", () => {
         ],
       },
     ]) as Cell[][];
-    rows[2]![10] = 7000;
+    rows[2]![shopeeColumn("Voucher Ditanggung Penjual")] = "7.000";
     const { orders, problems } = group(rows);
     expect(orders).toEqual([]);
     expect(problems).toEqual([
@@ -86,25 +85,25 @@ describe("the double-count rule", () => {
     expect(orders[0]).toMatchObject({ rawStatus: "Selesai", statusKey: "selesai" });
   });
 
-  test("a line-scope fee or voucher is summed over the rows (a TikTok-style adapter)", () => {
+  test("a line-scope fee or voucher is summed over the rows (another adapter's shape)", () => {
     const specs: ColumnSpec[] = [
       { field: "channelOrderNo", label: "Order ID", aliases: ["Order ID"], required: true },
       { field: "status", label: "Status", aliases: ["Status"], required: true },
       { field: "orderedAt", label: "Created", aliases: ["Created"], required: true },
       { field: "sku", label: "SKU", aliases: ["SKU"], required: true },
       { field: "qty", label: "Qty", aliases: ["Qty"], required: true },
-      { field: "lineTotal", label: "Subtotal", aliases: ["Subtotal"], required: true },
+      { field: "listUnitPrice", label: "Price", aliases: ["Price"], required: true },
       { field: "sellerVoucher", label: "Voucher toko", aliases: ["Voucher toko"], required: true, scope: "line" },
       { field: "fee", component: "affiliate_commission", label: "Komisi afiliasi", aliases: ["Komisi afiliasi"], required: false, scope: "line" },
       { field: "fee", component: "platform_commission", label: "Komisi platform", aliases: ["Komisi platform"], required: false, scope: "order" },
     ];
     const rows: Cell[][] = [
-      ["Order ID", "Status", "Created", "SKU", "Qty", "Subtotal", "Voucher toko", "Komisi afiliasi", "Komisi platform"],
-      ["5770001112", "Selesai", "2026-10-23 10:00", "A-M", 1, 100000, 2000, 5000, 9000],
-      ["5770001112", "Selesai", "2026-10-23 10:00", "A-L", 1, 100000, 3000, 7000, 9000],
+      ["Order ID", "Status", "Created", "SKU", "Qty", "Price", "Voucher toko", "Komisi afiliasi", "Komisi platform"],
+      ["5770001112", "Selesai", "2026-10-23 10:00", "A-M", "1", "100.000", "2.000", "5.000", "9.000"],
+      ["5770001112", "Selesai", "2026-10-23 10:00", "A-L", "1", "100.000", "3.000", "7.000", "9.000"],
     ];
     const { orders } = group(rows, specs);
-    expect(orders[0]).toMatchObject({ sellerVoucherAmount: 5000, fees: { affiliate_commission: 12000, platform_commission: 9000 } });
+    expect(orders[0]).toMatchObject({ sellerDiscountAmount: 5000, priceMismatchRows: [], fees: { affiliate_commission: 12000, platform_commission: 9000 } });
   });
 });
 
@@ -131,12 +130,13 @@ describe("lines", () => {
         orderNo: "2410FFF666",
         lines: [
           { sku: "A-M", qty: 1, lineTotal: 100000 },
-          { sku: "A-M", qty: 2, lineTotal: 200001 },
+          { sku: "A-M", qty: 2, listUnitPrice: 100001 },
         ],
       },
     ]);
-    expect(orders[0]).toMatchObject({ subtotalAmount: 300000, roundingDifference: 1 });
-    expect(orders[0]!.lines[0]!.unitPrice).toBe(100000);
+    // 300.002 / 3 rounds to 100.001 a piece: the admin lines add up to 1 more than the file.
+    expect(orders[0]).toMatchObject({ subtotalAmount: 300003, roundingDifference: -1 });
+    expect(orders[0]!.lines[0]!.unitPrice).toBe(100001);
   });
 
   test("names are hints only: same name with different SKUs stays two lines, a blank SKU stays unknown", () => {
@@ -165,7 +165,7 @@ describe("invalid rows", () => {
   test("a bad cell keeps its whole order out and is reported with row and column; other orders are kept", () => {
     const { orders, problems, rowErrors } = shopee([
       { orderNo: "2410III999", lines: [{ sku: "A-M", qty: 1, lineTotal: 1000 }, { sku: "A-L", qty: "dua", lineTotal: 1000 }] },
-      { orderNo: "2410JJJ000", lines: [{ sku: "A-M", qty: 1, lineTotal: "Rp 1.000" }] },
+      { orderNo: "2410JJJ000", lines: [{ sku: "A-M", qty: 1, listUnitPrice: "1.000", unitPriceAfterDiscount: "1.000" }] },
     ]);
     expect(orders.map((order) => order.channelOrderNo)).toEqual(["2410JJJ000"]);
     expect(problems).toEqual([expect.objectContaining({ channelOrderNo: "2410III999", code: "invalid_rows", rowNumbers: [2, 3] })]);
@@ -215,13 +215,14 @@ describe("invalid rows", () => {
 
   test("order times that really differ between rows keep the order out", () => {
     const rows = shopeeRows([{ orderNo: "2410QQQ666", lines: [{ sku: "A-M", qty: 1, lineTotal: 1000 }, { sku: "A-L", qty: 1, lineTotal: 1000 }] }]) as Cell[][];
-    rows[2]![3] = "2026-10-23 14:06";
+    rows[2]![shopeeColumn("Waktu Pesanan Dibuat")] = "2026-10-23 14:06";
     expect(group(rows).problems[0]).toMatchObject({ code: "inconsistent_values", message: expect.stringContaining("Waktu Pesanan Dibuat") });
   });
 
   test("rows whose mapped columns are all blank are skipped and counted", () => {
     const rows = shopeeRows([{ orderNo: "2410MMM333", lines: [{ sku: "A-M", qty: 1, lineTotal: 1000 }] }]) as Cell[][];
-    rows.push(Array.from({ length: 20 }, (_, index) => (index === 2 ? "Total" : null)));
+    // "Total" in an unmapped column (No. Resi): the mapped ones are all blank.
+    rows.push(Array.from({ length: 49 }, (_, index) => (index === shopeeColumn("No. Resi") ? "Total" : null)));
     const result = group(rows);
     expect(result).toMatchObject({ blankRowCount: 1, dataRowCount: 1 });
   });

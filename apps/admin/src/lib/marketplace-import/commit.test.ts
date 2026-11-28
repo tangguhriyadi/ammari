@@ -124,8 +124,6 @@ describe("commitImport: a new Selesai order (test 33)", () => {
           status: "Selesai",
           orderedAt: "2026-10-22 09:15",
           sellerVoucher: 10_000,
-          adminFee: 4_500,
-          serviceFee: 3_000,
           lines: [
             { sku: s.sku("M"), qty: 1, lineTotal: 249_000 },
             { sku: s.sku("L"), qty: 2, lineTotal: 518_000 },
@@ -175,9 +173,9 @@ describe("commitImport: a new Selesai order (test 33)", () => {
         ].sort(),
       );
 
-      const fees = await tx.select().from(orderChannelFees).where(eq(orderChannelFees.orderId, order!.id));
-      expect(Object.fromEntries(fees.map((fee) => [fee.component, fee.amount]))).toEqual({ admin_fee: 4_500, service_fee: 3_000, affiliate_commission: 0 });
-      expect(fees.every((fee) => fee.importBatchId === outcome.batchId)).toBe(true);
+      // The order export has no fee columns (plan §19.2): no fee rows, so no M2 until the
+      // Penghasilan Saya import writes the actual ones (never zero fees).
+      expect(await tx.select().from(orderChannelFees).where(eq(orderChannelFees.orderId, order!.id))).toEqual([]);
 
       const [batch] = await tx.select().from(importBatches).where(eq(importBatches.id, outcome.batchId));
       expect(batch).toMatchObject({ channelId: "shopee", kind: "orders", status: "committed", uploadedBy: staff.id, filename: "pesanan.xlsx", fileSha256: parsed.fileSha256, rowCount: 2 });
@@ -213,7 +211,7 @@ describe("commitImport: idempotent re-import (test 34)", () => {
       const s = await seedVariants(tx, ["M"]);
       const staff = await insertStaffUser(tx);
       const parsed = parse([
-        { orderNo: s.orderNo("A"), status: "Selesai", adminFee: 1_000, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] },
+        { orderNo: s.orderNo("A"), status: "Selesai", sellerVoucher: 1_000, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] },
         { orderNo: s.orderNo("B"), status: "Perlu Dikirim", lines: [{ sku: s.sku("M"), qty: 2, lineTotal: 498_000 }] },
       ]);
       committed(await previewAndCommit(tx, parsed, staff.id));
@@ -328,27 +326,31 @@ describe("commitImport: status changes on existing orders (tests 35 to 37)", () 
   });
 });
 
-describe("commitImport: voucher and fees on re-import (test 38)", () => {
-  test("voucher and fees are updated; a fee column missing from a later file leaves the stored fee as is", async () => {
+describe("commitImport: seller discounts on re-import, fees never touched (test 38, plan §19.2)", () => {
+  test("the seller discount (voucher + product + bundle) is updated; fee rows written by another source stay as they are", async () => {
     await withRollback(async (tx) => {
       const s = await seedVariants(tx, ["M"]);
       const staff = await insertStaffUser(tx);
-      const lines = [{ sku: s.sku("M"), qty: 2, lineTotal: 498_000 }];
-      committed(await previewAndCommit(tx, parse([{ orderNo: s.orderNo("A"), status: "Selesai", sellerVoucher: 10_000, adminFee: 4_000, serviceFee: 3_000, lines }]), staff.id));
+      committed(await previewAndCommit(tx, parse([{ orderNo: s.orderNo("A"), status: "Selesai", sellerVoucher: 10_000, lines: [{ sku: s.sku("M"), qty: 2, lineTotal: 498_000 }] }]), staff.id));
+      const first = await orderByChannelNo(tx, s.orderNo("A"));
+      // As the Penghasilan Saya import (session 7e) will write them.
+      await tx.insert(orderChannelFees).values([
+        { orderId: first!.id, component: "admin_fee", amount: 4_000, source: "actual" },
+        { orderId: first!.id, component: "service_fee", amount: 3_000, source: "actual" },
+      ]);
+      const feesBefore = await tx.select().from(orderChannelFees).where(eq(orderChannelFees.orderId, first!.id));
 
-      const rows = withoutColumn(shopeeRows([{ orderNo: s.orderNo("A"), status: "Selesai", sellerVoucher: 15_000, adminFee: 4_500, lines }]), "Biaya Layanan");
-      const parsed = parseRows(rows);
-      expect(parsed.warnings.some((warning) => warning.includes("Biaya Layanan"))).toBe(true);
+      const parsed = parse([
+        { orderNo: s.orderNo("A"), status: "Selesai", sellerVoucher: 15_000, sellerBundleDiscount: 2_000, lines: [{ sku: s.sku("M"), qty: 2, listUnitPrice: 249_000, sellerDiscount: 4_000 }] },
+      ]);
+      expect(parsed.warnings).toEqual([]);
       const outcome = committed(await previewAndCommit(tx, parsed, staff.id));
       expect(outcome).toMatchObject({ created: 0, updated: 1 });
 
       const order = await orderByChannelNo(tx, s.orderNo("A"));
-      expect(order).toMatchObject({ discountAmount: 15_000, totalAmount: 483_000, subtotalAmount: 498_000 });
-      const fees = await tx.select().from(orderChannelFees).where(eq(orderChannelFees.orderId, order!.id));
-      expect(Object.fromEntries(fees.map((fee) => [fee.component, fee.amount]))).toEqual({ admin_fee: 4_500, service_fee: 3_000, affiliate_commission: 0 });
-      expect(fees.find((fee) => fee.component === "admin_fee")?.importBatchId).toBe(outcome.batchId);
-      expect(fees.find((fee) => fee.component === "service_fee")?.importBatchId).not.toBe(outcome.batchId);
-      // Stock untouched by a voucher/fee update.
+      expect(order).toMatchObject({ discountAmount: 21_000, totalAmount: 477_000, subtotalAmount: 498_000 });
+      expect(await tx.select().from(orderChannelFees).where(eq(orderChannelFees.orderId, order!.id))).toEqual(feesBefore);
+      // Stock untouched by a discount update.
       expect((await movementsFor(tx, [s.sku("M")])).filter((movement) => movement.type === "sale")).toHaveLength(1);
     });
   });
@@ -465,6 +467,23 @@ describe("commitImport: drift and refusals (tests 40, 42, 43)", () => {
       const outcome = await commitImport({ parsed, fileName: "pesanan.xlsx", options: {}, expectedDigest: preview.digest, actorStaffUserId: staff.id }, tx);
       expect(outcome.kind).toBe("blocked");
       if (outcome.kind === "blocked") expect(outcome.blockers[0]).toContain("Pemetaan kolom Shopee belum diverifikasi");
+      expect(await tableCounts(tx)).toEqual(before);
+    });
+  });
+
+  test("a changed header row blocks the whole file on the server, even with the e2e unlock and a matching digest (plan §19.2)", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const staff = await insertStaffUser(tx);
+      const rows = withoutColumn(shopeeRows([{ orderNo: s.orderNo("A"), status: "Selesai", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }]), "Total Berat");
+      const parsed = parseRows(rows);
+      expect(parsed.mappingVerified).toBe(true);
+      const preview = await plan(tx, parsed);
+      expect(preview.counts.create).toBe(1);
+      const before = await tableCounts(tx);
+      const outcome = await commitImport({ parsed, fileName: "pesanan.xlsx", options: {}, expectedDigest: preview.digest, actorStaffUserId: staff.id }, tx);
+      expect(outcome.kind).toBe("blocked");
+      if (outcome.kind === "blocked") expect(outcome.blockers).toEqual([expect.stringContaining('Format export Shopee berubah sejak 27 Nov 2026: kolom "Total Berat" tidak ada')]);
       expect(await tableCounts(tx)).toEqual(before);
     });
   });

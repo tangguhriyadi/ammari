@@ -41,8 +41,8 @@ describe("toImportPreview", () => {
           await tx.insert(orderItems).values({ orderId: existing.id, sku: sku("M"), qty: 1, unitPrice: 249_000, unitCost: 100_000 });
           await tx.insert(orderChannelFees).values({ orderId: existing.id, component: "admin_fee", amount: 1_000 });
           return [
-            { orderNo: no("A"), status: "Selesai", sellerVoucher: 5_000, adminFee: 2_000, lines: [{ sku: sku("M"), qty: 2, lineTotal: 498_001 }] },
-            { orderNo: no("B"), status: "Selesai", sellerVoucher: 3_000, adminFee: 2_500, lines: [{ sku: sku("M"), qty: 1, lineTotal: 249_000 }] },
+            { orderNo: no("A"), status: "Selesai", sellerVoucher: 5_000, lines: [{ sku: sku("M"), qty: 2, lineTotal: 498_000 }] },
+            { orderNo: no("B"), status: "Selesai", sellerVoucher: 3_000, lines: [{ sku: sku("M"), qty: 1, lineTotal: 249_000 }] },
           ];
         },
         false,
@@ -50,17 +50,10 @@ describe("toImportPreview", () => {
       expect(preview.canViewProfit).toBe(false);
       expect(preview.counts).toMatchObject({ create: 1, update: 1 });
       expect(preview.totals).toEqual({ newOrderCount: 1, newPieces: 2, newOmzetAmount: null, newVoucherAmount: null, newFeeAmount: null });
-      expect(preview.rows.every((row) => row.omzetAmount === null)).toBe(true);
+      expect(preview.rows.every((row) => row.omzetAmount === null && row.fileSubtotals === null)).toBe(true);
       const update = preview.rows.find((row) => row.action === "update");
-      // The fixture's zero service fee and affiliate commission are new (known zero) rows.
-      expect(update?.changes).toEqual([
-        "Status: Siap Kirim → Selesai",
-        "Voucher penjual berubah",
-        "Biaya Administrasi berubah",
-        "Biaya Layanan berubah",
-        "Komisi afiliasi berubah",
-        "Status marketplace: Perlu Dikirim → Selesai",
-      ]);
+      // The stored admin fee is never touched: the order export has no fee columns (plan §19.2).
+      expect(update?.changes).toEqual(["Status: Siap Kirim → Selesai", "Diskon penjual berubah", "Status marketplace: Perlu Dikirim → Selesai"]);
       // Nothing in the serialized payload carries an amount or an internal "before" state.
       const json = JSON.stringify(preview);
       expect(json).not.toMatch(RUPIAH);
@@ -70,20 +63,49 @@ describe("toImportPreview", () => {
     });
   });
 
-  test("with finance.view_profit: totals, omzet, voucher and fee changes in rupiah", async () => {
+  test("with finance.view_profit: totals, omzet, seller discount and the file's Subtotal Pesanan in rupiah", async () => {
     await withRollback(async (tx) => {
       const preview = await previewFor(
         tx,
-        async (sku, no) => [{ orderNo: no("A"), status: "Selesai", sellerVoucher: 5_000, adminFee: 2_000, serviceFee: 1_000, lines: [{ sku: sku("M"), qty: 2, lineTotal: 498_001 }] }],
+        async (sku, no) => [
+          {
+            orderNo: no("A"),
+            status: "Selesai",
+            sellerVoucher: 5_000,
+            lines: [
+              { sku: sku("M"), qty: 1, listUnitPrice: 249_000 },
+              { sku: sku("M"), qty: 1, listUnitPrice: 249_001 },
+            ],
+          },
+        ],
         true,
       );
       // 498.001 over 2 pieces: unit price 249.001 (rounded), subtotal 498.002, one rupiah of rounding.
-      expect(preview.totals).toEqual({ newOrderCount: 1, newPieces: 2, newOmzetAmount: 493_002, newVoucherAmount: 5_000, newFeeAmount: 3_000 });
+      expect(preview.totals).toEqual({ newOrderCount: 1, newPieces: 2, newOmzetAmount: 493_002, newVoucherAmount: 5_000, newFeeAmount: 0 });
       const created = preview.rows.find((row) => row.action === "create");
-      expect(created).toMatchObject({ omzetAmount: 493_002, targetStatus: "completed", pieces: 2 });
+      expect(created).toMatchObject({ omzetAmount: 493_002, targetStatus: "completed", pieces: 2, fileSubtotals: [249_000, 249_001] });
       expect(created?.warnings).toEqual([`Selisih pembulatan ${formatRupiah(1)}`]);
       expect(preview.canSave).toBe(false);
       expect(preview.saveBlockers[0]).toContain("Pemetaan kolom Shopee belum diverifikasi");
+    });
+  });
+
+  test("a blank SKU: counted, linked to Daftar SKU, never offered for a manual match (plan §19.6)", async () => {
+    await withRollback(async (tx) => {
+      const preview = await previewFor(
+        tx,
+        async (sku, no) => [
+          { orderNo: no("A"), lines: [{ sku: null, qty: 1, lineTotal: 249_000 }] },
+          { orderNo: no("B"), lines: [{ sku: null, qty: 1, lineTotal: 249_000 }, { sku: sku("M"), qty: 1, lineTotal: 249_000 }] },
+          { orderNo: no("C"), lines: [{ sku: sku("M"), qty: 1, lineTotal: 249_000 }] },
+        ],
+        false,
+      );
+      expect(preview.blankSkuOrderCount).toBe(2);
+      expect(preview.unknownSkus).toEqual([]);
+      const held = preview.rows.filter((row) => row.action === "review");
+      expect(held).toHaveLength(2);
+      expect(held.every((row) => row.reasons.every((reason) => reason.code === "blank_sku" && reason.skuListLink && reason.stockSku === null))).toBe(true);
     });
   });
 

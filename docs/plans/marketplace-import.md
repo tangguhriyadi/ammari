@@ -825,7 +825,7 @@ map, tests 11/12 flipped to "accepts", one e2e run).
 
 ## 19. Real Shopee export (27 Nov 2026): mapping, income import, sessions 7a to 7f
 
-Status: **plan, no code** (28 Nov 2026). **Owner decisions Q1-Q8 recorded 28 Nov 2026 (19.10).** Supersedes the article-based mapping of section 2.1, decision 11
+Status: **session 7a implemented** (28 Nov 2026, real order mapping, lock still on); 7b-7f plan. **Owner decisions Q1-Q8 recorded 28 Nov 2026 (19.10).** Supersedes the article-based mapping of section 2.1, decision 11
 ("fees come from the order export") and session 7. TikTok no longer uses a file
 (tiktok-shop-integration.md T1-T9), so everything below is **Shopee only**. Accounting side:
 accounting.md Session 5.
@@ -847,6 +847,38 @@ shapes were copied, no buyer data.
 - The shop's listings have an **empty "Nomor Referensi SKU"** today.
 
 ### 19.2 Column mapping (replaces section 2.1)
+
+**The exact header row** (row 1 of the 27 Nov 2026 export, copied by the owner's assistant, no data
+rows). The space after the slash in columns 2 and 5 is part of the text. This is the 49-header file
+signature (`SHOPEE_HEADER_SIGNATURE` in `adapters/shopee.ts`):
+
+```
+ 0 No. Pesanan                         25 Jumlah Produk di Pesan
+ 1 Status Pesanan                      26 Total Berat
+ 2 Status Pembatalan/ Pengembalian     27 Voucher Ditanggung Penjual
+ 3 No. Resi                            28 Cashback Koin
+ 4 Opsi Pengiriman                     29 Voucher Ditanggung Shopee
+ 5 Antar ke counter/ pick-up           30 Paket Diskon
+ 6 Pesanan Harus Dikirimkan Sebelum (Menghindari keterlambatan)
+ 7 Waktu Pengiriman Diatur             31 Paket Diskon (Diskon dari Shopee)
+ 8 Waktu Pesanan Dibuat                32 Paket Diskon (Diskon dari Penjual)
+ 9 Waktu Pembayaran Dilakukan          33 Potongan Koin Shopee
+10 Tipe Pesanan                        34 Diskon Kartu Kredit
+11 Metode Pembayaran                   35 Ongkos Kirim Dibayar oleh Pembeli
+12 SKU Induk                           36 Estimasi Potongan Biaya Pengiriman
+13 Nama Produk                         37 Ongkos Kirim Pengembalian Barang
+14 Nomor Referensi SKU                 38 Total Pembayaran
+15 Nama Variasi                        39 Perkiraan Ongkos Kirim
+16 Harga Awal                          40 Catatan dari Pembeli
+17 Harga Setelah Diskon                41 Catatan
+18 Jumlah                              42 Username (Pembeli)
+19 Returned quantity                   43 Nama Penerima
+20 Subtotal Pesanan                    44 No. Telepon
+21 Total Diskon                        45 Alamat Pengiriman
+22 Diskon Dari Penjual                 46 Kota/Kabupaten
+23 Diskon Dari Shopee                  47 Provinsi
+24 Berat Produk                        48 Waktu Pesanan Selesai
+```
 
 Columns are listed 0-based. "Read" means the parser takes the value. Every other column is never read
 past the header row. Aliases are the exact header text. The English aliases of section 2.1 are
@@ -890,8 +922,9 @@ value.
 **Amounts written** (section 4 otherwise unchanged; decided Q3, owner 28 Nov 2026): revenue is
 everything except what the **seller** funds. `unit_price` = the merged weighted average of `Harga
 Awal`, so `subtotal_amount = Σ Harga Awal × Jumlah`. `discount_amount = Diskon Dari Penjual (Σ rows,
-or once if order scope per O1-b) + Voucher Ditanggung Penjual + Paket Diskon (Diskon dari Penjual)`,
-capped at the subtotal as today. Every Shopee-funded discount, voucher and coin (cols 23, 28, 29, 31,
+or once if order scope per O1-b) + Voucher Ditanggung Penjual + Paket Diskon (Diskon dari Penjual)`.
+A total above the subtotal is never capped: the order is held ("Diskon penjual ... lebih besar dari
+total harga produk"), as the voucher was before. Every Shopee-funded discount, voucher and coin (cols 23, 28, 29, 31,
 33, 34) is left out of `discount_amount`, so it stays in revenue: Shopee pays it to the seller. Omzet
 (`subtotal − discount`) is then what the seller is owed for the goods before fees. Unlike web orders
 (a sale price is `unit_price`), a Shopee seller price cut sits in `discount_amount` (4-1201); omzet is
@@ -901,11 +934,47 @@ deleted, and so is the "optional fee column missing" warning. Fee rows written e
 are.
 
 **Adapter changes:** `ColumnSpec` gains the fields above. `group-orders.ts` computes the row amount
-from `unitPriceAfterDiscount × qty` instead of reading `lineTotal`. The required-column report names
+from `listUnitPrice × qty` (Harga Awal, the revenue basis of Q3) instead of reading `lineTotal`;
+`Harga Setelah Diskon` is read only for the price check. (An earlier draft of this line said
+`unitPriceAfterDiscount × qty`, which would have taken seller and Shopee product discounts out of
+revenue twice over; Q3 and the "Amounts written" paragraph above are what was built.) The required-column report names
 the new columns. The **file signature** becomes the exact 49-header list. A Shopee file whose header
 differs (column added, removed or renamed) still previews, but it gets the save blocker "Format export
 Shopee berubah sejak 27 Nov 2026: kolom X". This is checked on every upload, so a silent Shopee
 format change can never write.
+
+**As built in 7a (28 Nov 2026):**
+
+- The signature is compared **exactly** (case and spaces count), position by position; trailing blank
+  header cells are ignored. The message names each missing column ("kolom \"X\" tidak ada"), each new
+  one ("kolom baru \"Y\""), or "urutan kolom berubah" when only the order changed. The e2e unlock
+  never lifts it, and `commitImport` refuses on it server-side like the lock.
+- "Preview still works" holds for every column the parser can do without. A renamed or missing
+  **required** column (0, 1, 2, 8, 14, 16, 17, 18, 22, 27, 32) cannot be previewed: the file is
+  refused with "Kolom wajib tidak ditemukan: X" (the old article headers land here too). Optional
+  read columns (13, 15, 19, 20, 21, 23) and every unread column only add the save blocker. Matching
+  a column for reading stays normalized (case and spacing), so a case-only change still previews.
+- Every money, qty and time cell must be **text** in the verified shape: rupiah
+  `^(0|[1-9]\d{0,2}(\.\d{3})*)$` (no decimals, commas, `Rp` or ungrouped `1000`), at most Rp 10 miliar
+  per cell and per row amount (so every sum stays exact), the SKU text too, Jumlah and Returned
+  quantity whole-number text, times exactly `YYYY-MM-DD HH:MM`. A number cell, a date serial or seconds
+  is a row error. Blank discount cells are 0; a blank Harga Awal or Harga Setelah Diskon is a row error.
+- A workbook with more than one sheet carrying the order header gets the save blocker "File berisi
+  lebih dari satu sheet pesanan": only the first is read, so the others would be left out silently.
+- Col 2: there is no `cancelReturnMap` object yet. Every non-blank value holds the order (the map
+  starts empty in effect); 7c adds the map with each value's owner decision (19.4 a-d).
+- Cols 7 and 48 (ship/complete dates) are not read in 7a: they are part of the signature only. 7b
+  maps them, with the "sudah diatur pengirimannya, belum dikirim" preview count.
+- The hold reasons, all listed together on one order: "SKU kosong di Shopee (Nomor Referensi SKU) untuk
+  <nama produk, variasi> (baris N). Isi SKU penjual di Shopee dari Daftar SKU, lalu export ulang." (with
+  a "Buka Daftar SKU" link, no "Cocokkan ke varian"); "Status pembatalan/pengembalian 'X' belum dikenal";
+  "Ada barang diretur di Shopee (Returned quantity N)"; "Harga di file tidak konsisten (baris N)". The
+  preview shows "N pesanan tertahan karena SKU kosong di Shopee" and, for finance staff, "Subtotal di
+  file" per row. The new-order totals line shows "diskon penjual" and no longer "biaya platform" (always
+  0 from this file).
+- The generic fee machinery (a `fee` ColumnSpec, `order_channel_fees` writes in the commit) is kept for
+  any future order file that has fees; the Shopee adapter has no fee columns, so the order import writes
+  and changes no fee rows, and leaves rows written by another source alone.
 
 ### 19.3 Real ship and complete dates (accounting D-2, Session 5)
 
@@ -1057,7 +1126,7 @@ Every fixture uses the exact 49 headers in the real order, all cells text.
 
 | # | Session | Output | Migration | Tests | Reviewers |
 |---|---|---|---|---|---|
-| **7a** | Real order mapping (lock stays) | Adapter rewritten to 19.2: new fields, computed row amount, discount = voucher + seller bundle, fee specs removed, 49-header signature save blocker, holds (blank SKU, unknown col 2 value, returned qty > 0, price check), revenue grain per Q3, preview counts | none | Unit: the exact real header row maps every field, with the 49 columns in order and 40-47 never in the serialized output (fake buyer values); all-text cells `"229.000"`/`"0"`/`""`; `"700 gr"` never parsed; row amount = `Harga Awal × Jumlah` (2 rows of 1 SKU merged); discount = 22 + 27 + 32; Shopee-funded cols 23/29/31/33 > 0 change neither subtotal nor discount (Q3); one header renamed or missing → save blocker naming it; "Jumlah Produk di Pesan" never taken for Jumlah; blank SKU → "SKU kosong" hold with no manual match offered; `SKU Induk` filled + col 14 blank still held; col 2 non-blank → hold; returned qty 1 → hold; price check broken → hold; old article headers ("Total Harga Produk") → missing-column error. Existing lock tests unchanged. | typescript, security, silent-failure |
+| **7a** | Real order mapping (lock stays). **Done 28 Nov 2026.** | Adapter rewritten to 19.2: new fields, computed row amount (Harga Awal × Jumlah), discount = seller product discount + voucher + seller bundle (cols 22 + 27 + 32, Q3), fee specs removed, 49-header signature save blocker, holds (blank SKU, unknown col 2 value, returned qty > 0, price check), revenue grain per Q3, preview counts | none | Unit: the exact real header row maps every field, with the 49 columns in order and 40-47 never in the serialized output (fake buyer values); all-text cells `"229.000"`/`"0"`/`""`; `"700 gr"` never parsed; row amount = `Harga Awal × Jumlah` (2 rows of 1 SKU merged); discount = 22 + 27 + 32; Shopee-funded cols 23/29/31/33 > 0 change neither subtotal nor discount (Q3); one header renamed or missing → save blocker naming it; "Jumlah Produk di Pesan" never taken for Jumlah; blank SKU → "SKU kosong" hold with no manual match offered; `SKU Induk` filled + col 14 blank still held; col 2 non-blank → hold; returned qty 1 → hold; price check broken → hold; old article headers ("Total Harga Produk") → missing-column error. Existing lock tests unchanged. | typescript, security, silent-failure |
 | **7b** | Real dates (accounting Session 5, D-2) | 19.3: planner + commit write `marketplace_shipped_at`/`_completed_at` write-once, status-gated, validated; preview counts and warnings; order detail block. Check that the opening-balance 1-1505 proposal (`sales-balances.ts`) uses the recognition date, not `shipped_at`; switch it if not. | none | Unit: `Perlu Dikirim` + col 7 → not stored; `Dikirim` + col 7 → stored as Jakarta → UTC (23:30 WIB stays that date); blank → NULL; malformed → row error; ship < order or > now+1h → row error; completed only on `Selesai`. DB (TDD): create fills the dates; re-import fills an empty one; re-import never clears or overwrites (a different value → warning, stored value kept); concurrent fill is safe (conditional update); posting: a Shopee order's `marketplace_ship_date_missing` issue clears after import, M1/M2 dated by col 7's Jakarta date. | typescript, database, silent-failure |
 | **7c** | Unlock (after the owner's checklist 19.10 passes) | Adjust scopes (`Subtotal Pesanan`, discount columns) and statuses to what the second real file showed, add the seen col 2 values (each with its owner decision), drop holds the file proved unnecessary, flip `SHOPEE_MAPPING_VERIFIED`, update the lock tests | none | Lock tests flipped; one fixture per newly mapped status/col-2 value; the 2-item-order fixture in the real shape. (O1-c is recorded, not a gate: Q1.) e2e (390 + 1280): upload → preview → Simpan → order in `/orders`. | typescript, silent-failure |
 | **7d** | Income parser (preview only, `SHOPEE_INCOME_MAPPING_VERIFIED = false`) | Needs a real 2026 income file (O4). Sheet selection, preamble skip, fee column → component table (accountant reviewed), sum check, signed money for the marked columns, kind toggle "Pesanan / Penghasilan" on `/import` | none | Unit: preamble rows ignored; header on row 6; missing `income` sheet refused; unknown money column → save blocker; sum mismatch → hold; buyer username never in output; signed parse only where allowed. | typescript, security, silent-failure |

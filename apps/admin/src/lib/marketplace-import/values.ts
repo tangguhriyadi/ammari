@@ -122,3 +122,60 @@ function shorten(text: string): string {
   const trimmed = text.trim();
   return trimmed.length > 40 ? `${trimmed.slice(0, 40)}...` : trimmed;
 }
+
+// ---------- Text-only parsers (the real Shopee export, plan §19.1) ----------
+// Every cell of the 27 Nov 2026 "Pesanan Saya" export is TEXT: rupiah with "." thousands and no
+// decimals, times "YYYY-MM-DD HH:MM" in Jakarta, "" for empty. Anything else (a number cell, a
+// decimal, a comma, seconds) means the file is not the shape that was verified, so it is a row
+// error, never a guess. `label` names the column in the message.
+
+const notText = (label: string) => fail(`${label} harus berupa teks seperti di export Shopee.`);
+
+/** One money cell's ceiling: Rp 10 miliar, far above any real gamis row. With at most MAX_LINE_QTY
+ * pieces per row and MAX_DATA_ROWS rows, every sum of a file stays a safe integer (exact). */
+export const MAX_RUPIAH_CELL = 10_000_000_000;
+
+/** Whole rupiah >= 0 written "229.000", "8.000" or "0": digits in proper groups of 3 joined by ".",
+ * no leading zero, nothing else, at most MAX_RUPIAH_CELL. Blank ("") is `null`. */
+export function parseRupiahText(cell: Cell, label: string): ParseResult<number | null> {
+  if (isBlank(cell)) return ok(null);
+  if (typeof cell !== "string") return notText(label);
+  const text = cell.trim();
+  if (!/^(?:0|[1-9]\d{0,2}(?:\.\d{3})*)$/.test(text)) return fail(`"${shorten(cell)}" bukan angka rupiah dengan format 229.000.`);
+  const value = Number(text.replaceAll(".", ""));
+  if (!Number.isSafeInteger(value) || value > MAX_RUPIAH_CELL) return fail("Angka uang terlalu besar.");
+  return ok(value);
+}
+
+/** The variant SKU as text only: a number cell may already have lost leading zeros ("00123" -> 123)
+ * and could match the wrong variant. Otherwise as `parseSku`. */
+export function parseSkuText(cell: Cell): ParseResult<string | null> {
+  if (typeof cell === "number") return notText("Nomor Referensi SKU");
+  return parseSku(cell);
+}
+
+/** A whole count >= 0 as text ("0", "2"), up to MAX_LINE_QTY. Blank is `null`. */
+export function parseCountText(cell: Cell, label: string): ParseResult<number | null> {
+  if (isBlank(cell)) return ok(null);
+  if (typeof cell !== "string") return notText(label);
+  const text = cell.trim();
+  const value = /^\d{1,4}$/.test(text) ? Number(text) : NaN;
+  if (!Number.isSafeInteger(value) || value > MAX_LINE_QTY) return fail(`${label} harus bilangan bulat 0 atau lebih.`);
+  return ok(value);
+}
+
+/** Jumlah as text, 1 to MAX_LINE_QTY. Never blank. */
+export function parseQtyText(cell: Cell): ParseResult<number> {
+  if (typeof cell === "number") return notText("Jumlah");
+  return parseQty(cell);
+}
+
+const MINUTE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+
+/** "YYYY-MM-DD HH:MM", Asia/Jakarta, to its UTC instant. No seconds, no serials, no other shapes. */
+export function parseJakartaMinuteText(cell: Cell, label: string): ParseResult<Date> {
+  if (typeof cell === "number") return notText(label);
+  if (typeof cell !== "string") return fail(`${label} kosong atau tidak valid.`);
+  if (!MINUTE_TIME_PATTERN.test(cell.trim())) return fail(`"${shorten(cell)}" bukan waktu dengan format TTTT-BB-HH JJ:MM.`);
+  return parseJakartaDateTime(cell, false);
+}

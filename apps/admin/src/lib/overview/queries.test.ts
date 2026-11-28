@@ -288,9 +288,16 @@ describe("platform fees (docs/plans/marketplace-import.md §9, tests 45 and 46)"
       // 2031-03-10 12:00 WIB, as Waktu Pesanan Dibuat.
       const lines = [{ sku: variant.sku, qty: 1, lineTotal: 249_000 }];
       await commit([
-        { orderNo: `${marker}A`, status: "Selesai", orderedAt: "2031-03-10 12:00", sellerVoucher: 9_000, adminFee: 4_000, serviceFee: 1_000, lines },
-        { orderNo: `${marker}B`, status: "Perlu Dikirim", orderedAt: "2031-03-10 13:00", adminFee: 4_000, lines },
+        { orderNo: `${marker}A`, status: "Selesai", orderedAt: "2031-03-10 12:00", sellerVoucher: 9_000, lines },
+        { orderNo: `${marker}B`, status: "Perlu Dikirim", orderedAt: "2031-03-10 13:00", lines },
       ]);
+      // The order export carries no fees (plan §19.2): until the Penghasilan Saya import, both are
+      // "Biaya platform belum lengkap". Then the actual fees arrive (written here as session 7e will).
+      const imported = await tx.select({ id: orders.id, channelOrderNo: orders.channelOrderNo }).from(orders).where(eq(orders.channelId, "shopee"));
+      const idOf = (no: string) => imported.find((row) => row.channelOrderNo === no)!.id;
+      expect((await getPeriodTotals(DAY, { canViewProfit: true }, tx)).money?.platformFees.ordersWithoutFees).toBe(2);
+      await fees(tx, idOf(`${marker}A`), { admin_fee: 4_000, service_fee: 1_000 });
+      await fees(tx, idOf(`${marker}B`), { admin_fee: 4_000 });
       const before = await getPeriodTotals(DAY, { canViewProfit: true }, tx);
       expect(before.orders).toBe(2);
       expect(before.money).toMatchObject({ omzet: 240_000 + 249_000, hpp: 200_000, platformFee: 9_000, labaSetelahBiayaPlatform: 489_000 - 200_000 - 9_000 });
@@ -298,7 +305,7 @@ describe("platform fees (docs/plans/marketplace-import.md §9, tests 45 and 46)"
       expect(await getChannelBreakdown(DAY, { canViewProfit: true }, tx)).toEqual([{ channelId: "shopee", channelName: "Shopee", orders: 2, pcs: 2, omzet: 489_000 }]);
 
       // B is cancelled on Shopee: cancelled in admin, out of every figure, its fees with it.
-      await commit([{ orderNo: `${marker}B`, status: "Batal", orderedAt: "2031-03-10 13:00", adminFee: 4_000, lines }]);
+      await commit([{ orderNo: `${marker}B`, status: "Batal", orderedAt: "2031-03-10 13:00", lines }]);
       const after = await getPeriodTotals(DAY, { canViewProfit: true }, tx);
       expect(after).toMatchObject({ orders: 1, cancelledOrders: 1 });
       expect(after.money).toMatchObject({ omzet: 240_000, hpp: 100_000, platformFee: 5_000, labaSetelahBiayaPlatform: 135_000 });

@@ -7,89 +7,218 @@ import * as XLSX from "xlsx";
 
 export type FixtureCell = string | number | boolean | null | { formula: string; cached: string | number };
 
-/** The fake buyer data every Shopee fixture row carries; must never appear in parser output. */
+/** The fake buyer data every Shopee fixture row carries in columns 40-47; must never appear in parser
+ * output. */
 export const FAKE_BUYER = {
+  buyerNote: "Catatan pembeli rahasia zz",
+  note: "Catatan penjual rahasia zz",
   username: "pembeli_rahasia_zz",
   name: "Nama Penerima Rahasia",
   phone: "6281299990000",
   address: "Jl. Rahasia No. 99, Kelurahan Fiktif",
   city: "KOTA FIKTIF",
-  province: "Provinsi Fiktif / Kota Fiktif",
+  province: "PROVINSI FIKTIF",
 } as const;
 
-/** Shopee's reference columns (plan §2.1, unverified) with buyer and shipping columns mixed in, in
- * a plausible Seller Center order. */
+/** The exact header row of the real Shopee "Pesanan Saya" export of 27 Nov 2026, in order (plan
+ * §19.2). The space after the slash in columns 2 and 5 is part of the text. */
 export const SHOPEE_HEADER = [
   "No. Pesanan",
   "Status Pesanan",
-  "Username (Pembeli)",
+  "Status Pembatalan/ Pengembalian",
+  "No. Resi",
+  "Opsi Pengiriman",
+  "Antar ke counter/ pick-up",
+  "Pesanan Harus Dikirimkan Sebelum (Menghindari keterlambatan)",
+  "Waktu Pengiriman Diatur",
   "Waktu Pesanan Dibuat",
-  "Nama Produk",
-  "Nama Variasi",
-  "Nomor Referensi SKU",
+  "Waktu Pembayaran Dilakukan",
+  "Tipe Pesanan",
+  "Metode Pembayaran",
   "SKU Induk",
+  "Nama Produk",
+  "Nomor Referensi SKU",
+  "Nama Variasi",
+  "Harga Awal",
+  "Harga Setelah Diskon",
   "Jumlah",
-  "Total Harga Produk",
+  "Returned quantity",
+  "Subtotal Pesanan",
+  "Total Diskon",
+  "Diskon Dari Penjual",
+  "Diskon Dari Shopee",
+  "Berat Produk",
+  "Jumlah Produk di Pesan",
+  "Total Berat",
   "Voucher Ditanggung Penjual",
+  "Cashback Koin",
   "Voucher Ditanggung Shopee",
+  "Paket Diskon",
+  "Paket Diskon (Diskon dari Shopee)",
+  "Paket Diskon (Diskon dari Penjual)",
+  "Potongan Koin Shopee",
+  "Diskon Kartu Kredit",
   "Ongkos Kirim Dibayar oleh Pembeli",
-  "Biaya Administrasi",
-  "Biaya Layanan",
-  "Biaya Komisi AMS",
+  "Estimasi Potongan Biaya Pengiriman",
+  "Ongkos Kirim Pengembalian Barang",
+  "Total Pembayaran",
+  "Perkiraan Ongkos Kirim",
+  "Catatan dari Pembeli",
+  "Catatan",
+  "Username (Pembeli)",
   "Nama Penerima",
   "No. Telepon",
   "Alamat Pengiriman",
   "Kota/Kabupaten",
-  "Provinsi / Kota",
+  "Provinsi",
+  "Waktu Pesanan Selesai",
 ] as const;
+
+export type ShopeeHeader = (typeof SHOPEE_HEADER)[number];
+
+/** The column index of a Shopee header. */
+export function shopeeColumn(header: ShopeeHeader): number {
+  return SHOPEE_HEADER.indexOf(header);
+}
+
+/** A money value as the real file writes it: text, "." thousands, no decimals. A string is taken as
+ * is (to test what the parser refuses); null is a blank cell. */
+export type FixtureMoney = number | string | null;
+
+export function rupiahText(amount: number): string {
+  if (!Number.isSafeInteger(amount) || amount < 0) throw new Error(`fixture: not a whole rupiah amount: ${amount}`);
+  return String(amount).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+function moneyCell(value: FixtureMoney): FixtureCell {
+  if (value === null) return "";
+  return typeof value === "number" ? rupiahText(value) : value;
+}
 
 export interface FixtureLine {
   sku: string | null;
   qty: number | string;
-  lineTotal: number | string;
+  /** Harga Awal x Jumlah. Harga Awal defaults to lineTotal / qty (must divide evenly). */
+  lineTotal?: number;
+  /** Harga Awal (per piece), overrides the one derived from lineTotal. */
+  listUnitPrice?: FixtureMoney;
+  /** Harga Setelah Diskon (per piece); defaults to Harga Awal - Total Diskon / Jumlah. */
+  unitPriceAfterDiscount?: FixtureMoney;
+  /** Total Diskon of the row; defaults to seller + Shopee discount. */
+  totalDiscount?: FixtureMoney;
+  /** Diskon Dari Penjual of the row. */
+  sellerDiscount?: number;
+  /** Diskon Dari Shopee of the row. */
+  shopeeDiscount?: number;
+  returnedQty?: number | string;
+  /** Subtotal Pesanan; defaults to Harga Setelah Diskon x Jumlah. */
+  fileSubtotal?: FixtureMoney;
   productName?: string;
   variationName?: string;
+  /** SKU Induk: never read. */
+  parentSku?: string;
 }
 
 export interface FixtureOrder {
   orderNo: string;
   status?: string;
+  /** Status Pembatalan/ Pengembalian; blank by default. */
+  cancelReturnStatus?: string;
+  /** Text "YYYY-MM-DD HH:MM", or a number to test that serials are refused. */
   orderedAt?: string | number;
+  shippedAt?: string;
+  completedAt?: string;
   lines: FixtureLine[];
-  sellerVoucher?: number | string | null;
-  adminFee?: number | string | null;
-  serviceFee?: number | string | null;
-  affiliateFee?: number | string | null;
+  sellerVoucher?: FixtureMoney;
+  /** Paket Diskon (Diskon dari Penjual). */
+  sellerBundleDiscount?: FixtureMoney;
+  /** Shopee-funded columns: count in revenue (owner Q3), never read. */
+  shopeeVoucher?: number;
+  shopeeBundleDiscount?: number;
+  shopeeCoins?: number;
+  coinCashback?: number;
 }
 
-/** One row per line, order-level values repeated on every row (Shopee's shape, plan §4). */
+function listUnitPriceOf(line: FixtureLine): FixtureMoney {
+  if (line.listUnitPrice !== undefined) return line.listUnitPrice;
+  if (line.lineTotal === undefined) throw new Error("fixture: a line needs listUnitPrice or lineTotal");
+  // A deliberately invalid Jumlah ("dua"): the row is an error anyway, any price will do.
+  if (typeof line.qty !== "number") return line.lineTotal;
+  if (line.lineTotal % line.qty !== 0) throw new Error(`fixture: lineTotal ${line.lineTotal} is not ${line.qty} x a whole Harga Awal`);
+  return line.lineTotal / line.qty;
+}
+
+/** One row per line, order-level values repeated on every row, every cell text, the exact 49 headers
+ * in the real order (plan §19.1). Buyer columns 40-47 carry FAKE_BUYER. */
 export function shopeeRows(orders: readonly FixtureOrder[]): FixtureCell[][] {
   const rows: FixtureCell[][] = [[...SHOPEE_HEADER]];
   for (const order of orders) {
+    const orderPieces = order.lines.reduce((sum, line) => sum + (typeof line.qty === "number" ? line.qty : 0), 0);
     for (const line of order.lines) {
-      rows.push([
+      const listUnitPrice = listUnitPriceOf(line);
+      const qty = typeof line.qty === "number" ? line.qty : null;
+      const sellerDiscount = line.sellerDiscount ?? 0;
+      const shopeeDiscount = line.shopeeDiscount ?? 0;
+      const totalDiscount = line.totalDiscount !== undefined ? line.totalDiscount : sellerDiscount + shopeeDiscount;
+      let after: FixtureMoney;
+      if (line.unitPriceAfterDiscount !== undefined) after = line.unitPriceAfterDiscount;
+      else if (typeof listUnitPrice === "number" && typeof totalDiscount === "number" && qty !== null && totalDiscount % qty === 0) after = listUnitPrice - totalDiscount / qty;
+      else if (typeof listUnitPrice === "number" && totalDiscount === 0) after = listUnitPrice;
+      else throw new Error("fixture: give unitPriceAfterDiscount explicitly for this line");
+      const subtotal = line.fileSubtotal !== undefined ? line.fileSubtotal : typeof after === "number" && qty !== null ? after * qty : null;
+      const row: FixtureCell[] = [
         order.orderNo,
         order.status ?? "Selesai",
-        FAKE_BUYER.username,
+        order.cancelReturnStatus ?? "",
+        "SPXID0000000001",
+        "SPX Standard",
+        "Pick-up",
+        "2026-10-25 23:59",
+        order.shippedAt ?? "",
         order.orderedAt ?? "2026-10-23 14:05",
+        "2026-10-23 14:06",
+        "Normal",
+        "ShopeePay",
+        line.parentSku ?? "INDUK-UJI",
         line.productName ?? "Gamis Uji",
+        line.sku ?? "",
         line.variationName ?? "Sage,M",
-        line.sku,
-        "INDUK-UJI",
-        line.qty,
-        line.lineTotal,
-        order.sellerVoucher === undefined ? 0 : order.sellerVoucher,
-        5000,
-        12000,
-        order.adminFee === undefined ? 0 : order.adminFee,
-        order.serviceFee === undefined ? 0 : order.serviceFee,
-        order.affiliateFee === undefined ? 0 : order.affiliateFee,
+        moneyCell(listUnitPrice),
+        moneyCell(after),
+        String(line.qty),
+        line.returnedQty === undefined ? "0" : String(line.returnedQty),
+        moneyCell(subtotal),
+        moneyCell(totalDiscount),
+        rupiahText(sellerDiscount),
+        rupiahText(shopeeDiscount),
+        "700 gr",
+        String(orderPieces + 90),
+        `${700 * orderPieces} gr`,
+        moneyCell(order.sellerVoucher === undefined ? 0 : order.sellerVoucher),
+        rupiahText(order.coinCashback ?? 0),
+        rupiahText(order.shopeeVoucher ?? 5_000),
+        "N",
+        rupiahText(order.shopeeBundleDiscount ?? 0),
+        moneyCell(order.sellerBundleDiscount === undefined ? 0 : order.sellerBundleDiscount),
+        rupiahText(order.shopeeCoins ?? 0),
+        "0",
+        "12.000",
+        "0",
+        "0",
+        "333.333",
+        "12.000",
+        FAKE_BUYER.buyerNote,
+        FAKE_BUYER.note,
+        FAKE_BUYER.username,
         FAKE_BUYER.name,
         FAKE_BUYER.phone,
         FAKE_BUYER.address,
         FAKE_BUYER.city,
         FAKE_BUYER.province,
-      ]);
+        order.completedAt ?? "",
+      ];
+      if (row.length !== SHOPEE_HEADER.length) throw new Error("fixture: row length differs from the header");
+      rows.push(row);
     }
   }
   return rows;

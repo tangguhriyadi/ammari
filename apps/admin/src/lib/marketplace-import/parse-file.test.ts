@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { csvBytes, FAKE_BUYER, shopeeRows, xlsxBytes, type FixtureOrder } from "../../../test/marketplace-fixtures";
+import { csvBytes, FAKE_BUYER, shopeeColumn, shopeeRows, xlsxBytes, type FixtureOrder } from "../../../test/marketplace-fixtures";
 import { SHOPEE_MAPPING_VERIFIED } from "./adapters/shopee";
 import { MAX_ORDERS } from "./limits";
 import { parseMarketplaceFile } from "./parse-file";
@@ -10,8 +10,6 @@ const ORDERS: FixtureOrder[] = [
     status: "Selesai",
     orderedAt: "2026-10-22 09:15",
     sellerVoucher: 10000,
-    adminFee: 4500,
-    serviceFee: 3000,
     lines: [
       { sku: "POKA-FZ-SAGE-M", qty: 1, lineTotal: 249000 },
       { sku: "POKA-FZ-SAGE-L", qty: 2, lineTotal: 498000 },
@@ -47,10 +45,11 @@ describe("parseMarketplaceFile: Shopee", () => {
       orderedAtRange: { from: new Date("2026-10-22T02:15:00.000Z"), to: new Date("2026-10-24T14:40:00.000Z") },
     });
     expect(parsed.fileSha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(parsed.orders.map((order) => [order.channelOrderNo, order.statusKey, order.subtotalAmount, order.sellerVoucherAmount, order.fees])).toEqual([
-      ["2410NNN100", "selesai", 747000, 10000, { admin_fee: 4500, service_fee: 3000, affiliate_commission: 0 }],
-      ["2410NNN200", "perlu dikirim", 259000, 0, { admin_fee: 0, service_fee: 0, affiliate_commission: 0 }],
-      ["2410NNN300", "menunggu konfirmasi", 259000, 0, { admin_fee: 0, service_fee: 0, affiliate_commission: 0 }],
+    // No fees: the order export has no fee columns (plan §19.2).
+    expect(parsed.orders.map((order) => [order.channelOrderNo, order.statusKey, order.subtotalAmount, order.sellerDiscountAmount, order.fees])).toEqual([
+      ["2410NNN100", "selesai", 747000, 10000, {}],
+      ["2410NNN200", "perlu dikirim", 259000, 0, {}],
+      ["2410NNN300", "menunggu konfirmasi", 259000, 0, {}],
     ]);
   });
 
@@ -58,8 +57,9 @@ describe("parseMarketplaceFile: Shopee", () => {
     const result = parse(xlsxBytes(shopeeRows(ORDERS)));
     const serialized = JSON.stringify(result);
     for (const value of Object.values(FAKE_BUYER)) expect(serialized).not.toContain(value);
-    // Nor do the shipping/ongkir or platform-voucher columns' values (12000 and 5000 per row).
+    // Nor do the shipping/ongkir or platform-voucher columns' values (12.000 and 5.000 per row).
     expect(serialized).not.toContain("12000");
+    expect(serialized).not.toContain("12.000");
   });
 
   test("Simpan stays locked until the real header is verified (owner decision 14)", () => {
@@ -87,7 +87,7 @@ describe("parseMarketplaceFile: Shopee", () => {
   test("csv row numbers match the file even after a blank line", () => {
     const rows = shopeeRows(ORDERS).map((row) => row.map((cell) => (cell === null || typeof cell === "object" ? null : String(cell))));
     rows.splice(2, 0, []);
-    rows[4]![8] = "dua";
+    rows[4]![shopeeColumn("Jumlah")] = "dua";
     const result = parse(csvBytes(rows), "shopee", "pesanan.csv");
     expect(result.ok && result.value.rowErrors).toEqual([{ rowNumber: 5, columnLabel: "Jumlah", message: "Jumlah harus bilangan bulat." }]);
     expect(result.ok && result.value.blankRowCount).toBe(1);
@@ -105,15 +105,15 @@ describe("parseMarketplaceFile: Shopee", () => {
     expect(result.ok && [result.value.sheetName, result.value.headerRowNumber, result.value.orders.length]).toEqual(["orders", 3, 3]);
   });
 
-  test("a missing optional fee column is a warning, not a refusal", () => {
-    const rows = shopeeRows(ORDERS).map((row) => row.filter((_, index) => index !== 14));
+  test("a missing optional column is not a warning: it is a save blocker of the header signature", () => {
+    const rows = shopeeRows(ORDERS).map((row) => row.filter((_, index) => index !== shopeeColumn("Total Diskon")));
     const result = parse(xlsxBytes(rows));
-    expect(result.ok && result.value.warnings).toEqual(["Kolom Biaya Layanan tidak ada di file; biaya platform pesanan di file ini dihitung belum lengkap."]);
-    expect(result.ok && result.value.orders[0]!.fees).toEqual({ admin_fee: 4500, affiliate_commission: 0 });
+    expect(result.ok && result.value.warnings).toEqual([]);
+    expect(result.ok && result.value.saveBlockers[1]).toContain('kolom "Total Diskon" tidak ada');
   });
 
   test("a missing required column refuses the file, naming it", () => {
-    const rows = shopeeRows(ORDERS).map((row) => row.filter((_, index) => index !== 8));
+    const rows = shopeeRows(ORDERS).map((row) => row.filter((_, index) => index !== shopeeColumn("Jumlah")));
     const result = parse(xlsxBytes(rows));
     expect(result).toEqual({
       ok: false,
@@ -125,15 +125,16 @@ describe("parseMarketplaceFile: Shopee", () => {
     const tiktokShaped = [["Order ID", "Order Status", "Seller SKU", "Quantity"], ["5770001112", "Completed", "A-M", 1]];
     const result = parse(xlsxBytes(tiktokShaped));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("missing_columns");
+    // English headers are not aliases any more (plan §19.2), so nothing in it is recognised.
+    if (!result.ok) expect(result.error.code).toBe("not_this_channel");
     const unrelated = parse(xlsxBytes([["Nama", "Alamat"], ["x", "y"]]));
     expect(!unrelated.ok && unrelated.error.code).toBe("not_this_channel");
   });
 
-  test("an Excel date serial in Waktu Pesanan Dibuat works", () => {
+  test("an Excel date serial in Waktu Pesanan Dibuat is refused: the real export writes text (plan §19.1)", () => {
     const serial = 46318 + (14 * 60 + 5) / 1440;
     const result = parse(xlsxBytes(shopeeRows([{ ...ORDERS[1]!, orderedAt: serial }])));
-    expect(result.ok && result.value.orders[0]!.orderedAt).toEqual(new Date("2026-10-23T07:05:00.000Z"));
+    expect(result.ok && result.value.rowErrors).toEqual([{ rowNumber: 2, columnLabel: "Waktu Pesanan Dibuat", message: "Waktu Pesanan Dibuat harus berupa teks seperti di export Shopee." }]);
   });
 
   test("more orders than the limit refuse the file", () => {
@@ -148,7 +149,7 @@ describe("parseMarketplaceFile: Shopee", () => {
   test("row errors are listed up to a cap and counted in full", () => {
     const bad: FixtureOrder[] = Array.from({ length: 250 }, (_, index) => ({
       orderNo: `BAD${String(index).padStart(6, "0")}`,
-      lines: [{ sku: "A-M", qty: "x", lineTotal: 1000 }],
+      lines: [{ sku: "A-M", qty: "x", listUnitPrice: 1000, unitPriceAfterDiscount: 1000 }],
     }));
     const result = parse(xlsxBytes(shopeeRows(bad)));
     expect(result.ok && [result.value.rowErrors.length, result.value.rowErrorCount, result.value.problems.length]).toEqual([200, 250, 250]);

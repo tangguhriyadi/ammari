@@ -4,7 +4,7 @@ import { adapterFor } from "./adapters";
 import type { MarketplaceAdapter } from "./adapters/types";
 import { fileError, type FileResult, type ImportFileError } from "./errors";
 import { groupOrders, type ImportOrder, type OrderProblem, type RowError } from "./group-orders";
-import { locateHeader, type HeaderMatch } from "./headers";
+import { headerSignatureDifferences, locateHeader, type HeaderMatch } from "./headers";
 import { readSpreadsheet, type SheetRows } from "./read-sheet";
 
 // The session 1 entry point of the marketplace import (docs/plans/marketplace-import.md §1, §2):
@@ -56,16 +56,21 @@ export interface ParseFileInput {
   assumeMappingVerified?: boolean;
 }
 
-/** The first sheet whose header matches; otherwise the most useful refusal (a sheet that is
- * nearly right beats "not this channel"). */
-function findSheet(sheets: readonly SheetRows[], adapter: MarketplaceAdapter): FileResult<{ sheet: SheetRows; header: HeaderMatch }> {
+/** The first sheet whose header matches, and the names of every matching sheet (a second one would
+ * otherwise be left out silently); otherwise the most useful refusal (a sheet that is nearly right
+ * beats "not this channel"). */
+function findSheet(sheets: readonly SheetRows[], adapter: MarketplaceAdapter): FileResult<{ sheet: SheetRows; header: HeaderMatch; matchingSheetNames: string[] }> {
   let refusal: ImportFileError | null = null;
+  let found: { sheet: SheetRows; header: HeaderMatch } | null = null;
+  const matchingSheetNames: string[] = [];
   for (const sheet of sheets) {
     const header = locateHeader(sheet.rows, adapter.columns!, adapter.label);
-    if (header.ok) return { ok: true, value: { sheet, header: header.value } };
-    if (refusal === null || refusal.code === "not_this_channel") refusal = header.error;
+    if (header.ok) {
+      matchingSheetNames.push(sheet.name);
+      found ??= { sheet, header: header.value };
+    } else if (refusal === null || refusal.code === "not_this_channel") refusal = header.error;
   }
-  return { ok: false, error: refusal! };
+  return found ? { ok: true, value: { ...found, matchingSheetNames } } : { ok: false, error: refusal! };
 }
 
 export function parseMarketplaceFile(input: ParseFileInput): FileResult<ParsedImport> {
@@ -78,7 +83,7 @@ export function parseMarketplaceFile(input: ParseFileInput): FileResult<ParsedIm
   if (!workbook.ok) return workbook;
   const found = findSheet(workbook.value.sheets, adapter);
   if (!found.ok) return found;
-  const { sheet, header } = found.value;
+  const { sheet, header, matchingSheetNames } = found.value;
 
   const grouped = groupOrders({
     rows: sheet.rows,
@@ -98,9 +103,9 @@ export function parseMarketplaceFile(input: ParseFileInput): FileResult<ParsedIm
     else unknown.set(order.statusKey, { rawStatus: order.rawStatus, orderCount: 1 });
   }
 
-  const warnings = header.missingOptional
-    .filter((spec) => spec.field === "fee")
-    .map((spec) => `Kolom ${spec.label} tidak ada di file; biaya platform pesanan di file ini dihitung belum lengkap.`);
+  // No "fee column missing" warning any more: Shopee's order export has no fee columns at all (plan
+  // §19.2); fees come only from the Penghasilan Saya import.
+  const warnings: string[] = [];
   if (dataRowCount === 0) warnings.push("File tidak berisi baris pesanan.");
 
   let orderedAtRange: ParsedImport["orderedAtRange"] = null;
@@ -115,6 +120,21 @@ export function parseMarketplaceFile(input: ParseFileInput): FileResult<ParsedIm
   const mappingVerified = adapter.mappingVerified || input.assumeMappingVerified === true;
   const lockedMessage = mappingVerified ? null : (adapter.lockedMessage ?? "Kanal ini belum bisa disimpan.");
   const saveBlockers = lockedMessage ? [lockedMessage] : [];
+  if (matchingSheetNames.length > 1) {
+    saveBlockers.push(
+      `File berisi lebih dari satu sheet pesanan (${matchingSheetNames.map((name) => `"${name.slice(0, 40)}"`).join(", ")}), jadi hanya sheet pertama yang terbaca. Export ulang file dengan satu sheet saja.`,
+    );
+  }
+  // Checked on every upload and never lifted by the e2e unlock: a silent Shopee format change must
+  // never write (plan §19.2).
+  if (adapter.headerSignature) {
+    const differences = headerSignatureDifferences(sheet.rows[header.headerRowIndex] ?? [], adapter.headerSignature.headers);
+    if (differences.length > 0) {
+      saveBlockers.push(
+        `Format export ${adapter.label} berubah sejak ${adapter.headerSignature.since}: ${differences.join(", ")}. Pratinjau tetap bisa dipakai, tapi pesanan belum bisa disimpan. Kirim baris judul kolom yang baru ke admin teknis.`,
+      );
+    }
+  }
   if (unattributedRowCount > 0) {
     saveBlockers.push(
       `${unattributedRowCount.toLocaleString("id-ID")} baris berisi data tapi nomor pesanannya kosong atau tidak valid, jadi tidak jelas milik pesanan mana. Perbaiki atau export ulang file, lalu periksa lagi.`,

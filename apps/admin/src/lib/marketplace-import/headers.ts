@@ -80,3 +80,46 @@ export function locateHeader(rows: readonly Cell[][], specs: readonly ColumnSpec
     value: { headerRowIndex: bestRow, columns, missingOptional: specs.filter((spec) => !spec.required && !columns.has(columnSpecId(spec))) },
   };
 }
+
+/** Most differences named in one message; the rest are counted. */
+const MAX_SIGNATURE_DIFFERENCES = 8;
+
+function headerText(cell: Cell): string {
+  if (cell === null || cell === undefined) return "";
+  const text = String(cell);
+  return text.length > 60 ? `${text.slice(0, 60)}...` : text;
+}
+
+/** How a header row differs from the verified export's, exactly (no normalizing: a case or spacing
+ * change is a change too), as Indonesian phrases. Empty = identical. Trailing blank cells are not
+ * columns. Plan §19.2: any difference blocks Simpan, the preview still works. */
+export function headerSignatureDifferences(headerRow: readonly Cell[], signature: readonly string[]): string[] {
+  const actual = headerRow.map((cell) => (cell === null || cell === undefined ? "" : String(cell)));
+  while (actual.length > 0 && actual.at(-1)!.trim() === "") actual.pop();
+
+  const remaining = new Map<string, number>();
+  for (const header of signature) remaining.set(header, (remaining.get(header) ?? 0) + 1);
+  const added: string[] = [];
+  for (const header of actual) {
+    const left = remaining.get(header) ?? 0;
+    if (left > 0) remaining.set(header, left - 1);
+    else added.push(header);
+  }
+  const missing = signature.filter((header) => {
+    const left = remaining.get(header) ?? 0;
+    if (left === 0) return false;
+    remaining.set(header, left - 1);
+    return true;
+  });
+
+  const differences = [
+    ...missing.map((header) => `kolom "${headerText(header)}" tidak ada`),
+    ...added.map((header) => (header.trim() === "" ? "kolom baru tanpa judul" : `kolom baru "${headerText(header)}"`)),
+  ];
+  if (differences.length === 0 && actual.some((header, index) => header !== signature[index])) differences.push("urutan kolom berubah");
+  if (differences.length > MAX_SIGNATURE_DIFFERENCES) {
+    const rest = differences.length - MAX_SIGNATURE_DIFFERENCES;
+    return [...differences.slice(0, MAX_SIGNATURE_DIFFERENCES), `dan ${rest} perubahan lain`];
+  }
+  return differences;
+}

@@ -103,6 +103,18 @@ for (const layout of [MOBILE, DESKTOP]) {
     // No finance.view_profit: no rupiah anywhere in the preview.
     await expect(page.getByTestId("import-new-totals")).toHaveText("Pesanan baru: 3 pcs");
     await expect(page.getByTestId("import-preview")).not.toContainText("Rp");
+
+    // A changed header row and a blank variant SKU (plan §19.2, §19.6): previewed, held, never saved.
+    const changed = shopeeRows([{ orderNo: `${layout.prefix}K001`, status: "Selesai", orderedAt: "2026-01-17 10:00", lines: [{ sku: null, qty: 1, lineTotal: 249_000, parentSku: E2E_IMPORT_SKU_M }] }]);
+    changed[0]![SHOPEE_HEADER.indexOf("Total Berat")] = "Total Berat (kg)";
+    await upload(page, "Shopee", { name: "berubah.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(xlsxBytes(changed)) });
+    await expect(page.getByTestId("import-save-blockers")).toContainText('Format export Shopee berubah sejak 27 Nov 2026: kolom "Total Berat" tidak ada, kolom baru "Total Berat (kg)"');
+    await expect(page.getByTestId("import-blank-sku-count")).toContainText("1 pesanan tertahan karena SKU kosong di Shopee");
+    const held = await visibleRow(page.getByTestId("section-review"), layout, `${layout.prefix}K001`);
+    await expect(held).toContainText("SKU kosong di Shopee (Nomor Referensi SKU)");
+    await expect(held.getByRole("link", { name: "Buka Daftar SKU" })).toHaveAttribute("href", "/stock/sku-list");
+    // No manual match for a blank SKU.
+    await expect(page.getByTestId("unknown-skus")).toHaveCount(0);
   });
 
   test(`Impor: match, Simpan, history, orders, then the same file again (${layout.label})`, async ({ page, context }) => {
