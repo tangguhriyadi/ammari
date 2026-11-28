@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { testDb, withRollback, type TestTx } from "@ammari/db/test-utils";
 import { withExclusiveRun } from "@ammari/commerce/maintenance";
-import type { TikTokSyncSummary } from "@ammari/commerce/tiktok";
+import { emptyTikTokStockPushCounts, type TikTokSyncSummary } from "@ammari/commerce/tiktok";
 
 // docs/plans/tiktok-shop-integration.md §9, T4: the TikTok sync cron route. The run itself is tested
 // against a real database in packages/commerce (src/tiktok/sync.test.ts); here: the cron auth gate,
@@ -49,7 +49,8 @@ function summary(overrides: Partial<TikTokSyncSummary> = {}): TikTokSyncSummary 
     apply: { enabled: false, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 0, rechecked: 0, recheckIncomplete: false, notFound: 0, waitingBackfill: 0, problems: [] },
     afterSales: afterSales(),
     finance: finance(),
-    listings: { skipped: "not_due", complete: false, stoppedBy: null, pages: 0, products: 0, skus: 0, autoMapped: 0, invalid: 0, ownWarehouses: 0, notListed: 0, severalListings: 0 },
+    listings: { skipped: "not_due", complete: false, stoppedBy: null, pages: 0, products: 0, skus: 0, autoMapped: 0, invalid: 0, ownWarehouses: 0, notListed: 0, severalListings: 0, drift: 0 },
+    stockPush: emptyTikTokStockPushCounts(),
     backfill: { ran: false, id: null, state: null, orders: { slices: 0, pages: 0, stored: 0, sliceSeconds: null }, afterSales: { slices: 0, pages: 0 }, finance: { windows: 0, skipped: null }, stoppedBy: null },
     budgetExhausted: false,
     error: null,
@@ -161,7 +162,7 @@ describe("POST /api/internal/tiktok/sync", () => {
   test("stock sync S1: a listing read without its scope or that stopped early warns (200); a failed one is 500", async () => {
     const warns = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const listings = (overrides: Partial<TikTokSyncSummary["listings"]>): TikTokSyncSummary["listings"] => ({ skipped: null, complete: true, stoppedBy: null, pages: 1, products: 1, skus: 1, autoMapped: 0, invalid: 0, ownWarehouses: 1, notListed: 0, severalListings: 0, ...overrides });
+    const listings = (overrides: Partial<TikTokSyncSummary["listings"]>): TikTokSyncSummary["listings"] => ({ skipped: null, complete: true, stoppedBy: null, pages: 1, products: 1, skus: 1, autoMapped: 0, invalid: 0, ownWarehouses: 1, notListed: 0, severalListings: 0, drift: 0, ...overrides });
     for (const [value, status, warned] of [
       [summary({ listings: listings({}) }), 200, false],
       [summary({ listings: listings({ skipped: "no_scope", complete: false }) }), 200, true],
@@ -176,6 +177,39 @@ describe("POST /api/internal/tiktok/sync", () => {
       });
       if (warned) expect(JSON.stringify(warns.mock.calls)).toContain("needs a look");
       else if (status === 200) expect(warns).not.toHaveBeenCalled();
+    }
+  });
+
+  test("stock sync S2: a retryable push failure or a product error is 500 (ALERT after 3); a refusal, a busy product or a closed gate with the switch on warns (200)", async () => {
+    const warns = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const push = (overrides: Partial<TikTokSyncSummary["stockPush"]>): TikTokSyncSummary["stockPush"] => ({ ...emptyTikTokStockPushCounts(), ...overrides });
+    for (const [value, status, warned] of [
+      [summary({ stockPush: push({ calls: 2, pushed: 3 }) }), 200, false],
+      [summary({ stockPush: push({ skipped: "switch_off" }) }), 200, false],
+      [summary({ stockPush: push({ calls: 1, failed: 2, problems: [{ id: "p1", code: "rate_limited" }] }) }), 500, false],
+      [summary({ stockPush: push({ errors: 1, problems: [{ id: "p1", code: "sqlstate:40P01" }] }) }), 500, false],
+      [summary({ stockPush: push({ calls: 1, refused: 1, problems: [{ id: "s-a", code: "12052393" }] }) }), 200, true],
+      [summary({ stockPush: push({ busy: 1 }) }), 200, true],
+      // Nothing due this run, but a variant has failed 3 times: still 500, so the ALERT keeps going.
+      [summary({ stockPush: push({ stuckRetries: 1 }) }), 500, false],
+      // A refusal from an earlier run still waiting for a person: a warning on every run.
+      [summary({ stockPush: push({ refusedSkus: 1 }) }), 200, true],
+      [summary({ stockPush: push({ skipped: "listings_stale" }) }), 200, true],
+      [summary({ stockPush: push({ skipped: "no_scope" }) }), 200, true],
+    ] as [TikTokSyncSummary, number, boolean][]) {
+      warns.mockClear();
+      errors.mockClear();
+      await inRollback(async () => {
+        runTikTokSyncMock.mockResolvedValueOnce(value);
+        const response = await call();
+        expect(response.status).toBe(status);
+        const body = JSON.stringify(await response.json());
+        // Ids and codes only: never a token or a URL.
+        expect(body).not.toMatch(/access_token|https?:\/\//);
+      });
+      if (status === 500) expect(errors).toHaveBeenCalled();
+      else expect(warns.mock.calls.length > 0).toBe(warned);
     }
   });
 

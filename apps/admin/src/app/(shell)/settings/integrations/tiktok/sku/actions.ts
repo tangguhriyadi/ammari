@@ -8,6 +8,7 @@ import { revalidateAdmin } from "@/lib/admin-revalidate";
 import { defaultDb } from "@/lib/db";
 import { ActionError } from "@/lib/errors";
 import { TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
+import { pushTikTokStockAfterResponse } from "@/lib/integrations/tiktok-stock-push";
 import { searchMatchVariants, type MatchVariantOption } from "@/lib/marketplace-import/variant-search";
 
 // Pemetaan SKU TikTok (docs/plans/tiktok-shop-integration.md §3.3, Q12; T4). integrations.manage
@@ -39,6 +40,8 @@ export async function mapTikTokSkuAction(tiktokSkuId: string, variantSku: string
     if (!skuId.success || !variant.success) throw new ActionError(MAP_ERRORS.invalid_sku_id);
     const result = await mapTikTokSku(defaultDb, { tiktokSkuId: skuId.data, variantSku: variant.data, staffUserId: session.staffUser.id });
     if (!result.ok) throw new ActionError(MAP_ERRORS[result.reason]);
+    // A mapping moves which variant a TikTok SKU follows (and R2's held pieces): push after the commit.
+    pushTikTokStockAfterResponse();
     revalidateAdmin("/settings");
     return undefined;
   });
@@ -51,6 +54,7 @@ export async function unmapTikTokSkuAction(tiktokSkuId: string): Promise<ActionR
     if (!skuId.success) throw new ActionError(MAP_ERRORS.invalid_sku_id);
     const result = await unmapTikTokSku(defaultDb, { tiktokSkuId: skuId.data, staffUserId: session.staffUser.id });
     if (!result.ok) throw new ActionError("Pemetaan ini sudah tidak ada. Muat ulang halaman.");
+    pushTikTokStockAfterResponse();
     revalidateAdmin("/settings");
     return undefined;
   });

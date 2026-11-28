@@ -2,6 +2,7 @@ import "server-only";
 import { eq, inArray } from "drizzle-orm";
 import { goodsReceiptItems, orderItems, productionBatchItems, products, productVariants } from "@ammari/db/schema";
 import { defaultDb, type Database } from "@/lib/db";
+import { pushTikTokStockAfterResponse } from "@/lib/integrations/tiktok-stock-push";
 import { revalidateProductSlugs } from "@/lib/revalidate";
 
 // Storefront availability (PDP sizes, SOLD OUT, tile label) is derived from stock_movements and
@@ -9,6 +10,10 @@ import { revalidateProductSlugs } from "@/lib/revalidate";
 // stock must tell apps/web to refresh the affected product pages and the homepage. Same secret
 // flow as product saves (lib/revalidate.ts). Defect movements, accessory/fabric purchases, "Tutup
 // batch" and the shipped/completed order transitions never change sellable stock: no call there.
+//
+// The same moment (after the commit) is when TikTok should hear of it: every call also schedules the
+// best-effort TikTok stock push (docs/plans/tiktok-stock-sync.md S2). The database triggers already
+// queued the change in its own transaction, so a caller that forgets this only waits for the cron.
 
 /** Resolves SKUs to their product slugs (deduplicated) and revalidates those pages + the homepage
  * in one batched call. `skus` may be a function (e.g. `() => skusForOrder(id)`) so that looking
@@ -19,6 +24,7 @@ export async function revalidateStorefrontForSkus(
   skus: readonly string[] | (() => Promise<readonly string[]>),
   db: Database = defaultDb,
 ): Promise<{ ok: boolean }> {
+  pushTikTokStockAfterResponse();
   try {
     const unique = [...new Set(typeof skus === "function" ? await skus() : skus)];
     if (unique.length === 0) return { ok: true };

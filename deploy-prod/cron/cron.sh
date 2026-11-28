@@ -14,8 +14,9 @@
 # accounting posting run, docs/plans/accounting.md §2 and Session 12: reads source records, writes
 # journals only; the same run as admin's "Posting sekarang", under the same run lock).
 # Every 5 minutes: POST /api/internal/tiktok/sync (TikTok Shop, docs/plans/tiktok-shop-integration.md
-# §9: due connection events, token refresh, the webhook inbox and the order reconciliation poll; read
-# only until T5). While TikTok is not configured (503) it is retried hourly, not every tick.
+# §9: due connection events, token refresh, the webhook inbox and the order reconciliation poll; and the
+# stock push's retry drain, docs/plans/tiktok-stock-sync.md S2). While TikTok is not configured (503) it is
+# retried hourly, not every tick.
 # All straight at the web
 # container over the internal Docker network (`web` is the dev service name and prod's floating
 # alias for the active slot, deploy-prod/remote-deploy.sh point_web_alias), never through Caddy,
@@ -186,7 +187,7 @@ while :; do
       last_tiktok="$now"
       tiktok_failures=$((tiktok_failures + 1))
       if [ "$tiktok_failures" -ge "$TIKTOK_SYNC_ALERT_AFTER" ]; then
-        log "ALERT: the TikTok Shop sync has failed $tiktok_failures times in a row; TikTok orders are not being read (see web's logs and Integrasi TikTok)"
+        log "ALERT: the TikTok Shop sync has failed $tiktok_failures times in a row; TikTok orders are not being read or stock is not being pushed to TikTok (see web's logs and Integrasi TikTok)"
       fi
     fi
   fi

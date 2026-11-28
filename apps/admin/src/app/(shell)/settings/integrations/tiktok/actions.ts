@@ -2,13 +2,14 @@
 
 import { buildAuthorizeUrl } from "@ammari/tiktok-shop";
 import { z } from "zod";
-import { confirmTikTokBackfill, createTikTokOAuthState, disconnectTikTokShop, setTikTokOrdersApply, setTikTokStockSync, startTikTokBackfill } from "@ammari/commerce/tiktok";
+import { confirmTikTokBackfill, createTikTokOAuthState, disconnectTikTokShop, retryRefusedTikTokStockPushes, setTikTokOrdersApply, setTikTokStockSync, startTikTokBackfill } from "@ammari/commerce/tiktok";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin, revalidateOverview } from "@/lib/admin-revalidate";
 import { defaultDb } from "@/lib/db";
 import { ActionError } from "@/lib/errors";
 import { getTikTokRuntime, TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
+import { pushTikTokStockAfterResponse } from "@/lib/integrations/tiktok-stock-push";
 import { TIKTOK_BACKFILL_ERRORS, TIKTOK_CONNECT_ERRORS } from "@/lib/integrations/tiktok-messages";
 
 /** "Hubungkan TikTok Shop" / "Hubungkan ulang" (docs/plans/tiktok-shop-integration.md §7.3 step 1):
@@ -62,10 +63,10 @@ export async function setTikTokOrdersApplyAction(input: z.input<typeof ordersApp
 
 const stockSyncSchema = z.object({ enabled: z.boolean() });
 
-/** "Sinkronkan stok ke TikTok" / "Hentikan sinkron stok" (docs/plans/tiktok-stock-sync.md R1, S1).
+/** "Sinkronkan stok ke TikTok" / "Hentikan sinkron stok" (docs/plans/tiktok-stock-sync.md R1, S1/S2).
  * integrations.manage on the server; audited (`tiktok_stock_sync_enable` / `_disable`). ON is refused
- * while "Mulai terapkan pesanan" is OFF (also by the database). S1 only stores the flag: nothing is
- * pushed to TikTok until S2. */
+ * while "Mulai terapkan pesanan" is OFF (also by the database). ON queues every mapped variant in the
+ * same transaction and starts the first full push after the response (S2). */
 export async function setTikTokStockSyncAction(input: z.input<typeof stockSyncSchema>): Promise<ActionResult<{ changed: boolean }>> {
   const session = await requirePermission(TIKTOK_PERMISSION);
   const parsed = stockSyncSchema.safeParse(input);
@@ -73,8 +74,23 @@ export async function setTikTokStockSyncAction(input: z.input<typeof stockSyncSc
   return runAction(async () => {
     const result = await setTikTokStockSync(defaultDb, { enabled: parsed.data.enabled, staffUserId: session.staffUser.id });
     if (!result.ok) throw new ActionError(result.reason === "orders_apply_off" ? "Aktifkan Mulai terapkan pesanan dulu." : "Hubungkan TikTok Shop dulu.");
+    if (parsed.data.enabled && result.changed) pushTikTokStockAfterResponse();
     revalidateAdmin("/settings");
     return { changed: result.changed };
+  });
+}
+
+/** "Kirim ulang yang ditolak" (docs/plans/tiktok-stock-sync.md S2): after a person fixed what TikTok
+ * refused (a promotion lock, a global product, shared inventory), clears the refusals and pushes again.
+ * integrations.manage on the server; audited (`tiktok_stock_push_retry`). */
+export async function retryRefusedTikTokStockAction(): Promise<ActionResult<{ cleared: number }>> {
+  const session = await requirePermission(TIKTOK_PERMISSION);
+  return runAction(async () => {
+    const result = await retryRefusedTikTokStockPushes(defaultDb, { staffUserId: session.staffUser.id });
+    if (!result.ok) throw new ActionError("Hubungkan TikTok Shop dulu.");
+    if (result.cleared > 0) pushTikTokStockAfterResponse();
+    revalidateAdmin("/settings");
+    return { cleared: result.cleared };
   });
 }
 

@@ -7,7 +7,7 @@ import { setTikTokStockSyncAction } from "../../actions";
 
 // "Sinkronkan stok ke TikTok" (docs/plans/tiktok-stock-sync.md decision 4, R1). Both directions ask for
 // confirmation; the server re-checks integrations.manage, refuses ON while "Mulai terapkan pesanan" is
-// OFF and audits the change. In S1 nothing is sent to TikTok yet.
+// OFF and audits the change. Turning it on starts the first full push (S2).
 
 /** `reason`: why the button is disabled, shown under it and tied to it (aria-describedby). */
 export function TikTokStockSyncToggle({ enabled, disabled, reason }: { enabled: boolean; disabled: boolean; reason?: string | null }) {

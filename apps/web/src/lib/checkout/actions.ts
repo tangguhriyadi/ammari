@@ -3,6 +3,7 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { z } from "zod";
 import { databaseErrorLogFields, placeOrder, type PlaceOrderFieldError } from "@ammari/commerce/checkout";
+import { pushTikTokStockAfterResponse } from "@/lib/tiktok/stock-push";
 import { PLACE_ORDER_MESSAGES } from "@ammari/commerce/checkout-messages";
 import { getCustomerSession } from "@/lib/auth/customer-session";
 import { isCartEnabled } from "@/lib/cart-flag";
@@ -146,6 +147,9 @@ async function runPlaceOrder(input: PlaceOrderActionInput): Promise<PlaceOrderAc
 
   // The order is committed: nothing below may turn it into a "failed" answer. Each step is
   // best-effort and logged with the order number.
+  // Its stock holds lower what TikTok may sell (docs/plans/tiktok-stock-sync.md decision 1): push after
+  // the response, never failing it.
+  pushTikTokStockAfterResponse();
   if (result.accessToken) {
     try {
       await writeOrderAccessCookie(result.accessToken);

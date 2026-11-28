@@ -24,7 +24,7 @@ export type TikTokConnectionStatus = (typeof TIKTOK_CONNECTION_STATUSES)[number]
 
 /** `products` (migration 0064, stock sync S1): the listing read pass (Search Products), its
  * `last_run_at` / `last_ok_at` / `last_error_code` only; it has no window. */
-export const TIKTOK_SYNC_RESOURCES = ["orders", "returns", "cancellations", "statements", "payments", "unsettled", "products"] as const;
+export const TIKTOK_SYNC_RESOURCES = ["orders", "returns", "cancellations", "statements", "payments", "unsettled", "products", "stock_push", "stock_reconcile"] as const;
 export type TikTokSyncResource = (typeof TIKTOK_SYNC_RESOURCES)[number];
 
 export const TIKTOK_WEBHOOK_EVENT_STATUSES = ["pending", "processed", "ignored", "failed"] as const;
@@ -781,5 +781,54 @@ export const tiktokListingSkus = pgTable(
     index("tiktok_listing_skus_variant_sku_idx").on(table.variantSku).where(sql`${table.variantSku} is not null`),
     // S2: one Update Inventory call per product.
     index("tiktok_listing_skus_product_idx").on(table.connectionId, table.tiktokProductId),
+  ],
+);
+
+// ---- Stock sync: the push (docs/plans/tiktok-stock-sync.md §7, S2, migration 0065) -------------------
+
+/** What marked a variant dirty. Written by the database triggers (stock, hold, mapping, tiktok_order) and
+ * by the push code (the others). */
+export const TIKTOK_STOCK_OUTBOX_SOURCES = ["stock", "hold", "mapping", "tiktok_order", "enable", "reconcile", "hold_expiry", "retry", "listing"] as const;
+export type TikTokStockOutboxSource = (typeof TIKTOK_STOCK_OUTBOX_SOURCES)[number];
+
+/** The dirty-variant outbox. INSERT-ONLY for every writer: the triggers on stock_movements,
+ * stock_reservations, tiktok_sku_mappings and tiktok_orders add a row in the writer's own transaction
+ * (so a rollback leaves none, and no write path can forget it), and never update one, so a stock write
+ * never waits on a row lock held by the push. The push reads the highest id per variant before it
+ * computes, and after the call deletes only ids up to that one: a change committed meanwhile keeps its
+ * row and is pushed again. Rows are written only while a connection has the stock switch on (the
+ * switch turning on queues every mapped variant itself). No foreign key on purpose (no lock on
+ * product_variants from inside every stock write); a row for a deleted variant is simply drained. */
+export const tiktokStockOutbox = pgTable(
+  "tiktok_stock_outbox",
+  {
+    id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+    variantSku: text("variant_sku").notNull(),
+    source: text("source", { enum: TIKTOK_STOCK_OUTBOX_SOURCES }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("tiktok_stock_outbox_source_check", checkIn(table.source, TIKTOK_STOCK_OUTBOX_SOURCES)),
+    check("tiktok_stock_outbox_variant_sku_check", sql`char_length(${table.variantSku}) between 1 and 128`),
+    index("tiktok_stock_outbox_variant_sku_idx").on(table.variantSku, table.id),
+  ],
+);
+
+/** Retry state of a variant whose last push failed for a reason worth retrying (a rate limit, an
+ * outage, a network failure, an unknown code). Written only by the push. Backoff 1, 2, 4 ... minutes,
+ * at most an hour; deleted once the variant is pushed, unchanged or held. */
+export const tiktokStockPushRetries = pgTable(
+  "tiktok_stock_push_retries",
+  {
+    variantSku: text("variant_sku").primaryKey(),
+    attempts: integer("attempts").notNull(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true, mode: "date" }).notNull(),
+    lastErrorCode: text("last_error_code").notNull(),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_stock_push_retries_attempts_check", sql`${table.attempts} >= 1`),
+    check("tiktok_stock_push_retries_error_code_check", sql`char_length(${table.lastErrorCode}) between 1 and 64`),
+    check("tiktok_stock_push_retries_variant_sku_check", sql`char_length(${table.variantSku}) between 1 and 128`),
   ],
 );

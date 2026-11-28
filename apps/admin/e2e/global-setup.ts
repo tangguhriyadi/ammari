@@ -429,7 +429,8 @@ export const E2E_TIKTOK_BF_LONELY_ORDER_NO = "ORD-E2E-TT-SALAH-KETIK";
 // tiktok-stock-sync.spec.ts (docs/plans/tiktok-stock-sync.md S1): listings a read pass would have stored,
 // under a disconnected connection row for the fake shop (the spec's connect reuses that row in place, as a
 // reconnect), on their own variant (7 pieces, nothing else moves it): one that would change (TikTok 2 → 7),
-// one held (product status not updatable), one unmapped (never touched).
+// one held (product status not updatable), one unmapped (never touched). S2: the held one also carries a
+// push TikTok refused (12052393, a promotion lock), for the health block's "SKU yang gagal dikirim".
 export const E2E_TIKTOK_STOCK_SKU = "E2E-STOK-TT-M";
 export const E2E_TIKTOK_STOCK_CHANGE_SKU_ID = "1729000000000000951";
 export const E2E_TIKTOK_STOCK_HELD_SKU_ID = "1729000000000000952";
@@ -1001,7 +1002,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       const listing = { connectionId: connection!.id, readAt, warehouseId: "7000000000000000777" };
       await tx.insert(tiktokListingSkus).values([
         { ...listing, tiktokSkuId: E2E_TIKTOK_STOCK_CHANGE_SKU_ID, tiktokProductId: "1729000000000000950", productStatus: "ACTIVATE", productTitle: "Gamis Stok TikTok", skuLabel: "Hitam · M", sellerSku: E2E_TIKTOK_STOCK_SKU, variantSku: E2E_TIKTOK_STOCK_SKU, tiktokQuantity: 2 },
-        { ...listing, tiktokSkuId: E2E_TIKTOK_STOCK_HELD_SKU_ID, tiktokProductId: "1729000000000000960", productStatus: "PLATFORM_DEACTIVATED", productTitle: "Gamis Stok Lama", skuLabel: "Hitam · M", sellerSku: E2E_TIKTOK_STOCK_SKU, variantSku: E2E_TIKTOK_STOCK_SKU, tiktokQuantity: 1, holdReason: "status_not_updatable" },
+        { ...listing, tiktokSkuId: E2E_TIKTOK_STOCK_HELD_SKU_ID, tiktokProductId: "1729000000000000960", productStatus: "PLATFORM_DEACTIVATED", productTitle: "Gamis Stok Lama", skuLabel: "Hitam · M", sellerSku: E2E_TIKTOK_STOCK_SKU, variantSku: E2E_TIKTOK_STOCK_SKU, tiktokQuantity: 1, holdReason: "status_not_updatable", lastPushErrorCode: "12052393", lastPushErrorAt: readAt },
         { ...listing, tiktokSkuId: E2E_TIKTOK_STOCK_UNMAPPED_SKU_ID, tiktokProductId: "1729000000000000970", productStatus: "ACTIVATE", productTitle: "Gamis Lain", skuLabel: null, sellerSku: E2E_TIKTOK_STOCK_UNMAPPED_SELLER_SKU, variantSku: null, tiktokQuantity: 5, holdReason: "unmapped" },
       ]);
     }

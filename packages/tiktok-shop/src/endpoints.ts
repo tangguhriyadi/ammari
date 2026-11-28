@@ -37,9 +37,14 @@ export const TIKTOK_ENDPOINTS = {
   searchProducts: "/product/202309/products/search",
   /** GET, the seller's warehouses (Ammari's own one is a domestic sales warehouse). */
   warehouses: "/logistics/202309/warehouses",
+  // Stock sync S2: THE ONLY WRITE CALL (scope seller.product.write). Owner facts, 28 Nov 2026.
+  /** POST, at most 100 SKUs, INCREMENTAL mode, one product per call. */
+  updateInventory: (productId: string) => `/product/202309/products/${encodeURIComponent(productId)}/inventory/update`,
 } as const;
 
 export const SEARCH_PRODUCTS_MAX_PAGE_SIZE = 100;
+/** Update Inventory takes at most this many SKUs per product. */
+export const UPDATE_INVENTORY_MAX_SKUS = 100;
 
 export const FINANCE_MAX_PAGE_SIZE = 100;
 

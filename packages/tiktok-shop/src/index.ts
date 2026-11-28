@@ -38,6 +38,7 @@ export {
   TIKTOK_AUTHORIZE_URL,
   TIKTOK_AUTH_ENDPOINTS,
   TIKTOK_ENDPOINTS,
+  UPDATE_INVENTORY_MAX_SKUS,
 } from "./endpoints";
 export {
   TIKTOK_BUYER_MESSAGE_MAX_CHARS,
@@ -108,6 +109,7 @@ export {
   type TikTokListingSkuRecord,
   type TikTokWarehouse,
 } from "./products";
+export { updateTikTokInventory, type TikTokInventorySkuResult, type TikTokInventoryUpdateSku, type UpdateTikTokInventoryInput } from "./inventory";
 export { TikTokMoneyFormatError, parseRupiah, type ParseRupiahOptions } from "./rupiah";
 export { Secret } from "./secret";
 export { getAuthorizedShops, type TikTokAuthorizedShop } from "./shops";

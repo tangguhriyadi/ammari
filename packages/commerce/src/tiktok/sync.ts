@@ -46,6 +46,8 @@ import { advanceTikTokBackfill, loadFetchingTikTokBackfill, markTikTokBackfillFe
 import { nextTikTokBackfillSliceSeconds, planTikTokBackfillWindows } from "./backfill-windows";
 import { ingestTikTokOrder } from "./order-store";
 import { finishTikTokListingPass, storeTikTokListingProduct } from "./stock-sync";
+import { TIKTOK_STOCK_REREAD_CODES } from "./stock-push-rules";
+import { drainTikTokStockOutbox, emptyTikTokStockPushCounts, prepareTikTokStockOutbox, queueTikTokListingDrift, tiktokStockPushDue, tiktokStockPushGate, type TikTokStockPushContext, type TikTokStockPushCounts } from "./stock-push";
 import { TIKTOK_POLL_LAG_MS, TIKTOK_POLL_SLICE_MS, planTikTokPollWindows, type TikTokPollWindow } from "./order-windows";
 import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokConnectionEvents } from "./webhook";
 
@@ -91,7 +93,12 @@ import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokCon
 // Stock sync S1 (docs/plans/tiktok-stock-sync.md §4): every 15 minutes, after finance and before the
 // backfill, with at most a quarter of the budget, the listing read pass: Get Warehouse List, then every
 // page of Search Products, each product stored (tiktok_listing_skus) with its classification and the
-// exact auto-map. Only a complete pass marks unseen SKUs `not_listed`. READ ONLY: nothing is pushed.
+// exact auto-map. Only a complete pass marks unseen SKUs `not_listed`.
+// Stock sync S2 (docs/plans/tiktok-stock-sync.md §7): right after the read pass, with at most a quarter of
+// the budget, the push's drain (stock-push.ts): hold expiries queued, the hourly full reconciliation,
+// then every due dirty variant pushed (one Update Inventory call per product) while the stock switch is
+// on; a failed push is retried here with backoff. The same drain runs right after a stock change
+// (pushTikTokStockNow, from the apps' after()).
 
 export const TIKTOK_SYNC_BUDGET_MS = 150_000;
 /** The webhook's `after()` drain of one order. */
@@ -219,6 +226,8 @@ export interface TikTokListingCounts {
   ownWarehouses: number;
   notListed: number;
   severalListings: number;
+  /** S2: variants re-queued because TikTok showed another quantity than the one last pushed. */
+  drift: number;
 }
 
 export interface TikTokBackfillCounts {
@@ -245,6 +254,8 @@ export interface TikTokSyncSummary {
   afterSales: TikTokAfterSaleCounts;
   finance: TikTokFinanceCounts;
   listings: TikTokListingCounts;
+  /** Stock sync S2: the push's drain. */
+  stockPush: TikTokStockPushCounts;
   backfill: TikTokBackfillCounts;
   budgetExhausted: boolean;
   /** What stopped the run: a TikTok error's kind and code, or `incomplete` (orders of a slice
@@ -282,7 +293,8 @@ function emptySummary(): TikTokSyncSummary {
     apply: emptyApplyCounts(),
     afterSales: emptyAfterSaleCounts(),
     finance: emptyFinanceCounts(),
-    listings: { skipped: "not_due", complete: false, stoppedBy: null, pages: 0, products: 0, skus: 0, autoMapped: 0, invalid: 0, ownWarehouses: 0, notListed: 0, severalListings: 0 },
+    listings: { skipped: "not_due", complete: false, stoppedBy: null, pages: 0, products: 0, skus: 0, autoMapped: 0, invalid: 0, ownWarehouses: 0, notListed: 0, severalListings: 0, drift: 0 },
+    stockPush: emptyTikTokStockPushCounts(),
     backfill: { ran: false, id: null, state: null, orders: { slices: 0, pages: 0, stored: 0, sliceSeconds: null }, afterSales: { slices: 0, pages: 0 }, finance: { windows: 0, skipped: null }, stoppedBy: null },
     budgetExhausted: false,
     error: null,
@@ -1294,7 +1306,15 @@ async function listingsSkip(session: Session): Promise<TikTokListingCounts["skip
   if (!TIKTOK_LISTINGS_SCOPES.every((scope) => view?.grantedScopes.includes(scope))) return "no_scope";
   const [row] = await session.db.execute<{ last_ok_at: string | Date | null }>(sql`select last_ok_at from tiktok_sync_cursors where resource = 'products'`);
   const lastOk = row?.last_ok_at ? new Date(row.last_ok_at).getTime() : null;
-  return lastOk !== null && session.clock().getTime() - lastOk < TIKTOK_LISTINGS_EVERY_MS ? "not_due" : null;
+  if (lastOk === null || session.clock().getTime() - lastOk >= TIKTOK_LISTINGS_EVERY_MS) return null;
+  // S2: TikTok refused a push for a listing's status, SKU or warehouse: re-read now, not in 15 minutes.
+  const [reread] = await session.db.execute<{ due: boolean }>(sql`
+    select exists (
+      select 1 from tiktok_listing_skus
+      where connection_id = ${session.connectionId}::uuid and last_push_error_at > read_at and last_push_error_code in (${sql.join(TIKTOK_STOCK_REREAD_CODES.map((code) => sql`${code}`), sql`, `)})
+    ) as due
+  `);
+  return reread?.due ? null : "not_due";
 }
 
 /** One read pass (plan §4). Rows are stored product by product; only a pass that read every page with
@@ -1345,8 +1365,39 @@ async function readTikTokListings(session: Session, summary: TikTokSyncSummary):
   const finished = await finishTikTokListingPass(session.db, { connectionId: session.connectionId, passStart });
   counts.notListed = finished.notListed;
   counts.severalListings = finished.severalListings;
+  counts.drift = await queueTikTokListingDrift(session.db, { connectionId: session.connectionId, passStart });
   counts.complete = true;
 }
+
+// ---- The stock push's drain (S2) ----------------------------------------------------------------
+
+function pushContext(session: Session): TikTokStockPushContext {
+  return { db: session.db, api: session.deps.api, connectionId: session.connectionId, call: (path) => shopCall(session, path), clock: session.clock, deadline: session.deadline };
+}
+
+/** The push right after a stock change (the apps' after(), never inside the stock transaction): the same
+ * drain as the cron's, without its upkeep. Returns null when there is nothing to do (checked before any
+ * credential is loaded). Throws only for a database or programming failure; the caller logs and drops it
+ * (the cron retries). */
+export async function pushTikTokStockNow(db: Database, deps: TikTokSyncDeps, options: { budgetMs?: number } = {}): Promise<TikTokStockPushCounts | null> {
+  if (!(await tiktokStockPushDue(db))) return null;
+  // A closed gate (scope, stale listings) is known without loading or refreshing any credential.
+  const gate = await tiktokStockPushGate(db);
+  if (!gate.ok) return { ...emptyTikTokStockPushCounts(), skipped: gate.reason };
+  const clock = deps.now ?? (() => new Date());
+  const summary = emptySummary();
+  const session = await openSession(db, deps, clock, clock().getTime() + (options.budgetMs ?? TIKTOK_STOCK_PUSH_NOW_BUDGET_MS), summary);
+  const counts = emptyTikTokStockPushCounts();
+  if (typeof session === "string") {
+    counts.skipped = session;
+    return counts;
+  }
+  await drainTikTokStockOutbox(pushContext(session), counts);
+  return counts;
+}
+
+/** The budget of one after() push. */
+export const TIKTOK_STOCK_PUSH_NOW_BUDGET_MS = 40_000;
 
 // ---- Health on the connection and the cursor -------------------------------------------------
 
@@ -1485,6 +1536,24 @@ export async function runTikTokSync(db: Database, deps: TikTokSyncDeps, options:
         summary.listings.stoppedBy = "budget_exhausted";
         // Visible on Sinkron stok (the cursor's last error) and in the cron log (route "needs a look").
         await db.execute(sql`update tiktok_sync_cursors set last_error_code = 'budget_exhausted', updated_at = now() where resource = 'products'`);
+      } finally {
+        session.deadline = fullDeadline;
+      }
+    }
+    // 6c. The stock push (S2), at most a quarter of the budget, after the read so it pushes against fresh
+    // listings. Its TikTok failures are counted, never thrown (route 500 on a retryable failure → ALERT
+    // after 3 runs); the marks wait with backoff.
+    {
+      const fullDeadline = session.deadline;
+      session.deadline = Math.min(fullDeadline, clock().getTime() + Math.floor((options.budgetMs ?? TIKTOK_SYNC_BUDGET_MS) / 4));
+      try {
+        await prepareTikTokStockOutbox(db, summary.stockPush);
+        await drainTikTokStockOutbox(pushContext(session), summary.stockPush);
+      } catch (error) {
+        // A database failure in the push never stops orders, returns, finance or the backfill: counted
+        // (route 500 → ALERT) with its SQLSTATE or class name, and the marks wait for the next run.
+        summary.stockPush.errors += 1;
+        summary.stockPush.problems.push({ id: "drain", code: applyErrorCode(error) });
       } finally {
         session.deadline = fullDeadline;
       }

@@ -1,8 +1,8 @@
 # TikTok Shop stock sync (Ammari → TikTok, one way)
 
-Status: **S1 built** 28 Nov 2026 (data + read + preview, migration **0064**, no pushing). **S2 planned**
-(the push). Nothing reaches TikTok's write API until S2 is built, reviewed and the owner turns the
-switch on (§9 runbook).
+Status: **S1 built** 28 Nov 2026 (data + read + preview, migration **0064**). **S2 built** 28 Nov 2026
+(the push, migration **0065**, §7a). Nothing reaches TikTok's write API until S2 is deployed and the owner
+turns the switch on (§9 runbook); the push also needs `seller.product.write` on the connection.
 
 Goal: before launch (mid-December 2026), TikTok Shop's available quantity for every mapped SKU follows
 Ammari's stock automatically. **Ammari is the source of truth**; TikTok is never read back into
@@ -235,6 +235,67 @@ Integrasi > TikTok Shop gains the sub-tab **Sinkron stok** (`/settings/integrati
   order: `mapTikTokSku`'s `unknown_tiktok_sku`), the Update Inventory client in `packages/tiktok-shop`
   (the only write call), its error-code table, a fake for e2e, and the R11 staleness guard.
 
+## 7a. S2 build notes (28 Nov 2026)
+
+- **Outbox, insert-only (a deviation from the `variant_sku pk` sketch above, on purpose).**
+  `tiktok_stock_outbox(id identity, variant_sku, source, created_at)` gets one row per change, written
+  by `AFTER` triggers on `stock_movements` (insert), `stock_reservations` (insert, delete, a change of
+  sku/qty/status/expires_at), `tiktok_sku_mappings` (old and new variant) and `tiktok_orders` (insert, a
+  change of order_id/status/paid_time/apply_state/latest_snapshot_id: the variants its old and new
+  snapshot lines map to; unreadable lines → every mapped variant). Triggers never `ON CONFLICT DO
+  UPDATE`, so a stock write never waits on a row lock held by the push or another writer. Marks are
+  written only while some connection has the stock switch on. The DB test asserts the triggers exist on
+  all four tables, so a new writer of those tables is covered without code; each writer type is also
+  tested (raw INSERT of every movement type, adjustStock, saveStockCount, reserve/consume/release, map,
+  unmap, TikTok order insert/cancel, rollback → no mark).
+- **Retry state** lives in `tiktok_stock_push_retries(variant_sku pk, attempts, next_attempt_at,
+  last_error_code)`, written only by the push. Backoff 1, 2, 4 … min, ≤ 1 h; a mark newer than the last
+  failure makes the variant due at once. Cursor resources `stock_push` (window_end = hold-expiry
+  watermark; last_ok_at = last clean drain) and `stock_reconcile` (last full reconciliation and which
+  switch-on it covered).
+- **Drain** (`stock-push.ts`, shared by the cron and the after() push): gate (active connection, switch
+  on and so orders apply on, `seller.product.write`, a complete listing pass < 2 h old and none failing
+  since) → due variants → their products through the ACTIVE mapping → per product, under
+  `pg_advisory_xact_lock('tiktok-stock:<connection>:<product>')`: re-read marks, rows, R7 from the tables,
+  `loadTikTokTargetInputs` (the preview's loader), `planTikTokProductPush`, one Update Inventory call
+  (own warehouse only, INCREMENTAL, ≤ 100), results written to the listing rows before the lock is
+  released. A variant's marks (ids ≤ what was read) are deleted only once every product it feeds
+  settled. Skip rule: target = last pushed and (TikTok's read agrees, or the read predates the push);
+  first push compares with the read quantity. Two pushers of one product → one call (the second finds
+  it unchanged); a change committed mid-push → the second pusher sends the fresh target (scratch-DB
+  concurrency test).
+- **Errors**: per-SKU `data.errors` (sku_id at the top or under `detail`; a named code in
+  `extra_errors` wins; an error naming no SKU of the call fails every SKU) → 12052393 / 12052141 /
+  12052921 held until **Kirim ulang yang ditolak** (audited `tiktok_stock_push_retry`); 12052901,
+  12052556 / 12052036, 12052097 / 12052530 / 12052531 held until a newer read, and the read pass becomes
+  due at once; anything else (rate limit, 5xx, network, an unknown code) retried with backoff.
+- **When**: after() in admin (inside `revalidateStorefrontForSkus`, which every stock-changing action
+  calls; mapping actions; switch on; Kirim ulang) and web (`revalidateProductPages`: payment
+  notification, status check, sweep; checkout; the TikTok webhook's after()); single flight per process
+  with one rerun, so a burst of checkouts uses one connection. The cron run (step 6c, after the read,
+  ¼ budget) also queues hold expiries (`expires_at` in (watermark, now]), the hourly full
+  reconciliation (and once after each switch-on), drift seen by a complete read (TikTok ≠ last pushed
+  after the push), and purges marks while the switch is off.
+- **Health** (Sinkron stok, while the switch is on): last push, variants waiting (warning after 30 min),
+  automatic retries, SKUs TikTok refused with reason and code, why the gate is closed. The cron route
+  answers 500 on a retryable push failure or a product error (three runs → ALERT, wording updated in
+  both cron.sh); a refusal, a busy product, a closed gate with the switch on → "needs a look".
+- **Review fixes (code review, 28 Nov 2026):** marks are settled by the exact ids read under the
+  product lock, never "every id up to the highest" (identity ids are given at insert, not at commit, so a
+  slower writer's lower id could commit mid-call and be deleted unpushed; regression test); the cron folds
+  duplicate marks to one per variant (a long closed gate never grows the table); a closed gate is answered
+  before credentials are loaded; a new change skips the backoff only after a non-rate-limit failure at
+  least a minute old; a lock timeout (SQLSTATE read through Drizzle's `cause`) is `busy`, any other
+  product failure backs off like a failed call; a database error in the cron's push step is counted
+  (500) and never stops orders, finance or the backfill; the route keeps answering 500 while a variant
+  has failed 3+ times in a row (so a long outage keeps the ALERT going) and warns on every run while
+  refused SKUs wait; a complete read also re-queues never-pushed pushable listings and refusals it
+  answers; numeric-string error codes are read as codes.
+- **Not done in S2 (left for later):** mapping a listing-only SKU on Pemetaan SKU TikTok (`mapTikTokSku`
+  still needs the SKU on an order); the banner on Integrasi for a variant dirty > 30 min (shown on the
+  Sinkron stok tab only); not auto-mapping non-`ACTIVATE` listings. A4 (the `data.errors` shape) still
+  to check in T0.
+
 ## 8. Assumptions to check in T0 (built on, never guessed silently)
 
 - **A1** Search Products 202309: list key `products`, each with `id`, `status`, `title`, `skus[]` with
@@ -262,4 +323,4 @@ Integrasi > TikTok Shop gains the sub-tab **Sinkron stok** (`/settings/integrati
 | # | Scope | Migration | Tests |
 |---|---|---|---|
 | **S1** (built) | 0064; Search Products + Get Warehouse List clients (read only); `classifyTikTokListingSku`, `tiktokHeldOrderQuantities`, `computeTikTokTargetQuantity` (pure); the read pass in `runTikTokSync` (15 min, ¼ budget); `setTikTokStockSync` + R1; Sinkron stok sub-tab with preview and switch (flag only); "Modifikasi produk" label. | **0064** | Unit: target (holds, expired/released/consumed holds, held TikTok orders, clamps, invalid input), held-order quantities (missing quantity = 1, unreadable → hold, unmapped → unattributed, skipped/applied/cancelled ignored), classification (statuses, warehouses 0/1/2/FBT-like, quantities), product/warehouse parsing. DB: read upsert idempotent, not_listed only after a complete pass, several listings, auto-map, switch invariant (CHECK, trigger, conditional enable, orders-off audits stock-off). e2e 390/1280: sub-tab preview from seeded listings, switch disabled while orders apply is off. |
-| **S2** | §7. | **0065** (outbox + triggers) | Unit: push planning (diff vs last pushed, first push vs read quantity, one call per product, ≤ 100), error mapping incl. per-SKU errors under code 0. DB: every stock write path enqueues in its own transaction (rollback → no outbox row), hold expiry enqueues, backoff, concurrency (two pushers → one call per product). Fake TikTok: no FBT warehouse ever in a body, INCREMENTAL always, unmapped SKUs never in a body. e2e: health on the tab at 390/1280. |
+| **S2** (built) | §7, §7a. | **0065** (outbox + triggers) | Unit: push planning (diff vs last pushed, first push vs read quantity, one call per product, ≤ 100), error mapping incl. per-SKU errors under code 0. DB: every stock write path enqueues in its own transaction (rollback → no outbox row), hold expiry enqueues, backoff, concurrency (two pushers → one call per product). Fake TikTok: no FBT warehouse ever in a body, INCREMENTAL always, unmapped SKUs never in a body. e2e: health on the tab at 390/1280. |

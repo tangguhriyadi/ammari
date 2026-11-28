@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
 
 // A disposable database of its own, always named ammari_scratch_* (never `ammari` or
 // `ammari_test`), for tests that must commit for real: migration upgrades, deferred constraint
@@ -64,4 +66,13 @@ export function migrationsUpTo(lastIdx: number): string {
   journal.entries = journal.entries.filter((entry) => entry.idx <= lastIdx);
   writeFileSync(journalPath, JSON.stringify(journal));
   return dir;
+}
+
+/** A pool on a scratch database, migrated to the latest migration, for packages that do not depend on
+ * `postgres` themselves (e.g. @ammari/commerce's concurrency tests). Close it with `end()`. */
+export async function openMigratedScratchDatabase(database: string, options: { max?: number } = {}) {
+  const client = postgres(scratchUrl(database), { max: options.max ?? 6, onnotice: () => {} });
+  const db = drizzle(client);
+  await migrate(db, { migrationsFolder });
+  return { db, end: () => client.end() };
 }

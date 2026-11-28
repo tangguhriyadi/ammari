@@ -65,3 +65,37 @@ export const TIKTOK_STOCK_HOLD_LABELS: Record<TikTokListingHoldReason | TikTokTa
   tiktok_order_unclear: "Ada pesanan TikTok ditahan yang jumlahnya tidak terbaca",
   invalid_input: "Data stok tidak terbaca",
 };
+
+/** Why TikTok refused a pushed quantity, or why the push could not finish (Sinkron stok, S2). Keys are the
+ * stored codes: TikTok's numeric code (§0 of docs/plans/tiktok-stock-sync.md) or the client's error kind.
+ * The raw code is always shown next to it, so an unlisted one is still named. */
+export const TIKTOK_STOCK_PUSH_ERROR_LABELS: Record<string, string> = {
+  "12052393": "Terkunci promo di TikTok: stok tidak boleh diturunkan di bawah stok promo. Akhiri atau ubah promonya, lalu Kirim ulang",
+  "12052141": "Stok produk ini diatur di produk global TikTok. Ubah di sana, lalu Kirim ulang",
+  "12052921": "Stok produk ini berbagi dengan toko sumber. Lepas pembagiannya, lalu Kirim ulang",
+  "12052901": "Status produk di TikTok tidak bisa diubah stoknya. Dicoba lagi setelah dibaca ulang",
+  "12052556": "SKU tidak dikenali TikTok. Dicoba lagi setelah dibaca ulang",
+  "12052036": "SKU tidak dikenali TikTok. Dicoba lagi setelah dibaca ulang",
+  "12052097": "Gudang tidak dikenali TikTok. Dicoba lagi setelah dibaca ulang",
+  "12052530": "Gudang tidak cocok untuk SKU ini. Dicoba lagi setelah dibaca ulang",
+  "12052531": "Gudang tidak cocok untuk SKU ini. Dicoba lagi setelah dibaca ulang",
+  rate_limited: "TikTok sedang membatasi permintaan. Dicoba lagi otomatis",
+  unavailable: "TikTok sedang tidak tersedia. Dicoba lagi otomatis",
+  network: "Koneksi ke TikTok gagal. Dicoba lagi otomatis",
+  budget_exhausted: "Waktu habis. Dicoba lagi otomatis",
+  reauth_required: "TikTok Shop perlu dihubungkan ulang",
+  refresh_failed: "Token TikTok belum bisa diperbarui. Dicoba lagi otomatis",
+  invalid_response: "Balasan TikTok tidak terbaca. Dicoba lagi otomatis",
+  clock_skew: "Jam server tidak cocok dengan TikTok. Dicoba lagi otomatis",
+};
+
+/** Why nothing is pushed right now (the gate), shown while the switch is on. */
+export const TIKTOK_STOCK_PUSH_GATE_LABELS = {
+  not_connected: "TikTok Shop belum terhubung.",
+  reauth_required: "TikTok Shop perlu dihubungkan ulang.",
+  switch_off: "Sinkron stok belum aktif.",
+  no_scope: "Izin Modifikasi produk belum diberikan. Hubungkan ulang TikTok Shop setelah izinnya disetujui.",
+  listings_never_read: "Produk TikTok belum pernah selesai dibaca. Stok dikirim setelah pembacaan pertama selesai.",
+  listings_stale: "Produk TikTok tidak terbaca lebih dari 2 jam. Stok ditahan sampai dibaca ulang.",
+  listings_failing: "Pembacaan produk TikTok terakhir gagal. Stok ditahan sampai pembacaan berikutnya berhasil.",
+} as const;

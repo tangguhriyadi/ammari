@@ -9,13 +9,15 @@ import {
   computeTikTokTargetQuantity,
   tiktokHeldOrderQuantities,
   type TikTokCheckoutHold,
+  type TikTokHeldOrderQuantities,
   type TikTokOwnWarehouses,
   type TikTokTargetHoldReason,
+  type TikTokTargetResult,
 } from "./stock-sync-rules";
 
 // TikTok stock sync, S1 (docs/plans/tiktok-stock-sync.md §3-§6): the listing store the read pass
-// writes, the preview the Sinkron stok tab shows, and the switch. NOTHING HERE CALLS TIKTOK'S WRITE
-// API: S1 never pushes; turning the switch on only stores the flag (S2 builds the push).
+// writes, the preview the Sinkron stok tab shows, and the switch. NOTHING HERE CALLS TIKTOK: the push
+// (S2) is stock-push.ts. Turning the switch on queues every mapped variant (the first full push).
 
 /** Update Inventory takes at most this many SKUs per product (owner facts, 28 Nov 2026; R8). */
 export const TIKTOK_MAX_SKUS_PER_PRODUCT = 100;
@@ -138,8 +140,9 @@ export type SetTikTokStockSyncResult = { ok: true; changed: boolean } | { ok: fa
 
 /** "Sinkronkan stok ke TikTok" / "Hentikan sinkron stok" (integrations.manage, audited). ON needs an
  * active connection with "Mulai terapkan pesanan" ON, checked in the same conditional UPDATE (and by
- * the database CHECK, R1). OFF works on the current connection whatever its state. In S1 the flag is
- * only stored: nothing is pushed. */
+ * the database CHECK, R1). OFF works on the current connection whatever its state. ON queues every
+ * mapped listing's variant in the same transaction (the first full push, S2: the preview the owner saw);
+ * the caller then starts the push after the commit. */
 export async function setTikTokStockSync(db: Database, input: { enabled: boolean; staffUserId: string; now?: Date }): Promise<SetTikTokStockSyncResult> {
   return db.transaction(async (tx) => {
     const [row] = await tx.execute<{ id: string; status: string; orders_apply_enabled: boolean; stock_sync_enabled: boolean }>(sql`
@@ -168,8 +171,23 @@ export async function setTikTokStockSync(db: Database, input: { enabled: boolean
       before: { stockSyncEnabled: !input.enabled },
       after: { stockSyncEnabled: input.enabled },
     });
+    if (input.enabled) await queueAllMappedTikTokStock(tx, row.id, "enable");
     return { ok: true, changed: true };
   });
+}
+
+/** Marks every variant an active mapping of one of the connection's listings names as dirty (S2): the
+ * first push after the switch goes on, and the hourly full reconciliation. Held rows are queued too;
+ * the push decides, at send time, what is held. Returns how many variants were queued. */
+export async function queueAllMappedTikTokStock(db: Database, connectionId: string, source: "enable" | "reconcile"): Promise<number> {
+  const rows = await db.execute<{ variant_sku: string }>(sql`
+    insert into tiktok_stock_outbox (variant_sku, source)
+    select distinct m.variant_sku, ${source}
+    from tiktok_listing_skus l join tiktok_sku_mappings m on m.tiktok_sku_id = l.tiktok_sku_id and m.is_active
+    where l.connection_id = ${connectionId}::uuid
+    returning variant_sku
+  `);
+  return rows.length;
 }
 
 /** Whether the active connection has the stock switch on (S2's push checks this). */
@@ -262,11 +280,9 @@ export async function getTikTokStockSyncPreview(db: Database, options: { connect
     tiktok_quantity: number | null;
     hold_reason: string | null;
     read_at: string | Date;
-    physical: number | null;
   }>(sql`
     select l.tiktok_sku_id, l.tiktok_product_id, l.product_title, l.sku_label, l.seller_sku, l.product_status, l.variant_sku,
-           p.name as product_name, fc.name as color_name, pv.size, l.warehouse_id, l.tiktok_quantity, l.hold_reason, l.read_at,
-           case when l.variant_sku is null then null else (select coalesce(sum(m.qty), 0)::int from stock_movements m where m.sku = l.variant_sku) end as physical
+           p.name as product_name, fc.name as color_name, pv.size, l.warehouse_id, l.tiktok_quantity, l.hold_reason, l.read_at
     from tiktok_listing_skus l
     left join product_variants pv on pv.sku = l.variant_sku
     left join products p on p.id = pv.product_id
@@ -276,39 +292,12 @@ export async function getTikTokStockSyncPreview(db: Database, options: { connect
     limit ${options.limit ?? TIKTOK_STOCK_PREVIEW_LIMIT}
   `);
   const variants = [...new Set(listings.map((row) => row.variant_sku).filter((sku): sku is string => sku !== null))];
-
-  const [clock] = await db.execute<{ now: string | Date }>(sql`select now() as now`);
-  if (!clock) throw new Error("getTikTokStockSyncPreview: no database clock");
-  const dbNow = new Date(clock.now);
   const [count] = await db.execute<{ total: number }>(sql`select count(*)::int as total from tiktok_listing_skus where connection_id = ${options.connectionId}::uuid`);
   const total = Number(count?.total ?? 0);
-  const holds = new Map<string, TikTokCheckoutHold[]>();
-  if (variants.length > 0) {
-    const rows = await db.execute<{ sku: string; qty: number; expires_at: string | Date }>(sql`
-      select sku, qty, expires_at from stock_reservations
-      where status = 'active' and sku in (${sql.join(variants.map((sku) => sql`${sku}`), sql`, `)})
-    `);
-    for (const row of rows) {
-      const list = holds.get(row.sku) ?? [];
-      list.push({ qty: Number(row.qty), status: "active", expiresAt: new Date(row.expires_at) });
-      holds.set(row.sku, list);
-    }
-  }
-
-  // R2: paid TikTok orders not applied in admin, through the active mappings.
-  const heldOrders = await db.execute<{ tiktok_order_id: string; status: string; paid: boolean; applied: boolean; apply_state: string | null; payload: AllowlistedObject }>(sql`
-    select o.tiktok_order_id, o.status, o.paid_time is not null as paid, o.order_id is not null as applied, o.apply_state, s.payload
-    from tiktok_orders o join tiktok_order_snapshots s on s.id = o.latest_snapshot_id
-    where o.order_id is null and o.paid_time is not null and o.status not in ('UNPAID', 'CANCELLED')
-  `);
-  const mappingRows = await db.execute<{ tiktok_sku_id: string; variant_sku: string }>(sql`select tiktok_sku_id, variant_sku from tiktok_sku_mappings where is_active`);
-  const held = tiktokHeldOrderQuantities(
-    heldOrders.map((row) => ({ tiktokOrderId: row.tiktok_order_id, status: row.status, paid: row.paid, applied: row.applied, applyState: row.apply_state, payload: row.payload })),
-    new Map(mappingRows.map((row) => [row.tiktok_sku_id, row.variant_sku])),
-  );
+  const inputs = await loadTikTokTargetInputs(db, variants);
+  const held = inputs.held;
 
   const preview: TikTokStockPreview = { ...empty, unattributedHeldOrders: held.unattributedOrders.length, unreadableHeldOrders: held.unreadableOrders.length, total, truncated: total > listings.length };
-  const anyUnreadable = held.unreadableOrders.length > 0;
   for (const row of listings) {
     const listingHold = holdOf(row.hold_reason);
     const base = {
@@ -327,13 +316,7 @@ export async function getTikTokStockSyncPreview(db: Database, options: { connect
     if (!row.variant_sku || listingHold === "unmapped") {
       result = { ...base, target: null, breakdown: null, state: "unmapped", holdReason: "unmapped" };
     } else {
-      const target = computeTikTokTargetQuantity({
-        physicalQty: Number(row.physical),
-        holds: holds.get(row.variant_sku) ?? [],
-        heldTikTokQty: held.byVariant.get(row.variant_sku) ?? 0,
-        heldTikTokUnclear: anyUnreadable || held.unclearVariants.has(row.variant_sku),
-        now: dbNow,
-      });
+      const target = tiktokTargetFor(inputs, row.variant_sku);
       // The listing's own hold comes first; the target is still shown when it could be computed.
       const quantity = target.kind === "push" ? target.quantity : null;
       const breakdown = target.kind === "push" ? target.breakdown : null;
@@ -345,4 +328,58 @@ export async function getTikTokStockSyncPreview(db: Database, options: { connect
     preview.rows.push(result);
   }
   return preview;
+}
+
+// ---- Target inputs (shared by the preview and the push) -------------------------------------------
+
+export interface TikTokTargetInputs {
+  /** The database clock, the one every `expires_at > now()` comparison reads. */
+  now: Date;
+  physical: Map<string, number>;
+  holds: Map<string, TikTokCheckoutHold[]>;
+  held: TikTokHeldOrderQuantities;
+}
+
+/** Everything computeTikTokTargetQuantity needs for `variants`, read now from the tables (decision 1,
+ * R2): the ledger, the active checkout holds, and the paid TikTok orders not applied in admin through
+ * the active mappings. The preview and the push both call this, so the owner sees what will be sent. */
+export async function loadTikTokTargetInputs(db: Database, variants: readonly string[]): Promise<TikTokTargetInputs> {
+  const [clock] = await db.execute<{ now: string | Date }>(sql`select now() as now`);
+  if (!clock) throw new Error("loadTikTokTargetInputs: no database clock");
+  const physical = new Map<string, number>();
+  const holds = new Map<string, TikTokCheckoutHold[]>();
+  if (variants.length > 0) {
+    const list = sql.join(variants.map((sku) => sql`${sku}`), sql`, `);
+    const ledger = await db.execute<{ sku: string; qty: number }>(sql`select sku, coalesce(sum(qty), 0)::int as qty from stock_movements where sku in (${list}) group by sku`);
+    for (const row of ledger) physical.set(row.sku, Number(row.qty));
+    const rows = await db.execute<{ sku: string; qty: number; expires_at: string | Date }>(sql`select sku, qty, expires_at from stock_reservations where status = 'active' and sku in (${list})`);
+    for (const row of rows) {
+      const entries = holds.get(row.sku) ?? [];
+      entries.push({ qty: Number(row.qty), status: "active", expiresAt: new Date(row.expires_at) });
+      holds.set(row.sku, entries);
+    }
+  }
+  // R2: paid TikTok orders not applied in admin, through the active mappings.
+  const heldOrders = await db.execute<{ tiktok_order_id: string; status: string; paid: boolean; applied: boolean; apply_state: string | null; payload: AllowlistedObject }>(sql`
+    select o.tiktok_order_id, o.status, o.paid_time is not null as paid, o.order_id is not null as applied, o.apply_state, s.payload
+    from tiktok_orders o join tiktok_order_snapshots s on s.id = o.latest_snapshot_id
+    where o.order_id is null and o.paid_time is not null and o.status not in ('UNPAID', 'CANCELLED')
+  `);
+  const mappingRows = await db.execute<{ tiktok_sku_id: string; variant_sku: string }>(sql`select tiktok_sku_id, variant_sku from tiktok_sku_mappings where is_active`);
+  const held = tiktokHeldOrderQuantities(
+    heldOrders.map((row) => ({ tiktokOrderId: row.tiktok_order_id, status: row.status, paid: row.paid, applied: row.applied, applyState: row.apply_state, payload: row.payload })),
+    new Map(mappingRows.map((row) => [row.tiktok_sku_id, row.variant_sku])),
+  );
+  return { now: new Date(clock.now), physical, holds, held };
+}
+
+/** The target of one variant from loaded inputs. An unreadable held order holds every variant. */
+export function tiktokTargetFor(inputs: TikTokTargetInputs, variantSku: string): TikTokTargetResult {
+  return computeTikTokTargetQuantity({
+    physicalQty: inputs.physical.get(variantSku) ?? 0,
+    holds: inputs.holds.get(variantSku) ?? [],
+    heldTikTokQty: inputs.held.byVariant.get(variantSku) ?? 0,
+    heldTikTokUnclear: inputs.held.unreadableOrders.length > 0 || inputs.held.unclearVariants.has(variantSku),
+    now: inputs.now,
+  });
 }

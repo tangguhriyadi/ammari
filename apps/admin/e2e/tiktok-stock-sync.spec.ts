@@ -13,8 +13,10 @@ import {
 // 1280px (TableContainer), CLAUDE.md. global-setup.ts seeds three listing SKUs a read pass would have
 // stored, under the fake shop's (disconnected) connection row. Each viewport connects through the
 // stubbed TikTok (TIKTOK_PROVIDER=fake; the row is reused in place), reads the preview, sees the switch
-// disabled while "Mulai terapkan pesanan" is off, and disconnects again. Nothing reaches TikTok, and
-// nothing is pushed (S1 has no write call).
+// disabled while "Mulai terapkan pesanan" is off, and disconnects again. S2: with both switches on, the
+// push's health block (last push, waiting variants, the refused SKU with "Kirim ulang", and why nothing is
+// sent: the fake shop never grants seller.product.write, so the gate stays closed). Nothing reaches
+// TikTok's write API; both switches are turned off again so the next viewport starts the same.
 
 const VIEWPORTS = [
   { name: "390", width: 390, height: 844 },
@@ -101,6 +103,58 @@ for (const viewport of VIEWPORTS) {
         await page.goto(INTEGRATION);
         await expect(page.getByRole("list", { name: "Izin yang diberikan" }).getByText("Produk", { exact: true })).toBeVisible();
       } finally {
+        await disconnect(page);
+      }
+    });
+
+    test("S2 health: with the switch on, the block shows what waits, what TikTok refused and why nothing is sent", async ({ page }) => {
+      // Two switches, two confirmations and three pages under `next dev`: more than the default 30 s.
+      test.setTimeout(120_000);
+      await loginAs(page, E2E_TIKTOK_ADMIN_EMAIL);
+      await connectFake(page);
+      const ordersSection = page.getByRole("region", { name: "Pesanan TikTok" });
+      // A click before the page hydrated opens nothing: only the click is retried.
+      const openDialog = async (button: ReturnType<Page["getByRole"]>, dialogName: string) => {
+        await expect(async () => {
+          await button.click();
+          await expect(page.getByRole("dialog", { name: dialogName })).toBeVisible({ timeout: 2_000 });
+        }).toPass({ timeout: 30_000 });
+        return page.getByRole("dialog", { name: dialogName });
+      };
+      try {
+        await (await openDialog(ordersSection.getByRole("button", { name: "Mulai terapkan pesanan" }), "Mulai terapkan pesanan TikTok?")).getByRole("button", { name: "Mulai terapkan" }).click();
+        await expect(ordersSection.getByText("Aktif", { exact: true })).toBeVisible();
+
+        await page.goto(PAGE);
+        const switchSection = page.getByRole("region", { name: "Sinkronkan stok ke TikTok" });
+        // No health block while the switch is off.
+        await expect(page.getByRole("region", { name: "Pengiriman stok" })).toHaveCount(0);
+        await (await openDialog(switchSection.getByRole("button", { name: "Sinkronkan stok ke TikTok" }), "Sinkronkan stok ke TikTok?")).getByRole("button", { name: "Sinkronkan" }).click();
+        await expect(switchSection.getByText("Aktif", { exact: true })).toBeVisible();
+
+        const health = page.getByRole("region", { name: "Pengiriman stok" });
+        await expect(health).toBeVisible();
+        await expect(health.getByText("Terakhir terkirim:")).toBeVisible();
+        await expect(health.getByText(/^\d+ varian$/).first()).toBeVisible();
+        // The fake grants no seller.product.write: nothing is sent, and the tab says why.
+        await expect(health.getByText(/Stok belum dikirim: Izin Modifikasi produk belum diberikan/)).toBeVisible();
+        const failed = health.getByRole("list", { name: "SKU yang gagal dikirim" });
+        const refused = failed.getByRole("listitem").filter({ hasText: E2E_TIKTOK_STOCK_HELD_SKU_ID });
+        await expect(refused).toHaveCount(1);
+        await expect(refused.getByText(/Terkunci promo di TikTok/)).toBeVisible();
+        await expect(refused.getByText(/Kode 12052393/)).toBeVisible();
+        await expect(health.getByRole("button", { name: "Kirim ulang yang ditolak" })).toBeVisible();
+        // The list fits the viewport (no sideways scroll on a phone).
+        const box = await failed.boundingBox();
+        expect(box!.width).toBeLessThanOrEqual(viewport.width);
+      } finally {
+        // "Hentikan penerapan pesanan" turns the stock switch off with it (R1).
+        await page.goto(INTEGRATION);
+        await expect(ordersSection.getByRole("button", { name: /^(Mulai terapkan pesanan|Hentikan penerapan pesanan)$/ })).toBeVisible();
+        if ((await ordersSection.getByRole("button", { name: "Hentikan penerapan pesanan" }).count()) > 0) {
+          await (await openDialog(ordersSection.getByRole("button", { name: "Hentikan penerapan pesanan" }), "Hentikan penerapan pesanan TikTok?")).getByRole("button", { name: "Hentikan" }).click();
+          await expect(ordersSection.getByText("Belum aktif (uji coba)", { exact: true })).toBeVisible();
+        }
         await disconnect(page);
       }
     });

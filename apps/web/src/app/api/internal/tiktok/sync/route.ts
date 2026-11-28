@@ -13,7 +13,9 @@ import { authorizeCronRequest, cronJson } from "@/lib/internal/cron-auth";
 // allowlisted snapshots; no admin order, stock or journal changes (T5). T5 applies orders and T6
 // returns/cancellations (Search Returns/Cancellations, read only) behind the kill switch. T7 adds the
 // finance reads (unsettled transactions, statements, payouts; GET only) every 30 minutes and writes
-// the TikTok orders' order_channel_fees.
+// the TikTok orders' order_channel_fees. Stock sync: the listing read (S1, every 15 minutes) and the push's
+// drain (S2): the ONE write to TikTok (Update Inventory) while "Sinkronkan stok ke TikTok" is on; a
+// retryable push failure answers 500, so three in a row are an ALERT line like any other failed run.
 //
 // Answers: 200 with the run's counts (also when no shop is connected: `{ skipped: "not_connected" }`,
 // or the lock is held: `{ skipped: "running" }`; a run that ran out of its 150-s budget is 200 too,
@@ -37,6 +39,11 @@ function statusFor(summary: TikTokSyncSummary): number {
   if (!summary.error && summary.afterSales.failed > 0) return 500;
   // T7: an order's fees that failed to fetch, store or rebuild (retried every finance run).
   if (!summary.error && summary.finance.failed > 0) return 500;
+  // Stock sync S2: a push that failed for a retryable reason (rate limit, outage, network, unknown code)
+  // or a product that failed for a database error. Retried with backoff; 3 runs in a row → ALERT.
+  // A variant that failed 3+ times in a row keeps answering 500 while it waits out its backoff, so a long
+  // outage keeps the ALERT going instead of resetting on the runs where nothing was due.
+  if (!summary.error && summary.stockPush.failed + summary.stockPush.errors + summary.stockPush.stuckRetries > 0) return 500;
   if (!summary.error) return 200;
   switch (summary.error.kind) {
     case "rate_limited":
@@ -82,10 +89,14 @@ export async function POST(request: Request): Promise<Response> {
       // Stock sync S1: the listing read lacks a scope, or stopped before reading every page.
       // A complete read that found no Ammari warehouse holds every SKU (warehouse_unclear): assumption A2.
       summary.listings.skipped === "no_scope" || (summary.listings.skipped === null && (!summary.listings.complete || summary.listings.ownWarehouses === 0)) ||
+      // Stock sync S2: SKUs TikTok refused (held until a person or a re-read acts), a product another
+      // pusher held, a drain out of budget, or the switch on but nothing may be pushed (scope, R11).
+      summary.stockPush.refused > 0 || summary.stockPush.refusedSkus > 0 || summary.stockPush.busy > 0 || summary.stockPush.budgetExhausted ||
+      summary.stockPush.skipped === "no_scope" || summary.stockPush.skipped === "reauth_required" || summary.stockPush.skipped === "listings_never_read" || summary.stockPush.skipped === "listings_stale" || summary.stockPush.skipped === "listings_failing" ||
       (summary.backfill.ran && summary.backfill.stoppedBy !== null && (summary.backfill.stoppedBy !== "budget_exhausted" || summary.backfill.orders.pages + summary.backfill.afterSales.pages + summary.backfill.finance.windows === 0));
     if (status !== 200) console.error("[tiktok] sync stopped; the next run retries", summary);
     else if (attention) console.warn("[tiktok] sync done, needs a look", summary);
-    else if (summary.orders.fetched > 0 || summary.inbox.claimed > 0 || summary.apply.created + summary.apply.updated > 0 || summary.afterSales.fetched + summary.afterSales.applied > 0 || summary.finance.skipped === null || summary.listings.skipped === null || summary.backfill.ran) console.info("[tiktok] sync done", summary);
+    else if (summary.orders.fetched > 0 || summary.inbox.claimed > 0 || summary.apply.created + summary.apply.updated > 0 || summary.afterSales.fetched + summary.afterSales.applied > 0 || summary.finance.skipped === null || summary.listings.skipped === null || summary.stockPush.calls > 0 || summary.backfill.ran) console.info("[tiktok] sync done", summary);
     return cronJson(status, summary);
   } catch (error) {
     console.error("[tiktok] sync failed; retried on the next run", errorLogFields(error));

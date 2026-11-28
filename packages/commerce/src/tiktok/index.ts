@@ -4,7 +4,8 @@ import "server-only";
 // tokens (T2), the webhook inbox (T3), the order read side: snapshots, projection, SKU mapping, the
 // sync run and its dry-run preview (T4), applying orders to admin orders and stock behind the kill
 // switch (T5), cancellations and returns (T6), and the finance read side: statements, estimates, fee
-// lines into order_channel_fees, payouts (T7), and the backfill from 1 Dec 2026 in enrich mode (T9).
+// lines into order_channel_fees, payouts (T7), the backfill from 1 Dec 2026 in enrich mode (T9), and the
+// stock sync: the listing read and preview (S1) and the push to TikTok (S2).
 
 export {
   consumeTikTokOAuthState,
@@ -75,6 +76,30 @@ export {
   type TikTokStockPreviewRow,
   type TikTokStockPreviewState,
 } from "./stock-sync";
+export {
+  TIKTOK_STOCK_HEALTH_FAILED_LIMIT,
+  TIKTOK_STOCK_PUSH_SCOPE,
+  TIKTOK_STOCK_RECONCILE_EVERY_MS,
+  emptyTikTokStockPushCounts,
+  getTikTokStockPushHealth,
+  retryRefusedTikTokStockPushes,
+  tiktokStockPushGate,
+  type TikTokStockPushCounts,
+  type TikTokStockPushFailedRow,
+  type TikTokStockPushGate,
+  type TikTokStockPushHealth,
+  type TikTokStockPushSkip,
+} from "./stock-push";
+export {
+  TIKTOK_STOCK_LISTING_MAX_AGE_MS,
+  decideTikTokSkuPush,
+  planTikTokProductPush,
+  tiktokStockPushBackoffMs,
+  tiktokStockPushErrorAction,
+  type TikTokPushHoldReason,
+  type TikTokPushRefusal,
+} from "./stock-push-rules";
+export { createTikTokStockPushScheduler, type TikTokStockPushRequest } from "./stock-push-runner";
 export {
   TIKTOK_MAX_STOCK_QUANTITY,
   TIKTOK_STOCK_UPDATABLE_STATUSES,
@@ -174,7 +199,9 @@ export {
   TIKTOK_FINANCE_SCOPE,
   TIKTOK_SYNC_BUDGET_MS,
   TIKTOK_WEBHOOK_DRAIN_BUDGET_MS,
+  TIKTOK_STOCK_PUSH_NOW_BUDGET_MS,
   drainTikTokWebhookOrderEvent,
+  pushTikTokStockNow,
   runTikTokSync,
   type DrainTikTokWebhookEventResult,
   type TikTokAfterSaleCounts,

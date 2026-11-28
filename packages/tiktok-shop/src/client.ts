@@ -28,7 +28,8 @@ import { signRequest } from "./sign";
 //   - A `Retry-After` above 60 s is not waited out inside one request: `rate_limited` at once, and
 //     the next run retries. Below 1 s it is raised to 1 s.
 //   - Any other non-zero code: `api`, no retry.
-// Phase 1 is read-only towards TikTok (decided Q15), so every call here is safe to repeat.
+// Phase 1 is read-only towards TikTok (decided Q15) apart from Update Inventory (stock sync S2,
+// ./inventory.ts), which sets absolute quantities; so every call here is safe to repeat.
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 

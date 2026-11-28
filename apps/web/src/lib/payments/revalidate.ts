@@ -2,15 +2,19 @@ import "server-only";
 import { revalidateTag } from "next/cache";
 import { HOMEPAGE_CACHE_TAG } from "@/lib/content/homepage-data";
 import { PRODUCTS_CACHE_TAG, productCacheTag } from "@/lib/content/product-data";
+import { pushTikTokStockAfterResponse } from "@/lib/tiktok/stock-push";
 
 /** After a sale or a released hold (docs/plans/cart-checkout.md §7 "Revalidation"): the product
  * pages, their related lists and the homepage tiles show availability. The product's own data is
  * expired outright (`{ expire: 0 }`, the next PDP request reads fresh stock, as `revalidatePath`
  * did while the page was ISR); the shared lists may serve stale once while they refresh. Best-
  * effort: logged, never thrown, because the payment is already recorded. Only from a route handler
- * or a server action (the installed Next docs: revalidation is not allowed during render). */
+ * or a server action (the installed Next docs: revalidation is not allowed during render).
+ * The same moment tells TikTok (docs/plans/tiktok-stock-sync.md S2): the best-effort stock push after
+ * the response; the change is already queued by the database in its own transaction. */
 export function revalidateProductPages(productSlugs: readonly string[], context: { orderNo: string | null }): void {
   if (productSlugs.length === 0) return;
+  pushTikTokStockAfterResponse();
   try {
     for (const slug of productSlugs) revalidateTag(productCacheTag(slug), { expire: 0 });
     revalidateTag(PRODUCTS_CACHE_TAG, "max");

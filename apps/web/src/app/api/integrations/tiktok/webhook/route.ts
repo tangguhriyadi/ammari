@@ -17,6 +17,7 @@ import {
 import { verifyWebhookSignature } from "@ammari/tiktok-shop";
 import { defaultDb } from "@/lib/db";
 import { readCappedBody } from "@/lib/http/capped-body";
+import { pushTikTokStockAfterResponse } from "@/lib/tiktok/stock-push";
 
 // The TikTok Shop webhook (docs/plans/tiktok-shop-integration.md §2, §3.2, §4.1 step 1, §8.1; T3):
 // `POST https://ammari.id/api/integrations/tiktok/webhook`, registered once per app in Partner
@@ -215,6 +216,9 @@ async function afterDelivery(runtime: TikTokRuntime, shopId: string, receivedAt:
     // with backoff); codes only in the log.
     try {
       const outcome = await drainTikTokWebhookOrderEvent(defaultDb, { api: runtime.api, auth: runtime.auth, keyring: runtime.config.tokenKeyring }, stored.id);
+      // A stored/applied TikTok order can move a variant's target (R2, the ledger): push next. Already
+      // inside after(); the push is its own best-effort step (docs/plans/tiktok-stock-sync.md S2).
+      pushTikTokStockAfterResponse();
       if (outcome.kind === "error") console.warn("[tiktok] webhook order refresh failed; the sync cron retries", { eventId: stored.id, ...outcome.error });
       else if (outcome.kind === "not_stored") console.warn("[tiktok] webhook order not stored; retried with backoff", { eventId: stored.id, problems: outcome.problems });
       else if (outcome.kind === "processed") {

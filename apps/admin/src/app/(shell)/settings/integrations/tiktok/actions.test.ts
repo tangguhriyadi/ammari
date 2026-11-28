@@ -4,20 +4,23 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 // integrations.manage on every call, whatever the page showed. The writes themselves are covered
 // against the database in packages/commerce/src/tiktok/connection.test.ts.
 
-const { getStaffSessionMock, createStateMock, disconnectMock, runtimeMock, stockSyncMock } = vi.hoisted(() => ({
+const { getStaffSessionMock, createStateMock, disconnectMock, runtimeMock, stockSyncMock, retryMock, pushMock } = vi.hoisted(() => ({
   stockSyncMock: vi.fn(),
+  retryMock: vi.fn(),
+  pushMock: vi.fn(),
   getStaffSessionMock: vi.fn(),
   createStateMock: vi.fn(),
   disconnectMock: vi.fn(),
   runtimeMock: vi.fn(),
 }));
 vi.mock("@/lib/auth/staff-session", () => ({ getStaffSession: getStaffSessionMock }));
-vi.mock("@ammari/commerce/tiktok", () => ({ createTikTokOAuthState: createStateMock, disconnectTikTokShop: disconnectMock, setTikTokStockSync: stockSyncMock }));
+vi.mock("@ammari/commerce/tiktok", () => ({ createTikTokOAuthState: createStateMock, disconnectTikTokShop: disconnectMock, setTikTokStockSync: stockSyncMock, retryRefusedTikTokStockPushes: retryMock }));
+vi.mock("@/lib/integrations/tiktok-stock-push", () => ({ pushTikTokStockAfterResponse: pushMock }));
 vi.mock("@/lib/integrations/tiktok", () => ({ getTikTokRuntime: runtimeMock, TIKTOK_PERMISSION: "integrations.manage" }));
 vi.mock("@/lib/admin-revalidate", () => ({ revalidateAdmin: vi.fn(), revalidateOverview: vi.fn() }));
 
 const { Secret } = await import("@ammari/tiktok-shop");
-const { disconnectTikTokAction, setTikTokStockSyncAction, startTikTokConnectAction } = await import("./actions");
+const { disconnectTikTokAction, retryRefusedTikTokStockAction, setTikTokStockSyncAction, startTikTokConnectAction } = await import("./actions");
 
 function sessionWith(permissionKeys: string[]) {
   return {
@@ -109,5 +112,42 @@ describe("setTikTokStockSyncAction (docs/plans/tiktok-stock-sync.md R1)", () => 
     stockSyncMock.mockResolvedValueOnce({ ok: false, reason: "orders_apply_off" });
     expect(await setTikTokStockSyncAction({ enabled: true })).toEqual({ ok: false, error: "Aktifkan Mulai terapkan pesanan dulu." });
     expect(await setTikTokStockSyncAction({ enabled: "yes" } as never)).toEqual({ ok: false, error: "Input tidak valid." });
+  });
+
+  test("S2: turning it ON starts the first push after the response; OFF or no change does not", async () => {
+    getStaffSessionMock.mockResolvedValue(sessionWith(["integrations.manage"]));
+    pushMock.mockClear();
+    stockSyncMock.mockResolvedValueOnce({ ok: true, changed: true });
+    await setTikTokStockSyncAction({ enabled: true });
+    expect(pushMock).toHaveBeenCalledTimes(1);
+    stockSyncMock.mockResolvedValueOnce({ ok: true, changed: false });
+    await setTikTokStockSyncAction({ enabled: true });
+    stockSyncMock.mockResolvedValueOnce({ ok: true, changed: true });
+    await setTikTokStockSyncAction({ enabled: false });
+    expect(pushMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("retryRefusedTikTokStockAction (docs/plans/tiktok-stock-sync.md S2)", () => {
+  test("integrations.manage on the server; without it nothing is cleared", async () => {
+    for (const keys of [[], ["stock.manage"]]) {
+      getStaffSessionMock.mockResolvedValueOnce(sessionWith(keys));
+      await expect(retryRefusedTikTokStockAction()).rejects.toThrow(/forbidden\(\)/);
+    }
+    expect(retryMock).not.toHaveBeenCalled();
+  });
+
+  test("clears as this staff user and pushes after the response only when something was cleared", async () => {
+    getStaffSessionMock.mockResolvedValue(sessionWith(["integrations.manage"]));
+    pushMock.mockClear();
+    retryMock.mockResolvedValueOnce({ ok: true, cleared: 2 });
+    expect(await retryRefusedTikTokStockAction()).toEqual({ ok: true, data: { cleared: 2 } });
+    expect(retryMock).toHaveBeenCalledWith(expect.anything(), { staffUserId: "staff-1" });
+    expect(pushMock).toHaveBeenCalledTimes(1);
+    retryMock.mockResolvedValueOnce({ ok: true, cleared: 0 });
+    await retryRefusedTikTokStockAction();
+    expect(pushMock).toHaveBeenCalledTimes(1);
+    retryMock.mockResolvedValueOnce({ ok: false, reason: "not_connected" });
+    expect(await retryRefusedTikTokStockAction()).toEqual({ ok: false, error: "Hubungkan TikTok Shop dulu." });
   });
 });
