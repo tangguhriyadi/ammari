@@ -4,6 +4,10 @@ Status: **owner decisions recorded 2026-10-24** (section 13). Sessions 1 to 3 im
 2026-10-24/25, sessions 4 to 6 implemented 2026-10-25 (section 17).
 Shopee "Simpan" stays locked (`SHOPEE_MAPPING_VERIFIED = false`) until a real Seller Center header
 is checked (section 2.1). Written 2026-10-24.
+**28 Nov 2026:** the owner's real "Pesanan Saya" export (27 Nov 2026) replaces the article-based mapping.
+See **section 19** for the real columns, the "Penghasilan Saya" income import (fees, settlements,
+refunds), withdrawals, and sessions 7a-7f. TikTok now runs on the API (tiktok-shop-integration.md), so
+the file import is Shopee only.
 
 The admin `/import` page ("Impor", `orders.import`) is a `ComingSoonPage` placeholder today
 (`apps/admin/src/app/(shell)/import/page.tsx`). This plan turns it into a daily upload of the Seller
@@ -158,6 +162,8 @@ interface MarketplaceAdapter {
   Buyer-paid ongkir is not mapped at all (not revenue).
 
 ### 2.1 Shopee columns (from a public article, **not verified against a real file**)
+
+> **Superseded 28 Nov 2026 by section 19.2** (real header, 49 columns, no fee columns). Kept for history.
 
 | Field | Aliases (initial) | Required | Scope | Notes |
 |---|---|---|---|---|
@@ -612,7 +618,9 @@ Still open (none blocks sessions 1 to 3):
 
 - **O1. Real Shopee header** (decision 14): needed to unlock Simpan; also confirms whether the order
   export carries Biaya Administrasi / Biaya Layanan (decision 11) and the scope of each money
-  column (section 4).
+  column (section 4). **Header received 27 Nov 2026 (section 19.1).** It has no fee columns, so
+  decision 11 is replaced by the income import (19.5). The row-level checks still open are O1-a..h
+  (19.10).
 - **O2. Per-item partial cancels/returns on Shopee**: if they happen for this shop, a follow-up adds
   a partial return path (decision 6 keeps them in Perlu dicek until then).
 - **O3. TikTok header**: one real export header row, no buyer data.
@@ -732,14 +740,15 @@ One feature per session, each committable on its own.
 | 4 | Commit (TDD, stock) | `@ammari/commerce` `commit.ts`, export of the shared stock helpers from `lifecycle.ts`, `previewImport` / `commitImport` server actions with permission checks and the Shopee lock; tests 33 to 44 | typescript, database, security, silent-failure |
 | 5 | `/import` UI + history + order detail block | Page, preview, Cocokkan ke varian, Simpan (locked notice), history, batch detail, attention badge; e2e 47 to 50 at 390 and 1280 | react, typescript |
 | 6 | Ringkasan net profit + docs | `orderPlatformFeeSql`, the "belum lengkap" note, tests 45 and 46; SPEC §3.1, §5.2, §6, Status updated | typescript, database |
-| 7 | Shopee unlock (when O1 arrives) | Check aliases/scopes against the real header, flip `SHOPEE_MAPPING_VERIFIED`, adjust the lock tests | typescript |
+| 7 | ~~Shopee unlock (when O1 arrives)~~ | **Replaced by sessions 7a-7f (section 19.9)** | |
 
 TikTok mapping later: one small session once a real header is in hand (adapter `columns`, status
 map, tests 11/12 flipped to "accepts", one e2e run).
 
 ## 16. Out of scope
 
-- Shopee/TikTok **income** (Penghasilan) export into `order_settlements` and actual-payout profit.
+- ~~Shopee/TikTok **income** (Penghasilan) export into `order_settlements` and actual-payout profit.~~
+  Shopee income is now in scope (section 19.5). TikTok finance comes from the API (T7).
 - Courier/resi import, buyer data of any kind, regional reports.
 - Partial (per-item) cancels/returns from the marketplace (O2).
 - Negative stock (decision 2).
@@ -813,3 +822,293 @@ map, tests 11/12 flipped to "accepts", one e2e run).
   `getPeriodTotals`); the breakdowns and charts do not pay for them (review).
 - SPEC §3.1, §5.2, §6, §7 and Status updated.
 
+
+## 19. Real Shopee export (27 Nov 2026): mapping, income import, sessions 7a to 7f
+
+Status: **plan, no code** (28 Nov 2026). **Owner decisions Q1-Q8 recorded 28 Nov 2026 (19.10).** Supersedes the article-based mapping of section 2.1, decision 11
+("fees come from the order export") and session 7. TikTok no longer uses a file
+(tiktok-shop-integration.md T1-T9), so everything below is **Shopee only**. Accounting side:
+accounting.md Session 5.
+
+### 19.1 What the real file shows
+
+The owner downloaded a real "Pesanan Saya" export on 27 Nov 2026. Only the header row and the value
+shapes were copied, no buyer data.
+
+- `.xlsx`, one sheet `orders`, header in **row 1**, data from row 2, **49 columns**.
+- **Every cell is TEXT.** There are no Excel numbers and no date serials, so the 15-digit order number
+  problem of section 2.2 cannot happen.
+- Rupiah is text with `.` thousands separators and no decimals (`"229.000"`, `"8.000"`, `"0"`).
+  `parseMoney` already accepts this.
+- Times are text `YYYY-MM-DD HH:MM` (Jakarta, no seconds). `parseDateTime` already accepts this.
+- Empty is `""` (blank). Weight is `"700 gr"` (not read). `Paket Diskon` is `N`/`Y` (not read).
+- **There are no fee columns** (no admin, service, commission or AMS fee). Fees and releases are only
+  in the separate **"Penghasilan Saya"** (income) report (19.5).
+- The shop's listings have an **empty "Nomor Referensi SKU"** today.
+
+### 19.2 Column mapping (replaces section 2.1)
+
+Columns are listed 0-based. "Read" means the parser takes the value. Every other column is never read
+past the header row. Aliases are the exact header text. The English aliases of section 2.1 are
+dropped: they were never seen and could only match a different file.
+
+| # | Header | Field | Read | Scope | Rule |
+|---|---|---|---|---|---|
+| 0 | No. Pesanan | `channelOrderNo` | yes, required | key | As today (`^[A-Z0-9]{6,32}$` after uppercasing). |
+| 1 | Status Pesanan | `status` | yes, required | order | Section 3 map. Only `Perlu Dikirim` has been seen in this file. |
+| 2 | Status Pembatalan/ Pengembalian | `cancelReturnStatus` (new) | yes, required column | order | Raw text, max 64. **Blank** means nothing is in progress. **Any non-blank value that is not in the new `cancelReturnMap`** sends the order to Perlu dicek ("Status pembatalan/pengembalian 'X' belum dikenal"). It is never imported or updated, and never guessed. The map starts **empty**: values are added only once seen in a real file (19.4). |
+| 7 | Waktu Pengiriman Diatur | `shippedAt` (new) | yes, required column | order | Into `orders.marketplace_shipped_at` (19.3). Blank = not shipped yet. |
+| 8 | Waktu Pesanan Dibuat | `orderedAt` | yes, required | order | As today (decision 13). |
+| 12 | SKU Induk | none | **no** | | The parent SKU. It never names one variant and is never a fallback for column 14. |
+| 13 | Nama Produk | `productName` | display only | line | As today: shown next to an unknown SKU, never stored or matched. |
+| 14 | Nomor Referensi SKU | `sku` | yes, required column | line | The variant SKU. **Blank cell**: see 19.6. |
+| 15 | Nama Variasi | `variationName` | display only | line | As today. |
+| 16 | Harga Awal | `listUnitPrice` (new) | yes, required | line | **Revenue basis (Q3).** Row goods amount = `Harga Awal × Jumlah`, computed in integers, never with `parseFloat`. Replaces `lineTotal` ("Total Harga Produk" does not exist). |
+| 17 | Harga Setelah Diskon | `unitPriceAfterDiscount` (new) | yes, required | line | Read only for the price check below. |
+| 18 | Jumlah | `qty` | yes, required | line | As today. Exact alias, so "Jumlah Produk di Pesan" (col 25) can never match. |
+| 19 | Returned quantity | `returnedQty` (new) | yes | line | Integer ≥ 0, blank = 0. **> 0 sends the order to Perlu dicek** ("Ada barang diretur di Shopee") until 19.4 decides full vs partial (O2). |
+| 20 | Subtotal Pesanan | `fileSubtotal` (new) | yes | **unknown** | Check only. Once its scope is verified (O1-b), the order's Σ row goods amount must equal it, or the order goes to Perlu dicek. Until then it is only shown in the preview as "Subtotal di file". |
+| 21 | Total Diskon | check | yes | line? | Price check (below). |
+| 22 | Diskon Dari Penjual | `sellerProductDiscount` (new) | yes, required | line? | Seller-funded product discount: **added to `discount_amount`** (D-4). Price check (below). |
+| 23 | Diskon Dari Shopee | check | yes | line? | Shopee-funded: **counts in revenue** (Q3), so it is never subtracted. Read only for the price check. |
+| 27 | Voucher Ditanggung Penjual | `sellerVoucher` | yes, required | order | Into `discount_amount`, as today. |
+| 32 | Paket Diskon (Diskon dari Penjual) | `sellerBundleDiscount` (new) | yes, required column | order? | **Added to `discount_amount`** (seller-funded bundle discount, D-4). Its scope is checked by the double-count rule. |
+| 31 | Paket Diskon (Diskon dari Shopee) | none | no | | Shopee-funded: counts in revenue (Q3), so it is never subtracted. |
+| 48 | Waktu Pesanan Selesai | `completedAt` (new) | yes, required column | order | Into `orders.marketplace_completed_at` (19.3). |
+| 28, 29, 33, 34 | Cashback Koin, Voucher Ditanggung Shopee, Potongan Koin Shopee, Diskon Kartu Kredit | none | no | | Shopee-funded and paid to the seller by Shopee: **counts in revenue (Q3)**, which is why it is never subtracted. Not read. |
+| 35-37, 39 | Ongkos Kirim Dibayar oleh Pembeli, Estimasi Potongan Biaya Pengiriman, Ongkos Kirim Pengembalian Barang, Perkiraan Ongkos Kirim | none | no | | Buyer ongkir is pass-through (`shipping_amount = 0`, section 4). The seller's real shipping and return-shipping costs come from the income report (19.5). |
+| 38 | Total Pembayaran | none | no | | What the buyer paid, including platform-funded money. It is not our revenue. |
+| 3-6, 9-11, 24-26, 30 | resi, courier, pick-up, ship-by, payment time, order type, payment method, weights, Paket Diskon N/Y | none | no | | Not needed. The ship-by deadline (col 6) could later feed Packing, but it is out of scope here. |
+| 40-47 | Catatan dari Pembeli, Catatan, Username (Pembeli), Nama Penerima, No. Telepon, Alamat Pengiriman, Kota/Kabupaten, Provinsi | none | **never** | | Buyer data. Never read past the header row, never stored (decision 9; same rule as TikTok §6). Packing uses Shopee's own label. **Decided Q7: no buyer note is stored for Shopee.** |
+
+**Price check** (per row, only when cols 16, 21, 22, 23 are all present): `Harga Awal × Jumlah −
+Total Diskon = Harga Setelah Diskon × Jumlah` and `Total Diskon = Diskon Dari Penjual + Diskon Dari
+Shopee`. These are hypotheses until O1-d confirms them on a discounted order. A row that breaks them
+sends its order to Perlu dicek ("Harga di file tidak konsisten"). The check is never used to repair a
+value.
+
+**Amounts written** (section 4 otherwise unchanged; decided Q3, owner 28 Nov 2026): revenue is
+everything except what the **seller** funds. `unit_price` = the merged weighted average of `Harga
+Awal`, so `subtotal_amount = Σ Harga Awal × Jumlah`. `discount_amount = Diskon Dari Penjual (Σ rows,
+or once if order scope per O1-b) + Voucher Ditanggung Penjual + Paket Diskon (Diskon dari Penjual)`,
+capped at the subtotal as today. Every Shopee-funded discount, voucher and coin (cols 23, 28, 29, 31,
+33, 34) is left out of `discount_amount`, so it stays in revenue: Shopee pays it to the seller. Omzet
+(`subtotal − discount`) is then what the seller is owed for the goods before fees. Unlike web orders
+(a sale price is `unit_price`), a Shopee seller price cut sits in `discount_amount` (4-1201); omzet is
+the same either way. The income import cross-checks it (19.5). `shipping_amount = 0`. **No `order_channel_fees` rows**
+are written by the order import any more: the order file has none. The three fee `ColumnSpec`s are
+deleted, and so is the "optional fee column missing" warning. Fee rows written earlier stay as they
+are.
+
+**Adapter changes:** `ColumnSpec` gains the fields above. `group-orders.ts` computes the row amount
+from `unitPriceAfterDiscount × qty` instead of reading `lineTotal`. The required-column report names
+the new columns. The **file signature** becomes the exact 49-header list. A Shopee file whose header
+differs (column added, removed or renamed) still previews, but it gets the save blocker "Format export
+Shopee berubah sejak 27 Nov 2026: kolom X". This is checked on every upload, so a silent Shopee
+format change can never write.
+
+### 19.3 Real ship and complete dates (accounting D-2, Session 5)
+
+The columns already exist (`orders.marketplace_shipped_at`, `marketplace_completed_at`, migration
+0059). **No migration is needed.**
+
+- `shippedAt` (col 7) is stored **only when the order's Shopee status is shipped or later** (`Dikirim` /
+  `Sedang Dikirim` / `Selesai` / a return state). A col 7 value on a `Perlu Dikirim` row is not stored.
+  The seller has arranged pickup, but the parcel may not have left (D-1: handover to the courier).
+  Such rows are counted in the preview ("12 pesanan sudah diatur pengirimannya, belum dikirim").
+- `completedAt` (col 48) is stored only when the status is `Selesai`.
+- **Write once**, the same as TikTok (`coalesce(existing, new)`, conditional `UPDATE ... WHERE
+  marketplace_shipped_at IS NULL RETURNING`). A later file with a *different* value never
+  overwrites. It shows as a preview warning ("Waktu kirim di file berbeda dengan yang tersimpan").
+  A blank never clears a stored value.
+- Validation (row error, never a silent NULL): the value must parse, `orderedAt ≤ shippedAt ≤
+  completedAt`, and no value may be more than 1 hour after the upload time.
+- Filling a date counts as a change in the planner: it is in the digest, it makes the order
+  "Diperbarui", and it writes `import_batch_orders.changes` and the audit `after`. The app's own
+  `shipped_at`/`completed_at` are never touched.
+- The order detail "Marketplace" block shows both dates.
+- Accounting needs no rule change: the sales loader already reads `marketplace_shipped_at` for every
+  marketplace channel (T8). Shopee M1/M2 start posting as soon as the column is filled. The
+  `marketplace_ship_date_missing` issues clear on the next run.
+- **Decided (Q1, owner 28 Nov 2026):** "Waktu Pengiriman Diatur" **is** the ship/handover date (D-1),
+  stored only once Shopee reports the order as shipped. It may be the time the seller arranged
+  shipment rather than the courier pickup. The status gate bounds that gap, usually to the same day.
+  O1-c is still checked, for the record only: it no longer blocks the unlock.
+
+### 19.4 Statuses, cancellations and returns from the order export
+
+- `statusMap`: `perlu dikirim` becomes `seenInRealFile: true`. Nothing else changes until seen
+  (`Belum Bayar`, `Dikirim`/`Sedang Dikirim` spellings are still unverified; `Selesai`, `Batal` and
+  `Dalam Pengembalian` were seen by the owner earlier).
+- `cancelReturnStatus` (col 2) starts as an **empty** map, so every non-blank value is Perlu dicek.
+  For each value seen in a real file, the owner decides with the technical admin which of these it
+  is: (a) cancellation in progress, no effect; (b) return requested, `return_pending` flag;
+  (c) return and refund **done, all goods back**, `-> returned` (stock restored, S4);
+  (d) **refund only**, goods stay with the buyer, no status change (the refund amount comes from the
+  income report, 19.5). Partial returns (`Returned quantity` < `Jumlah` on any line) stay Perlu
+  dicek (O2).
+- **Return date (accounting S4), decided Q5 (owner 28 Nov 2026):** the **refund date from Penghasilan
+  Saya**. The order file has no return time. 7e writes `marketplace_returned_at` (write once) from the
+  income report's refund row of a returned order, and S4 uses it like TikTok's. Only when no refund
+  row has been imported does S4 fall back to `returned_at` (the import time). A refund row imported
+  after S4 posted on the fallback date reposts S4 (reverse + repost; a closed month gets the
+  difference in the first open month).
+
+### 19.5 "Penghasilan Saya" (income) import: fees, settlements, refunds
+
+The only source of Shopee fees and releases. It uses the same `/import` page and the same two-step
+preview/Simpan with digest. It takes the same channel advisory lock (`marketplace-import:shopee`), so
+an income and an order Simpan never interleave. Batch `kind = 'income'` (already in
+`IMPORT_BATCH_KINDS`). It has its own lock constant, `SHOPEE_INCOME_MAPPING_VERIFIED = false`, until
+a **real 2026 income file** is checked (O4). The columns below come from a 2023 sample and must be
+re-verified.
+
+- **Reading.** A workbook with sheets `income`, `service fee details` and `summary`. The parser picks
+  the sheet named `income` and **refuses** if it is missing. The header sits after preamble rows (shop
+  username, totals): header detection already scans the first 10 rows, and the limit becomes 15.
+  Preamble cells are never read. `Username (Pembeli)` and any other buyer column are never read. The
+  other two sheets are read only if 7d's file check shows they carry something the income sheet lacks
+  (for example a per-fee breakdown).
+- **One row per order release** (key `No. Pesanan`). Rows with a `No. Pengajuan` (return/refund
+  request) are refund rows. Whether one order can have several rows is O4-b.
+- **Fee columns → `order_channel_fees` components.** The table is fixed in code, built in 7d from the
+  real headers, and reviewed once by the accountant (same pattern as TikTok §5.3). Each fee column
+  maps to one of `admin_fee`, `service_fee`, `platform_commission`, `affiliate_commission`,
+  `seller_shipping_subsidy`, `other`. **A money column the table does not know holds the whole file**
+  (save blocker "Kolom penghasilan baru: X"). It is never summed into `other` silently.
+- **Sum check per row (never a silent pass):** `Total Penghasilan` must equal the signed sum of the
+  known goods, discount, refund, shipping and fee columns, using the formula fixed in 7d from the real
+  file. A row that does not add up holds its order (Perlu dicek "Rincian penghasilan tidak cocok").
+  If the total column is absent, nothing passes. This catches a renamed or new fee column.
+- **Writes** (one transaction, conditional writes as in section 17):
+  - `order_channel_fees`: one upsert per component, `source = 'actual'`, `import_batch_id`. A
+    component the file shows as 0 is written as 0 (a known zero). Columns are never inferred.
+  - `order_settlements`: `external_ref = 'shopee:<No. Pesanan>'` (refund rows:
+    `'shopee:<No. Pengajuan>'`), `settled_at` = `Tanggal Dana Dilepaskan` (a date, stored as Jakarta
+    00:00), `net_amount = Total Penghasilan`, `fee_amount` = Σ fee components, `gross_amount = net +
+    fee` (the existing CHECK). Upsert on `(order_id, external_ref)`. A changed amount for the same
+    ref goes through the conditional update: the digest shows it, and it is never overwritten
+    blindly.
+  - Refund-only rows (19.4 d) go to `marketplace_refunds` (`kind = 'refund_only'`, `channel_refund_id
+    = No. Pengajuan`, amount = `Jumlah Pengembalian Dana ke Pembeli`, `refunded_at` = release date),
+    `ON CONFLICT DO NOTHING`. They are only written when the order's col 2 status is mapped to (d);
+    otherwise Perlu dicek. Accounting S7 is already channel-generic (Cr `seller_balance.<channel>`),
+    and Ringkasan already subtracts these rows.
+  - A refund row of a return with goods (19.4 c) writes its settlement row and
+    `marketplace_returned_at` = the refund date (Q5, write once, conditional `WHERE ... IS NULL`).
+  - **Revenue cross-check (Q3):** the income row's goods amount after seller-funded discounts (from the
+    7d formula) must equal the order's `subtotal_amount − discount_amount`. A mismatch holds the order
+    ("Omzet pesanan berbeda dengan laporan penghasilan") and is never repaired.
+- **Holds:** the order is not in admin yet ("Pesanan belum diimpor, impor file Pesanan dulu"). The
+  income import never creates an order. Other holds: the order is admin-cancelled, a sum mismatch, or
+  an amount that cannot be parsed. **Negative amounts** are allowed only in the columns 7d marks as
+  signed (refunds, adjustments). `parseMoney` gains a `signed` option for those columns only.
+- **Ringkasan:** "Laba setelah biaya platform" gets real Shopee fees, and "Biaya platform belum
+  lengkap" now means "income report not imported yet". No 18% and no estimate (decision 8 stands;
+  confirmed Q2).
+- **Cadence (Q8, owner 28 Nov 2026):** imported **weekly, plus once before the 8th** of each month
+  for the month close (D-23 closes by the 10th).
+
+### 19.6 Empty "Nomor Referensi SKU"
+
+Today every Shopee listing has an empty variant SKU, so **every order would be Perlu dicek**.
+
+- A blank SKU gets its own reason, "SKU kosong di Shopee (Nomor Referensi SKU)". It names the product
+  and variation (display only) and links to Daftar SKU (section 11.1). The whole order is held
+  (decision 1).
+- **No manual match for a blank SKU.** "Cocokkan ke varian" is keyed by the file SKU. A blank key would
+  send every blank line of every order to one variant. Product or variation names are never used
+  (owner addition A), and neither is `SKU Induk`. The only fix is the owner filling the seller SKUs in
+  Shopee (from Daftar SKU) and exporting again.
+- The preview shows one count, "N pesanan tertahan karena SKU kosong", so progress on filling SKUs is
+  visible.
+- Unlocking (7c) does not depend on SKUs being filled: held orders are simply not saved.
+- **Decided Q6 (owner 28 Nov 2026):** the owner fills the Shopee (and TikTok) seller SKUs **next week,
+  before launch**. Until then the rows are held as above, never guessed.
+
+### 19.7 Decisions (owner, 28 Nov 2026)
+
+- **Revenue grain (Q3):** revenue is everything except what the seller funds. Seller product discounts,
+  seller vouchers and seller bundle discounts go to `discount_amount` (4-1201, D-4). Shopee-funded
+  discounts, vouchers and coins count in revenue because Shopee pays them to the seller (19.2). This
+  replaces the earlier draft, which held orders with Shopee-funded discounts.
+- **Fees (Q2, D-5):** actual only, from the income report. No rate-based estimate. The month close
+  warns about orders without fees (accounting Session 5).
+- **Withdrawals (Q4, D-11):** manual journal (19.8).
+- **Ship date (Q1)** 19.3, **return date (Q5)** 19.4, **seller SKUs (Q6)** 19.6, **buyer note (Q7)**
+  19.2, **income cadence (Q8)** 19.5.
+
+### 19.8 Withdrawals to Bank utama (D-11, accounting M3)
+
+Penghasilan Saya lists **releases into Saldo Penjual** (per order, `Tanggal Dana Dilepaskan`), not
+withdrawals from it to the bank. This is going by the 2023 sample (O4-c confirms it).
+
+**Decided Q4 (owner 28 Nov 2026):** withdrawals **stay a manual journal**, using the existing template
+"Penarikan Saldo Penjual Shopee" (`manual-journal-input.ts`): Dr 1-1201 Bank utama / Cr 1-1302.
+**Later item, not in sessions 7a-7f:** importing "Saldo Saya → Riwayat Transaksi" (only the withdrawal
+rows, into a `marketplace_withdrawals` table, with rule `shopee_withdrawal` and mapping key
+`cash.shopee_payout` shipped in a migration). Ads paid from the balance would stay M4 business
+expenses there, so they are never counted twice.
+
+### 19.9 Sessions (replace section 15 row 7)
+
+Each session is one commit, TDD for parser and money paths, synthetic fixtures only (section 14).
+Every fixture uses the exact 49 headers in the real order, all cells text.
+
+| # | Session | Output | Migration | Tests | Reviewers |
+|---|---|---|---|---|---|
+| **7a** | Real order mapping (lock stays) | Adapter rewritten to 19.2: new fields, computed row amount, discount = voucher + seller bundle, fee specs removed, 49-header signature save blocker, holds (blank SKU, unknown col 2 value, returned qty > 0, price check), revenue grain per Q3, preview counts | none | Unit: the exact real header row maps every field, with the 49 columns in order and 40-47 never in the serialized output (fake buyer values); all-text cells `"229.000"`/`"0"`/`""`; `"700 gr"` never parsed; row amount = `Harga Awal × Jumlah` (2 rows of 1 SKU merged); discount = 22 + 27 + 32; Shopee-funded cols 23/29/31/33 > 0 change neither subtotal nor discount (Q3); one header renamed or missing → save blocker naming it; "Jumlah Produk di Pesan" never taken for Jumlah; blank SKU → "SKU kosong" hold with no manual match offered; `SKU Induk` filled + col 14 blank still held; col 2 non-blank → hold; returned qty 1 → hold; price check broken → hold; old article headers ("Total Harga Produk") → missing-column error. Existing lock tests unchanged. | typescript, security, silent-failure |
+| **7b** | Real dates (accounting Session 5, D-2) | 19.3: planner + commit write `marketplace_shipped_at`/`_completed_at` write-once, status-gated, validated; preview counts and warnings; order detail block. Check that the opening-balance 1-1505 proposal (`sales-balances.ts`) uses the recognition date, not `shipped_at`; switch it if not. | none | Unit: `Perlu Dikirim` + col 7 → not stored; `Dikirim` + col 7 → stored as Jakarta → UTC (23:30 WIB stays that date); blank → NULL; malformed → row error; ship < order or > now+1h → row error; completed only on `Selesai`. DB (TDD): create fills the dates; re-import fills an empty one; re-import never clears or overwrites (a different value → warning, stored value kept); concurrent fill is safe (conditional update); posting: a Shopee order's `marketplace_ship_date_missing` issue clears after import, M1/M2 dated by col 7's Jakarta date. | typescript, database, silent-failure |
+| **7c** | Unlock (after the owner's checklist 19.10 passes) | Adjust scopes (`Subtotal Pesanan`, discount columns) and statuses to what the second real file showed, add the seen col 2 values (each with its owner decision), drop holds the file proved unnecessary, flip `SHOPEE_MAPPING_VERIFIED`, update the lock tests | none | Lock tests flipped; one fixture per newly mapped status/col-2 value; the 2-item-order fixture in the real shape. (O1-c is recorded, not a gate: Q1.) e2e (390 + 1280): upload → preview → Simpan → order in `/orders`. | typescript, silent-failure |
+| **7d** | Income parser (preview only, `SHOPEE_INCOME_MAPPING_VERIFIED = false`) | Needs a real 2026 income file (O4). Sheet selection, preamble skip, fee column → component table (accountant reviewed), sum check, signed money for the marked columns, kind toggle "Pesanan / Penghasilan" on `/import` | none | Unit: preamble rows ignored; header on row 6; missing `income` sheet refused; unknown money column → save blocker; sum mismatch → hold; buyer username never in output; signed parse only where allowed. | typescript, security, silent-failure |
+| **7e** | Income commit (TDD, money) | 19.5 writes: fees `actual`, `order_settlements`, `marketplace_refunds`, `marketplace_returned_at` from the refund date (Q5); revenue cross-check (Q3); holds; history and batch detail; unlock once a real file passes | **0064** only if 7d's real file needs a new fee component (CHECK widen, expand-only); else none | DB: fees replace nothing they should not (order import never writes fees again; income re-import of the same file → all unchanged); a component changed by a later file → conditional update + accounting M2 reverse + repost (closed month → first open month); refund-only row → `marketplace_refunds` once (replay no-op) → S7 posts Dr 4-1301 / Cr 1-1302; returned order + refund row → `marketplace_returned_at` set once, S4 dated by it; S4 already posted on the import-time fallback → reverse + repost on the refund date (closed month → first open month); revenue mismatch → hold; order not imported → hold; concurrent order + income Simpan serialise. e2e at 390/1280: income preview + Simpan. | typescript, database, security, silent-failure |
+| **7f** | Shopee accounting | Accounting Session 5 part 2: close warning (orders without fees, Q2), Rekonsiliasi "Shopee", opening 1-1302 hint. Withdrawals stay manual (Q4) | none expected (no new reference data); the withdrawal import is a later item (19.8) | See accounting.md Session 5. | database, typescript, react |
+
+### 19.10 Open checks for the owner's next real export, and questions
+
+**O1, the next "Pesanan Saya" export.** It should cover about 2 weeks, so it includes shipped, completed,
+cancelled and multi-item orders. Send the header plus these answers only, no buyer data:
+
+- **O1-a** Does a **multi-item order** have one row per item, with order-level columns (status, times,
+  voucher, `Paket Diskon (Diskon dari Penjual)`) repeated on every row, or only on the first?
+- **O1-b** Scope of `Subtotal Pesanan`, `Total Diskon`, `Diskon Dari Penjual`, `Diskon Dari Shopee`:
+  per row or per order? (Check one 2-item order against the Seller Center order detail.)
+- **O1-c** Is **"Waktu Pengiriman Diatur"** filled while the status is still `Perlu Dikirim`? For 2 or 3
+  shipped orders, how does it compare with the pickup or "dikirim" time in the order's tracking?
+- **O1-d** On a discounted order, does `Harga Awal × Jumlah − Total Diskon = Harga Setelah Diskon ×
+  Jumlah`, and does `Total Diskon = Diskon Dari Penjual + Diskon Dari Shopee`?
+- **O1-e** Does an order with `Diskon Dari Shopee` > 0 show that amount added back in Penghasilan
+  Saya? (Q3 is decided; this confirms the 7e revenue cross-check formula.)
+- **O1-f** Every distinct value of `Status Pesanan` and `Status Pembatalan/ Pengembalian` in the
+  file, and what each meant on the order page (cancel, return requested, refunded with goods back,
+  refund only).
+- **O1-g** For a returned order, what `Returned quantity` shows, and whether `Waktu Pesanan Selesai`
+  is filled.
+- **O1-h** 2 or 3 order numbers checked against the Seller Center order page (format, length).
+
+**O4, a real 2026 "Penghasilan Saya" export:**
+
+- **O4-a** The exact header row and the row it sits on.
+- **O4-b** Can one order have more than one row (a release plus a later refund or adjustment)?
+- **O4-c** What the `summary` and `service fee details` sheets contain. Does either list withdrawals?
+- **O4-d** One order's row read against its Seller Center "Rincian penghasilan": which columns add up
+  to `Total Penghasilan`.
+- **O4-e** Is a **"Saldo Saya → Riwayat Transaksi"** export available, and which row types does it
+  have?
+
+**Decisions (owner, 28 Nov 2026), formerly questions Q1-Q8:**
+
+- **Q1 Yes.** "Waktu Pengiriman Diatur" (col 7) is the ship/handover date (D-1), stored only once
+  Shopee reports the order as shipped (19.3).
+- **Q2 Yes.** Shopee fees are actual only, from the Penghasilan Saya import. No rate-based estimate.
+  The close warns about orders without fees (19.5, accounting Session 5).
+- **Q3 Yes.** Shopee-funded discounts, vouchers and coins count in revenue, because Shopee pays them
+  to the seller (19.2, 19.7).
+- **Q4** Withdrawals stay a manual journal ("Penarikan Saldo Penjual Shopee") for now. Importing "Saldo
+  Saya → Riwayat Transaksi" is a later item (19.8).
+- **Q5** The Shopee return date is the refund date from Penghasilan Saya. Import time is only the
+  fallback (19.4).
+- **Q6** The owner fills the Shopee (and TikTok) seller SKUs next week, before launch. Until then the
+  rows are held (19.6).
+- **Q7 No** buyer note is stored for Shopee (19.2, buyer columns 40-47 never read).
+- **Q8** Penghasilan Saya is imported weekly, plus once before the 8th for the month close (19.5).

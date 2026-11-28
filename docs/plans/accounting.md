@@ -1,8 +1,9 @@
 # Accounting module (double-entry general ledger)
 
 Status: **Sessions 1-4 and 6-12 implemented** (migrations 0049-0056); Session 5: **TikTok replaced by
-tiktok-shop-integration.md T5/T8** (real ship time = TikTok `collection_time`, migrations 0059/0062), **Shopee still
-blocked** (marketplace dates, §8); MDR
+tiktok-shop-integration.md T5/T8** (real ship time = TikTok `collection_time`, migrations 0059/0062), **Shopee re-planned
+28 Nov 2026** from the real "Pesanan Saya" export (§8 Session 5 → marketplace-import.md §19, sessions
+7a-7f; no fee columns, so fees come from a "Penghasilan Saya" import); MDR
 W2/W5 off until fee work A/B. Originally: plan, Investigation date 2026-11-26
 (branch `dev`, HEAD `aa2147f`). Revised 2026-11-26 with the owner's answers (Midtrans fee "A+B",
 Biteship, no credit sales — §10), then with the **final policy decisions D-1..D-25 (owner +
@@ -390,9 +391,9 @@ Dr 5-1101 / Cr 1-1505: the goods left the shelf at to_ship but stay in inventory
 
 | # | Event | Date | Journal |
 |---|---|---|---|
-| M1 | Revenue | the order's **real ship time from the export file**, stored by the Session 5 import feature [D-2] | S3 with the balance account = 1-1302/1-1303 Saldo Penjual, Penjualan **gross** of fees [D-1]. Platform vouchers/coins are the platform's, not recorded. No real ship time in the file yet (e.g. imported while still `to_ship`, or the column empty) → no M1, a posting issue until a later upload fills it; never the import time. The stored completed time is kept for reference and reconciliation only (recognition is at shipping [D-1]). |
-| M2 | Platform fees (`order`,id,`channel_fees`) — every component **except** `payment_gateway_fee` (that one is W2) | same date as M1 [D-5] | Dr 6-1201 Biaya platform (`admin_fee`,`service_fee`,`platform_commission`,`affiliate_commission`,`other`) · Dr 6-1202 Subsidi ongkir penjual (`seller_shipping_subsidy`) / Cr Saldo Penjual. A re-upload that changes a fee → reverse + re-post; if M1's month is closed, the difference lands in the **first open month** [D-5]. |
-| M3 | Withdrawal to bank / payout [D-11] | TikTok: the payout's `paid_time` (Jakarta) | **TikTok (T8): rule `tiktok_payout`** (`tiktok_payout`, payment_id, `paid_out`) from Get Payments, once TikTok reports it PAID: Dr `cash.tiktok_payout` (1-1201 Bank utama, Q17) / Cr 1-1303. **Shopee: manual journal for now:** Dr 1-1201 Bank utama / Cr 1-1302, from the bank statement, until the income ("Penghasilan") import fills `order_settlements`. |
+| M1 | Revenue | the order's **real ship time from the export file**, stored by the Session 5 import feature [D-2] | S3 with the balance account = 1-1302/1-1303 Saldo Penjual, Penjualan **gross** of fees [D-1]. Platform vouchers/coins are the platform's, not recorded. **Shopee (owner Q3, 28 Nov 2026):** every Shopee-funded discount, voucher and coin counts in Penjualan (Shopee pays it to the seller). Only seller-funded discounts go to 4-1201 (marketplace-import.md §19.2). No real ship time in the file yet (e.g. imported while still `to_ship`, or the column empty) → no M1, a posting issue until a later upload fills it; never the import time. The stored completed time is kept for reference and reconciliation only (recognition is at shipping [D-1]). |
+| M2 | Platform fees (`order`,id,`channel_fees`) — every component **except** `payment_gateway_fee` (that one is W2) | same date as M1 [D-5] | Dr 6-1201 Biaya platform (`admin_fee`,`service_fee`,`platform_commission`,`affiliate_commission`,`other`) · Dr 6-1202 Subsidi ongkir penjual (`seller_shipping_subsidy`) / Cr Saldo Penjual. A re-upload that changes a fee → reverse + re-post; if M1's month is closed, the difference lands in the **first open month** [D-5]. **Shopee (28 Nov 2026):** the order export has no fee columns. Fees arrive only from the Penghasilan Saya import, as `source = actual`. Until then the order has no M2 (no fee rows means no journal, never zero fees), and the close warns (Session 5). |
+| M3 | Withdrawal to bank / payout [D-11] | TikTok: the payout's `paid_time` (Jakarta) | **TikTok (T8): rule `tiktok_payout`** (`tiktok_payout`, payment_id, `paid_out`) from Get Payments, once TikTok reports it PAID: Dr `cash.tiktok_payout` (1-1201 Bank utama, Q17) / Cr 1-1303. **Shopee: manual journal for now:** Dr 1-1201 Bank utama / Cr 1-1302, from the bank statement. Penghasilan Saya lists releases *into* Saldo Penjual, not withdrawals, so **Decided Q4 (owner 28 Nov 2026):** Shopee withdrawals stay this manual journal (template "Penarikan Saldo Penjual Shopee"). Importing "Saldo Saya → Riwayat Transaksi" is a later item (marketplace-import.md §19.8). |
 | M5 | TikTok statement adjustment (T8) | the statement's `statement_time` (Jakarta) | Rule `tiktok_adjustment` (`tiktok_statement_transaction`, id, `adjustment`): the signed settlement moves 1-1303 against the account the accountant mapped for its type (`tiktok.adjustment.<type>`, Pemetaan Akun); unmapped = posting issue `tiktok_adjustment_unmapped`, never guessed (ads suggested to 6-1101). |
 | S7 | Refund-only, goods stay with the buyer (T8, Q10) | `marketplace_refunds.refunded_at` (Jakarta) | Rule `marketplace_refund` (`marketplace_refund`, id, `refunded`): Dr 4-1301 Retur penjualan / Cr Saldo Penjual, no HPP or stock line; held behind M1 while M1 is a posting issue. Ringkasan subtracts the same amount on the same date (Q19). |
 | M4 | Expense paid from seller balance [D-11] | `expense_date` | Cr 1-1302/1-1303 when `channel_id` is set, else 1-1305 Saldo marketplace belum dipilah (owner reclassifies manually). |
@@ -612,7 +613,7 @@ from the cut-over date whenever a rule lands, and January closes by 10 Feb [D-23
 | 2 | Posting engine (pure rules + runner: insert / no-op / reverse+repost, cut-over filter, issues queue) with **expenses (E1–E2) and supplier payments (P3–P4, R4 without chain)**; pages Jurnal umum + Buku besar. **First useful report.** | Unit: each rule snapshot → lines, balanced; card → 1-1201 [D-18]. DB: run twice = no new rows; void → reversal; changed mapping + rule bump → reverse+repost; closed period → correction dated in first open period. e2e: Jurnal umum + Buku besar at 390 px and 1280 px. |
 | 3 | Data Master **Akun** (list, add sub-account, rename, deactivate, bank fields; Kas & Bank filter = Kas tunai + Bank utama [D-17]) + **Pemetaan akun** (expense categories/items, methods, channels; refuses 1-15xx targets [D-14]; unmapped categories warned [D-25]); **Pengaturan pajak** form for `tax_settings` [D-20]; issues shown on the Kategori Biaya page. | Unit: validation (rate in bps, exemption ≥ 0, end date optional). DB: delete-once-used refused, system rows locked, mapping to inventory refused, tax-settings edit audited. e2e list pages at 390/1280. |
 | 4 | Opening balances wizard (system-proposed lines + typed ones, as of 31 Dec 2026 [D-22]), manual journals (with attachment; templates for Biteship top-up, marketplace withdrawal, refund-via-Midtrans reclass), period close/reopen (deadline, warnings, written reason [D-23]), **Neraca saldo** + PDF/Excel. | DB: opening journal balances; close blocks posting; reopen without reason refused, with reason audited; trial month never closable. e2e: manual journal create/reverse, Neraca saldo at 390/1280. |
-| **5** | **Feature D-2 — real marketplace dates.** Expand-only migration: nullable `orders.marketplace_shipped_at`, `orders.marketplace_completed_at` (names final in that session's plan); the Shopee (and prepared TikTok) import maps the export file's ship/complete time columns into them, on create **and** on every re-upload (later uploads fill dates that were empty). Never overwrites the app's own `shipped_at`/`completed_at` (management screens keep working). Order detail shows both. No "upload by the 3rd" rule. | Unit: column parsing (Jakarta time, empty cell → NULL, malformed → import row error, not a silent NULL). DB: import then re-import fills the date; re-import never clears an existing date. `silent-failure-hunter` review (import code). |
+| **5** | **Feature D-2: real marketplace dates, Shopee** (TikTok done in T5/T8). **No migration:** `orders.marketplace_shipped_at`/`_completed_at` exist since 0059. **Part 1** = marketplace-import.md sessions **7a** (real 49-column mapping, lock stays) + **7b** (col 7 "Waktu Pengiriman Diatur" → `marketplace_shipped_at`, stored only once Shopee says shipped; col 48 "Waktu Pesanan Selesai" → `marketplace_completed_at`; write-once, on create and every re-upload; never touches the app's `shipped_at`/`completed_at`) + **7c** (unlock after the owner's checklist). **Part 2** = **7d/7e** (Penghasilan Saya import: actual fees, `order_settlements`, refund-only rows, return date = refund date [Q5]) + **7f** (accounting below). Owner decisions Q1-Q8 recorded 28 Nov 2026 (below). No "upload by the 3rd" rule. | 7a/7b/7c: see marketplace-import.md §19.9 (column parsing, empty → NULL, malformed → row error, status-gated, write-once, re-import never clears; M1/M2 post on col 7's Jakarta date; the `marketplace_ship_date_missing` issue clears). 7f: close warning lists Shopee orders recognised in the month with no actual fee rows; Rekonsiliasi Shopee per order (1-1302 lines vs Σ settlement net); S7 for a Shopee refund-only row; a Shopee order through shipped → income imported → manual withdrawal journal leaves 1-1302 at 0; S4 dated by the refund date (fallback: import time). `silent-failure-hunter` on all import code. |
 | **6** | **Feature D-3 — manual-order payment.** New table `order_manual_payments` (`order_id` PK, `method` cash/transfer/card, `cash_account_code` → `accounts`, recorded by/at; audited), written by the manual-order create/edit form; **required** for new WhatsApp/Instagram/offline/manual-web orders; account picker lists active Kas & Bank accounts (today Kas tunai + Bank utama [D-17]), defaulting from the method mapping; an "isi metode bayar" action fills it for older orders. No credit option. | Unit: method → default account; card → Bank utama. DB: order + payment row in one transaction; missing row → posting issue (once Session 9 posts rule S6). e2e: create a manual order with method/account at 390/1280. |
 | 7 | Purchases chain: P1, P2, P3 (with chain), P5, P6, P7; reconciliation checks 1 (bahan) and 2 (utang); **ledger-side guard test** that purchase/payment rules never debit an expense [D-14]. | Unit: chain allocation (DP before receipt, partial receipts, reversal returns advance, overpaid close). DB: against real receipts from fixtures; Σ P1 = tagihan for closed docs. |
 | 8 | Production: R1–R5, A1, A2; reconciliation for 1-1503/1-1504/1-1506. | Unit: R3 split — normal completion residue → 5-1201, short-close rest → 6-4102 [D-15]; A1/P7 → 6-4101/6-4102 [D-16]; scoped cost lines. DB: post → receive partially → short-close (the Haura beige L case: 12 planned, 6 received) → reopen → close; ledger = stock valuation. |
@@ -629,19 +630,71 @@ Every session: `/plan` approval first, `database-reviewer` + `typescript-reviewe
 reads both; no `SALES_RULE_VERSION` bump). The TikTok file import and its column mapping are no longer needed.
 The text below now applies to **Shopee only**.
 
-**Session 5 status: BLOCKED (26 Nov 2026), deferred until real Shopee/TikTok export files are
-available.** The repo has no evidence of a ship-time or complete-time column for either marketplace:
-the Shopee adapter's columns come from a public article and are not verified (`SHOPEE_MAPPING_VERIFIED
-= false`, marketplace-import.md O1), and the TikTok adapter has no columns at all (O3). Nothing is
-guessed. Waiting for, per marketplace, a real export **header row** (no buyer data) and for the ship
-time and complete time columns: the exact header text, the value **format** (text such as
-`2026-12-03 14:22` or an Excel date cell), the **empty-value form** of an order not yet shipped or
-completed (empty cell, `-`, other), and whether the value is **the same on every row of an order**.
-The **full TikTok column mapping** is its own task (it is a prerequisite for any TikTok import, not
-part of Session 5). Until Session 5 ships, a marketplace order without a real ship date stays a
-**posting issue** (M1, §4.3; never the import time), and the opening-balance 1-1505 proposal still
-reads `orders.shipped_at` (the import time for marketplace orders), to be switched to the real ship
-time by Session 5.
+**Session 5 status (28 Nov 2026): unblocked for Shopee, planned in marketplace-import.md §19.** The
+owner's real "Pesanan Saya" export (27 Nov 2026) has the ship time ("Waktu Pengiriman Diatur", col 7)
+and the complete time ("Waktu Pesanan Selesai", col 48). Both are text `YYYY-MM-DD HH:MM` in Jakarta
+time, and blank is `""`. The previous blocker (26 Nov) asked for exactly this. Whether the values
+repeat on every row of a multi-item order is still open (O1-a). Until 7b ships, a Shopee order stays a
+`marketplace_ship_date_missing` posting issue (never the import time). 7b checks that the
+opening-balance 1-1505 proposal uses the recognition date, not `orders.shipped_at`.
+
+**Owner decisions (28 Nov 2026)** (full text: marketplace-import.md §19.10):
+
+- **Q1** Col 7 "Waktu Pengiriman Diatur" **is** the D-1 ship/handover date, stored only once Shopee
+  reports the order as shipped. M1/M2 are dated by its Jakarta date.
+- **Q2** Fees are **actual only**, from Penghasilan Saya. No rate-based estimate. The close warns about
+  orders without fees (option A below).
+- **Q3** Shopee-funded discounts, vouchers and coins **count in revenue** (Penjualan). Only
+  seller-funded discounts go to 4-1201 [D-4].
+- **Q4** Withdrawals stay a **manual journal** ("Penarikan Saldo Penjual Shopee"). The balance
+  transaction import is a later item.
+- **Q5** The Shopee **return date (S4) = the refund date from Penghasilan Saya**. Import time is only
+  the fallback.
+- **Q6** The owner fills the Shopee and TikTok seller SKUs next week, before launch. Until then the
+  rows are held.
+- **Q7** No buyer note is stored for Shopee.
+- **Q8** Penghasilan Saya is imported **weekly, plus once before the 8th** for the month close (D-23).
+
+**Shopee fees without fee columns (D-5): DECIDED, option A (owner Q2, 28 Nov 2026).**
+The order export has no commission, admin or service fee. Options:
+
+- **A. Actual only, from a "Penghasilan Saya" import (chosen).** M1 posts revenue on the ship
+  date (col 7). M2 posts when the income import writes the actual `order_channel_fees` rows
+  (`source = actual`). M2 is dated by M1's date [D-5], so an income file imported before the month
+  closes puts the fee in the right month. A file imported after the close puts it in the **first
+  open month** [D-23], which is the engine's normal reverse + repost. The month close **warns**
+  (never blocks) with the Shopee orders recognised in the month that have no actual fee rows yet
+  (count + 5 order numbers), the same as TikTok's estimate warning (Q9). If the amount matters, the
+  accountant books a reversing manual accrual (Dr 6-1201 / Cr 1-1302), using a new manual-journal
+  template "Akrual biaya Shopee", so no figure is invented by code. Shopee releases funds a few days
+  after completion, so with the import before the 8th (Q8) the late-month orders are usually covered.
+- B. Rate-based estimate (a Settings table of bps per component, `source = estimate`, replaced by the
+  actual). Rejected: Shopee's fees depend on category, program (Gratis Ongkir Xtra, cashback), per-item
+  caps and a fixed per-order fee, so a rate table would be wrong per order. It would also break
+  marketplace-import decision 8 (no 18% and no estimates in Ringkasan). TikTok's estimates are
+  different: TikTok computes them itself (unsettled transactions). Shopee's order file gives nothing
+  comparable.
+- C. Fees only at payout (net revenue). Rejected: it breaks D-1 (revenue gross of fees) and D-5.
+
+**Withdrawals (D-11, M3): DECIDED (Q4).** Penghasilan Saya records releases into Saldo Penjual Shopee
+(1-1302), not withdrawals to Bank utama. Withdrawals stay the manual journal "Penarikan Saldo
+Penjual Shopee" (Dr 1-1201 / Cr 1-1302). Importing "Saldo Saya → Riwayat Transaksi" is a later item,
+outside Session 5 (marketplace-import.md §19.8).
+
+**Returns and refunds:** a return with goods back is S4 + S2 through the order import (col 2 value
+mapped by the owner, marketplace-import.md §19.4). S4 is dated by the **refund date from
+Penghasilan Saya** (Q5, `marketplace_returned_at`, written by 7e). Only while no refund row is imported
+does it fall back to the import time. A later refund row reposts S4 on the refund date (closed month →
+first open month). A refund-only row from the income import goes to
+`marketplace_refunds` and posts the existing channel-generic **S7** (Dr 4-1301 / Cr 1-1302). Partial
+returns stay Perlu dicek (O2).
+
+**Session 5 part 2 (7f) accounting scope:** Shopee close warning (above); Rekonsiliasi "Shopee
+(Penghasilan)": per order, 1-1302 lines vs Σ `order_settlements.net_amount` (not released yet =
+waiting); the 1-1302 balance vs released-not-withdrawn (only once withdrawals are imported); opening
+1-1302 hint ("Saldo Penjual" from Seller Center, typed by hand); the "Akrual biaya Shopee" template.
+No M3 rule (Q4) and no new reference data, so no migration is expected. Rules are added at version 1 with their own source types.
+`SALES_RULE_VERSION` does not change, so no existing journal reposts.
 
 ### 8.1 Carried over from the Session 1 review (26 Nov 2026)
 
@@ -1048,8 +1101,14 @@ A's `source` column and lands with Session 11.
 - **Shopee returns keep the import time** ([D-2] covers ship/complete dates only; TikTok's S4 is dated by
   `marketplace_returned_at` since tiktok-shop-integration.md T8): S4 for a Shopee return is dated when the
   return is imported; if that month is closed the return
-  lands in the first open month. Acceptable under [D-23]; revisit if the export file gains a
-  reliable return date.
+  lands in the first open month. Acceptable under [D-23]. **Decided Q5 (28 Nov 2026):** S4 uses the refund date from Penghasilan
+  Saya once 7e imports it. The import time is only the fallback while no refund row has been imported.
+- **Shopee fees arrive late** (no fee columns in the order export; Session 5 option A): orders shipped
+  late in a month whose income is imported after the close get their fees in the first open month
+  [D-5, D-23]. The close warning lists them, and the accountant may accrue by manual journal.
+- **Every Shopee order is held until the seller SKUs are filled** ("Nomor Referensi SKU" is empty on
+  the shop's listings, marketplace-import.md §19.6). The owner fills them next week, before launch
+  (Q6). If that slips, Shopee revenue and stock are missing until a re-export after the fix.
 - **PPh final rate end** ([D-20]): with the original PP 55/2022 limit, the 0,5% rate for an NPWP
   registered in 2020 ends with tax year 2026, i.e. **before the first official month**. Until the
   accountant confirms the PP 55 revision and updates `rate_valid_until`, the system proposes no
