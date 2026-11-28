@@ -4,7 +4,6 @@ import { formatDateTime, formatNumber } from "@ammari/ui/lib";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { SHOPEE_TAB } from "@/lib/integrations/tabs";
 import { getLastImportBatch } from "@/lib/marketplace-import/history";
-import { IntegrationHeader } from "../_components/integration-header";
 
 // Administrasi > Integrasi > Shopee: a read-only summary. Shopee has no API connection; its orders
 // come in through the file import. Orders a file holds in Perlu dicek are never saved, so there is
@@ -17,7 +16,6 @@ export default async function ShopeeIntegrationPage() {
 
   return (
     <>
-      <IntegrationHeader session={session} tab={SHOPEE_TAB} description="Shopee terhubung lewat impor file (Pesanan Saya), bukan API." />
       <div className="flex max-w-3xl flex-col gap-6">
         <Card className="flex flex-col gap-2 p-4 sm:p-6">
           <section aria-labelledby="shopee-last-import-heading" className="flex flex-col gap-2">

@@ -47,8 +47,26 @@ for (const viewport of VIEWPORTS) {
         await expect(breadcrumb(page).getByText(crumb, { exact: true })).toBeVisible();
       }
 
+      // Each tab has its logo, loaded and decorative: the label alone is the accessible name.
+      for (const [name, file] of [["TikTok Shop", "tiktok"], ["Shopee", "shopee"]] as const) {
+        const logo = tabs(page).getByRole("link", { name, exact: true }).locator("img");
+        await expect(logo).toHaveAttribute("src", `/logos/${file}.png`);
+        await expect(logo).toHaveAttribute("alt", "");
+        await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+        await expect(tabs(page).getByRole("link", { name, exact: true })).toBeInViewport({ ratio: 1 });
+      }
+
+      // The heading and tab row stay the very same nodes through a tab switch: mark them, click, and
+      // check at once, without waiting for the new content.
+      const heading = page.getByRole("heading", { level: 1, name: "Integrasi" });
+      for (const locator of [heading, tabs(page)]) await locator.evaluate((node) => node.setAttribute("data-mounted", "before-switch"));
       await tabs(page).getByRole("link", { name: "Shopee" }).click();
+      expect(await heading.getAttribute("data-mounted", { timeout: 500 })).toBe("before-switch");
+      expect(await tabs(page).getAttribute("data-mounted", { timeout: 500 })).toBe("before-switch");
       await expect(page).toHaveURL(new RegExp(`${SHOPEE}$`));
+      await expect(tabs(page).getByRole("link", { name: "Shopee" })).toHaveAttribute("aria-current", "true");
+      await expect(heading).toHaveAttribute("data-mounted", "before-switch");
+      await expect(tabs(page)).toHaveAttribute("data-mounted", "before-switch");
       await expect(page.getByText("Shopee terhubung lewat impor file (Pesanan Saya), bukan API.")).toBeVisible();
       // Filled or empty, depending on which specs ran before this one.
       await expect(page.getByRole("region", { name: "Impor pesanan terakhir" })).toContainText(/\d+ disimpan, \d+ ditahan, \d+ dilewati|Belum ada impor pesanan Shopee yang disimpan\./);

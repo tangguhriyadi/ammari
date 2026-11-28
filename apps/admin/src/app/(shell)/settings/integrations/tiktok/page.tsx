@@ -9,9 +9,6 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { getTikTokRuntime, TIKTOK_INTEGRATION_PATH, TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
 import { TIKTOK_CONNECT_ERRORS, TIKTOK_CONNECTED_MESSAGE, TIKTOK_HELD_REASON_LABELS, TIKTOK_RECONNECTED_MESSAGE, isTikTokConnectErrorCode } from "@/lib/integrations/tiktok-messages";
 import { getTikTokIntegrationPageData } from "@/lib/integrations/tiktok-queries";
-import { TIKTOK_TAB } from "@/lib/integrations/tabs";
-import { IntegrationHeader } from "../_components/integration-header";
-import { TikTokSubTabs } from "./_components/tiktok-sub-tabs";
 import { TikTokConnectionActions } from "./_components/tiktok-connection-actions";
 import { TikTokBackfillActions } from "./_components/tiktok-backfill-actions";
 import { TikTokConnectionBanner } from "./_components/tiktok-connection-banner";
@@ -85,7 +82,7 @@ function Section({ id, title, children }: { id: string; title: string; children:
 }
 
 export default async function TikTokIntegrationPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const session = await requirePermission(TIKTOK_PERMISSION);
+  await requirePermission(TIKTOK_PERMISSION);
   const search = await searchParams;
   const runtime = getTikTokRuntime({ requireServiceId: true });
   const [{ connection, connectedByName, webhookCounts, ordersCursor, failedEvents, tiktokOrderCount, unmappedSkuCount, appliedCount, heldByReason }, backfill] = await Promise.all([getTikTokIntegrationPageData(), getTikTokBackfillView(defaultDb)]);
@@ -99,8 +96,6 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
 
   return (
     <>
-      <IntegrationHeader session={session} tab={TIKTOK_TAB} description="Hubungkan toko TikTok agar pesanan, retur, dan pencairan dana masuk otomatis ke admin." />
-      <TikTokSubTabs active="Koneksi" />
       <div className="flex max-w-3xl flex-col gap-6">
         {connected && (
           <p role="status" className="rounded-lg border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">

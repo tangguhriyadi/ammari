@@ -1,12 +1,10 @@
-import { LoadingRegion } from "@ammari/ui";
-import { BreadcrumbSkeleton, PageHeaderSkeleton } from "@/components/page-skeleton";
+import { LoadingRegion, Skeleton } from "@ammari/ui";
 
-// Shown while /settings/integrations picks a tab, instead of the Pengaturan form skeleton.
+// The content area under the Integrasi tabs; the layout keeps the breadcrumb, title and tabs.
 export default function Loading() {
   return (
     <LoadingRegion>
-      <BreadcrumbSkeleton />
-      <PageHeaderSkeleton />
+      <Skeleton className="h-36 w-full max-w-3xl rounded-lg" />
     </LoadingRegion>
   );
 }

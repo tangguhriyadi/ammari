@@ -36,6 +36,8 @@ const FILES = {
   "gopay-logo.svg.svg": "gopay.svg",
   "shopeepay-logo.svg": "shopeepay.svg",
   "va-logo.svg": "va.svg",
+  "tiktok-logo-512.png": "tiktok.png",
+  "shopee-logo-512.png": "shopee.png",
 };
 
 const targets = [path.join(here, "../../../apps/web/public/logos"), path.join(here, "../../../apps/admin/public/logos")];

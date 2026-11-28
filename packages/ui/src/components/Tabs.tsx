@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { cn } from "../lib/cn";
 
@@ -5,6 +6,8 @@ export interface TabItem {
   label: string;
   href: string;
   isActive: boolean;
+  /** A decorative logo before the label; the label stays the accessible name. */
+  iconSrc?: string;
 }
 
 export interface TabsProps {
@@ -32,6 +35,7 @@ export function Tabs({ items, ...rest }: TabsProps) {
             item.isActive ? "bg-brand text-brand-foreground" : "bg-neutral-100 text-neutral-700 hover:bg-neutral-200",
           )}
         >
+          {item.iconSrc && <Image src={item.iconSrc} unoptimized alt="" aria-hidden="true" width={16} height={16} className="mr-1.5 size-4 shrink-0" />}
           {item.label}
         </Link>
       ))}
