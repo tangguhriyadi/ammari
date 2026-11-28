@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
+import { createTikTokAuthClient } from "../src/auth";
 import { DEFAULT_REQUEST_TIMEOUT_MS, TikTokApiError, createTikTokClient, type FetchLike, type TikTokClientOptions } from "../src/client";
 import { Secret } from "../src/secret";
 import { signRequest } from "../src/sign";
@@ -444,6 +445,71 @@ describe("no secret in errors or logs (§7.1)", () => {
       ...errors.flatMap((error) => [String(error), JSON.stringify(error), (error as Error).stack ?? "", (error as Error).message]),
     ].join("\n");
     for (const needle of [APP_SECRET, APP_KEY, ACCESS_TOKEN, REFRESHED_TOKEN, "tiktok.test", "?", ...signs]) {
+      expect(text).not.toContain(needle);
+    }
+  });
+
+  test("auth host refusals (T0): the logged detail names the cause, never a token, code, id, name, expiry number or URL", async () => {
+    const lines: string[] = [];
+    for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        lines.push(args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg) ?? String(arg))).join(" "));
+      });
+    }
+    const nowS = START / 1000;
+    const farRefresh = Date.UTC(2241, 5, 1) / 1000 + 777;
+    const farAccess = nowS + 40 * 86_400 + 333;
+    const pastRefresh = nowS - 4_321;
+    const SELLER = "Toko Rahasia Bandung";
+    const OPEN_ID = "OPENID_secretish_42";
+    const AUTH_CODE = "ROW_auth_code_once";
+    const OLD_REFRESH = "ROW_old_refresh_token";
+    const data = (overrides: Record<string, unknown>) => ({
+      access_token: ACCESS_TOKEN,
+      access_token_expire_in: nowS + 7 * 86_400,
+      refresh_token: REFRESHED_TOKEN,
+      refresh_token_expire_in: nowS + 60 * 86_400,
+      open_id: OPEN_ID,
+      seller_name: SELLER,
+      seller_base_region: "ID",
+      user_type: 0,
+      ...overrides,
+    });
+    const bodies: unknown[] = [
+      `<html>${ACCESS_TOKEN}</html>`,
+      { code: 0, request_id: "r1", data: data({ refresh_token_expire_in: farRefresh }) },
+      { code: 0, request_id: "r2", data: data({ access_token_expire_in: farAccess }) },
+      { code: 0, request_id: "r3", data: data({ refresh_token_expire_in: pastRefresh }) },
+      { code: 0, request_id: "r4", data: data({ refresh_token: undefined, access_token_expire_in: String(nowS) }) },
+    ];
+    const fetch: FetchLike = async () => {
+      const body = bodies.shift();
+      return new Response(typeof body === "string" ? body : JSON.stringify(body));
+    };
+    const auth = createTikTokAuthClient({ appKey: new Secret(APP_KEY), appSecret: new Secret(APP_SECRET), baseUrl: "https://auth.tiktok.test", fetch, now: () => START });
+    const details: (string | null)[] = [];
+    const errors: unknown[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      try {
+        await (i % 2 === 0 ? auth.getAccessToken(new Secret(AUTH_CODE)) : auth.refreshAccessToken(new Secret(OLD_REFRESH)));
+      } catch (error) {
+        errors.push(error);
+        details.push((error as TikTokApiError).detail);
+        // What the admin callback logs ("[tiktok-connect] failed", reason + toJSON()).
+        console.warn("[tiktok-connect] failed", { reason: "invalid_response", ...(error as TikTokApiError).toJSON() });
+        console.error("tiktok auth failed", error);
+      }
+    }
+    expect(details).toEqual([
+      "envelope_unparsable",
+      "expiry:refresh:beyond_cap:2241",
+      "expiry:access:beyond_cap:2027",
+      "expiry:refresh:past:2026",
+      "schema:access_token_expire_in:invalid_type;schema:refresh_token:invalid_type",
+    ]);
+    const text = [...lines, ...errors.flatMap((error) => [String(error), JSON.stringify(error), (error as Error).stack ?? ""])].join("\n");
+    expect(text).toContain('"detail":"expiry:refresh:beyond_cap:2241"');
+    for (const needle of [APP_SECRET, APP_KEY, ACCESS_TOKEN, REFRESHED_TOKEN, AUTH_CODE, OLD_REFRESH, OPEN_ID, SELLER, "tiktok.test", "?", "app_key=", "auth_code=", String(farRefresh), String(farAccess), String(pastRefresh)]) {
       expect(text).not.toContain(needle);
     }
   });

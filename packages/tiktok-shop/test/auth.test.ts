@@ -13,6 +13,7 @@ const APP_SECRET = "dummyappsecret0123456789";
 const SERVICE_ID = "7000000000000000999";
 const NOW = Date.UTC(2026, 10, 27, 3, 0, 0);
 const NOW_S = NOW / 1000;
+const yearS = (year: number) => Date.UTC(year, 0, 1) / 1000;
 
 function tokenBody(overrides: Record<string, unknown> = {}) {
   return {
@@ -149,6 +150,156 @@ describe("token get / refresh", () => {
 
   test("refuses a non-https base URL", () => {
     expect(() => createTikTokAuthClient({ appKey: new Secret(APP_KEY), appSecret: new Secret(APP_SECRET), baseUrl: "http://auth.test" })).toThrow(/https origin/);
+  });
+});
+
+// T0 (28 Nov 2026, dev): HTTP 200, code 0, refused as invalid_response with no way to tell why. Each
+// refusal now carries a `detail` naming the cause: never a value, only the field path and zod's
+// issue code, or which expiry, why, and its year.
+describe("invalid_response detail (T0 diagnostics)", () => {
+  async function detailOf(body: unknown, call: "get" | "refresh" = "get") {
+    const h = harness({ body });
+    const promise = call === "get" ? h.client.getAccessToken(new Secret("c")) : h.client.refreshAccessToken(new Secret("r"));
+    const error = await rejection(promise);
+    expect(error.kind).toBe("invalid_response");
+    expect(error.toJSON().detail).toBe(error.detail);
+    return error.detail;
+  }
+
+  test("a 200 whose body is not the envelope → envelope_unparsable", async () => {
+    expect(await detailOf("<html>")).toBe("envelope_unparsable");
+    expect(await detailOf({ data: {} })).toBe("envelope_unparsable");
+  });
+
+  test.each([
+    ["a missing refresh token", { refresh_token: undefined }, "schema:refresh_token:invalid_type"],
+    ["an empty access token", { access_token: "" }, "schema:access_token:too_small"],
+    ["an expiry sent as a string", { access_token_expire_in: String(NOW_S + 3600) }, "schema:access_token_expire_in:invalid_type"],
+    ["a fractional expiry", { refresh_token_expire_in: NOW_S + 0.5 }, "schema:refresh_token_expire_in:invalid_type"],
+    ["two failing fields", { access_token: undefined, refresh_token_expire_in: null }, "schema:access_token:invalid_type;schema:refresh_token_expire_in:invalid_type"],
+  ])("%s → %s", async (_name, overrides, detail) => {
+    expect(await detailOf(tokenBody(overrides))).toBe(detail);
+  });
+
+  test("data that is not an object → schema:(root):invalid_type", async () => {
+    expect(await detailOf({ code: 0, request_id: "r", data: null })).toBe("schema:(root):invalid_type");
+  });
+
+  test.each([
+    ["access relative", { access_token_expire_in: 604_800 }, "expiry:access:relative:1970"],
+    ["access in the past", { access_token_expire_in: NOW_S - 60 }, "expiry:access:past:2026"],
+    ["access now (not in the future)", { access_token_expire_in: NOW_S }, "expiry:access:past:2026"],
+    ["access more than 30 days ahead", { access_token_expire_in: NOW_S + 30 * 86_400 + 1 }, "expiry:access:beyond_cap:2026"],
+    ["access in 2100", { access_token_expire_in: yearS(2100) }, "expiry:access:beyond_cap:2100"],
+    ["refresh relative", { refresh_token_expire_in: 31_536_000 }, "expiry:refresh:relative:1971"],
+    ["refresh in the past", { refresh_token_expire_in: NOW_S - 1 }, "expiry:refresh:past:2026"],
+    ["refresh after 2200", { refresh_token_expire_in: yearS(2201) }, "expiry:refresh:beyond_cap:2201"],
+    ["refresh absurdly far", { refresh_token_expire_in: Number.MAX_SAFE_INTEGER }, "expiry:refresh:beyond_cap:out_of_range"],
+  ])("%s → %s", async (_name, overrides, detail) => {
+    expect(await detailOf(tokenBody(overrides))).toBe(detail);
+    expect(await detailOf(tokenBody(overrides), "refresh")).toBe(detail);
+  });
+
+  test("the access expiry is checked first and reported alone", async () => {
+    expect(await detailOf(tokenBody({ access_token_expire_in: 1, refresh_token_expire_in: 2 }))).toBe("expiry:access:relative:1970");
+  });
+
+  test("the detail never quotes a value: no token, no full expiry number, no name", async () => {
+    const far = yearS(2300) + 12_345;
+    const h = harness({ body: tokenBody({ access_token: "ROW_leak_access", refresh_token: "ROW_leak_refresh", refresh_token_expire_in: far, seller_name: "Toko Rahasia" }) });
+    const error = await rejection(h.client.getAccessToken(new Secret("code-leak")));
+    const text = [error.message, JSON.stringify(error), String(error.detail)].join("\n");
+    for (const leak of ["ROW_leak", String(far), "Toko Rahasia", "code-leak", APP_SECRET]) expect(text).not.toContain(leak);
+    expect(error.detail).toBe("expiry:refresh:beyond_cap:2300");
+  });
+
+  test("errors other than invalid_response carry no detail", async () => {
+    const h = harness({ body: { code: 36004004, request_id: "req-x" } });
+    const error = await rejection(h.client.getAccessToken(new Secret("c")));
+    expect(error.detail).toBeNull();
+    expect(error.toJSON()).not.toHaveProperty("detail");
+  });
+});
+
+// T0: refresh_token_expire_in "equals the authorization duration the user granted", which can be far
+// in the future. Stored as is (timestamptz) up to the year 2200; the access token stays strict.
+describe("expiry bounds", () => {
+  test.each([
+    ["2100", yearS(2100)],
+    ["the last second of 2200", yearS(2201) - 1],
+  ])("a refresh expiry in %s is accepted and stored as is (token get and refresh)", async (_name, seconds) => {
+    for (const call of ["get", "refresh"] as const) {
+      const h = harness({ body: tokenBody({ refresh_token_expire_in: seconds }) });
+      const tokens = call === "get" ? await h.client.getAccessToken(new Secret("c")) : await h.client.refreshAccessToken(new Secret("r"));
+      expect(tokens.refreshTokenExpiresAt.getTime()).toBe(seconds * 1000);
+    }
+  });
+
+  test("an access expiry exactly 30 days ahead is accepted", async () => {
+    const h = harness({ body: tokenBody({ access_token_expire_in: NOW_S + 30 * 86_400 }) });
+    expect((await h.client.getAccessToken(new Secret("c"))).accessTokenExpiresAt.getTime()).toBe(NOW + 30 * 86_400_000);
+  });
+});
+
+// T0: optional fields must never block a connect. Too long or the wrong type → dropped (null / left
+// out of the scopes); unknown fields ignored. Only the tokens and both expiries are required.
+describe("lenient optional fields", () => {
+  test.each(["get", "refresh"] as const)("%s: overlong or mistyped optional fields are dropped, not fatal", async (call) => {
+    const h = harness({
+      body: tokenBody({
+        open_id: "o".repeat(5_000),
+        seller_name: "n".repeat(513),
+        seller_base_region: "r".repeat(17),
+        granted_scopes: ["seller.order.info", "s".repeat(129), 42, "seller.finance.info", null],
+        user_type: 1,
+        some_future_field: { nested: true },
+      }),
+    });
+    const tokens = call === "get" ? await h.client.getAccessToken(new Secret("c")) : await h.client.refreshAccessToken(new Secret("r"));
+    expect(tokens.accessToken.reveal()).toBe("ROW_dummy_access");
+    expect(tokens.sellerName).toBeNull();
+    expect(tokens.sellerBaseRegion).toBeNull();
+    expect(tokens.grantedScopes).toEqual(["seller.finance.info", "seller.order.info"]);
+    expect(tokens.droppedFields).toEqual(["granted_scopes", "open_id", "seller_base_region", "seller_name"]);
+  });
+
+  test("optional fields of the wrong type (array, number, object, string for a list) are dropped too", async () => {
+    const h = harness({ body: tokenBody({ open_id: ["o"], seller_name: 7, seller_base_region: { a: 1 }, granted_scopes: "seller.order.info" }) });
+    const tokens = await h.client.getAccessToken(new Secret("c"));
+    expect(tokens.sellerName).toBeNull();
+    expect(tokens.sellerBaseRegion).toBeNull();
+    expect(tokens.grantedScopes).toEqual([]);
+    expect(tokens.droppedFields).toEqual(["granted_scopes", "open_id", "seller_base_region", "seller_name"]);
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["null", null],
+    ["empty", ""],
+  ])("%s optional fields are fine and drop nothing", async (_name, value) => {
+    const h = harness({ body: tokenBody({ open_id: value, seller_name: value, seller_base_region: value, granted_scopes: value === "" ? [] : value, user_type: value }) });
+    const tokens = await h.client.getAccessToken(new Secret("c"));
+    expect(tokens).toMatchObject({ sellerName: null, sellerBaseRegion: null, grantedScopes: [], droppedFields: [] });
+  });
+
+  test("the well-formed case keeps the name and region and drops nothing", async () => {
+    const tokens = await harness({ body: tokenBody() }).client.getAccessToken(new Secret("c"));
+    expect(tokens).toMatchObject({ sellerName: "Ammari Test", sellerBaseRegion: "ID", droppedFields: [] });
+  });
+
+  test("more than 200 scopes: the first 200 valid ones are kept, the rest dropped", async () => {
+    const scopes = Array.from({ length: 250 }, (_, i) => `scope.${String(i).padStart(3, "0")}`);
+    const tokens = await harness({ body: tokenBody({ granted_scopes: scopes }) }).client.getAccessToken(new Secret("c"));
+    expect(tokens.grantedScopes).toHaveLength(200);
+    expect(tokens.droppedFields).toEqual(["granted_scopes"]);
+  });
+
+  test.each([
+    ["an access token over 4096 characters", { access_token: "a".repeat(4097) }, "schema:access_token:too_big"],
+    ["a refresh token that is a number", { refresh_token: 12345 }, "schema:refresh_token:invalid_type"],
+  ])("required fields stay strict: %s", async (_name, overrides, detail) => {
+    const error = await rejection(harness({ body: tokenBody(overrides) }).client.getAccessToken(new Secret("c")));
+    expect(error.detail).toBe(detail);
   });
 });
 

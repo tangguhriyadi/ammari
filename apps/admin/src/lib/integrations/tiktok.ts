@@ -37,6 +37,7 @@ function forbidden(): Response {
 
 function failed(code: TikTokConnectErrorCode, error?: TikTokApiError): Response {
   // One line, reason and TikTok's error fields only: never the code, the state, a token or the URL.
+  // `detail` (on invalid_response) names the failing field or expiry, never a value (T0).
   console.warn("[tiktok-connect] failed", { reason: code, ...(error ? error.toJSON() : {}) });
   return redirectTo(`${TIKTOK_INTEGRATION_PATH}?error=${code}`);
 }
@@ -103,6 +104,10 @@ export async function handleTikTokCallback(input: TikTokCallbackInput): Promise<
     if (shops.length > 1) return failed("multiple_shops");
     const saved = await saveTikTokConnection(db, { tokens, shop: shops[0]!, staffUserId: session.staffUser.id, keyring: config.tokenKeyring, now });
     if (!saved.ok) return failed(saved.reason);
+    // Optional token fields TikTok sent in an unusable shape (names only, T0): connected anyway, but
+    // a surprise worth a warning.
+    const dropped = tokens.droppedFields ?? [];
+    if (dropped.length > 0) console.warn("[tiktok-connect] token fields dropped", { droppedFields: dropped });
     console.info("[tiktok-connect] connected", { shopId: shops[0]!.shopId, reconnected: saved.reconnected });
     return redirectTo(`${TIKTOK_INTEGRATION_PATH}?connected=${saved.reconnected ? "again" : "new"}`);
   } catch (error) {

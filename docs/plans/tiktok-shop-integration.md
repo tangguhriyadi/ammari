@@ -659,6 +659,39 @@ T2 built the connection; nothing reaches TikTok until the owner sets these. Valu
    (`packages/tiktok-shop/src/auth.ts` refuses anything else as `invalid_response` and the page shows
    `kode: invalid_response`), and the envelope codes TikTok uses for an expired access token
    (passed to the API client as `authErrorCodes` in T4).
+
+   **T0 result (28 Nov 2026, first real connect on dev).** Done on dev with the Partner Center redirect
+   URL **temporarily set to `https://admin.ammari.my.id/api/integrations/tiktok/callback`** (it must go
+   back to `https://admin.ammari.id/api/integrations/tiktok/callback` before the prod connect: §14
+   step 6, §15 A9). `GET /api/v2/token/get` answered HTTP 200, envelope `code` 0 (request id
+   `2026112815360524CC4D8353ADB0256A30`), and `auth.ts` still refused it as `invalid_response`. Two
+   checks shared that kind (the token schema, or the expiry bounds), so the log could not say which.
+   TikTok's docs (authorization-overview-202407) confirm our field names and that both `*_expire_in`
+   are absolute Unix seconds, and say `refresh_token_expire_in` "equals the authorization duration the
+   user granted": a far-future value beyond the old 10-year cap is the likely cause. The answer also
+   carried `open_id`, `seller_name`, `seller_base_region`, `user_type` (int) and `granted_scopes`
+   (string[]).
+
+   **The fix (no migration):**
+   - Every `invalid_response` from the auth host now carries a `detail`, logged on
+     `[tiktok-connect] failed`: `envelope_unparsable`; `schema:<dotted path>:<zod issue code>` per
+     failing path (joined with `;`); or `expiry:<access|refresh>:<past|relative|beyond_cap>:<year>`
+     (the year only, never the number). Never a token, the app secret, the code, the state, `open_id`,
+     `seller_name` or a URL.
+   - Refresh token expiry: accepted up to the end of the year **2200** and stored as is
+     (`timestamptz`). Access token expiry stays strict: in the future and at most **30 days** ahead
+     (TikTok's default is 7). Both still refuse the past and relative values (< 1e9).
+   - Optional fields never block a connect: an overlong or mistyped `seller_name`,
+     `seller_base_region` or `open_id` is dropped (null), a `granted_scopes` entry over 128 characters
+     is dropped, unknown fields (`user_type`, ...) are ignored; dropped field names are logged as a
+     warning, `[tiktok-connect] token fields dropped` (`droppedFields`). Required: `access_token`,
+     `refresh_token` (non-empty strings) and both expiries (integers).
+   - The same rules apply to the token refresh (cron). A failed refresh now logs
+     `[tiktok-refresh] failed` with TikTok's error fields and the `detail` (`last_error_code` keeps the
+     short `kind:code`, 64-character column). A refresh whose scope list had an entry dropped keeps the
+     scopes granted at connect, with a `[tiktok-refresh] token fields dropped` warning, so the finance
+     scope can never vanish silently.
+   - Next connect: if it fails again, the `[tiktok-connect] failed` line's `detail` names the cause.
 6. **Key rotation:** add `TIKTOK_TOKEN_ENC_KEY_V2` (same command, new file), set
    `TIKTOK_TOKEN_ENC_KEY_CURRENT=2`, restart, reconnect (or let the next refresh re-encrypt with V2),
    then remove `_V1` once `token_key_version` is 2 on the connection row.
@@ -1281,6 +1314,11 @@ Nothing is guessed.
 - **T9 ambiguity (owner's call, §9.6):** whether a TikTok order shipped before 1 Dec 2026 that the backfill
   would create (never typed by hand) should be kept or cancelled after applying. The preview marks each one.
 
+- **T0 token exchange (28 Nov 2026, dev):** HTTP 200 / code 0 refused by our expiry cap (the refresh
+  token's expiry is the granted authorization duration, beyond the old 10-year cap). Fixed: refresh
+  expiry allowed up to 2200, optional fields lenient, every refusal names its cause in the log
+  (§7.4 step 5). The connect was made with the redirect URL temporarily on `admin.ammari.my.id`;
+  it goes back to `admin.ammari.id` before the prod connect (§14 step 6). Field names confirmed.
 - **T0 verification results** for Q1 (which ON_HOLD flow, and the gate on real orders), Q3 (what the
   Draf app and dev can do), Q6 (amounts are whole numbers) and Q13 (backfill reach, `collection_time`
   per fulfilment type). They are recorded here when known. The code already handles both outcomes
@@ -1345,10 +1383,15 @@ the prod admin host), the step says so.
    - Undo: not needed (without a connection the call is a no-op).
 6. **First connect** (prod admin only, the registered redirect, Q3): Integrasi > **Hubungkan TikTok Shop**, approve
    in TikTok with the shop owner's account.
+   - **Before pressing it:** in Partner Center, set the redirect URL back to
+     `https://admin.ammari.id/api/integrations/tiktok/callback`. The T0 connect on dev (28 Nov 2026, §7.4 step 5)
+     temporarily set it to `https://admin.ammari.my.id/api/integrations/tiktok/callback`; with that left in place
+     TikTok sends the prod approval to dev, and the prod connect fails `state_invalid` on dev.
    - Check: "Terhubung", the shop name and id, the six scopes under "Izin yang diberikan" (Keuangan must be
      there for M2/M3), "Token akses berlaku sampai" about 7 days ahead; Log Aktivitas has "TikTok Shop
      dihubungkan"; within 5 minutes "Sinkronisasi terakhir berhasil" is set and Pesanan TikTok fills (dry run).
-     If the page shows `kode: invalid_response`, stop: the token response's field names differ (§7.4 step 5).
+     If the page shows `kode: invalid_response`, stop: the admin log line `[tiktok-connect] failed` has a `detail`
+     naming the field or expiry TikTok sent in an unexpected shape (§7.4 step 5).
    - Undo: **Putuskan** (wipes the tokens, stops the sync), and remove the app in Seller Center.
 7. **Dry run for a few days (kill switch off).** Map every SKU on Pemetaan SKU TikTok until "SKU TikTok belum
    dipetakan" is 0; read Pesanan TikTok ("Akan dibuat / dicocokkan / ditahan"); do the T0 checks of §15 on these
@@ -1419,6 +1462,11 @@ the prod admin host), the step says so.
 8. Also: TikTok's auth-error codes (pass them as `authErrorCodes`), whether the unsettled estimate's
    transaction id equals the statement's, and whether an adjustment's `settlement_amount` is its effect on
    the balance.
+9. **Redirect URL back to prod:** after the dev T0 connects, Partner Center's redirect URL is set back from
+   `https://admin.ammari.my.id/api/integrations/tiktok/callback` to
+   `https://admin.ammari.id/api/integrations/tiktok/callback` before §14 step 6 on prod. Token exchange shape:
+   recorded 28 Nov 2026 (§7.4 step 5); the admin log has no `[tiktok-connect] token fields dropped` line (or
+   each dropped field is understood).
 
 **B. Accountant review (before the first month close that contains TikTok):**
 

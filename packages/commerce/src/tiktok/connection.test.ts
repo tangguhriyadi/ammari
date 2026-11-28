@@ -40,7 +40,17 @@ function tokenSet(suffix: string, now = NOW): TikTokTokenSet {
   };
 }
 
-function fakeAuth(options: { delayMs?: number; fail?: TikTokApiError } = {}) {
+function captureWarnings(): string[] {
+  const lines: string[] = [];
+  for (const level of ["info", "warn", "error"] as const) {
+    vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" "));
+    });
+  }
+  return lines;
+}
+
+function fakeAuth(options: { delayMs?: number; fail?: TikTokApiError; tokens?: Partial<TikTokTokenSet> } = {}) {
   const calls: string[] = [];
   const auth: TikTokAuthClient = {
     async getAccessToken() {
@@ -51,7 +61,7 @@ function fakeAuth(options: { delayMs?: number; fail?: TikTokApiError } = {}) {
       if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
       if (options.fail) throw options.fail;
       // A fresh 7-day token as of a week after NOW, so it is not due again for any clock used here.
-      return tokenSet(`refreshed_${calls.length}`, new Date(NOW.getTime() + 7 * DAY));
+      return { ...tokenSet(`refreshed_${calls.length}`, new Date(NOW.getTime() + 7 * DAY)), ...options.tokens };
     },
   };
   return { auth, calls };
@@ -263,6 +273,47 @@ describe("token refresh", () => {
       expect(late).toEqual({ kind: "reauth_required", reason: "refresh_rejected" });
       expect((await row(tx, id)).status).toBe("reauth_required");
     });
+  });
+
+  test("T0: an invalid_response on refresh is retried and its detail is logged (never a value)", async () => {
+    const lines = captureWarnings();
+    await withRollback(async (tx) => {
+      const id = await connect(tx, (await insertStaffUser(tx)).id);
+      const refusal = new TikTokApiError({ kind: "invalid_response", path: "/api/v2/token/refresh", httpStatus: 200, code: 0, requestId: "req-r", detail: "expiry:access:beyond_cap:2027" });
+      const { auth } = fakeAuth({ fail: refusal });
+      const outcome = await refreshTikTokToken(tx, { auth, keyring: KEYRING, now: () => new Date(NOW.getTime() + 8 * DAY) });
+      expect(outcome).toEqual({ kind: "failed", errorCode: "invalid_response:0" });
+      expect((await row(tx, id)).status).toBe("active");
+    });
+    const text = lines.join("\n");
+    expect(text).toContain("[tiktok-refresh] failed");
+    expect(text).toContain('"detail":"expiry:access:beyond_cap:2027"');
+    expect(text).toContain('"requestId":"req-r"');
+    expect(text).not.toMatch(/ROW_/);
+  });
+
+  test("T0: a scope TikTok sent unusable on refresh keeps the scopes granted at connect, with a warning", async () => {
+    const lines = captureWarnings();
+    await withRollback(async (tx) => {
+      const id = await connect(tx, (await insertStaffUser(tx)).id, { ...tokenSet("1"), grantedScopes: ["seller.finance.info", "seller.order.info", "seller.shop.info"] });
+      const { auth } = fakeAuth({ tokens: { grantedScopes: ["seller.order.info"], droppedFields: ["granted_scopes", "seller_name"] } });
+      expect((await refreshTikTokToken(tx, { auth, keyring: KEYRING, now: () => NOW }, { force: true })).kind).toBe("refreshed");
+      expect((await row(tx, id)).grantedScopes).toEqual(["seller.finance.info", "seller.order.info", "seller.shop.info"]);
+    });
+    const text = lines.join("\n");
+    expect(text).toContain("[tiktok-refresh] token fields dropped");
+    expect(text).toContain('"droppedFields":["granted_scopes","seller_name"]');
+  });
+
+  test("a clean refresh replaces the scopes and warns about nothing", async () => {
+    const lines = captureWarnings();
+    await withRollback(async (tx) => {
+      const id = await connect(tx, (await insertStaffUser(tx)).id);
+      const { auth } = fakeAuth({ tokens: { grantedScopes: ["seller.finance.info", "seller.order.info"], droppedFields: [] } });
+      await refreshTikTokToken(tx, { auth, keyring: KEYRING, now: () => NOW }, { force: true });
+      expect((await row(tx, id)).grantedScopes).toEqual(["seller.finance.info", "seller.order.info"]);
+    });
+    expect(lines.join("\n")).not.toContain("[tiktok-refresh]");
   });
 
   test("TikTok unavailable is never a reauth, even after the access token expired", async () => {

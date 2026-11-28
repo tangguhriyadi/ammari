@@ -13,11 +13,29 @@ import { Secret } from "./secret";
 // failed refresh is retried by the next cron run.
 //
 // Field names (`auth_code`, `app_secret`, `access_token_expire_in`, ...) follow TikTok's token
-// documentation; the plan's confirmed facts (§0) name only the endpoints and grant types, so T0
-// re-checks them on the development shop. `*_expire_in` are absolute Unix seconds; anything that
-// does not look like a future instant is refused as `invalid_response`, never guessed.
+// documentation (authorization-overview-202407): `*_expire_in` are absolute Unix seconds.
+//
+// T0 (first real connect on dev, 28 Nov 2026): HTTP 200, code 0, refused as `invalid_response`
+// with no way to tell which check failed. TikTok's docs say `refresh_token_expire_in` "equals the
+// authorization duration the user granted", so it can lie far in the future (beyond the 10-year cap
+// this file had). So now:
+//   - required: both tokens (non-empty strings) and both expiries (integers). The access expiry
+//     must be in the future and at most 30 days ahead (TikTok's default is 7); the refresh expiry
+//     in the future and at most the end of the year 2200, stored as is (a timestamptz). Anything
+//     below 1e9 is a relative lifetime, not an instant, and is refused, never guessed.
+//   - optional (seller name and region, open_id, granted scopes): too long or the wrong type means
+//     the field (or the one scope) is dropped and named in `droppedFields`, never a failed connect.
+//     Unknown fields (`user_type`, ...) are ignored.
+//   - every `invalid_response` carries a `detail` (see `TikTokApiError.detail`): which path failed
+//     with zod's issue code, or which expiry, why and its year. Never a value.
 
-const MAX_TOKEN_LIFETIME_S = 10 * 365 * 24 * 3600;
+const ACCESS_TOKEN_MAX_LIFETIME_S = 30 * 24 * 3600;
+/** The last second of the year 2200 (UTC). */
+const REFRESH_TOKEN_MAX_EXPIRY_S = Date.UTC(2201, 0, 1) / 1000 - 1;
+/** Sept 2001: a smaller value is a lifetime in seconds, not an instant. */
+const MIN_ABSOLUTE_S = 1_000_000_000;
+const MAX_SCOPES = 200;
+const MAX_DETAIL_ISSUES = 8;
 
 const envelopeSchema = z.object({
   code: z.number().int(),
@@ -26,15 +44,11 @@ const envelopeSchema = z.object({
   data: z.unknown().optional(),
 });
 
-const tokenDataSchema = z.object({
+const requiredTokenSchema = z.object({
   access_token: z.string().min(1).max(4096),
   access_token_expire_in: z.number().int(),
   refresh_token: z.string().min(1).max(4096),
   refresh_token_expire_in: z.number().int(),
-  open_id: z.string().max(256).optional(),
-  seller_name: z.string().max(512).optional(),
-  seller_base_region: z.string().max(16).optional(),
-  granted_scopes: z.array(z.string().max(128)).max(200).optional(),
 });
 
 export interface TikTokTokenSet {
@@ -45,6 +59,65 @@ export interface TikTokTokenSet {
   grantedScopes: string[];
   sellerName: string | null;
   sellerBaseRegion: string | null;
+  /** Names of optional fields that were present but unusable (too long, wrong type) and dropped.
+   * Field names only, safe to log. Absent on token sets not built by this client (test fakes). */
+  droppedFields?: string[];
+}
+
+/** The only path segments a detail may name: our own schema keys, never a key TikTok sent. */
+const DETAIL_KEYS: ReadonlySet<string> = new Set(Object.keys(requiredTokenSchema.shape));
+const ISSUE_CODE = /^[a-z_]{1,32}$/;
+
+/** `schema:<dotted path>:<issue code>` per failing path. Path segments are allowlisted to the schema
+ * keys and the code to zod's fixed snake_case set; anything else is masked as `?`. Never a message
+ * (zod's can quote the value). */
+function schemaDetail(issues: readonly z.core.$ZodIssue[]): string {
+  const parts = new Set<string>();
+  for (const issue of issues) {
+    const path = issue.path.length === 0 ? "(root)" : issue.path.map((segment) => (typeof segment === "string" && DETAIL_KEYS.has(segment) ? segment : "?")).join(".");
+    const code = ISSUE_CODE.test(issue.code) ? issue.code : "?";
+    parts.add(`schema:${path}:${code}`);
+    if (parts.size >= MAX_DETAIL_ISSUES) break;
+  }
+  return [...parts].join(";");
+}
+
+/** The year only (never the full number), or `out_of_range` past what a Date holds. */
+function expiryYear(seconds: number): string {
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? "out_of_range" : String(date.getUTCFullYear());
+}
+
+function checkExpiry(which: "access" | "refresh", seconds: number, nowS: number, maxS: number): { at: Date } | { detail: string } {
+  const reason = seconds < MIN_ABSOLUTE_S ? "relative" : seconds <= nowS ? "past" : seconds > maxS ? "beyond_cap" : null;
+  if (reason) return { detail: `expiry:${which}:${reason}:${expiryYear(seconds)}` };
+  return { at: new Date(seconds * 1000) };
+}
+
+/** Optional fields: absent, null or empty is "none"; too long or the wrong type is dropped. */
+function readOptional(raw: Record<string, unknown>, dropped: Set<string>): Pick<TikTokTokenSet, "sellerName" | "sellerBaseRegion" | "grantedScopes"> {
+  const text = (key: string, max: number): string | null => {
+    const value = raw[key];
+    if (value === undefined || value === null || value === "") return null;
+    if (typeof value === "string" && value.length <= max) return value;
+    dropped.add(key);
+    return null;
+  };
+  text("open_id", 256); // validated only: nothing stores it
+  const sellerName = text("seller_name", 512);
+  const sellerBaseRegion = text("seller_base_region", 16);
+
+  let grantedScopes: string[] = [];
+  const scopes = raw.granted_scopes;
+  if (Array.isArray(scopes)) {
+    const valid = scopes.filter((scope): scope is string => typeof scope === "string" && scope.length > 0 && scope.length <= 128);
+    const unique = [...new Set(valid)];
+    if (valid.length !== scopes.length || unique.length > MAX_SCOPES) dropped.add("granted_scopes");
+    grantedScopes = unique.slice(0, MAX_SCOPES).sort();
+  } else if (scopes !== undefined && scopes !== null) {
+    dropped.add("granted_scopes");
+  }
+  return { sellerName, sellerBaseRegion, grantedScopes };
 }
 
 export interface TikTokAuthClientOptions {
@@ -89,8 +162,8 @@ export function createTikTokAuthClient(options: TikTokAuthClientOptions): TikTok
 
   async function call(path: string, params: Record<string, string>): Promise<TikTokTokenSet> {
     const search = new URLSearchParams({ app_key: options.appKey.reveal(), app_secret: options.appSecret.reveal(), ...params });
-    const error = (kind: ConstructorParameters<typeof TikTokApiError>[0]["kind"], httpStatus: number | null, code: number | null, requestId: string | null) =>
-      new TikTokApiError({ kind, path, httpStatus, code, requestId });
+    const error = (kind: ConstructorParameters<typeof TikTokApiError>[0]["kind"], httpStatus: number | null, code: number | null, requestId: string | null, detail: string | null = null) =>
+      new TikTokApiError({ kind, path, httpStatus, code, requestId, detail });
 
     let response: Response;
     try {
@@ -122,24 +195,31 @@ export function createTikTokAuthClient(options: TikTokAuthClientOptions): TikTok
     const requestId = envelope?.request_id ?? null;
     if (httpStatus === 429 || code === RATE_LIMIT_CODE) throw error("rate_limited", httpStatus, code, requestId);
     if (httpStatus >= 500) throw error("unavailable", httpStatus, code, requestId);
-    if (!envelope) throw error(httpStatus >= 200 && httpStatus < 300 ? "invalid_response" : "api", httpStatus, null, null);
+    if (!envelope) {
+      if (httpStatus >= 200 && httpStatus < 300) throw error("invalid_response", httpStatus, null, null, "envelope_unparsable");
+      throw error("api", httpStatus, null, null);
+    }
     if (httpStatus < 200 || httpStatus >= 300 || envelope.code !== 0) throw error("api", httpStatus, code, requestId);
 
-    const data = tokenDataSchema.safeParse(envelope.data);
-    if (!data.success) throw error("invalid_response", httpStatus, code, requestId);
+    const required = requiredTokenSchema.safeParse(envelope.data);
+    if (!required.success) throw error("invalid_response", httpStatus, code, requestId, schemaDetail(required.error.issues));
     const nowS = Math.floor(now() / 1000);
-    const instant = (seconds: number): Date | null => (seconds > nowS && seconds <= nowS + MAX_TOKEN_LIFETIME_S ? new Date(seconds * 1000) : null);
-    const accessTokenExpiresAt = instant(data.data.access_token_expire_in);
-    const refreshTokenExpiresAt = instant(data.data.refresh_token_expire_in);
-    if (!accessTokenExpiresAt || !refreshTokenExpiresAt) throw error("invalid_response", httpStatus, code, requestId);
+    // The access expiry first: when both are wrong, the first one named is the one to look at.
+    const access = checkExpiry("access", required.data.access_token_expire_in, nowS, nowS + ACCESS_TOKEN_MAX_LIFETIME_S);
+    if ("detail" in access) throw error("invalid_response", httpStatus, code, requestId, access.detail);
+    const refresh = checkExpiry("refresh", required.data.refresh_token_expire_in, nowS, REFRESH_TOKEN_MAX_EXPIRY_S);
+    if ("detail" in refresh) throw error("invalid_response", httpStatus, code, requestId, refresh.detail);
+
+    // `envelope.data` passed `z.object` (non-null, not an array) and came from JSON.parse.
+    const dropped = new Set<string>();
+    const optional = readOptional(envelope.data as Record<string, unknown>, dropped);
     return {
-      accessToken: new Secret(data.data.access_token),
-      accessTokenExpiresAt,
-      refreshToken: new Secret(data.data.refresh_token),
-      refreshTokenExpiresAt,
-      grantedScopes: [...new Set(data.data.granted_scopes ?? [])].sort(),
-      sellerName: data.data.seller_name ?? null,
-      sellerBaseRegion: data.data.seller_base_region ?? null,
+      accessToken: new Secret(required.data.access_token),
+      accessTokenExpiresAt: access.at,
+      refreshToken: new Secret(required.data.refresh_token),
+      refreshTokenExpiresAt: refresh.at,
+      ...optional,
+      droppedFields: [...dropped].sort(),
     };
   }
 

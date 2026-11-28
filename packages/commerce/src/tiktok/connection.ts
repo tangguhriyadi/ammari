@@ -453,6 +453,10 @@ async function refreshUnderLock(db: Database, deps: RefreshTikTokTokenDeps, opti
       tokens = await deps.auth.refreshAccessToken(refreshToken);
     } catch (error) {
       if (!(error instanceof TikTokApiError)) throw error;
+      // TikTok's error fields only (toJSON: kind, path, status, code, request id and, on an
+      // invalid_response, the `detail` naming the field or expiry). `last_error_code` keeps the short
+      // `kind:code`; this line is where the cause is read (T0).
+      console.warn("[tiktok-refresh] failed", error.toJSON());
       const errorCode = tiktokErrorCode(error);
       const accessExpired = row.accessTokenExpiresAt === null || row.accessTokenExpiresAt.getTime() <= now.getTime();
       // TikTok's codes for "refresh token invalid" are not among the confirmed facts (§0), so a
@@ -468,14 +472,21 @@ async function refreshUnderLock(db: Database, deps: RefreshTikTokTokenDeps, opti
       return { kind: "failed", errorCode };
     }
 
+    // An optional field TikTok sent in an unusable shape was dropped by the auth client (names only).
+    // A dropped scope means the list is incomplete, so it must not replace the one granted at connect
+    // (the finance scope would vanish silently).
+    const dropped = tokens.droppedFields ?? [];
+    if (dropped.length > 0) console.warn("[tiktok-refresh] token fields dropped", { droppedFields: dropped });
+    const scopesComplete = !dropped.includes("granted_scopes");
+
     const [updated] = await tx
       .update(tiktokShopConnections)
       .set({
         ...encryptPair(tokens, deps.keyring, row.id),
         accessTokenExpiresAt: tokens.accessTokenExpiresAt,
         refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
-        // An answer without scopes keeps the ones granted at connect.
-        grantedScopes: tokens.grantedScopes.length > 0 ? tokens.grantedScopes : row.grantedScopes,
+        // An answer without scopes, or with a scope dropped, keeps the ones granted at connect.
+        grantedScopes: scopesComplete && tokens.grantedScopes.length > 0 ? tokens.grantedScopes : row.grantedScopes,
         tokenGeneration: sql`${tiktokShopConnections.tokenGeneration} + 1`,
         lastRefreshedAt: now,
         lastErrorCode: null,

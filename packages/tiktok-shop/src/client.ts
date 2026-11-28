@@ -53,14 +53,19 @@ export type TikTokErrorKind =
   /** The run's time budget is spent; no new request was started. */
   | "budget_exhausted";
 
+export type TikTokErrorFields = { kind: TikTokErrorKind; path: string; httpStatus: number | null; code: number | null; requestId: string | null };
+
 export class TikTokApiError extends Error {
   readonly kind: TikTokErrorKind;
   readonly path: string;
   readonly httpStatus: number | null;
   readonly code: number | null;
   readonly requestId: string | null;
+  /** Why a response was refused, for the log (the auth host's `invalid_response`, T0): built only
+   * from field paths, issue codes and an expiry's year, never from a value TikTok sent. */
+  readonly detail: string | null;
 
-  constructor(fields: { kind: TikTokErrorKind; path: string; httpStatus: number | null; code: number | null; requestId: string | null }) {
+  constructor(fields: TikTokErrorFields & { detail?: string | null }) {
     super(`tiktok ${fields.kind}: ${fields.path} (http ${fields.httpStatus ?? "-"}, code ${fields.code ?? "-"}, request ${fields.requestId ?? "-"})`);
     this.name = "TikTokApiError";
     this.kind = fields.kind;
@@ -68,11 +73,13 @@ export class TikTokApiError extends Error {
     this.httpStatus = fields.httpStatus;
     this.code = fields.code;
     this.requestId = fields.requestId;
+    this.detail = fields.detail ?? null;
   }
 
   /** The loggable fields, nothing else. */
-  toJSON(): { kind: TikTokErrorKind; path: string; httpStatus: number | null; code: number | null; requestId: string | null } {
-    return { kind: this.kind, path: this.path, httpStatus: this.httpStatus, code: this.code, requestId: this.requestId };
+  toJSON(): TikTokErrorFields & { detail?: string } {
+    const fields: TikTokErrorFields = { kind: this.kind, path: this.path, httpStatus: this.httpStatus, code: this.code, requestId: this.requestId };
+    return this.detail === null ? fields : { ...fields, detail: this.detail };
   }
 }
 

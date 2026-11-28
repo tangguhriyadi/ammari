@@ -26,7 +26,7 @@ const ENV = {
 const GOOD_CODE = "ROW_good_code_123";
 const SHOP = { id: "7000000000000000001", cipher: "ROW_cipher_secretish", name: "Ammari", region: "ID", seller_type: "LOCAL" };
 
-type Scenario = { token?: "ok" | "rejected" | "403" | "503"; shops?: unknown[] };
+type Scenario = { token?: "ok" | "rejected" | "403" | "503"; tokenData?: Record<string, unknown>; shops?: unknown[] };
 
 function fakeTikTok(scenario: Scenario = {}) {
   const calls: URL[] = [];
@@ -48,6 +48,7 @@ function fakeTikTok(scenario: Scenario = {}) {
           refresh_token: "ROW_refresh_token_value",
           refresh_token_expire_in: NOW_S + 365 * 86_400,
           granted_scopes: ["seller.order.info"],
+          ...scenario.tokenData,
         },
       });
     }
@@ -148,7 +149,58 @@ describe("successful connect", () => {
       expect(again.headers.get("location")).toBe("/settings/integrations/tiktok?connected=again");
     });
     const text = logs.join("\n");
+    expect(text).toContain("[tiktok-connect] connected");
+    expect(text).not.toContain("droppedFields");
     for (const secret of [...SECRETS, ...states]) expect(text).not.toContain(secret);
+  });
+});
+
+// T0 (dev, 28 Nov 2026): TikTok answered 200 / code 0 with a refresh expiry past our old 10-year cap,
+// and the connect failed as invalid_response with nothing in the log to say why.
+describe("T0: token response shapes", () => {
+  const year2100S = Date.UTC(2100, 0, 1) / 1000;
+
+  test("a refresh expiry in 2100 and overlong optional fields still connect; the expiry is stored as is", async () => {
+    const logs = captureLogs();
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const state = await start(tx, staff.id);
+      states.push(state);
+      const { runtime } = fakeTikTok({
+        tokenData: { refresh_token_expire_in: year2100S, open_id: "OPENID_secretish", seller_name: "N".repeat(600), seller_base_region: "ID", user_type: 0 },
+      });
+      const response = await handleTikTokCallback({ url: callbackUrl({ code: GOOD_CODE, state }), session: session(staff.id), db: tx, runtime, now: NOW });
+      expect(response.headers.get("location")).toBe("/settings/integrations/tiktok?connected=new");
+      const [row] = await tx.select().from(tiktokShopConnections).where(eq(tiktokShopConnections.shopId, SHOP.id));
+      expect(row!.refreshTokenExpiresAt!.toISOString()).toBe("2100-01-01T00:00:00.000Z");
+    });
+    const text = logs.join("\n");
+    expect(text).toContain('"droppedFields":["seller_name"]');
+    for (const secret of [...SECRETS, ...states, "OPENID_secretish", "NNNN"]) expect(text).not.toContain(secret);
+  });
+
+  test.each([
+    ["a refresh expiry after 2200", { refresh_token_expire_in: Date.UTC(2205, 0, 1) / 1000 }, "expiry:refresh:beyond_cap:2205"],
+    ["an access expiry 40 days ahead", { access_token_expire_in: NOW_S + 40 * 86_400 }, "expiry:access:beyond_cap:2027"],
+    ["a relative access lifetime", { access_token_expire_in: 604_800 }, "expiry:access:relative:1970"],
+    ["a missing refresh token", { refresh_token: undefined }, "schema:refresh_token:invalid_type"],
+  ])("%s → invalid_response, and the log line names the cause (%s), never a value", async (_name, tokenData, detail) => {
+    const logs = captureLogs();
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      const state = await start(tx, staff.id);
+      states.push(state);
+      const { runtime } = fakeTikTok({ tokenData });
+      const response = await handleTikTokCallback({ url: callbackUrl({ code: GOOD_CODE, state }), session: session(staff.id), db: tx, runtime, now: NOW });
+      expect(errorOf(response)).toBe("invalid_response");
+      expect(await tx.select().from(tiktokShopConnections).where(eq(tiktokShopConnections.shopId, SHOP.id))).toHaveLength(0);
+    });
+    const text = logs.join("\n");
+    expect(text).toContain("[tiktok-connect] failed");
+    expect(text).toContain(`"detail":"${detail}"`);
+    expect(text).toContain('"requestId":"req-token"');
+    const numbers = Object.values(tokenData).filter((value): value is number => typeof value === "number").map(String);
+    for (const secret of [...SECRETS, ...states, ...numbers]) expect(text).not.toContain(secret);
   });
 });
 
