@@ -324,3 +324,105 @@ describe("order holds carried to the planner (plan §19.4, §19.6)", () => {
     expect(JSON.stringify(parsed)).not.toContain("POKA-INDUK");
   });
 });
+
+describe("ship and complete dates, cols 7 and 48 (plan §19.3, session 7b)", () => {
+  // The upload time the "no more than 1 hour after upload" rule is measured from.
+  const NOW = new Date("2026-11-28T05:00:00Z");
+  const parseAt = (orders: readonly FixtureOrder[], now = NOW) => {
+    const result = parseMarketplaceFile({ channelId: "shopee", fileName: "pesanan.xlsx", bytes: xlsxBytes(shopeeRows(orders)), now });
+    if (!result.ok) throw new Error(result.error.message);
+    return result.value;
+  };
+  const SHIPPED: FixtureOrder = { orderNo: "2611DAT001", status: "Dikirim", orderedAt: "2026-10-23 14:05", shippedAt: "2026-10-24 09:15", lines: [{ sku: "A-M", qty: 1, lineTotal: 229_000 }] };
+
+  test("both columns are required: a file without them is refused, naming them", () => {
+    for (const header of ["Waktu Pengiriman Diatur", "Waktu Pesanan Selesai"] as const) {
+      const rows = withoutColumn(shopeeRows([SHIPPED]), shopeeColumn(header));
+      const result = parseMarketplaceFile({ channelId: "shopee", fileName: "pesanan.xlsx", bytes: xlsxBytes(rows), now: NOW });
+      expect(result).toEqual({ ok: false, error: { code: "missing_columns", message: `Kolom wajib tidak ditemukan: ${header}. Pastikan file adalah export Pesanan dari Shopee Seller Center.` } });
+    }
+  });
+
+  test("col 7 and col 48 are read as Jakarta wall time (UTC+7) into UTC instants", () => {
+    const parsed = parseAt([{ ...SHIPPED, status: "Selesai", completedAt: "2026-10-27 18:40" }]);
+    expect(parsed.rowErrors).toEqual([]);
+    expect(parsed.orders[0]).toMatchObject({ shippedAt: new Date("2026-10-24T02:15:00Z"), completedAt: new Date("2026-10-27T11:40:00Z") });
+  });
+
+  test("23:30 WIB stays that Jakarta date (16:30 UTC the same day), never the next one", () => {
+    const parsed = parseAt([{ ...SHIPPED, orderedAt: "2026-11-05 10:00", shippedAt: "2026-11-05 23:30" }]);
+    expect(parsed.orders[0]!.shippedAt).toEqual(new Date("2026-11-05T16:30:00Z"));
+  });
+
+  test("blank cells are null", () => {
+    const parsed = parseAt([{ ...SHIPPED, shippedAt: "", completedAt: "" }]);
+    expect(parsed.orders[0]).toMatchObject({ shippedAt: null, completedAt: null });
+  });
+
+  test("the values are carried whatever the status: the status gate is the planner's (Perlu Dikirim + col 7)", () => {
+    const parsed = parseAt([{ ...SHIPPED, status: "Perlu Dikirim" }]);
+    expect(parsed.orders[0]!.shippedAt).toEqual(new Date("2026-10-24T02:15:00Z"));
+  });
+
+  test.each([
+    ["2026-10-24 09:15:00", "seconds"],
+    ["24/10/2026 09:15", "day first"],
+    ["2026-10-24", "no time"],
+    ["2026-02-30 09:15", "not a calendar date"],
+    ["2026-10-24 24:10", "hour 24"],
+  ])("col 7 %s (%s) is a row error, never a silent NULL", (value) => {
+    const parsed = parseAt([{ ...SHIPPED, shippedAt: value }]);
+    expect(parsed.orders).toEqual([]);
+    expect(parsed.rowErrors).toEqual([expect.objectContaining({ rowNumber: 2, columnLabel: "Waktu Pengiriman Diatur" })]);
+    expect(parsed.problems).toEqual([expect.objectContaining({ channelOrderNo: "2611DAT001", code: "invalid_rows" })]);
+  });
+
+  test("a date serial (a number cell) in col 48 is a row error", () => {
+    const rows = setCell(shopeeRows([{ ...SHIPPED, status: "Selesai" }]), 1, "Waktu Pesanan Selesai", 46_320.5);
+    const result = parseMarketplaceFile({ channelId: "shopee", fileName: "pesanan.xlsx", bytes: xlsxBytes(rows), now: NOW });
+    expect(result.ok && result.value.rowErrors).toEqual([expect.objectContaining({ columnLabel: "Waktu Pesanan Selesai" })]);
+  });
+
+  test("shipped before the order was placed is a row error", () => {
+    const parsed = parseAt([{ ...SHIPPED, shippedAt: "2026-10-23 14:04" }]);
+    expect(parsed.orders).toEqual([]);
+    expect(parsed.rowErrors).toEqual([{ rowNumber: 2, columnLabel: "Waktu Pengiriman Diatur", message: "Waktu Pengiriman Diatur lebih awal dari Waktu Pesanan Dibuat." }]);
+  });
+
+  test("completed before shipped is a row error", () => {
+    const parsed = parseAt([{ ...SHIPPED, status: "Selesai", completedAt: "2026-10-24 09:14" }]);
+    expect(parsed.rowErrors).toEqual([{ rowNumber: 2, columnLabel: "Waktu Pesanan Selesai", message: "Waktu Pesanan Selesai lebih awal dari Waktu Pengiriman Diatur." }]);
+  });
+
+  test("completed before the order was placed is a row error even without a ship time", () => {
+    const parsed = parseAt([{ ...SHIPPED, status: "Selesai", shippedAt: "", completedAt: "2026-10-22 10:00" }]);
+    expect(parsed.rowErrors).toEqual([{ rowNumber: 2, columnLabel: "Waktu Pesanan Selesai", message: "Waktu Pesanan Selesai lebih awal dari Waktu Pesanan Dibuat." }]);
+  });
+
+  test("equal times pass (orderedAt <= shippedAt <= completedAt)", () => {
+    const parsed = parseAt([{ ...SHIPPED, status: "Selesai", shippedAt: "2026-10-23 14:05", completedAt: "2026-10-23 14:05" }]);
+    expect(parsed.rowErrors).toEqual([]);
+    expect(parsed.orders).toHaveLength(1);
+  });
+
+  test("more than 1 hour after the upload time is a row error; exactly 1 hour passes", () => {
+    // NOW is 12:00 WIB on 28 Nov 2026.
+    const late = parseAt([{ ...SHIPPED, orderedAt: "2026-11-28 08:00", shippedAt: "2026-11-28 13:01" }]);
+    expect(late.rowErrors).toEqual([{ rowNumber: 2, columnLabel: "Waktu Pengiriman Diatur", message: "Waktu Pengiriman Diatur lebih dari 1 jam setelah waktu upload." }]);
+    const edge = parseAt([{ ...SHIPPED, status: "Selesai", orderedAt: "2026-11-28 08:00", shippedAt: "2026-11-28 13:00", completedAt: "2026-11-28 13:00" }]);
+    expect(edge.rowErrors).toEqual([]);
+    const lateComplete = parseAt([{ ...SHIPPED, status: "Selesai", orderedAt: "2026-11-28 08:00", shippedAt: "2026-11-28 09:00", completedAt: "2026-11-28 13:01" }]);
+    expect(lateComplete.rowErrors).toEqual([expect.objectContaining({ columnLabel: "Waktu Pesanan Selesai", message: "Waktu Pesanan Selesai lebih dari 1 jam setelah waktu upload." })]);
+  });
+
+  test("order scope: taken once across the order's rows, blanks ignored; two different values hold the order", () => {
+    const two: FixtureOrder = { ...SHIPPED, lines: [{ sku: "A-M", qty: 1, lineTotal: 229_000 }, { sku: "A-L", qty: 1, lineTotal: 229_000 }] };
+    const firstOnly = setCell(shopeeRows([two]), 2, "Waktu Pengiriman Diatur", "");
+    const parsedFirstOnly = parseMarketplaceFile({ channelId: "shopee", fileName: "pesanan.xlsx", bytes: xlsxBytes(firstOnly), now: NOW });
+    expect(parsedFirstOnly.ok && parsedFirstOnly.value.orders[0]!.shippedAt).toEqual(new Date("2026-10-24T02:15:00Z"));
+
+    const differing = setCell(shopeeRows([two]), 2, "Waktu Pengiriman Diatur", "2026-10-24 09:16");
+    const parsedDiffering = parseMarketplaceFile({ channelId: "shopee", fileName: "pesanan.xlsx", bytes: xlsxBytes(differing), now: NOW });
+    expect(parsedDiffering.ok && parsedDiffering.value.problems).toEqual([expect.objectContaining({ code: "inconsistent_values", message: expect.stringContaining("Waktu Pengiriman Diatur") })]);
+  });
+});

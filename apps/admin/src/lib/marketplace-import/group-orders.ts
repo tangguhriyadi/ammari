@@ -56,6 +56,11 @@ export interface ImportOrder {
   priceMismatchRows: number[];
   /** Subtotal Pesanan per row, as in the file (scope unverified, O1-b): display only. */
   fileSubtotals: number[];
+  /** Waktu Pengiriman Diatur (Jakarta, as its UTC instant), null when blank. Carried whatever the
+   * status: the planner stores it only once the marketplace says shipped (plan §19.3). */
+  shippedAt: Date | null;
+  /** Waktu Pesanan Selesai, null when blank; the planner stores it only on Selesai. */
+  completedAt: Date | null;
   fees: FeeAmounts;
   rowNumbers: number[];
 }
@@ -133,7 +138,15 @@ export interface GroupInput {
   columns: ReadonlyMap<string, number>;
   specs: readonly ColumnSpec[];
   date1904: boolean;
+  /** The upload time: a ship or complete time more than MAX_FUTURE_MS after it is a row error. */
+  now: Date;
 }
+
+/** A marketplace time may run ahead of our clock by at most this much (plan §19.3). */
+export const MAX_FUTURE_MS = 60 * 60 * 1000;
+
+type TimeField = "orderedAt" | "shippedAt" | "completedAt";
+const TIME_FIELDS: readonly ColumnSpec["field"][] = ["orderedAt", "shippedAt", "completedAt"];
 
 function isBlankCell(cell: Cell | undefined): boolean {
   return cell === undefined || cell === null || (typeof cell === "string" && cell.trim() === "");
@@ -257,6 +270,7 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
     }
 
     // Order values, kept as canonical values to compare across rows.
+    const rowTimes: Partial<Record<TimeField, { value: number; column: Column }>> = {};
     for (const column of mapped) {
       const { spec } = column;
       let value: OrderValue | null | undefined;
@@ -269,9 +283,10 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
         const cell = row[column.index];
         value = isBlankCell(cell) ? null : typeof cell === "string" && normalizeHeader(cell) !== null ? cell.trim() : undefined;
         if (value === undefined) reject(column, `${spec.label} tidak valid.`);
-      } else if (spec.field === "orderedAt") {
+      } else if (spec.field === "orderedAt" || spec.field === "shippedAt" || spec.field === "completedAt") {
         const cell = row[column.index] ?? null;
         value = isBlankCell(cell) ? null : take(column, (c) => parseJakartaMinuteText(c, spec.label))?.getTime();
+        if (typeof value === "number") rowTimes[spec.field] = { value, column };
       } else if ((isSellerDiscount(spec) || spec.field === "fee") && spec.scope === "order") {
         value = money(column);
       } else {
@@ -284,6 +299,11 @@ export function groupOrders(input: GroupInput): FileResult<GroupedOrders> {
       if (seen) seen.values.add(key);
       else draft.orderValues.set(id, { values: new Set([key]), first: value });
     }
+
+    // orderedAt <= shippedAt <= completedAt on the row, and neither more than an hour after the upload
+    // (plan §19.3): a row error, never a silent NULL. Only between values this row itself carries; the
+    // order-level backstop in finishOrder covers values split across rows.
+    for (const message of timeOrderProblems(rowTimes, input.now)) reject(message.column, message.text);
 
     if (!rowValid || qty === undefined || lineTotal === undefined || sku === undefined || listUnitPrice === undefined || (afterColumn && unitPriceAfterDiscount === undefined)) {
       draft.invalidRows.push(rowNumber);
@@ -347,6 +367,18 @@ function finishOrder(draft: OrderDraft, mapped: readonly Column[]): { order: Imp
     return problem("missing_value", `${label} kosong untuk pesanan ini, jadi pesanan belum diimpor.`);
   }
 
+  // Times split across rows (e.g. a ship time on the first row only, O1-a) are checked once more as
+  // the order's values; each row's own values were checked in the row loop.
+  const orderTimes: Partial<Record<TimeField, { value: number; column: Column }>> = {};
+  for (const column of mapped) {
+    const field = column.spec.field;
+    if (!TIME_FIELDS.includes(field)) continue;
+    const value = single(columnSpecId(column.spec));
+    if (typeof value === "number") orderTimes[field as TimeField] = { value, column };
+  }
+  const timeProblems = timeOrderProblems(orderTimes, null);
+  if (timeProblems.length > 0) return problem("invalid_rows", `${timeProblems.map((entry) => entry.text).join(" ")} Pesanan belum diimpor.`);
+
   const lines = [...draft.lines.values()].map((line) => ({ ...line, unitPrice: Math.round(line.lineTotal / line.qty) }));
   const subtotalAmount = lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0);
   const roundingDifference = lines.reduce((sum, line) => sum + line.lineTotal, 0) - subtotalAmount;
@@ -387,8 +419,34 @@ function finishOrder(draft: OrderDraft, mapped: readonly Column[]): { order: Imp
       returnedQty: draft.returnedQty,
       priceMismatchRows: draft.priceMismatchRows,
       fileSubtotals: draft.fileSubtotals,
+      shippedAt: timeOf(single("shippedAt")),
+      completedAt: timeOf(single("completedAt")),
       fees,
       rowNumbers: draft.rowNumbers,
     },
   };
+}
+
+function timeOf(value: OrderValue | undefined): Date | null {
+  return typeof value === "number" ? new Date(value) : null;
+}
+
+/** What is wrong with a set of order times (plan §19.3): out of order, or (with `now`) a ship or
+ * complete time more than an hour after the upload. Waktu Pesanan Dibuat is 7a's column and is not
+ * held to the upload time (existing tests date orders years ahead on purpose). Messages name the columns by their Seller Center labels. */
+function timeOrderProblems(times: Partial<Record<TimeField, { value: number; column: Column }>>, now: Date | null): { column: Column; text: string }[] {
+  const out: { column: Column; text: string }[] = [];
+  const { orderedAt, shippedAt, completedAt } = times;
+  const before = (later: { value: number; column: Column }, earlier: { value: number; column: Column }) => {
+    if (later.value < earlier.value) out.push({ column: later.column, text: `${later.column.spec.label} lebih awal dari ${earlier.column.spec.label}.` });
+  };
+  if (shippedAt && orderedAt) before(shippedAt, orderedAt);
+  if (completedAt && shippedAt) before(completedAt, shippedAt);
+  else if (completedAt && orderedAt) before(completedAt, orderedAt);
+  if (now) {
+    for (const time of [shippedAt, completedAt]) {
+      if (time && time.value > now.getTime() + MAX_FUTURE_MS) out.push({ column: time.column, text: `${time.column.spec.label} lebih dari 1 jam setelah waktu upload.` });
+    }
+  }
+  return out;
 }

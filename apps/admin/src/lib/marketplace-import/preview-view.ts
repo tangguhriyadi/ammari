@@ -1,5 +1,5 @@
 import type { ChannelFeeComponent, OrderStatus } from "@ammari/db/schema";
-import { formatRupiah } from "@ammari/ui/lib";
+import { formatDateTime, formatRupiah } from "@ammari/ui/lib";
 import { ORDER_STATUS_LABELS } from "@/lib/orders/status-labels";
 import type { ParsedImport } from "./parse-file";
 import type { ImportPlan, PlanAction, PlanEntry, ReviewCode, UnknownSkuGroup } from "./plan";
@@ -54,7 +54,8 @@ export interface PreviewRow {
    * used. Finance only; null without finance or when the file has none. */
   fileSubtotals: number[] | null;
   existing: PreviewExistingOrder | null;
-  /** Indonesian, one line per change (update). Money lines finance only. */
+  /** Indonesian, one line per change (update), or per marketplace date a new order gets (create).
+   * Money lines finance only. */
   changes: string[];
   reasons: PreviewReason[];
   warnings: string[];
@@ -89,6 +90,11 @@ export interface ImportPreview {
   unknownSkus: UnknownSkuGroup[];
   /** Orders held because the variant SKU is blank in the file (plan §19.6). */
   blankSkuOrderCount: number;
+  /** Ship and complete dates (plan §19.3). */
+  marketplaceDates: ImportPlan["marketplaceDates"];
+  /** Unchanged orders that still carry a warning (a ship date that differs from the stored one, an
+   * order date that differs): listed so it is seen, since the order itself is not shown. */
+  unchangedWithWarnings: { channelOrderNo: string; existing: PreviewExistingOrder | null; warnings: string[] }[];
   skuMatches: ImportPlan["skuMatches"];
   /** New + updated: what Simpan writes. */
   saveCount: number;
@@ -103,7 +109,7 @@ function rupiahOrNone(amount: number | null): string {
   return amount === null ? "belum ada" : formatRupiah(amount);
 }
 
-function rowFor(entry: PlanEntry, canViewProfit: boolean, fileSubtotals: readonly number[] | undefined): PreviewRow {
+function rowFor(entry: PlanEntry, canViewProfit: boolean, fileSubtotals: readonly number[] | undefined, channelLabel: string): PreviewRow {
   const base: PreviewRow = {
     channelOrderNo: entry.channelOrderNo,
     action: entry.action,
@@ -135,6 +141,10 @@ function rowFor(entry: PlanEntry, canViewProfit: boolean, fileSubtotals: readonl
         targetStatus: entry.transitions.at(-1) ?? "to_ship",
         pieces: entry.lines.reduce((sum, line) => sum + line.qty, 0),
         omzetAmount: canViewProfit ? entry.totalAmount : null,
+        changes: [
+          ...(entry.marketplaceShippedAt ? [`Waktu kirim di ${channelLabel}: ${formatDateTime(entry.marketplaceShippedAt)}`] : []),
+          ...(entry.marketplaceCompletedAt ? [`Waktu selesai di ${channelLabel}: ${formatDateTime(entry.marketplaceCompletedAt)}`] : []),
+        ],
         warnings: [...rounding, ...(entry.setReturnPending ? ["Retur di marketplace: pesanan ditandai, stok belum dikembalikan."] : [])],
         skuMatches: entry.skuMatches,
       };
@@ -151,6 +161,8 @@ function rowFor(entry: PlanEntry, canViewProfit: boolean, fileSubtotals: readonl
         changes.push(canViewProfit ? `${label}: ${arrow(rupiahOrNone(fee.before), formatRupiah(fee.after))}` : `${label} berubah`);
       }
       if (entry.channelStatus) changes.push(`Status marketplace: ${arrow(entry.channelStatus.before ?? "belum ada", entry.channelStatus.after)}`);
+      if (entry.marketplaceShippedAt) changes.push(`Waktu kirim di ${channelLabel} diisi: ${formatDateTime(entry.marketplaceShippedAt)}`);
+      if (entry.marketplaceCompletedAt) changes.push(`Waktu selesai di ${channelLabel} diisi: ${formatDateTime(entry.marketplaceCompletedAt)}`);
       return { ...base, rawStatus: entry.rawStatus, targetStatus: target, changes, warnings: entry.warnings, skuMatches: entry.skuMatches };
     }
     case "unchanged":
@@ -202,9 +214,15 @@ export function toImportPreview(parsed: ParsedImport, plan: ImportPlan, options:
     warnings: parsed.warnings,
     unknownStatuses: parsed.unknownStatuses,
     previousCommitAt: plan.previousCommit?.committedAt.toISOString() ?? null,
-    rows: plan.entries.map((entry) => rowFor(entry, canViewProfit, fileSubtotals.get(entry.channelOrderNo))),
+    rows: plan.entries.map((entry) => rowFor(entry, canViewProfit, fileSubtotals.get(entry.channelOrderNo), parsed.channelLabel)),
     unknownSkus: plan.unknownSkus,
     blankSkuOrderCount: plan.blankSkuOrderCount,
+    marketplaceDates: plan.marketplaceDates,
+    unchangedWithWarnings: plan.entries.flatMap((entry) =>
+      entry.action === "unchanged" && entry.warnings.length > 0
+        ? [{ channelOrderNo: entry.channelOrderNo, existing: rowFor(entry, canViewProfit, undefined, parsed.channelLabel).existing, warnings: entry.warnings }]
+        : [],
+    ),
     skuMatches: plan.skuMatches,
     saveCount,
     canSave: plan.saveBlockers.length === 0 && saveCount > 0,

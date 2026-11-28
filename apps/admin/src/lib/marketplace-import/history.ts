@@ -124,6 +124,8 @@ export type ImportedChange =
   | { kind: "voucher"; before: number | null; after: number | null }
   | { kind: "fee"; component: string; before: number | null; after: number | null }
   | { kind: "channel_status"; before: string | null; after: string }
+  /** A marketplace ship or complete time this import stored (write once, plan §19.3); ISO instant. */
+  | { kind: "marketplace_date"; field: "shipped" | "completed"; at: string }
   | { kind: "sku_match"; fileSku: string; adminSku: string };
 
 function num(value: unknown): number | null {
@@ -158,6 +160,12 @@ function changesOf(action: "created" | "updated", raw: unknown, canViewProfit: b
     }
     const channelStatus = value.channelStatus as { before?: unknown; after?: unknown } | null | undefined;
     if (channelStatus && str(channelStatus.after)) result.push({ kind: "channel_status", before: str(channelStatus.before), after: str(channelStatus.after)! });
+  }
+  // Created: the ISO string itself; updated: { before: null, after: ISO } (only empty dates are filled).
+  for (const [key, field] of [["marketplaceShippedAt", "shipped"], ["marketplaceCompletedAt", "completed"]] as const) {
+    const raw = value[key];
+    const at = action === "created" ? str(raw) : raw && typeof raw === "object" ? str((raw as { after?: unknown }).after) : null;
+    if (at) result.push({ kind: "marketplace_date", field, at });
   }
   if (Array.isArray(value.skuMatches)) {
     for (const match of value.skuMatches as { fileSku?: unknown; adminSku?: unknown }[]) {

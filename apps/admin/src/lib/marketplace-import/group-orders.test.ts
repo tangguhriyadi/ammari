@@ -9,7 +9,7 @@ import type { Cell } from "./read-sheet";
 function group(rows: Cell[][], specs: readonly ColumnSpec[] = shopeeAdapter.columns!) {
   const header = locateHeader(rows, specs, "Uji");
   if (!header.ok) throw new Error(header.error.message);
-  const result = groupOrders({ rows, headerRowIndex: header.value.headerRowIndex, columns: header.value.columns, specs, date1904: false });
+  const result = groupOrders({ rows, headerRowIndex: header.value.headerRowIndex, columns: header.value.columns, specs, date1904: false, now: new Date() });
   if (!result.ok) throw new Error(result.error.message);
   return result.value;
 }

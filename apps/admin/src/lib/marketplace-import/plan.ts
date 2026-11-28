@@ -13,10 +13,10 @@ import {
   type OrderStatus,
 } from "@ammari/db/schema";
 import { jakartaDate } from "@ammari/commerce/jakarta-day";
-import { formatDate } from "@ammari/ui/lib";
+import { formatDate, formatDateTime } from "@ammari/ui/lib";
 import { defaultDb, type Database } from "@/lib/db";
 import { adapterFor } from "./adapters";
-import type { FeeAmounts } from "./adapters/types";
+import type { FeeAmounts, StatusRule } from "./adapters/types";
 import { SELLER_DISCOUNT_EXCEEDS_SUBTOTAL, type ImportLine, type ImportOrder, type OrderProblemCode } from "./group-orders";
 import type { ParsedImport } from "./parse-file";
 import { decideStatus } from "./status-rules";
@@ -111,6 +111,10 @@ export interface CreateEntry extends EntryBase {
   transitions: OrderStatus[];
   setReturnPending: boolean;
   skuMatches: SkuMatch[];
+  /** orders.marketplace_shipped_at / _completed_at to store (plan §19.3): the file's value once the
+   * status gate lets it through, else null. */
+  marketplaceShippedAt: Date | null;
+  marketplaceCompletedAt: Date | null;
 }
 
 export interface FeeChange {
@@ -145,6 +149,9 @@ export interface UpdateEntry extends EntryBase {
   /** Only components that change; a component missing from the file is left as is. */
   fees: FeeChange[];
   channelStatus: { before: string | null; after: string } | null;
+  /** A date to fill (the stored one is empty: write once, plan §19.3); null leaves it as is. */
+  marketplaceShippedAt: Date | null;
+  marketplaceCompletedAt: Date | null;
   warnings: string[];
   skuMatches: SkuMatch[];
 }
@@ -191,6 +198,12 @@ export interface ImportPlan {
   unknownSkus: UnknownSkuGroup[];
   /** Orders held because a variant SKU cell is blank ("N pesanan tertahan karena SKU kosong"). */
   blankSkuOrderCount: number;
+  /** Ship and complete dates (plan §19.3), over the orders Simpan saves or leaves unchanged (held and
+   * skipped ones are not counted): how many get a date; how many carry a ship time the status gate
+   * keeps out (arranged, not shipped yet); how many are shipped per the marketplace but have neither
+   * a ship time in the file nor a stored one (M1 stays a posting issue until a file fills it); and how
+   * many hold a stored date the file contradicts (a warning; the stored date stays). */
+  marketplaceDates: { shippedAtFills: number; completedAtFills: number; arrangedNotShipped: number; shippedAtMissing: number; conflicts: number };
   /** Manual matches this plan used (audit + batch summary at Simpan). */
   skuMatches: (SkuMatch & { channelOrderNos: string[] })[];
   /** From the parse: while not empty nothing may be saved. NOT part of the digest: the commit must
@@ -223,6 +236,8 @@ interface ExistingRow {
   channelStatus: string | null;
   returnPending: boolean;
   createdByStaffUserId: string | null;
+  marketplaceShippedAt: Date | null;
+  marketplaceCompletedAt: Date | null;
 }
 
 function overrideError(message: string): PlanResult {
@@ -323,6 +338,33 @@ function feesInCanonicalOrder(fees: FeeAmounts): [ChannelFeeComponent, number][]
   });
 }
 
+/** The status gate of plan §19.3 (owner Q1): a ship time is stored only once the marketplace
+ * reports the order as shipped or later (shipped, completed, a return), never while it is still
+ * waiting to ship (the seller may have arranged pickup without the parcel leaving, D-1). A complete
+ * time only on the marketplace's own "completed" (Selesai).
+ *
+ * Cancelled (Batal, owner 28 Nov 2026): the ship time is stored when the admin order had already
+ * shipped (admin shipped, completed or returned: the cancel is a return, status-rules.ts), so M1
+ * posts on the real ship date and S4 reverses it. A cancel of an order still waiting to ship in admin
+ * stores nothing (there is no recognition to date). Never a complete time. */
+export function marketplaceDateGate(rule: StatusRule | undefined, adminStatus: OrderStatus | null): { shipped: boolean; completed: boolean } {
+  if (!rule) return { shipped: false, completed: false };
+  if (rule.kind === "return_pending") return { shipped: true, completed: false };
+  if (rule.kind !== "status") return { shipped: false, completed: false };
+  if (rule.status === "cancelled") {
+    return { shipped: adminStatus === "shipped" || adminStatus === "completed" || adminStatus === "returned", completed: false };
+  }
+  return { shipped: rule.status === "shipped" || rule.status === "completed" || rule.status === "returned", completed: rule.status === "completed" };
+}
+
+/** Write once (plan §19.3): fill an empty stored date, never overwrite or clear one. A different
+ * file value is a conflict (a warning). */
+function dateFill(stored: Date | null, file: Date | null): { fill: Date | null; conflict: boolean } {
+  if (file === null) return { fill: null, conflict: false };
+  if (stored === null) return { fill: file, conflict: false };
+  return { fill: null, conflict: stored.getTime() !== file.getTime() };
+}
+
 export async function planImport(parsed: ParsedImport, options: PlanOptions = {}, db: Database = defaultDb): Promise<PlanResult> {
   const adapter = adapterFor(parsed.channelId);
   if (!adapter) throw new Error(`planImport: no adapter for channel ${parsed.channelId}`);
@@ -374,6 +416,8 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
             channelStatus: orders.channelStatus,
             returnPending: sql<boolean>`'marketplace_return_pending' = any(${orders.needsAttention})`,
             createdByStaffUserId: orders.createdByStaffUserId,
+            marketplaceShippedAt: orders.marketplaceShippedAt,
+            marketplaceCompletedAt: orders.marketplaceCompletedAt,
           })
           .from(orders)
           .where(and(eq(orders.channelId, parsed.channelId), inArray(normalizedNo, fileOrderNos)))
@@ -431,6 +475,9 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
   const entries: PlanEntry[] = [];
   const unknownGroups = new Map<string, UnknownSkuGroup>();
   const allocated = new Map<string, number>();
+  let dateConflicts = 0;
+  let arrangedNotShipped = 0;
+  let shippedAtMissing = 0;
 
   for (const problem of parsed.problems) {
     const matches = existingByNo.get(problem.channelOrderNo) ?? [];
@@ -541,6 +588,14 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
       for (const line of resolved.lines) allocated.set(line.sku, (allocated.get(line.sku) ?? 0) + line.qty);
     }
 
+    const gate = marketplaceDateGate(statusMap[order.statusKey]?.rule, current?.status ?? null);
+    const fileShippedAt = gate.shipped ? order.shippedAt : null;
+    const fileCompletedAt = gate.completed ? order.completedAt : null;
+    // Counted only here, for orders that are saved or unchanged (every hold returned above).
+    const rule = statusMap[order.statusKey]?.rule;
+    if (order.shippedAt !== null && rule?.kind === "status" && rule.status === "to_ship") arrangedNotShipped++;
+    if (gate.shipped && order.shippedAt === null && (current === null || current.marketplaceShippedAt === null)) shippedAtMissing++;
+
     if (decision.kind === "create") {
       return {
         ...base,
@@ -556,6 +611,8 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
         transitions: decision.transitions,
         setReturnPending: decision.setReturnPending,
         skuMatches: resolved.matches,
+        marketplaceShippedAt: fileShippedAt,
+        marketplaceCompletedAt: fileCompletedAt,
       };
     }
 
@@ -579,8 +636,17 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
     });
     const channelStatus = existing.channelStatus !== order.rawStatus ? { before: existing.channelStatus, after: order.rawStatus } : null;
     const statusChange = decision.kind === "update" ? decision : null;
+    const shipped = dateFill(existing.marketplaceShippedAt, fileShippedAt);
+    const completed = dateFill(existing.marketplaceCompletedAt, fileCompletedAt);
+    if (shipped.conflict) {
+      warnings.push(`Waktu kirim di file berbeda dengan yang tersimpan (di file ${formatDateTime(fileShippedAt!)}, tersimpan ${formatDateTime(existing.marketplaceShippedAt!)}); yang tersimpan tidak diubah.`);
+    }
+    if (completed.conflict) {
+      warnings.push(`Waktu selesai di file berbeda dengan yang tersimpan (di file ${formatDateTime(fileCompletedAt!)}, tersimpan ${formatDateTime(existing.marketplaceCompletedAt!)}); yang tersimpan tidak diubah.`);
+    }
+    if (shipped.conflict || completed.conflict) dateConflicts++;
 
-    if (!statusChange && !discount && fees.length === 0 && !channelStatus) {
+    if (!statusChange && !discount && fees.length === 0 && !channelStatus && !shipped.fill && !completed.fill) {
       return { ...base, action: "unchanged", existing: existingRef(existing), warnings };
     }
     return {
@@ -603,6 +669,8 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
       totalAmount,
       fees,
       channelStatus,
+      marketplaceShippedAt: shipped.fill,
+      marketplaceCompletedAt: completed.fill,
       warnings,
       skuMatches: resolved.matches,
     };
@@ -615,6 +683,7 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
   entries.sort((a, b) => compareText(a.channelOrderNo, b.channelOrderNo));
 
   const counts: Record<PlanAction, number> = { create: 0, update: 0, unchanged: 0, review: 0, skip: 0 };
+  const marketplaceDates: ImportPlan["marketplaceDates"] = { shippedAtFills: 0, completedAtFills: 0, arrangedNotShipped, shippedAtMissing, conflicts: dateConflicts };
   const totals: ImportPlan["totals"] = { newOrderCount: 0, newPieces: 0, newOmzetAmount: 0, newVoucherAmount: 0, newFeeAmount: 0 };
   const matchUse = new Map<string, SkuMatch & { channelOrderNos: string[] }>();
   for (const entry of entries) {
@@ -627,6 +696,8 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
       totals.newFeeAmount += Object.values(entry.fees).reduce((sum, amount) => sum + (amount ?? 0), 0);
     }
     if (entry.action === "create" || entry.action === "update") {
+      if (entry.marketplaceShippedAt) marketplaceDates.shippedAtFills++;
+      if (entry.marketplaceCompletedAt) marketplaceDates.completedAtFills++;
       for (const match of entry.skuMatches) {
         const use = matchUse.get(match.fileSku) ?? { ...match, channelOrderNos: [] };
         if (!use.channelOrderNos.includes(entry.channelOrderNo)) use.channelOrderNos.push(entry.channelOrderNo);
@@ -650,6 +721,7 @@ export async function planImport(parsed: ParsedImport, options: PlanOptions = {}
       totals,
       unknownSkus,
       blankSkuOrderCount,
+      marketplaceDates,
       skuMatches,
       saveBlockers: parsed.saveBlockers,
       previousCommit: previous && previous.committedAt ? { batchId: previous.batchId, committedAt: previous.committedAt } : null,
@@ -679,6 +751,9 @@ function digestPayload(entry: PlanEntry): unknown {
         transitions: entry.transitions,
         returnPending: entry.setReturnPending,
         matches: entry.skuMatches.map((match) => [match.fileSku, match.adminSku]),
+        // Left out when null (canonicalJson drops undefined), so a plan without dates hashes as before.
+        shippedAt: entry.marketplaceShippedAt?.toISOString(),
+        completedAt: entry.marketplaceCompletedAt?.toISOString(),
       };
     case "update":
       return {
@@ -694,6 +769,8 @@ function digestPayload(entry: PlanEntry): unknown {
         fees: entry.fees.map((fee) => [fee.component, fee.before, fee.after]),
         channelStatus: entry.channelStatus,
         matches: entry.skuMatches.map((match) => [match.fileSku, match.adminSku]),
+        shippedAt: entry.marketplaceShippedAt?.toISOString(),
+        completedAt: entry.marketplaceCompletedAt?.toISOString(),
       };
     case "unchanged":
       return { ...key, orderId: entry.existing.orderId, from: entry.existing.status };

@@ -3,7 +3,8 @@
 Status: **Sessions 1-4 and 6-12 implemented** (migrations 0049-0056); Session 5: **TikTok replaced by
 tiktok-shop-integration.md T5/T8** (real ship time = TikTok `collection_time`, migrations 0059/0062), **Shopee re-planned
 28 Nov 2026** from the real "Pesanan Saya" export (§8 Session 5 → marketplace-import.md §19, sessions
-7a-7f; no fee columns, so fees come from a "Penghasilan Saya" import); MDR
+7a-7f; no fee columns, so fees come from a "Penghasilan Saya" import; **part 1: 7a and 7b done 28 Nov
+2026**, real ship/complete dates written, lock still on until 7c); MDR
 W2/W5 off until fee work A/B. Originally: plan, Investigation date 2026-11-26
 (branch `dev`, HEAD `aa2147f`). Revised 2026-11-26 with the owner's answers (Midtrans fee "A+B",
 Biteship, no credit sales — §10), then with the **final policy decisions D-1..D-25 (owner +
@@ -636,7 +637,11 @@ and the complete time ("Waktu Pesanan Selesai", col 48). Both are text `YYYY-MM-
 time, and blank is `""`. The previous blocker (26 Nov) asked for exactly this. Whether the values
 repeat on every row of a multi-item order is still open (O1-a). Until 7b ships, a Shopee order stays a
 `marketplace_ship_date_missing` posting issue (never the import time). 7b checks that the
-opening-balance 1-1505 proposal uses the recognition date, not `orders.shipped_at`.
+opening-balance 1-1505 proposal uses the recognition date, not `orders.shipped_at`. **Done in 7b (28
+Nov 2026):** the import writes `marketplace_shipped_at`/`_completed_at` (marketplace-import.md §19.3
+"As built in 7b"); M1 posts on col 7's Jakarta date through the existing loader, no rule or version
+change, nothing already booked reposts; the 1-1505 opening proposal now uses the recognition date
+(it used `orders.shipped_at`, which for a marketplace order is the import time).
 
 **Owner decisions (28 Nov 2026)** (full text: marketplace-import.md §19.10):
 
@@ -1352,6 +1357,12 @@ January to November 2027 are closed; reopen only newest first.
    confirm each system-proposed line and type Kas, Bank (bank statements), Saldo Penjual Shopee/TikTok, Piutang
    Midtrans and Saldo Biteship (dashboards on 31 Dec), fixed assets; post it while January is open, then close Ekuitas
    saldo awal into Modal pemilik once approved.
+   **Before entering it (owner, 28 Nov 2026): import every December 2026 Shopee "Pesanan Saya" export first**, so each
+   December order's ship date (col 7, marketplace-import.md §19.3) is filled. The 1-1505 proposal (Barang terjual belum
+   dikirim) uses the recognition date: an order shipped in the app before 1 Jan without its Shopee ship time is treated
+   as recognised before the books (the sales rule's `none`) and left out, so a ship date filled only after the opening
+   is posted could put the order on the wrong side of the cut-over. Check Akuntansi > Perlu dicek shows no December
+   `marketplace_ship_date_missing` for Shopee before confirming the proposal.
 8. **Pengaturan Pajak:** the initial row ends on 2026-12-31 (original PP 55/2022). Once the PP 55 revision is
    confirmed, the accountant adds a row effective 2027-01-01 with the new `rate_valid_until`; until then every 2027
    close warns and proposes no PPh final (D-20). If no extension materialises, the accrual design must be revisited (§9).
@@ -1365,11 +1376,12 @@ January to November 2027 are closed; reopen only newest first.
 **Stays pending (not blockers for 1 January, but known gaps):**
 
 - **Session 5 (real marketplace ship/complete dates, D-2): TikTok replaced by tiktok-shop-integration.md T5/T8**
-  (`orders.marketplace_shipped_at` = TikTok `collection_time`, read by the sales loader); **Shopee still blocked**
-  until real Shopee export headers are checked (§8). Until then every Shopee order shipped from 1 Dec (and a TikTok
-  order whose `collection_time` is not known yet) is the posting issue `marketplace_ship_date_missing` (no revenue
-  journal is guessed) and the opening 1-1505 proposal reads the import time. January cannot close cleanly without
-  either Session 5 or a reasoned close override.
+  (`orders.marketplace_shipped_at` = TikTok `collection_time`, read by the sales loader). **Shopee: 7a and 7b done
+  (28 Nov 2026)**, the import writes the real ship/complete dates and the 1-1505 proposal uses the recognition date;
+  **saving stays locked until 7c** (the owner's second real export, marketplace-import.md §19.10). Until then every
+  Shopee order shipped from 1 Dec (and a TikTok order whose `collection_time` is not known yet) is the posting issue
+  `marketplace_ship_date_missing` (no revenue journal is guessed). January cannot close cleanly without 7c or a
+  reasoned close override.
 - **MDR fee work A/B (D-8):** not built. W2/W5 and Rekonsiliasi check 3a stay off and the MDR "still an estimate" close
   warning is dormant; Midtrans payouts and fees go in by manual journal (W5 note in §4.2). Turning them on is part of that
   feature (add the loaders to `defaultPostingSources`, the warning to `periodWarnings`), plus the check 4 fix noted in

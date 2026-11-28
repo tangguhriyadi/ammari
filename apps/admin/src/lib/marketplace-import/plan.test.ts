@@ -63,6 +63,8 @@ async function insertExisting(
     orderDate?: Date;
     needsAttention?: ("marketplace_return_pending" | "refund_due")[];
     createdByStaffUserId?: string | null;
+    marketplaceShippedAt?: Date | null;
+    marketplaceCompletedAt?: Date | null;
   },
 ) {
   const subtotalAmount = input.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0);
@@ -77,6 +79,8 @@ async function insertExisting(
     channelStatus: input.channelStatus ?? null,
     needsAttention: input.needsAttention ?? [],
     createdByStaffUserId: input.createdByStaffUserId ?? null,
+    marketplaceShippedAt: input.marketplaceShippedAt ?? null,
+    marketplaceCompletedAt: input.marketplaceCompletedAt ?? null,
   });
   for (const line of input.lines) await tx.insert(orderItems).values({ orderId: order.id, sku: line.sku, qty: line.qty, unitPrice: line.unitPrice, unitCost: 100_000 });
   return order;
@@ -651,6 +655,8 @@ describe("planDigest", () => {
     transitions: ["shipped", "completed"],
     setReturnPending: false,
     skuMatches: [],
+    marketplaceShippedAt: null,
+    marketplaceCompletedAt: null,
   };
   const review: PlanEntry = { action: "review", channelOrderNo: "BBB222", rowNumbers: [3], existing: null, reasons: [{ code: "stock_short", sku: "X-M", message: "Stok X-M di admin tersisa 0, pesanan butuh 1." }] };
 
@@ -666,5 +672,156 @@ describe("planDigest", () => {
     expect(planDigest("shopee", [{ ...create, fees: { admin_fee: 5_000 } }, review])).not.toBe(digest);
     expect(planDigest("shopee", [{ ...create, skuMatches: [{ fileSku: "Y", adminSku: "X-M" }] }, review])).not.toBe(digest);
     expect(planDigest("shopee", [create, { ...review, reasons: [{ code: "stock_short", sku: "X-L", message: "" }] }])).not.toBe(digest);
+    // A ship or complete date to write is a decision (plan §19.3).
+    expect(planDigest("shopee", [{ ...create, marketplaceShippedAt: new Date("2026-10-23T02:00:00Z") }, review])).not.toBe(digest);
+    expect(planDigest("shopee", [{ ...create, marketplaceCompletedAt: new Date("2026-10-25T02:00:00Z") }, review])).not.toBe(digest);
+  });
+});
+
+describe("planImport: Shopee ship and complete dates (plan §19.3, session 7b)", () => {
+  const SHIP = "2026-10-23 09:15"; // 02:15 UTC
+  const DONE = "2026-10-26 20:40"; // 13:40 UTC
+  const SHIP_AT = new Date("2026-10-23T02:15:00Z");
+  const DONE_AT = new Date("2026-10-26T13:40:00Z");
+
+  test("status gate on create: col 7 only once Shopee says shipped or later, col 48 only on Selesai", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const line = [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }];
+      const parsed = parse([
+        { orderNo: s.orderNo("A"), status: "Perlu Dikirim", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, lines: line },
+        { orderNo: s.orderNo("B"), status: "Dikirim", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, completedAt: DONE, lines: line },
+        { orderNo: s.orderNo("C"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, completedAt: DONE, lines: line },
+        { orderNo: s.orderNo("D"), status: "Dalam Pengembalian", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, lines: line },
+        { orderNo: s.orderNo("E"), status: "Sedang Dikirim", orderedAt: "2026-10-22 09:15", lines: line },
+        { orderNo: s.orderNo("F"), status: "Perlu Dikirim", orderedAt: "2026-10-22 09:15", lines: line },
+      ]);
+      const planned = await plan(tx, parsed);
+      expect(entry(planned, s.orderNo("A"))).toMatchObject({ action: "create", marketplaceShippedAt: null, marketplaceCompletedAt: null });
+      expect(entry(planned, s.orderNo("B"))).toMatchObject({ action: "create", marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: null });
+      expect(entry(planned, s.orderNo("C"))).toMatchObject({ action: "create", marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: DONE_AT });
+      expect(entry(planned, s.orderNo("D"))).toMatchObject({ action: "create", marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: null });
+      // Blank col 7 on a shipped order: no date (M1 stays a posting issue), never the import time.
+      expect(entry(planned, s.orderNo("E"))).toMatchObject({ action: "create", marketplaceShippedAt: null, marketplaceCompletedAt: null });
+      expect(planned.marketplaceDates).toEqual({ shippedAtFills: 3, completedAtFills: 1, arrangedNotShipped: 1, shippedAtMissing: 1, conflicts: 0 });
+    });
+  });
+
+  test("re-import fills an empty stored date; the order becomes Diperbarui even with nothing else changing", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const existing = await insertExisting(tx, { channelOrderNo: s.orderNo("R"), status: "completed", lines: [{ sku: s.sku("M"), qty: 1, unitPrice: 249_000 }], channelStatus: "Selesai" });
+      const planned = await plan(tx, parse([{ orderNo: s.orderNo("R"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, completedAt: DONE, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }]));
+      expect(entry(planned, s.orderNo("R"))).toMatchObject({
+        action: "update",
+        existing: { orderId: existing.id },
+        transitions: [],
+        channelStatus: null,
+        discount: null,
+        marketplaceShippedAt: SHIP_AT,
+        marketplaceCompletedAt: DONE_AT,
+        warnings: [],
+      });
+      expect(planned.marketplaceDates).toMatchObject({ shippedAtFills: 1, completedAtFills: 1, shippedAtMissing: 0, conflicts: 0 });
+    });
+  });
+
+  test("a Perlu Dikirim re-import moving to Dikirim fills the ship date together with the status step", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      await insertExisting(tx, { channelOrderNo: s.orderNo("P"), status: "to_ship", lines: [{ sku: s.sku("M"), qty: 1, unitPrice: 249_000 }], channelStatus: "Perlu Dikirim" });
+      const planned = await plan(tx, parse([{ orderNo: s.orderNo("P"), status: "Dikirim", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }]));
+      expect(entry(planned, s.orderNo("P"))).toMatchObject({ action: "update", transitions: ["shipped"], marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: null });
+    });
+  });
+
+  test("write once: the same stored value is unchanged; a different one is a warning and never an update; a blank never clears", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const lines = [{ sku: s.sku("M"), qty: 1, unitPrice: 249_000 }];
+      const stored = { status: "completed" as const, lines, channelStatus: "Selesai", marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: DONE_AT };
+      await insertExisting(tx, { channelOrderNo: s.orderNo("S"), ...stored });
+      await insertExisting(tx, { channelOrderNo: s.orderNo("T"), ...stored });
+      await insertExisting(tx, { channelOrderNo: s.orderNo("U"), ...stored });
+      const fileLine = [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }];
+      const planned = await plan(
+        tx,
+        parse([
+          { orderNo: s.orderNo("S"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, completedAt: DONE, lines: fileLine },
+          { orderNo: s.orderNo("T"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: "2026-10-23 10:00", completedAt: "2026-10-27 08:00", lines: fileLine },
+          { orderNo: s.orderNo("U"), status: "Selesai", orderedAt: "2026-10-22 09:15", lines: fileLine },
+        ]),
+      );
+      expect(entry(planned, s.orderNo("S"))).toMatchObject({ action: "unchanged", warnings: [] });
+      const conflict = entry(planned, s.orderNo("T"));
+      expect(conflict).toMatchObject({ action: "unchanged" });
+      expect(conflict.action === "unchanged" && conflict.warnings).toEqual([
+        expect.stringContaining("Waktu kirim di file berbeda dengan yang tersimpan"),
+        expect.stringContaining("Waktu selesai di file berbeda dengan yang tersimpan"),
+      ]);
+      // A blank on an order with a stored date is not "missing".
+      expect(entry(planned, s.orderNo("U"))).toMatchObject({ action: "unchanged", warnings: [] });
+      expect(planned.marketplaceDates).toEqual({ shippedAtFills: 0, completedAtFills: 0, arrangedNotShipped: 0, shippedAtMissing: 0, conflicts: 1 });
+    });
+  });
+
+  test("a conflict on an order that changes for another reason: the status still moves, the stored date stays, the warning is shown", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      await insertExisting(tx, { channelOrderNo: s.orderNo("W"), status: "shipped", lines: [{ sku: s.sku("M"), qty: 1, unitPrice: 249_000 }], channelStatus: "Dikirim", marketplaceShippedAt: SHIP_AT });
+      const planned = await plan(tx, parse([{ orderNo: s.orderNo("W"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: "2026-10-23 10:00", completedAt: DONE, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }]));
+      const updated = entry(planned, s.orderNo("W"));
+      expect(updated).toMatchObject({ action: "update", transitions: ["completed"], marketplaceShippedAt: null, marketplaceCompletedAt: DONE_AT });
+      expect(updated.action === "update" && updated.warnings).toEqual([expect.stringContaining("Waktu kirim di file berbeda dengan yang tersimpan")]);
+      expect(planned.marketplaceDates).toEqual({ shippedAtFills: 0, completedAtFills: 1, arrangedNotShipped: 0, shippedAtMissing: 0, conflicts: 1 });
+    });
+  });
+
+  test("an order held in Perlu dicek gets no date and counts nothing, not even a ship time the gate would keep out", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const planned = await plan(
+        tx,
+        parse([
+          { orderNo: s.orderNo("H"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, completedAt: DONE, lines: [{ sku: null, qty: 1, lineTotal: 249_000 }] },
+          { orderNo: s.orderNo("I"), status: "Perlu Dikirim", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, lines: [{ sku: null, qty: 1, lineTotal: 249_000 }] },
+          { orderNo: s.orderNo("J"), status: "Dikirim", orderedAt: "2026-10-22 09:15", lines: [{ sku: null, qty: 1, lineTotal: 249_000 }] },
+        ]),
+      );
+      expect(planned.counts.review).toBe(3);
+      expect(planned.marketplaceDates).toEqual({ shippedAtFills: 0, completedAtFills: 0, arrangedNotShipped: 0, shippedAtMissing: 0, conflicts: 0 });
+    });
+  });
+
+  test("Batal stores col 7 only when the admin order already shipped (cancelled after shipping, owner 28 Nov 2026); never col 48", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const lines = [{ sku: s.sku("M"), qty: 1, unitPrice: 249_000 }];
+      await insertExisting(tx, { channelOrderNo: s.orderNo("K"), status: "shipped", lines, channelStatus: "Dikirim" });
+      await insertExisting(tx, { channelOrderNo: s.orderNo("L"), status: "returned", lines, channelStatus: "Batal" });
+      await insertExisting(tx, { channelOrderNo: s.orderNo("N"), status: "to_ship", lines, channelStatus: "Perlu Dikirim" });
+      const fileLine = [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }];
+      const batal = (suffix: string) => ({ orderNo: s.orderNo(suffix), status: "Batal", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, completedAt: DONE, lines: fileLine });
+      const planned = await plan(tx, parse([batal("K"), batal("L"), batal("N"), batal("Q")]));
+      // Shipped in admin: the cancel is a return, and the ship date lets M1 post before S4 reverses it.
+      expect(entry(planned, s.orderNo("K"))).toMatchObject({ action: "update", transitions: ["returned"], marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: null });
+      // Already returned in admin with no date: filled, nothing else changes.
+      expect(entry(planned, s.orderNo("L"))).toMatchObject({ action: "update", transitions: [], channelStatus: null, marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: null });
+      // Still waiting to ship in admin: a cancel before shipping, no recognition to date.
+      expect(entry(planned, s.orderNo("N"))).toMatchObject({ action: "update", transitions: ["cancelled"], marketplaceShippedAt: null, marketplaceCompletedAt: null });
+      // A new Batal order is never imported.
+      expect(entry(planned, s.orderNo("Q"))).toMatchObject({ action: "skip", reason: "undone_before_import" });
+      expect(planned.marketplaceDates).toEqual({ shippedAtFills: 2, completedAtFills: 0, arrangedNotShipped: 0, shippedAtMissing: 0, conflicts: 0 });
+    });
+  });
+
+  test("Batal after shipping with a blank col 7 is counted as a missing ship time", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      await insertExisting(tx, { channelOrderNo: s.orderNo("K"), status: "shipped", lines: [{ sku: s.sku("M"), qty: 1, unitPrice: 249_000 }], channelStatus: "Dikirim" });
+      const planned = await plan(tx, parse([{ orderNo: s.orderNo("K"), status: "Batal", orderedAt: "2026-10-22 09:15", lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }]));
+      expect(entry(planned, s.orderNo("K"))).toMatchObject({ action: "update", transitions: ["returned"], marketplaceShippedAt: null });
+      expect(planned.marketplaceDates.shippedAtMissing).toBe(1);
+    });
   });
 });

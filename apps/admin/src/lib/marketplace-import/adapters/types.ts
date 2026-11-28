@@ -30,6 +30,9 @@ export type ColumnSpec =
   | (ColumnSpecBase & { field: "sellerVoucher" | "sellerProductDiscount" | "sellerBundleDiscount"; required: boolean; scope: ColumnScope })
   // Status Pembatalan/ Pengembalian: order-level text; any non-blank value holds the order (§19.4).
   | (ColumnSpecBase & { field: "cancelReturnStatus"; required: boolean })
+  // Waktu Pengiriman Diatur / Waktu Pesanan Selesai: order-level Jakarta times (§19.3). Stored in
+  // orders.marketplace_shipped_at / _completed_at by the planner's status gate, write once.
+  | (ColumnSpecBase & { field: "shippedAt" | "completedAt"; required: boolean })
   // Platform fees read from an order file. Shopee's order export has none (plan §19.2): its fees come
   // only from the Penghasilan Saya import (sessions 7d/7e). Kept for an adapter that does.
   | (ColumnSpecBase & { field: "fee"; component: ChannelFeeComponent; required: false; scope: ColumnScope })

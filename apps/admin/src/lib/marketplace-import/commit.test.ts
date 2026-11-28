@@ -587,3 +587,110 @@ describe("commitImport: concurrency (test 41)", () => {
     }
   });
 });
+
+describe("commitImport: Shopee ship and complete dates (plan §19.3, session 7b)", () => {
+  const SHIP = "2026-10-23 09:15";
+  const DONE = "2026-10-26 20:40";
+  const SHIP_AT = new Date("2026-10-23T02:15:00Z");
+  const DONE_AT = new Date("2026-10-26T13:40:00Z");
+
+  test("create fills both dates as stored instants; the app's own shipped_at/completed_at are the transition times, not col 7/48", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const staff = await insertStaffUser(tx);
+      const outcome = committed(
+        await previewAndCommit(tx, parse([{ orderNo: s.orderNo("A"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, completedAt: DONE, lines: [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }] }]), staff.id),
+      );
+      const order = await orderByChannelNo(tx, s.orderNo("A"));
+      expect(order).toMatchObject({ status: "completed", marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: DONE_AT });
+      expect(order!.shippedAt?.getTime()).not.toBe(SHIP_AT.getTime());
+      expect(order!.completedAt?.getTime()).not.toBe(DONE_AT.getTime());
+
+      const [history] = await tx.select().from(importBatchOrders).where(eq(importBatchOrders.importBatchId, outcome.batchId));
+      expect(history?.changes).toMatchObject({ marketplaceShippedAt: SHIP_AT.toISOString(), marketplaceCompletedAt: DONE_AT.toISOString() });
+      const [audit] = await tx.select().from(auditLog).where(and(eq(auditLog.entityId, order!.id), eq(auditLog.action, "import_create")));
+      expect(audit?.after).toMatchObject({ marketplaceShippedAt: SHIP_AT.toISOString(), marketplaceCompletedAt: DONE_AT.toISOString() });
+    });
+  });
+
+  test("Perlu Dikirim with col 7 stores nothing (arranged, not shipped yet); a later Dikirim file fills it once", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const staff = await insertStaffUser(tx);
+      const lines = [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }];
+      committed(await previewAndCommit(tx, parse([{ orderNo: s.orderNo("A"), status: "Perlu Dikirim", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, lines }]), staff.id));
+      expect(await orderByChannelNo(tx, s.orderNo("A"))).toMatchObject({ status: "to_ship", marketplaceShippedAt: null, marketplaceCompletedAt: null });
+
+      const outcome = committed(await previewAndCommit(tx, parse([{ orderNo: s.orderNo("A"), status: "Dikirim", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, lines }]), staff.id));
+      expect(outcome).toMatchObject({ created: 0, updated: 1 });
+      const order = await orderByChannelNo(tx, s.orderNo("A"));
+      expect(order).toMatchObject({ status: "shipped", marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: null });
+      const [history] = await tx.select().from(importBatchOrders).where(eq(importBatchOrders.importBatchId, outcome.batchId));
+      expect(history?.changes).toMatchObject({ marketplaceShippedAt: { before: null, after: SHIP_AT.toISOString() }, marketplaceCompletedAt: null });
+      const [audit] = await tx.select().from(auditLog).where(and(eq(auditLog.entityId, order!.id), eq(auditLog.action, "import_update")));
+      expect(audit?.before).toMatchObject({ marketplaceShippedAt: null });
+      expect(audit?.after).toMatchObject({ marketplaceShippedAt: { before: null, after: SHIP_AT.toISOString() } });
+    });
+  });
+
+  test("re-import fills only the empty date; the same file again is all unchanged (idempotent); a different value never overwrites and a blank never clears", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const staff = await insertStaffUser(tx);
+      const lines = [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }];
+      const file = (shippedAt: string, completedAt: string) => parse([{ orderNo: s.orderNo("A"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt, completedAt, lines }]);
+      // Imported before 7b, or with col 48 still blank: only the ship date.
+      committed(await previewAndCommit(tx, file(SHIP, ""), staff.id));
+      expect(await orderByChannelNo(tx, s.orderNo("A"))).toMatchObject({ marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: null });
+
+      committed(await previewAndCommit(tx, file(SHIP, DONE), staff.id));
+      expect(await orderByChannelNo(tx, s.orderNo("A"))).toMatchObject({ marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: DONE_AT });
+
+      const before = await tableCounts(tx);
+      const again = await previewAndCommit(tx, file(SHIP, DONE), staff.id);
+      expect(again.kind).toBe("nothing_to_save");
+      expect(await tableCounts(tx)).toEqual(before);
+
+      const conflict = await previewAndCommit(tx, file("2026-10-23 11:00", "2026-10-27 08:00"), staff.id);
+      expect(conflict.kind).toBe("nothing_to_save");
+      const conflictPlan = conflict.kind === "nothing_to_save" ? conflict.plan : null;
+      expect(conflictPlan?.marketplaceDates.conflicts).toBe(1);
+      expect(await tableCounts(tx)).toEqual(before);
+
+      expect((await previewAndCommit(tx, file("", ""), staff.id)).kind).toBe("nothing_to_save");
+      expect(await orderByChannelNo(tx, s.orderNo("A"))).toMatchObject({ marketplaceShippedAt: SHIP_AT, marketplaceCompletedAt: DONE_AT });
+    });
+  });
+
+  test("a date filled since the in-transaction plan (a concurrent writer): the conditional UPDATE finds nothing, drift, nothing written", async () => {
+    await withRollback(async (tx) => {
+      const s = await seedVariants(tx, ["M"]);
+      const staff = await insertStaffUser(tx);
+      const lines = [{ sku: s.sku("M"), qty: 1, lineTotal: 249_000 }];
+      committed(await previewAndCommit(tx, parse([{ orderNo: s.orderNo("A"), status: "Dikirim", orderedAt: "2026-10-22 09:15", lines }]), staff.id));
+      const parsed = parse([{ orderNo: s.orderNo("A"), status: "Dikirim", orderedAt: "2026-10-22 09:15", shippedAt: SHIP, lines }]);
+      const order = await orderByChannelNo(tx, s.orderNo("A"));
+      const other = new Date("2026-10-23T05:00:00Z");
+      const before = await tableCounts(tx);
+
+      const result = await commitMarketplaceImport(
+        {
+          channelId: "shopee",
+          actorStaffUserId: staff.id,
+          batch: { filename: "pesanan.xlsx", fileSha256: parsed.fileSha256, rowCount: 1 },
+          replan: async (inner) => {
+            const fresh = await plan(inner, parsed);
+            expect(fresh.entries[0]).toMatchObject({ action: "update", marketplaceShippedAt: SHIP_AT });
+            await inner.update(orders).set({ marketplaceShippedAt: other }).where(eq(orders.id, order!.id));
+            return { proceed: true, plan: toCommitPlan(fresh) };
+          },
+        },
+        tx,
+      );
+      expect(result.status).toBe("drift");
+      expect(await tableCounts(tx)).toEqual(before);
+      // The savepoint rolled the concurrent write back too; the point is that ours never overwrote it.
+      expect((await orderByChannelNo(tx, s.orderNo("A")))?.marketplaceShippedAt).toBeNull();
+    });
+  });
+});

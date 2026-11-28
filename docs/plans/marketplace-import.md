@@ -825,7 +825,7 @@ map, tests 11/12 flipped to "accepts", one e2e run).
 
 ## 19. Real Shopee export (27 Nov 2026): mapping, income import, sessions 7a to 7f
 
-Status: **session 7a implemented** (28 Nov 2026, real order mapping, lock still on); 7b-7f plan. **Owner decisions Q1-Q8 recorded 28 Nov 2026 (19.10).** Supersedes the article-based mapping of section 2.1, decision 11
+Status: **sessions 7a and 7b implemented** (28 Nov 2026: real order mapping, real ship/complete dates; lock still on); 7c-7f plan. **Owner decisions Q1-Q8 recorded 28 Nov 2026 (19.10).** Supersedes the article-based mapping of section 2.1, decision 11
 ("fees come from the order export") and session 7. TikTok no longer uses a file
 (tiktok-shop-integration.md T1-T9), so everything below is **Shopee only**. Accounting side:
 accounting.md Session 5.
@@ -1004,6 +1004,49 @@ The columns already exist (`orders.marketplace_shipped_at`, `marketplace_complet
   shipment rather than the courier pickup. The status gate bounds that gap, usually to the same day.
   O1-c is still checked, for the record only: it no longer blocks the unlock.
 
+**As built in 7b (28 Nov 2026):**
+
+- Cols 7 and 48 are **required** columns (fields `shippedAt`, `completedAt`, order scope like
+  `orderedAt`: taken once, blanks ignored, two different values hold the order). A file without
+  either is refused with "Kolom wajib tidak ditemukan".
+- Parsing: exactly text `YYYY-MM-DD HH:MM`, Asia/Jakarta → UTC (23:30 WIB stays that Jakarta date).
+  Row errors (never a silent NULL): any other shape, a number cell, `orderedAt > shippedAt`,
+  `shippedAt > completedAt` (or `orderedAt > completedAt` without a ship time), and a ship or
+  complete time more than 1 hour after the upload (`orderedAt` is 7a's column and is not held to it) (`parseMarketplaceFile({ now })`, default the clock). Values split
+  across rows are checked once more at order level.
+- Status gate (`marketplaceDateGate` in `plan.ts`): col 7 is stored for rules `shipped`,
+  `completed`, `returned` and `return_pending` (Dikirim, Sedang Dikirim, Selesai, Dalam
+  Pengembalian); col 48 only for `completed` (Selesai). **Batal (decided by the owner, 28 Nov
+  2026):** col 7 is stored when the admin order had already shipped (admin `shipped`, `completed` or
+  `returned`; the cancel becomes a return), so M1 posts on the ship date and S4 reverses it (Saldo
+  Penjual back to 0). A Batal of an order still `to_ship` in admin is a cancel before shipping and
+  stores nothing; a new Batal order is skipped as before; col 48 is never stored on Batal.
+- Write once: the planner fills only an empty stored date; a different file value is a warning on the
+  order ("Waktu kirim/selesai di file berbeda dengan yang tersimpan (...); yang tersimpan tidak
+  diubah."), never an update; a blank never clears. A fill alone makes the order "Diperbarui". The
+  commit writes each date with `UPDATE ... WHERE id = $1 AND <column> IS NULL RETURNING`; no row back
+  is drift (rollback, fresh preview). Created orders get both dates in their INSERT. The digest
+  carries the dates to write (left out when null, so plans without dates hash as before).
+- `import_batch_orders.changes` and the audit `after` carry `marketplaceShippedAt` /
+  `marketplaceCompletedAt` (create: the ISO instant; update: `{ before: null, after }`); the batch
+  detail lists them ("Waktu kirim di marketplace disimpan: ...").
+- Preview (counted over orders saved or left unchanged; held and skipped orders are not counted):
+  "Waktu dari Shopee yang akan disimpan: N pesanan dapat waktu kirim, M pesanan dapat waktu selesai",
+  "N pesanan sudah diatur pengirimannya, belum dikirim" (a col 7 value on a `to_ship` rule), "N
+  pesanan sudah dikirim di Shopee, tapi Waktu Pengiriman Diatur kosong di file" (gate open, col 7
+  blank, nothing stored: M1 stays a posting issue), and the conflict count. A conflict on an order
+  held in Perlu dicek is not computed (it shows once the hold is resolved). New orders list their dates in the notes, updates in the changes. Unchanged
+  orders that carry a warning are now listed ("Tidak berubah, ada catatan"); before 7b an unchanged
+  order's warnings (e.g. the order-date one) were never shown.
+- The order detail "Marketplace" block already showed both dates (TikTok T5); unchanged.
+- Accounting: no rule change, no version bump, no repost of anything already booked. A Shopee order
+  shipped without col 7 stays `marketplace_ship_date_missing`; the upload that fills it lets M1 post on
+  col 7's Jakarta date (into the first open month when that month is closed, D-23); the issue clears.
+- Opening balance 1-1505 (`opening-balance.ts`): switched from `orders.shipped_at` to the recognition
+  date exactly as S3/M1 treat it: marketplace orders use `marketplace_shipped_at`; without one, the
+  app's `shipped_at` (the sales rule books such an order shipped before the start as recognised before
+  the books, `none`, and never relieves 1-1505 for it). Channels from `MARKETPLACE_CHANNEL_IDS`.
+
 ### 19.4 Statuses, cancellations and returns from the order export
 
 - `statusMap`: `perlu dikirim` becomes `seenInRealFile: true`. Nothing else changes until seen
@@ -1127,7 +1170,7 @@ Every fixture uses the exact 49 headers in the real order, all cells text.
 | # | Session | Output | Migration | Tests | Reviewers |
 |---|---|---|---|---|---|
 | **7a** | Real order mapping (lock stays). **Done 28 Nov 2026.** | Adapter rewritten to 19.2: new fields, computed row amount (Harga Awal × Jumlah), discount = seller product discount + voucher + seller bundle (cols 22 + 27 + 32, Q3), fee specs removed, 49-header signature save blocker, holds (blank SKU, unknown col 2 value, returned qty > 0, price check), revenue grain per Q3, preview counts | none | Unit: the exact real header row maps every field, with the 49 columns in order and 40-47 never in the serialized output (fake buyer values); all-text cells `"229.000"`/`"0"`/`""`; `"700 gr"` never parsed; row amount = `Harga Awal × Jumlah` (2 rows of 1 SKU merged); discount = 22 + 27 + 32; Shopee-funded cols 23/29/31/33 > 0 change neither subtotal nor discount (Q3); one header renamed or missing → save blocker naming it; "Jumlah Produk di Pesan" never taken for Jumlah; blank SKU → "SKU kosong" hold with no manual match offered; `SKU Induk` filled + col 14 blank still held; col 2 non-blank → hold; returned qty 1 → hold; price check broken → hold; old article headers ("Total Harga Produk") → missing-column error. Existing lock tests unchanged. | typescript, security, silent-failure |
-| **7b** | Real dates (accounting Session 5, D-2) | 19.3: planner + commit write `marketplace_shipped_at`/`_completed_at` write-once, status-gated, validated; preview counts and warnings; order detail block. Check that the opening-balance 1-1505 proposal (`sales-balances.ts`) uses the recognition date, not `shipped_at`; switch it if not. | none | Unit: `Perlu Dikirim` + col 7 → not stored; `Dikirim` + col 7 → stored as Jakarta → UTC (23:30 WIB stays that date); blank → NULL; malformed → row error; ship < order or > now+1h → row error; completed only on `Selesai`. DB (TDD): create fills the dates; re-import fills an empty one; re-import never clears or overwrites (a different value → warning, stored value kept); concurrent fill is safe (conditional update); posting: a Shopee order's `marketplace_ship_date_missing` issue clears after import, M1/M2 dated by col 7's Jakarta date. | typescript, database, silent-failure |
+| **7b** | Real dates (accounting Session 5, D-2). **Done 28 Nov 2026.** | 19.3: planner + commit write `marketplace_shipped_at`/`_completed_at` write-once, status-gated, validated; preview counts and warnings; order detail block. Check that the opening-balance 1-1505 proposal (`sales-balances.ts`) uses the recognition date, not `shipped_at`; switch it if not. | none | Unit: `Perlu Dikirim` + col 7 → not stored; `Dikirim` + col 7 → stored as Jakarta → UTC (23:30 WIB stays that date); blank → NULL; malformed → row error; ship < order or > now+1h → row error; completed only on `Selesai`. DB (TDD): create fills the dates; re-import fills an empty one; re-import never clears or overwrites (a different value → warning, stored value kept); concurrent fill is safe (conditional update); posting: a Shopee order's `marketplace_ship_date_missing` issue clears after import, M1/M2 dated by col 7's Jakarta date. | typescript, database, silent-failure |
 | **7c** | Unlock (after the owner's checklist 19.10 passes) | Adjust scopes (`Subtotal Pesanan`, discount columns) and statuses to what the second real file showed, add the seen col 2 values (each with its owner decision), drop holds the file proved unnecessary, flip `SHOPEE_MAPPING_VERIFIED`, update the lock tests | none | Lock tests flipped; one fixture per newly mapped status/col-2 value; the 2-item-order fixture in the real shape. (O1-c is recorded, not a gate: Q1.) e2e (390 + 1280): upload → preview → Simpan → order in `/orders`. | typescript, silent-failure |
 | **7d** | Income parser (preview only, `SHOPEE_INCOME_MAPPING_VERIFIED = false`) | Needs a real 2026 income file (O4). Sheet selection, preamble skip, fee column → component table (accountant reviewed), sum check, signed money for the marked columns, kind toggle "Pesanan / Penghasilan" on `/import` | none | Unit: preamble rows ignored; header on row 6; missing `income` sheet refused; unknown money column → save blocker; sum mismatch → hold; buyer username never in output; signed parse only where allowed. | typescript, security, silent-failure |
 | **7e** | Income commit (TDD, money) | 19.5 writes: fees `actual`, `order_settlements`, `marketplace_refunds`, `marketplace_returned_at` from the refund date (Q5); revenue cross-check (Q3); holds; history and batch detail; unlock once a real file passes | **0064** only if 7d's real file needs a new fee component (CHECK widen, expand-only); else none | DB: fees replace nothing they should not (order import never writes fees again; income re-import of the same file → all unchanged); a component changed by a later file → conditional update + accounting M2 reverse + repost (closed month → first open month); refund-only row → `marketplace_refunds` once (replay no-op) → S7 posts Dr 4-1301 / Cr 1-1302; returned order + refund row → `marketplace_returned_at` set once, S4 dated by it; S4 already posted on the import-time fallback → reverse + repost on the refund date (closed month → first open month); revenue mismatch → hold; order not imported → hold; concurrent order + income Simpan serialise. e2e at 390/1280: income preview + Simpan. | typescript, database, security, silent-failure |

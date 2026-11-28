@@ -54,6 +54,9 @@ export interface ParseFileInput {
    * exercised end to end while the adapter constant stays false. Set solely from
    * `e2eMappingUnlocked` (e2e-unlock.ts), which refuses outside a local e2e run. */
   assumeMappingVerified?: boolean;
+  /** The upload time; a ship or complete time more than an hour after it is a row error (plan
+   * §19.3). Defaults to the clock. */
+  now?: Date;
 }
 
 /** The first sheet whose header matches, and the names of every matching sheet (a second one would
@@ -91,6 +94,7 @@ export function parseMarketplaceFile(input: ParseFileInput): FileResult<ParsedIm
     columns: header.columns,
     specs: adapter.columns,
     date1904: workbook.value.date1904,
+    now: input.now ?? new Date(),
   });
   if (!grouped.ok) return grouped;
   const { orders, problems, rowErrors, dataRowCount, blankRowCount, unattributedRowCount } = grouped.value;

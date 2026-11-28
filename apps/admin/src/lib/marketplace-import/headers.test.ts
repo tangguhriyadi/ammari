@@ -10,6 +10,7 @@ const REQUIRED = [
   "No. Pesanan",
   "Status Pesanan",
   "Status Pembatalan/ Pengembalian",
+  "Waktu Pengiriman Diatur",
   "Waktu Pesanan Dibuat",
   "Nomor Referensi SKU",
   "Harga Awal",
@@ -18,6 +19,7 @@ const REQUIRED = [
   "Diskon Dari Penjual",
   "Voucher Ditanggung Penjual",
   "Paket Diskon (Diskon dari Penjual)",
+  "Waktu Pesanan Selesai",
 ];
 
 describe("normalizeHeader", () => {
@@ -62,8 +64,8 @@ describe("locateHeader", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.headerRowIndex).toBe(0);
-    expect(result.value.columns.get("sku")).toBe(4);
-    expect(result.value.columns.get("sellerVoucher")).toBe(9);
+    expect(result.value.columns.get("sku")).toBe(REQUIRED.indexOf("Nomor Referensi SKU"));
+    expect(result.value.columns.get("sellerVoucher")).toBe(REQUIRED.indexOf("Voucher Ditanggung Penjual"));
   });
 
   test("finds the header below title rows", () => {

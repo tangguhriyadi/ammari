@@ -77,6 +77,9 @@ export const shopeeAdapter: MarketplaceAdapter = {
     { field: "channelOrderNo", label: "No. Pesanan", aliases: ["No. Pesanan"], required: true },
     { field: "status", label: "Status Pesanan", aliases: ["Status Pesanan"], required: true },
     { field: "cancelReturnStatus", label: "Status Pembatalan/ Pengembalian", aliases: ["Status Pembatalan/ Pengembalian"], required: true },
+    // The ship/handover time (D-1, owner Q1): stored only once Shopee reports the order as shipped
+    // (the planner's status gate, §19.3). Required so a file without it can never fill nothing silently.
+    { field: "shippedAt", label: "Waktu Pengiriman Diatur", aliases: ["Waktu Pengiriman Diatur"], required: true },
     { field: "orderedAt", label: "Waktu Pesanan Dibuat", aliases: ["Waktu Pesanan Dibuat"], required: true },
     // Display only. "SKU Induk" (the parent SKU) is deliberately absent: it names no single variant
     // and is never a fallback for a blank variant SKU (§19.6).
@@ -97,10 +100,11 @@ export const shopeeAdapter: MarketplaceAdapter = {
     { field: "shopeeProductDiscount", label: "Diskon Dari Shopee", aliases: ["Diskon Dari Shopee"], required: false },
     { field: "sellerVoucher", label: "Voucher Ditanggung Penjual", aliases: ["Voucher Ditanggung Penjual"], required: true, scope: "order" },
     { field: "sellerBundleDiscount", label: "Paket Diskon (Diskon dari Penjual)", aliases: ["Paket Diskon (Diskon dari Penjual)"], required: true, scope: "order" },
+    // Stored only on Selesai (§19.3), for reference and reconciliation (recognition is at shipping).
+    { field: "completedAt", label: "Waktu Pesanan Selesai", aliases: ["Waktu Pesanan Selesai"], required: true },
     // Deliberately absent (§19.2): fees (the order export has none), every Shopee-funded voucher,
     // coin and bundle discount (they count in revenue, Q3), buyer ongkir and Total Pembayaran (not
     // revenue), shipping/courier/weight columns, and buyer columns 40-47 (decision 9, Q7).
-    // "Waktu Pengiriman Diatur" and "Waktu Pesanan Selesai" are read from session 7b.
   ],
   statusMap: {
     "belum bayar": { rule: { kind: "unpaid" }, seenInRealFile: false },

@@ -201,7 +201,8 @@ function FileSubtotal({ row }: { row: PreviewRow }) {
 
 function RowNotes({ row }: { row: PreviewRow }) {
   const subtotal = fileSubtotalText(row);
-  const notes = [...row.warnings, ...row.skuMatches.map((match) => `Dicocokkan: ${match.fileSku} ke ${match.adminSku}`), ...(subtotal ? [subtotal] : [])];
+  // A new order's marketplace dates (plan §19.3) sit with its notes; an update lists them as changes.
+  const notes = [...(row.action === "create" ? row.changes : []), ...row.warnings, ...row.skuMatches.map((match) => `Dicocokkan: ${match.fileSku} ke ${match.adminSku}`), ...(subtotal ? [subtotal] : [])];
   if (notes.length === 0) return null;
   return (
     <ul className="flex flex-col gap-0.5">
@@ -309,6 +310,37 @@ function UnknownSkus({ groups, overrides, busy, onMatch, onUnmatch, channelLabel
   );
 }
 
+/** Ship and complete dates from the file (plan §19.3): what Simpan fills, what the status gate keeps
+ * out, and stored dates the file contradicts (never overwritten). */
+function MarketplaceDates({ preview }: { preview: ImportPreviewData }) {
+  const { shippedAtFills, completedAtFills, arrangedNotShipped, shippedAtMissing, conflicts } = preview.marketplaceDates;
+  const channel = preview.channelLabel;
+  return (
+    <>
+      {(shippedAtFills > 0 || completedAtFills > 0) && (
+        <p className="text-sm text-neutral-700" data-testid="import-marketplace-dates">
+          Waktu dari {channel} yang akan disimpan: {formatNumber(shippedAtFills)} pesanan dapat waktu kirim, {formatNumber(completedAtFills)} pesanan dapat waktu selesai.
+        </p>
+      )}
+      {arrangedNotShipped > 0 && (
+        <p className="text-sm text-neutral-700" data-testid="import-arranged-not-shipped">
+          {formatNumber(arrangedNotShipped)} pesanan sudah diatur pengirimannya, belum dikirim. Waktu kirimnya disimpan setelah {channel} mencatatnya dikirim.
+        </p>
+      )}
+      {shippedAtMissing > 0 && (
+        <p className="text-sm text-warning-700" data-testid="import-ship-time-missing">
+          {formatNumber(shippedAtMissing)} pesanan sudah dikirim di {channel}, tapi Waktu Pengiriman Diatur kosong di file. Pendapatannya belum bisa dibukukan sampai file berikutnya mengisi waktu itu.
+        </p>
+      )}
+      {conflicts > 0 && (
+        <p className="text-sm text-warning-700" data-testid="import-date-conflicts">
+          {formatNumber(conflicts)} pesanan punya waktu kirim atau selesai di file yang berbeda dengan yang tersimpan. Yang tersimpan tidak diubah. Lihat catatan di pesanannya.
+        </p>
+      )}
+    </>
+  );
+}
+
 export function ImportPreview({ preview, overrides, busy, onMatch, onUnmatch }: ImportPreviewProps) {
   const byAction = (action: PreviewRow["action"]) => preview.rows.filter((row) => row.action === action);
   const review = byAction("review");
@@ -358,6 +390,7 @@ export function ImportPreview({ preview, overrides, busy, onMatch, onUnmatch }: 
             , lalu export ulang.
           </p>
         )}
+        <MarketplaceDates preview={preview} />
         {preview.unknownStatuses.length > 0 && (
           <p className="text-sm text-neutral-700">
             Status belum dikenal: {preview.unknownStatuses.map((status) => `"${status.rawStatus}" (${status.orderCount} pesanan)`).join(", ")}. Beri tahu admin teknis supaya statusnya dipasang.
@@ -402,6 +435,27 @@ export function ImportPreview({ preview, overrides, busy, onMatch, onUnmatch }: 
         <p className="text-sm text-neutral-700" data-testid="section-unchanged">
           Tidak berubah: {formatNumber(preview.counts.unchanged)} pesanan sudah sama dengan di admin.
         </p>
+      )}
+      {preview.unchangedWithWarnings.length > 0 && (
+        <Section title="Tidak berubah, ada catatan" count={preview.unchangedWithWarnings.length} open testId="section-unchanged-warnings">
+          <ul className="flex flex-col gap-2">
+            {preview.unchangedWithWarnings.map((item) => (
+              <li key={item.channelOrderNo} className="flex flex-col gap-0.5 rounded-md border border-neutral-200 p-3">
+                <span className="font-mono text-base break-all text-neutral-900">{item.channelOrderNo}</span>
+                {item.existing && (
+                  <Link href={`/orders/${item.existing.orderId}`} className="text-sm text-neutral-900 underline underline-offset-4">
+                    {item.existing.orderNo}
+                  </Link>
+                )}
+                {item.warnings.map((warning, index) => (
+                  <span key={`${index}-${warning}`} className="text-sm text-neutral-700">
+                    {warning}
+                  </span>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </Section>
       )}
       {skipped.length > 0 && (
         <p className="text-sm text-neutral-700" data-testid="section-skip">

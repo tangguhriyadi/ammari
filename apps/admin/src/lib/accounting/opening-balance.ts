@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { inReadCommitted } from "@ammari/accounting/ledger-write";
 import { journalLinesProblems, OFFICIAL_BOOKS_START, TRIAL_BOOKS_END, type JournalLineDraft } from "@ammari/accounting";
-import { accounts, journalEntries } from "@ammari/db/schema";
+import { accounts, journalEntries, MARKETPLACE_CHANNEL_IDS } from "@ammari/db/schema";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import { todayInJakarta } from "@/lib/products/jakarta-date";
@@ -131,7 +131,12 @@ export async function proposeOpeningBalances(db: Database = defaultDb): Promise<
   add("inventory.defect", "inventory.defect", "Persediaan barang cacat", "Nilai buku barang cacat per 31 Des 2026", num(stock?.defect));
 
   // Goods out of stock before the cut-over for orders not handed to the courier by then. A sale
-  // and its cancel-return before the cut-over net to zero.
+  // and its cancel-return before the cut-over net to zero. "Handed over" mirrors S3/M1 (rules/sales.ts
+  // recognitionDate and its "none" outcome): the app's shipped_at for web and manual orders; for
+  // Shopee/TikTok the marketplace's own ship time (D-2, marketplace-import.md §19.3), and without one
+  // the app's shipped_at, since the rule treats such an order shipped before the books start as
+  // recognised before them (opening balances) and never relieves 1-1505 for it. The cut-over instant
+  // is Jakarta midnight, so comparing instants equals comparing Jakarta dates.
   const [unshipped] = await rows<{ amount: string; order_count: number }>(
     db,
     sql`select coalesce(sum(net), 0)::bigint as amount, (count(*) filter (where net <> 0))::int as order_count from (
@@ -140,7 +145,11 @@ export async function proposeOpeningBalances(db: Database = defaultDb): Promise<
       join order_items oi on oi.id::text = sm.ref_id
       join orders o on o.id = oi.order_id
       where sm.ref_type = 'order_item' and sm.type in ('sale', 'return') and sm.created_at < ${CUTOVER_INSTANT}::timestamptz
-        and (o.shipped_at is null or o.shipped_at >= ${CUTOVER_INSTANT}::timestamptz)
+        and not coalesce(
+          o.shipped_at is not null
+          and (case when o.channel_id in (${sql.join(MARKETPLACE_CHANNEL_IDS.map((id) => sql`${id}`), sql`, `)}) then coalesce(o.marketplace_shipped_at, o.shipped_at) else o.shipped_at end) < ${CUTOVER_INSTANT}::timestamptz,
+          false
+        )
       group by o.id
     ) per_order`,
   );

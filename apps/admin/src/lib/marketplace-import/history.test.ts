@@ -61,4 +61,33 @@ describe("import history", () => {
       expect(await getImportBatchDetail(randomUUID(), { canViewProfit: true }, tx)).toBeNull();
     });
   });
+
+  test("the batch detail lists the ship and complete dates an import stored (plan §19.3)", async () => {
+    await withRollback(async (tx) => {
+      const marker = randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase();
+      const { product, fabric } = await insertProductVariant(tx);
+      const color = await insertFabricColor(tx, fabric.id);
+      const sku = `HSD${marker}-M`;
+      await tx.insert(productVariants).values({ sku, productId: product.id, fabricId: fabric.id, fabricColorId: color.id, closure: "front_zip", size: "M" });
+      await tx.insert(stockMovements).values({ sku, qty: 10, valueAmount: 1_000_000, type: "production", refType: "manual" });
+      const staff = await insertStaffUser(tx);
+      const commit = async (fixture: Parameters<typeof shopeeRows>[0][number]) => {
+        const parsed = parseMarketplaceFile({ channelId: "shopee", fileName: "pesanan.xlsx", bytes: xlsxBytes(shopeeRows([fixture])), assumeMappingVerified: true });
+        if (!parsed.ok) throw new Error(parsed.error.message);
+        const planned = await planImport(parsed.value, {}, tx);
+        if (!planned.ok) throw new Error(planned.error.message);
+        const outcome = await commitImport({ parsed: parsed.value, fileName: "pesanan.xlsx", options: {}, expectedDigest: planned.value.digest, actorStaffUserId: staff.id }, tx);
+        if (outcome.kind !== "committed") throw new Error(outcome.kind);
+        return outcome.batchId;
+      };
+      const lines = [{ sku, qty: 1, lineTotal: 249_000 }];
+      const created = await commit({ orderNo: `${marker}A`, status: "Dikirim", orderedAt: "2026-10-22 09:15", shippedAt: "2026-10-23 09:15", lines });
+      const updated = await commit({ orderNo: `${marker}A`, status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: "2026-10-23 09:15", completedAt: "2026-10-26 20:40", lines });
+      const first = await getImportBatchDetail(created, { canViewProfit: false }, tx);
+      expect(first?.orders[0]?.changes).toEqual(expect.arrayContaining([{ kind: "marketplace_date", field: "shipped", at: "2026-10-23T02:15:00.000Z" }]));
+      const second = await getImportBatchDetail(updated, { canViewProfit: false }, tx);
+      expect(second?.orders[0]?.changes).toEqual(expect.arrayContaining([{ kind: "marketplace_date", field: "completed", at: "2026-10-26T13:40:00.000Z" }]));
+      expect(second?.orders[0]?.changes.some((change) => change.kind === "marketplace_date" && change.field === "shipped")).toBe(false);
+    });
+  });
 });

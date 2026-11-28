@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   CHANNEL_FEE_COMPONENTS,
   importBatches,
@@ -62,6 +62,9 @@ export interface MarketplaceCreate {
   transitions: OrderStatus[];
   setReturnPending: boolean;
   skuMatches: MarketplaceSkuMatch[];
+  /** orders.marketplace_shipped_at / _completed_at (plan §19.3), already status-gated by the planner. */
+  marketplaceShippedAt: Date | null;
+  marketplaceCompletedAt: Date | null;
 }
 
 /** What the planner saw on the admin order; re-checked under the row lock before anything is written. */
@@ -87,6 +90,10 @@ export interface MarketplaceUpdate {
   /** Only the components that change; `before: null` = no row yet. */
   fees: { component: ChannelFeeComponent; before: number | null; after: number }[];
   channelStatus: { before: string | null; after: string } | null;
+  /** Fill an EMPTY stored date (write once, plan §19.3); null leaves it as is. Written with a
+   * conditional UPDATE ... WHERE ... IS NULL: a date filled since the plan is drift, never overwritten. */
+  marketplaceShippedAt: Date | null;
+  marketplaceCompletedAt: Date | null;
   skuMatches: MarketplaceSkuMatch[];
 }
 
@@ -197,6 +204,9 @@ async function createOrderFromImport(tx: Tx, entry: MarketplaceCreate, channelId
       createdByStaffUserId: null,
       channelStatus: entry.rawStatus,
       channelSyncedAt: now,
+      // The marketplace's own times; the app's shipped_at/completed_at are set by the transitions.
+      marketplaceShippedAt: entry.marketplaceShippedAt,
+      marketplaceCompletedAt: entry.marketplaceCompletedAt,
     })
     .onConflictDoNothing({ target: [orders.channelId, orders.channelOrderNo] })
     .returning({ id: orders.id });
@@ -235,6 +245,8 @@ async function createOrderFromImport(tx: Tx, entry: MarketplaceCreate, channelId
     fees: Object.fromEntries(fees),
     returnPending: entry.setReturnPending,
     skuMatches: entry.skuMatches,
+    marketplaceShippedAt: entry.marketplaceShippedAt?.toISOString() ?? null,
+    marketplaceCompletedAt: entry.marketplaceCompletedAt?.toISOString() ?? null,
   };
   await tx.insert(importBatchOrders).values({ importBatchId: batchId, orderId: inserted.id, action: "created", changes });
   await writeAuditLog(tx, {
@@ -305,6 +317,25 @@ async function updateOrderFromImport(tx: Tx, entry: MarketplaceUpdate, batchId: 
     if (written.length === 0) throw new MarketplaceImportDriftError(`fee ${fee.component} of ${entry.channelOrderNo} changed since the plan`);
   }
 
+  // Write once (plan §19.3): only into an empty column, conditionally, so a value written since the
+  // plan (by anyone) is drift and is never overwritten. Each date on its own: one may already be set.
+  if (entry.marketplaceShippedAt) {
+    const [filled] = await tx
+      .update(orders)
+      .set({ marketplaceShippedAt: entry.marketplaceShippedAt })
+      .where(and(eq(orders.id, entry.orderId), isNull(orders.marketplaceShippedAt)))
+      .returning({ id: orders.id });
+    if (!filled) throw new MarketplaceImportDriftError(`marketplace_shipped_at of ${entry.channelOrderNo} was filled since the plan`);
+  }
+  if (entry.marketplaceCompletedAt) {
+    const [filled] = await tx
+      .update(orders)
+      .set({ marketplaceCompletedAt: entry.marketplaceCompletedAt })
+      .where(and(eq(orders.id, entry.orderId), isNull(orders.marketplaceCompletedAt)))
+      .returning({ id: orders.id });
+    if (!filled) throw new MarketplaceImportDriftError(`marketplace_completed_at of ${entry.channelOrderNo} was filled since the plan`);
+  }
+
   // The flag after the transitions: a transition to cancelled/returned already cleared it.
   const flagChange = entry.setReturnPending ? withAttentionFlags(["marketplace_return_pending"]) : entry.clearReturnPending ? withoutAttentionFlag("marketplace_return_pending") : null;
   await tx
@@ -320,6 +351,8 @@ async function updateOrderFromImport(tx: Tx, entry: MarketplaceUpdate, batchId: 
     channelStatus: entry.channelStatus,
     returnPending: entry.setReturnPending ? "set" : entry.clearReturnPending ? "cleared" : null,
     skuMatches: entry.skuMatches,
+    marketplaceShippedAt: entry.marketplaceShippedAt ? { before: null, after: entry.marketplaceShippedAt.toISOString() } : null,
+    marketplaceCompletedAt: entry.marketplaceCompletedAt ? { before: null, after: entry.marketplaceCompletedAt.toISOString() } : null,
   };
   await tx.insert(importBatchOrders).values({ importBatchId: batchId, orderId: entry.orderId, action: "updated", changes });
   await writeAuditLog(tx, {
@@ -334,6 +367,9 @@ async function updateOrderFromImport(tx: Tx, entry: MarketplaceUpdate, batchId: 
       channelStatus: expected.channelStatus,
       returnPending: expected.returnPending,
       fees: entry.fees.map((fee) => ({ component: fee.component, amount: fee.before })),
+      // Only dates this import fills, and those were empty (write once).
+      ...(entry.marketplaceShippedAt ? { marketplaceShippedAt: null } : {}),
+      ...(entry.marketplaceCompletedAt ? { marketplaceCompletedAt: null } : {}),
     },
     after: { ...changes, importBatchId: batchId },
   });

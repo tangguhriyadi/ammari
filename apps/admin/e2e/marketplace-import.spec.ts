@@ -36,7 +36,8 @@ const UNKNOWN_SKU = "E2E-IMPOR-LL-SALAH";
 function fixtureOrders(prefix: string, tag: string): FixtureOrder[] {
   return [
     { orderNo: `${prefix}${tag}001`, status: "Selesai", orderedAt: "2026-01-15 10:00", lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }] },
-    { orderNo: `${prefix}${tag}002`, status: "Selesai", orderedAt: "2026-01-15 11:30", sellerVoucher: 10_000, lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }, { sku: E2E_IMPORT_SKU_L, qty: 1, lineTotal: 249_000 }] },
+    // Ship and complete times (plan §19.3): stored on Simpan, shown on the order page.
+    { orderNo: `${prefix}${tag}002`, status: "Selesai", orderedAt: "2026-01-15 11:30", shippedAt: "2026-01-16 08:00", completedAt: "2026-01-18 10:00", sellerVoucher: 10_000, lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }, { sku: E2E_IMPORT_SKU_L, qty: 1, lineTotal: 249_000 }] },
     { orderNo: `${prefix}${tag}003`, status: "Selesai", orderedAt: "2026-01-16 09:00", lines: [{ sku: UNKNOWN_SKU, qty: 1, lineTotal: 249_000, productName: "Gamis Uji Impor", variationName: "Sage,L" }] },
     { orderNo: `${prefix}${tag}004`, status: "Belum Bayar", orderedAt: "2026-01-16 09:30", lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }] },
   ];
@@ -105,11 +106,17 @@ for (const layout of [MOBILE, DESKTOP]) {
     await expect(page.getByTestId("import-preview")).not.toContainText("Rp");
 
     // A changed header row and a blank variant SKU (plan §19.2, §19.6): previewed, held, never saved.
-    const changed = shopeeRows([{ orderNo: `${layout.prefix}K001`, status: "Selesai", orderedAt: "2026-01-17 10:00", lines: [{ sku: null, qty: 1, lineTotal: 249_000, parentSku: E2E_IMPORT_SKU_M }] }]);
+    // K002: a ship time on an order Shopee still has waiting to ship is counted, never stored (§19.3).
+    const changed = shopeeRows([
+      { orderNo: `${layout.prefix}K001`, status: "Selesai", orderedAt: "2026-01-17 10:00", lines: [{ sku: null, qty: 1, lineTotal: 249_000, parentSku: E2E_IMPORT_SKU_M }] },
+      { orderNo: `${layout.prefix}K002`, status: "Perlu Dikirim", orderedAt: "2026-01-17 10:00", shippedAt: "2026-01-17 15:00", lines: [{ sku: E2E_IMPORT_SKU_M, qty: 1, lineTotal: 249_000 }] },
+    ]);
     changed[0]![SHOPEE_HEADER.indexOf("Total Berat")] = "Total Berat (kg)";
     await upload(page, "Shopee", { name: "berubah.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(xlsxBytes(changed)) });
     await expect(page.getByTestId("import-save-blockers")).toContainText('Format export Shopee berubah sejak 27 Nov 2026: kolom "Total Berat" tidak ada, kolom baru "Total Berat (kg)"');
     await expect(page.getByTestId("import-blank-sku-count")).toContainText("1 pesanan tertahan karena SKU kosong di Shopee");
+    await expect(page.getByTestId("import-arranged-not-shipped")).toContainText("1 pesanan sudah diatur pengirimannya, belum dikirim");
+    await expect(page.getByTestId("import-marketplace-dates")).toHaveCount(0);
     const held = await visibleRow(page.getByTestId("section-review"), layout, `${layout.prefix}K001`);
     await expect(held).toContainText("SKU kosong di Shopee (Nomor Referensi SKU)");
     await expect(held.getByRole("link", { name: "Buka Daftar SKU" })).toHaveAttribute("href", "/stock/sku-list");
@@ -130,6 +137,7 @@ for (const layout of [MOBILE, DESKTOP]) {
     await expect(page.getByTestId("import-file-summary")).toContainText("5 baris, 4 pesanan");
     await expectCounts(page, { create: 2, update: 0, unchanged: 0, review: 1, skip: 1 });
     await expect(page.getByTestId("import-new-totals")).toContainText("omzet Rp");
+    await expect(page.getByTestId("import-marketplace-dates")).toContainText("1 pesanan dapat waktu kirim, 1 pesanan dapat waktu selesai");
     await visibleRow(page.getByTestId("section-review"), layout, `${layout.prefix}S003`);
     await expect(page.getByTestId("section-skip")).toContainText("Belum Bayar 1");
 
@@ -162,6 +170,9 @@ for (const layout of [MOBILE, DESKTOP]) {
     await expect(orderRow).toBeVisible();
     await orderRow.getByRole("link").first().click();
     await expect(page.getByTestId("marketplace-section")).toContainText("Selesai");
+    await expect(page.getByTestId("marketplace-section")).toContainText("Diserahkan ke kurir (marketplace)");
+    await expect(page.getByTestId("marketplace-section")).toContainText("16 Jan 2026, 08.00");
+    await expect(page.getByTestId("marketplace-section")).toContainText("18 Jan 2026, 10.00");
     await expect(page.getByTestId("marketplace-section")).toContainText("Biaya platform");
 
     // The same file again: everything unchanged once the same match is made, Simpan disabled (test 48).

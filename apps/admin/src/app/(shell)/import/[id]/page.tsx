@@ -39,6 +39,8 @@ function changeText(change: ImportedChange): string {
       return `Status marketplace: ${change.before ?? "belum ada"} → ${change.after}`;
     case "sku_match":
       return `Dicocokkan: ${change.fileSku} ke ${change.adminSku}`;
+    case "marketplace_date":
+      return `${change.field === "shipped" ? "Waktu kirim" : "Waktu selesai"} di marketplace disimpan: ${formatDateTime(new Date(change.at))}`;
   }
 }
 

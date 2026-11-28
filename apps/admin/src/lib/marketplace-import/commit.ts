@@ -55,6 +55,8 @@ export function toCommitPlan(plan: ImportPlan): MarketplaceCommitPlan {
         transitions: entry.transitions,
         setReturnPending: entry.setReturnPending,
         skuMatches: entry.skuMatches,
+        marketplaceShippedAt: entry.marketplaceShippedAt,
+        marketplaceCompletedAt: entry.marketplaceCompletedAt,
       });
     } else if (entry.action === "update") {
       updates.push({
@@ -69,6 +71,8 @@ export function toCommitPlan(plan: ImportPlan): MarketplaceCommitPlan {
         totalAmount: entry.totalAmount,
         fees: entry.fees,
         channelStatus: entry.channelStatus,
+        marketplaceShippedAt: entry.marketplaceShippedAt,
+        marketplaceCompletedAt: entry.marketplaceCompletedAt,
         skuMatches: entry.skuMatches,
       });
     }

@@ -116,4 +116,46 @@ describe("toImportPreview", () => {
       for (const value of Object.values(FAKE_BUYER)) expect(json).not.toContain(value);
     });
   });
+
+  test("ship and complete dates (plan §19.3): counts, per-order lines, and conflicts on unchanged orders listed", async () => {
+    await withRollback(async (tx) => {
+      const preview = await previewFor(
+        tx,
+        async (sku, no) => {
+          const stored = await insertOrder(tx, {
+            channelId: "shopee",
+            channelOrderNo: no("C"),
+            status: "completed",
+            subtotalAmount: 249_000,
+            shippingAmount: 0,
+            discountAmount: 0,
+            channelStatus: "Selesai",
+            orderDate: new Date("2026-10-22T02:15:00Z"),
+            marketplaceShippedAt: new Date("2026-10-23T02:15:00Z"),
+            marketplaceCompletedAt: new Date("2026-10-26T13:40:00Z"),
+          });
+          await tx.insert(orderItems).values({ orderId: stored.id, sku: sku("M"), qty: 1, unitPrice: 249_000, unitCost: 100_000 });
+          const empty = await insertOrder(tx, { channelId: "shopee", channelOrderNo: no("D"), status: "completed", subtotalAmount: 249_000, shippingAmount: 0, discountAmount: 0, channelStatus: "Selesai", orderDate: new Date("2026-10-22T02:15:00Z") });
+          await tx.insert(orderItems).values({ orderId: empty.id, sku: sku("M"), qty: 1, unitPrice: 249_000, unitCost: 100_000 });
+          const line = [{ sku: sku("M"), qty: 1, lineTotal: 249_000 }];
+          return [
+            { orderNo: no("A"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: "2026-10-23 09:15", completedAt: "2026-10-26 20:40", lines: line },
+            { orderNo: no("B"), status: "Perlu Dikirim", orderedAt: "2026-10-22 09:15", shippedAt: "2026-10-23 09:15", lines: line },
+            { orderNo: no("C"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: "2026-10-23 10:00", completedAt: "2026-10-26 20:40", lines: line },
+            { orderNo: no("D"), status: "Selesai", orderedAt: "2026-10-22 09:15", shippedAt: "2026-10-23 09:15", completedAt: "2026-10-26 20:40", lines: line },
+          ];
+        },
+        false,
+      );
+      expect(preview.marketplaceDates).toEqual({ shippedAtFills: 2, completedAtFills: 2, arrangedNotShipped: 1, shippedAtMissing: 0, conflicts: 1 });
+      const created = preview.rows.find((row) => row.channelOrderNo.endsWith("A"));
+      expect(created?.changes).toEqual(["Waktu kirim di Shopee: 23 Okt 2026, 09.15", "Waktu selesai di Shopee: 26 Okt 2026, 20.40"]);
+      const updated = preview.rows.find((row) => row.channelOrderNo.endsWith("D"));
+      expect(updated).toMatchObject({ action: "update", changes: ["Waktu kirim di Shopee diisi: 23 Okt 2026, 09.15", "Waktu selesai di Shopee diisi: 26 Okt 2026, 20.40"] });
+      // The conflict sits on an unchanged order: listed so it is visible, never an update.
+      expect(preview.unchangedWithWarnings).toEqual([
+        expect.objectContaining({ channelOrderNo: expect.stringMatching(/C$/), warnings: [expect.stringContaining("Waktu kirim di file berbeda dengan yang tersimpan")] }),
+      ]);
+    });
+  });
 });
