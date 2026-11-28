@@ -5,8 +5,8 @@ Status: **T1 built** (`d6b82d2`); **T2 built** (`e2ec0a5`, connection + OAuth, m
 read side in dry run, migration 0058, build notes §9.1); **T5 built** 27 Nov 2026 (apply to orders and stock
 behind a kill switch that is off by default, migration 0059, build notes §9.2); **T6 built** 28 Nov 2026
 (cancellations and returns, read only, migration 0060, build notes §9.3); **T7 built** 28 Nov 2026 (finance
-read side, migration 0061, build notes §9.4). T8-T9 not started. T6 took migration 0060, so T7 is now
-**0061** and T8 **0062** (renumbered below).
+read side, migration 0061, build notes §9.4); **T8 built** 28 Nov 2026 (accounting, migration 0062, build
+notes §9.5). T9 not started. T6 took migration 0060, so T7 is now **0061** and T8 **0062** (renumbered below).
 Every session below needs its own `/plan` approval first (CLAUDE.md Workflow 1). **Owner decisions of
 27 Nov 2026 are recorded in §12** and folded into the sections and sessions they affect. Q1, Q3, Q6 and
 Q13 are verified in T0 on the development shop.
@@ -1048,6 +1048,61 @@ T2 built the connection; nothing reaches TikTok until the owner sets these. Valu
   import never reaches TikTok orders (the TikTok file adapter refuses every upload), so the two
   order_channel_fees writers never meet; the FK names longer than 63 characters are truncated by Postgres
   (as in 0057/0059).
+
+### 9.5 T8 build notes (28 Nov 2026)
+
+- **Loader** (`packages/accounting/src/sales-loaders.ts`): reads `orders.marketplace_shipped_at` and
+  `marketplace_returned_at`. `SALES_RULE_VERSION` stays 1. M1/M2 post on the Jakarta date of `collection_time`;
+  S4 of a marketplace order is dated `marketplace_returned_at` when set, else `returned_at` (S2 keeps the return
+  movement's date). **No existing journal reposts:** every TikTok M1 was a posting issue until now, so no TikTok
+  M1/M2/S2/S4 journal existed; Shopee still reads NULL; web and manual orders never read the columns. Tested by
+  posting with the pre-T8 loader and then the new one: zero reversals, only the TikTok order's M1/M2 are new.
+- **New rules, all version 1, own source types (nothing else reposts):** S7 `marketplace_refund`
+  (`rules/marketplace-refunds.ts`), M3 `tiktok_payout` and M5 `tiktok_adjustment` (`rules/tiktok-finance.ts`),
+  loaders in `tiktok-loaders.ts`, added to `defaultPostingSources()` after the sales chain.
+  - S7: Dr 4-1301 / Cr Saldo Penjual of the channel, no HPP/stock line; held behind M1 (across books) while M1 is
+    a posting issue; an order never shipped (`marketplace_refund_not_shipped`) or since cancelled/returned
+    (`marketplace_refund_order_undone`) is an issue, never guessed.
+  - M3: only status `PAID`; Dr `cash.tiktok_payout` / Cr 1-1303 on `paid_time`; PAID with unreadable money or no
+    time → `tiktok_payout_unreadable`; other statuses post nothing (a payout that leaves PAID is reversed).
+  - M5: kind `adjustment` statement transactions on the statement's `statement_time`, signed settlement against
+    `tiktok.adjustment.<type lower case>`; unmapped → `tiktok_adjustment_unmapped`; held transaction or statement →
+    `tiktok_statement_held`; 0 → nothing. Ids over 100 characters → `tiktok_source_id_too_long`.
+- **Migration 0062** (data + one function body): `cash.tiktok_payout` → 1-1201 (only while 1-1201 is postable,
+  `ON CONFLICT DO NOTHING`; also in `seed.ts` via `TIKTOK_ACCOUNT_MAPPINGS`), and `account_mappings_guard_target`
+  gains `cash.tiktok_payout` (Kas & Bank only) and `tiktok.adjustment.*` (never 1-15xx, never the account holding
+  `seller_balance.tiktok`). Same rules in `mapping-rules.ts`. Backward compatible: the previous release never
+  reads the key.
+- **Pemetaan Akun:** "Cara bayar dan pencairan" gains Pencairan Saldo Penjual TikTok; new section "Penyesuaian
+  TikTok Shop" lists every adjustment type in `tiktok_statement_transactions` (plus types already mapped),
+  unmapped first, with a banner and the open issue count. A type whose name marks ads (`ADS`, `AD`, `ADVERTIS*`,
+  `PROMOTE` as a word) gets the ads account (the target of `expense.category.ads_tiktok`, 6-1101) preselected and
+  "Saran: ..." shown; nothing is saved without Simpan. The server refuses a type no statement carried.
+- **Close warning (Q9):** `tiktokOrdersOnEstimatedFees` lists TikTok orders recognised in the month whose
+  `order_channel_fees.source` is still `estimate` (count + 5 order numbers) on Tutup buku; never blocks. Estimate →
+  actual is the engine's reverse + repost; into a closed month both land in the first open month (tested).
+- **Ringkasan (Q19):** `revenue-sql.ts` `refundOnlyRowsSql` (refunds of orders that still count, by `refunded_at`)
+  is subtracted in every figure built from the fragments: the omzet tile (with "Sudah dikurangi refund tanpa retur
+  barang"), per channel (a channel with only refunds gets a row with 0 orders), per day/month series, per product
+  type and top products (the refund spread over the order's lines with 0 pieces), the per-order report sheet (one
+  negative row per refund, note "Refund tanpa retur barang"), and so the Biaya tab's Laba rugi. Check 4 puts the
+  same amount on the order's `net_sales` key, where S7's 4-1301 lines land: no difference (tested).
+- **Rekonsiliasi "TikTok Shop"** (`lib/accounting/tiktok-reconciliation.ts`): (a) per order, its 1-1303 lines vs
+  Σ its ORDER/REFUND settlements (orders matched by `(tiktok, channel_order_no)`; not settled yet = waiting); (b)
+  per statement; (c) per payout, plus "PAID but not journaled" as review; (d) the 1-1303 balance vs unsettled
+  estimates + settled-not-paid-out (a difference is review, timing makes it normal); the M4/M5 ads pair list.
+  Phone and desktop layouts; e2e `accounting-tiktok.spec.ts` at 390/1280.
+- **Opening 1-1303:** the Saldo awal hint for Saldo Penjual TikTok shows the figure from the stored TikTok data
+  as of 31 Dec 2026 (`tiktokAmountsOwed`); still typed and confirmed by hand.
+- **Review fixes (code review, 28 Nov 2026):** S7 waits for M1 whenever M1 is due (any cause blocks it, not
+  only a missing `collection_time`); Ringkasan subtracts only refunds S7 books (order shipped/completed); check
+  (d) counts an estimate only while TikTok still lists it and not once a statement settles the same order and
+  type (unsettled and statement ids may differ, T0), and names held statements; a statement or payout whose
+  parts are not read yet is "review", not "Tidak cocok"; the suggestion text shows only for a preselectable
+  account; refund-only SKUs stay out of Produk terlaris; the report's order count leaves refund rows out.
+- **Assumptions to check in T0** (stated, never guessed silently): payout status `PAID` is final; a statement
+  transaction's own date is the statement's `statement_time`; an adjustment's `settlement_amount` is its effect on
+  the balance (positive = to the seller); the unsettled estimate's transaction id equals the later statement's.
 
 ---
 

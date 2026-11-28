@@ -20,6 +20,7 @@ function fixture(overrides: { linesWithoutCost?: number; ordersWithoutFees?: num
   ]);
   const money = {
     omzet: 2_000_000,
+    refundOnly: 0,
     hpp: 780_000,
     labaKotor: 1_220_000,
     marginBps: 6_100,

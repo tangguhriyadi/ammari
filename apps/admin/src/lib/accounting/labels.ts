@@ -160,4 +160,5 @@ export const PAYMENT_METHOD_MAPPING_LABELS: Record<string, string> = {
   "cash.method.transfer": "Transfer",
   "cash.method.card": "Kartu (debit)",
   "cash.midtrans_payout": "Pencairan Midtrans",
+  "cash.tiktok_payout": "Pencairan Saldo Penjual TikTok",
 };

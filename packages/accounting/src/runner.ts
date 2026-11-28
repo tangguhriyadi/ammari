@@ -31,6 +31,9 @@ import { productionChainRule, type ProductionBatchSnapshot } from "./rules/produ
 import { defectDisposalRule, finishedGoodsAdjustmentRule, type DefectDisposalSnapshot, type FinishedGoodsAdjustmentSnapshot } from "./rules/inventory";
 import { salesRule, type OrderSnapshot } from "./rules/sales";
 import { loadOrderSnapshots } from "./sales-loaders";
+import { marketplaceRefundRule, type MarketplaceRefundSnapshot } from "./rules/marketplace-refunds";
+import { tiktokAdjustmentRule, tiktokPayoutRule, type TikTokAdjustmentSnapshot, type TikTokPayoutSnapshot } from "./rules/tiktok-finance";
+import { loadMarketplaceRefundSnapshots, loadTikTokAdjustmentSnapshots, loadTikTokPayoutSnapshots } from "./tiktok-loaders";
 import { loadDefectDisposalSnapshots, loadFinishedGoodsAdjustmentSnapshots, loadProductionBatchSnapshots } from "./production-loaders";
 import { ENGINE_ENTRY_KINDS, type AccountInfo, type PostingContext, type PostingEvent, type PostingKey, type PostingRule } from "./rules/types";
 
@@ -51,6 +54,7 @@ import { ENGINE_ENTRY_KINDS, type AccountInfo, type PostingContext, type Posting
 export type { Database } from "./ledger-write";
 export { loadProductionBatchSnapshots } from "./production-loaders";
 export { loadOrderSnapshots } from "./sales-loaders";
+export { loadMarketplaceRefundSnapshots, loadTikTokAdjustmentSnapshots, loadTikTokPayoutSnapshots } from "./tiktok-loaders";
 
 /** A rule plus the loader for its snapshots. */
 export interface PostingSource {
@@ -156,6 +160,21 @@ export function salesSource(rule: PostingRule<OrderSnapshot> = salesRule): Posti
   return postingSource(rule, loadOrderSnapshots);
 }
 
+/** S7 refund-only (TikTok T8, marketplace_refunds). */
+export function marketplaceRefundSource(rule: PostingRule<MarketplaceRefundSnapshot> = marketplaceRefundRule): PostingSource {
+  return postingSource(rule, loadMarketplaceRefundSnapshots);
+}
+
+/** M3 TikTok payouts (TikTok T8). */
+export function tiktokPayoutSource(rule: PostingRule<TikTokPayoutSnapshot> = tiktokPayoutRule): PostingSource {
+  return postingSource(rule, loadTikTokPayoutSnapshots);
+}
+
+/** M5 TikTok statement adjustments (TikTok T8). */
+export function tiktokAdjustmentSource(rule: PostingRule<TikTokAdjustmentSnapshot> = tiktokAdjustmentRule): PostingSource {
+  return postingSource(rule, loadTikTokAdjustmentSnapshots);
+}
+
 /** The fixed asset register (Session 11, D-19). `now` fixes the current Jakarta month, the last
  * month whose depreciation is posted. */
 export async function loadFixedAssetSnapshots(db: Database, now: Date = new Date()): Promise<FixedAssetSnapshot[]> {
@@ -188,7 +207,8 @@ export function fixedAssetSource(options: { now?: Date; rule?: PostingRule<Fixed
 /** Every rule posting so far: E1-E2 (expenses), the purchase chain P1-P6, P7, the production chain
  * R1-R5 (batch payments included, Session 8), A1 and A2, and the sales chain (Session 9: S1-S6,
  * W1, W3, W4, W9, W10, M1, M2) and the fixed asset register (Session 11: acquisition, depreciation,
- * disposal). W2/W5 (rules/midtrans.ts) stay out until fee work A+B exists: today no
+ * disposal), and TikTok T8: S7 refund-only (after the sales chain, so the M1 it waits for is posted
+ * first in the same run), M3 payouts and M5 statement adjustments. W2/W5 (rules/midtrans.ts) stay out until fee work A+B exists: today no
  * order_channel_fees row has the `payment_gateway_fee` component (the `source` column exists since 0061,
  * written by TikTok T7 for marketplace fees; M2 does not read it), and nothing
  * writes order_settlements, so there is nothing for them to read. Each posting key is emitted by exactly one
@@ -204,6 +224,9 @@ export function defaultPostingSources(now?: Date): PostingSource[] {
     finishedGoodsAdjustmentSource(),
     defectDisposalSource(),
     salesSource(),
+    marketplaceRefundSource(),
+    tiktokPayoutSource(),
+    tiktokAdjustmentSource(),
     fixedAssetSource(now ? { now } : {}),
   ];
 }

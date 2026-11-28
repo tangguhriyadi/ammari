@@ -402,6 +402,15 @@ export const E2E_TIKTOK_FEE_ORDER_NO = "ORD-E2E-TT-BIAYA";
 export const E2E_TIKTOK_UNMAPPED_FEE_TYPE = "fee.e2e_new_fee_amount";
 export const E2E_TIKTOK_STATEMENT_ID = "7300000000000000301";
 export const E2E_TIKTOK_ADJUSTMENT_TYPE = "GMV_PAYMENT_FOR_ADS";
+// accounting-tiktok.spec.ts (docs/plans/tiktok-shop-integration.md T8): Rekonsiliasi "TikTok Shop" on
+// fixed December 2026 dates (the trial month, so the page's date is stable whatever today is): one
+// TikTok order with its settled ORDER transaction, the statement and the payout that paid it. The order
+// has no stock movement, so the posting run books no M1 for it: (a) shows it as not matching. Pemetaan
+// Akun reads T7's adjustment type above (unmapped, ads: 6-1101 suggested). Read only.
+export const E2E_TIKTOK_REKON_ORDER_ID = "579000000000000401";
+export const E2E_TIKTOK_REKON_ORDER_NO = "ORD-E2E-TT-REKON";
+export const E2E_TIKTOK_REKON_STATEMENT_ID = "7300000000000000401";
+export const E2E_TIKTOK_REKON_PAYOUT_ID = "7400000000000000401";
 export const E2E_ACTIVITY_LOG_ADMIN_EMAIL = "activity-log-admin@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_OWNER_EMAIL = "activity-log-owner@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_SUPPLIER_NAME = "E2E Log Supplier Baru";
@@ -987,6 +996,50 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         { transactionId: "7500000000000000302", statementId: E2E_TIKTOK_STATEMENT_ID, type: E2E_TIKTOK_ADJUSTMENT_TYPE, kind: "adjustment", settlementAmount: -20_000, adjustmentAmount: -20_000, contentSha256: "a".repeat(64), latestSnapshotId: await snap("statement_transaction", "7500000000000000302", "a".repeat(64)), fetchedAt },
       ]);
       await tx.insert(tiktokPayouts).values({ paymentId: "7400000000000000301", amount: 205_000, currency: "IDR", status: "PAID", paidTime: new Date(Date.now() - 86_400_000), bankAccountLast4: "4321", contentSha256: "b".repeat(64), latestSnapshotId: await snap("payment", "7400000000000000301", "b".repeat(64)), fetchedAt });
+
+      // T8: Rekonsiliasi TikTok Shop (see E2E_TIKTOK_REKON_ORDER_ID).
+      const rekonShipped = new Date("2026-12-04T23:30:00Z");
+      await tx.insert(orders).values({
+        channelId: "tiktok",
+        orderNo: E2E_TIKTOK_REKON_ORDER_NO,
+        channelOrderNo: E2E_TIKTOK_REKON_ORDER_ID,
+        status: "completed",
+        orderDate: new Date("2026-12-04T02:00:00Z"),
+        shippedAt: rekonShipped,
+        completedAt: new Date("2026-12-09T02:00:00Z"),
+        marketplaceShippedAt: rekonShipped,
+        subtotalAmount: 270_000,
+        shippingAmount: 0,
+        discountAmount: 20_000,
+        totalAmount: 250_000,
+        channelStatus: "COMPLETED",
+        channelSyncedAt: new Date(),
+      });
+      await tx.insert(tiktokStatements).values({
+        statementId: E2E_TIKTOK_REKON_STATEMENT_ID,
+        statementTime: new Date("2026-12-12T03:00:00Z"),
+        currency: "IDR",
+        settlementAmount: 220_400,
+        paymentStatus: "PAID",
+        paymentId: E2E_TIKTOK_REKON_PAYOUT_ID,
+        transactionsCompleteSha256: "c".repeat(64),
+        latestSnapshotId: await snap("statement", E2E_TIKTOK_REKON_STATEMENT_ID, "c".repeat(64)),
+        fetchedAt,
+      });
+      await tx.insert(tiktokStatementTransactions).values({
+        transactionId: "7500000000000000401",
+        statementId: E2E_TIKTOK_REKON_STATEMENT_ID,
+        type: "ORDER",
+        kind: "order",
+        tiktokOrderId: E2E_TIKTOK_REKON_ORDER_ID,
+        settlementAmount: 220_400,
+        feeTaxAmount: -29_600,
+        feesState: "complete",
+        contentSha256: "d".repeat(64),
+        latestSnapshotId: await snap("statement_transaction", "7500000000000000401", "d".repeat(64)),
+        fetchedAt,
+      });
+      await tx.insert(tiktokPayouts).values({ paymentId: E2E_TIKTOK_REKON_PAYOUT_ID, amount: 220_400, currency: "IDR", status: "PAID", createTime: new Date("2026-12-14T03:00:00Z"), paidTime: new Date("2026-12-14T17:10:00Z"), bankAccountLast4: "5555", contentSha256: "e".repeat(64), latestSnapshotId: await snap("payment", E2E_TIKTOK_REKON_PAYOUT_ID, "e".repeat(64)), fetchedAt });
     }
 
     const now = Date.now();

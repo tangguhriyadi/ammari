@@ -19,7 +19,8 @@ import { mappedAccount, negateOutcome, resolveOrIssue, systemAccount, type Posti
 //      the moment it arrives: Cr 2-1202 Utang pengembalian dana instead (the plan's W1 + W3 for that
 //      payment collapsed into one journal; same balances, no 2-1201 detour after the cancel).
 //   S3 / M1 (order, id, recognised) [D-1, handover to the courier]: web and manual on shipped_at,
-//      marketplace only on the real ship time from the export file [D-2] (no such time → the issue
+//      marketplace only on the real ship time (orders.marketplace_shipped_at: TikTok's collection_time,
+//      T8; Shopee's export file once its Session 5 ships) [D-2] (no such time → the issue
 //      `marketplace_ship_date_missing`, never the import time). Dr 2-1201 (web, manual) or Saldo
 //      Penjual (marketplace) total_amount · Dr 4-1201 Potongan penjualan discount_amount [D-4] /
 //      Cr Penjualan by channel subtotal_amount · Cr 2-1203 Titipan ongkir pembeli shipping_amount
@@ -33,7 +34,7 @@ import { mappedAccount, negateOutcome, resolveOrIssue, systemAccount, type Posti
 //   S2 (stock_movement, id, return), created_at: goods back on the shelf at the original cost. A
 //      cancel before shipping: Dr 1-1504 / Cr 1-1505. A return after shipping: Dr 1-1504 / Cr 5-1101
 //      HPP [D-7].
-//   S4 (order, id, returned), returned_at [D-7]: Dr 4-1301 Retur penjualan subtotal · Dr 6-1301 Beban
+//   S4 (order, id, returned), returned_at (a marketplace order: marketplace_returned_at when set) [D-7]: Dr 4-1301 Retur penjualan subtotal · Dr 6-1301 Beban
 //      ongkos kirim shipping_amount (the courier was already paid) / Cr 4-1201 discount · Cr the
 //      refund liability total (2-1202 web and manual; Saldo Penjual for a marketplace clawback).
 //   W3 / S6 cancel (order, id, cancelled_paid), cancelled_at: a paid order cancelled before shipping.
@@ -130,9 +131,15 @@ export interface OrderSnapshot {
   shippedAt: Date | null;
   cancelledAt: Date | null;
   returnedAt: Date | null;
-  /** The real ship time from the marketplace export file (Session 5, D-2). Always null until that
-   * feature stores it: marketplace revenue then waits as a posting issue, never the import time. */
+  /** The marketplace's real ship time (orders.marketplace_shipped_at, D-2): TikTok's
+   * collection_time, written by the TikTok sync (tiktok-shop-integration.md T5). NULL for Shopee
+   * until its own Session 5, and for any order whose ship time is not known yet: marketplace
+   * revenue then waits as a posting issue, never the import time. */
   marketplaceShippedAt: Date | null;
+  /** When the marketplace completed the return (orders.marketplace_returned_at: TikTok's
+   * RETURN_OR_REFUND_REQUEST_COMPLETE or cancel time, T6). S4 of a marketplace order is dated here
+   * when set, else by returned_at (tiktok-shop-integration.md §5.2). */
+  marketplaceReturnedAt: Date | null;
   /** order_manual_payments (Session 6), manual orders only. */
   manualPayment: ManualPaymentRecord | null;
   movements: OrderStockMovementSnapshot[];
@@ -441,9 +448,12 @@ export function salesEvents(order: OrderSnapshot, context: PostingContext): Post
     });
   }
 
-  // S4
+  // S4: a marketplace return is dated by the marketplace's own return time when it has one (T8,
+  // tiktok-shop-integration.md §5.2), so it lands on TikTok's date, not on "Retur diterima". S2 keeps
+  // the return movement's date (physical receipt).
   if (order.status === "returned" && order.returnedAt) {
-    const date = jakartaDateOf(order.returnedAt);
+    const returnedAt = kind === "marketplace" && order.marketplaceReturnedAt ? order.marketplaceReturnedAt : order.returnedAt;
+    const date = jakartaDateOf(returnedAt);
     events.push({ key: orderKey(order.id, "returned"), sourceDate: date, outcome: dated(date, () => s4Outcome(order, context)), ...heldBehindRecognition });
   }
 

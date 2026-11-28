@@ -7,6 +7,7 @@ import {
   FIXED_ASSET_GROUPS,
   INITIAL_CAPITALIZATION_THRESHOLD,
   INITIAL_TAX_SETTING,
+  TIKTOK_ACCOUNT_MAPPINGS,
 } from "./accounting/chart-of-accounts";
 import {
   accountMappings,
@@ -301,6 +302,19 @@ async function seedAccounting(db: Database) {
   await db.insert(accountMappings).values([...DEFAULT_ACCOUNT_MAPPINGS]).onConflictDoNothing({ target: accountMappings.mappingKey });
   await db.insert(taxSettings).values(INITIAL_TAX_SETTING).onConflictDoNothing({ target: taxSettings.effectiveFrom });
   await seedFixedAssets(db);
+  await seedTikTokAccounting(db);
+}
+
+// Migration 0062 (TikTok T8): the TikTok payout mapping, restored after e2e-db.ts's TRUNCATE. Insert-only.
+// Skipped on a database migrated only up to an older migration (detected by 0062's version of the
+// mapping guard, which knows the key): migration-0049/0051.test.ts seed such a scratch database, which
+// must keep exactly its own migration's mappings.
+async function seedTikTokAccounting(db: Database) {
+  const [guard] = (await db.execute(sql`
+    select coalesce(bool_or(prosrc like '%cash.tiktok_payout%'), false) as present from pg_proc where proname = 'account_mappings_guard_target'
+  `)) as unknown as { present: boolean }[];
+  if (!guard?.present) return;
+  await db.insert(accountMappings).values([...TIKTOK_ACCOUNT_MAPPINGS]).onConflictDoNothing({ target: accountMappings.mappingKey });
 }
 
 // Migration 0055 (Session 11, D-19): the tax groups, the capitalisation threshold and the disposal

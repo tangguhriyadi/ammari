@@ -24,6 +24,7 @@ export function MappingRow({
   canManage,
   itemId,
   indent = false,
+  suggestion,
 }: {
   mappingKey: string;
   label: string;
@@ -34,11 +35,16 @@ export function MappingRow({
   /** Set for an expense item: the empty choice clears its override. */
   itemId?: string;
   indent?: boolean;
+  /** A suggested target for an unmapped key (TikTok ads adjustment types → the ads expense account).
+   * Preselected in the select, but nothing is saved until Simpan: never an automatic mapping. */
+  suggestion?: MappingOption | null;
 }) {
   const router = useRouter();
   const toast = useToast();
   const selectId = useId();
-  const [value, setValue] = useState(accountCode ?? "");
+  // Only a suggestion the select actually offers, so the text and the preselected value always agree.
+  const offeredSuggestion = accountCode === null && suggestion && options.some((option) => option.code === suggestion.code) ? suggestion : null;
+  const [value, setValue] = useState(accountCode ?? offeredSuggestion?.code ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, startTransition] = useTransition();
   const current = options.find((option) => option.code === accountCode);
@@ -71,6 +77,11 @@ export function MappingRow({
           {canManage ? <label htmlFor={selectId}>{label}</label> : label}
         </span>
         {sublabel && <span className="text-sm text-neutral-600">{sublabel}</span>}
+        {offeredSuggestion && (
+          <span className="text-sm text-neutral-600" data-testid="mapping-suggestion">
+            Saran: {offeredSuggestion.code} {offeredSuggestion.name}.{canManage ? " Belum tersimpan sampai Anda menekan Simpan." : ""}
+          </span>
+        )}
         {!canManage &&
           (accountText ? <span className="text-sm text-neutral-700">{accountText}</span> : <Badge variant="warning">Belum dipetakan</Badge>)}
         {canManage && accountCode === null && !isItem && (

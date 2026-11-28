@@ -1,7 +1,26 @@
 import "server-only";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { mappingFamily, mappingTargetProblem, type MappingTargetProblem } from "@ammari/accounting";
-import { accountMappings, accounts, channels, expenseCategories, expenseItems, postingIssues, type AccountType, type ChannelId } from "@ammari/db/schema";
+import {
+  isTikTokAdsAdjustmentType,
+  mappingFamily,
+  mappingTargetProblem,
+  TIKTOK_ADJUSTMENT_UNMAPPED_ISSUE,
+  tiktokAdjustmentMappingKey,
+  tiktokAdjustmentTypeOfKey,
+  type MappingTargetProblem,
+} from "@ammari/accounting";
+import {
+  accountMappings,
+  accounts,
+  channels,
+  expenseCategories,
+  expenseItems,
+  postingIssues,
+  tiktokStatements,
+  tiktokStatementTransactions,
+  type AccountType,
+  type ChannelId,
+} from "@ammari/db/schema";
 import { ActionError, FieldError, isPostgresErrorCode } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
 import { PAYMENT_METHOD_MAPPING_LABELS } from "./labels";
@@ -24,15 +43,17 @@ export const MAPPING_MESSAGES = {
     not_found: "Akun tidak ditemukan.",
     not_postable: "Akun tujuan harus aktif dan bukan akun kelompok.",
     inventory: "Biaya tidak boleh dipetakan ke akun persediaan (1-15xx). Bahan masuk persediaan hanya lewat penerimaan barang.",
-    not_cash_bank: "Cara bayar hanya bisa dipetakan ke akun Kas & Bank (1-11xx, 1-12xx).",
+    not_cash_bank: "Cara bayar dan pencairan hanya bisa dipetakan ke akun Kas & Bank (1-11xx, 1-12xx).",
     not_revenue: "Penjualan kanal hanya bisa dipetakan ke akun pendapatan.",
     not_liability: "Utang supplier hanya bisa dipetakan ke akun kewajiban.",
+    seller_balance: "Penyesuaian TikTok tidak bisa dipetakan ke Saldo Penjual TikTok sendiri.",
   } satisfies Record<MappingTargetProblem, string>,
 } as const;
 
 /** The mapping keys this editor writes (plan Session 3: expense categories and items, payment
- * methods, channels). supplier_payable.* stays as the migration set it. */
-export const PAYMENT_METHOD_MAPPING_KEYS = ["cash.method.cash", "cash.method.transfer", "cash.method.card", "cash.midtrans_payout"] as const;
+ * methods, channels; TikTok T8: the TikTok payout and every TikTok adjustment type seen in a
+ * statement). supplier_payable.* stays as the migration set it. */
+export const PAYMENT_METHOD_MAPPING_KEYS = ["cash.method.cash", "cash.method.transfer", "cash.method.card", "cash.midtrans_payout", "cash.tiktok_payout"] as const;
 
 const ITEM_PREFIX = "expense.item.";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -56,15 +77,46 @@ export interface CategoryMappingRow extends MappingRow {
   items: (MappingRow & { itemId: string; isActive: boolean })[];
 }
 
+/** A TikTok statement adjustment type (M5, Q8): mapped by the accountant, never guessed. */
+export interface TikTokAdjustmentMappingRow extends MappingRow {
+  /** TikTok's type as received (`ADS_PAYMENT`, ...). */
+  type: string;
+  /** Statement transactions of this type stored so far (0: only a mapping is left). */
+  transactionCount: number;
+  lastStatementTime: Date | null;
+  /** Ads paid from the balance: the ads expense account (the account of category ads_tiktok, 6-1101
+   * Iklan) is SUGGESTED (owner, plan §3.6). Never saved without the accountant. */
+  suggestedAccountCode: string | null;
+}
+
 export interface MappingPage {
   categories: CategoryMappingRow[];
   paymentMethods: MappingRow[];
   channels: MappingRow[];
-  accounts: (MappingAccountOption & { isHeader: boolean; isActive: boolean })[];
+  /** Unmapped first, then by type. */
+  tiktokAdjustments: TikTokAdjustmentMappingRow[];
+  /** Open `tiktok_adjustment_unmapped` posting issues. */
+  tiktokAdjustmentIssueCount: number;
+  accounts: (MappingAccountOption & { isHeader: boolean; isActive: boolean; systemKey: string | null })[];
+}
+
+/** Every adjustment type TikTok's statements carried (T7 stores them as received) plus every type that
+ * already has a mapping, with how often it was seen. */
+async function tiktokAdjustmentTypes(db: Database): Promise<{ type: string; count: number; last: Date | null }[]> {
+  return db
+    .select({
+      type: tiktokStatementTransactions.type,
+      count: sql<number>`count(*)::int`,
+      last: sql<Date | null>`max(${tiktokStatements.statementTime})`.mapWith((value: Date | string | null) => (value === null ? null : new Date(value))),
+    })
+    .from(tiktokStatementTransactions)
+    .innerJoin(tiktokStatements, eq(tiktokStatements.statementId, tiktokStatementTransactions.statementId))
+    .where(eq(tiktokStatementTransactions.kind, "adjustment"))
+    .groupBy(tiktokStatementTransactions.type);
 }
 
 export async function getMappingPage(db: Database = defaultDb): Promise<MappingPage> {
-  const [mappingRows, categoryRows, itemRows, channelRows, accountRows] = await Promise.all([
+  const [mappingRows, categoryRows, itemRows, channelRows, accountRows, adjustmentTypes, [adjustmentIssues]] = await Promise.all([
     db.select({ key: accountMappings.mappingKey, code: accountMappings.accountCode }).from(accountMappings),
     db
       .select({ code: expenseCategories.code, name: sql<string>`${expenseCategories.name}::text`, isActive: expenseCategories.isActive })
@@ -76,11 +128,36 @@ export async function getMappingPage(db: Database = defaultDb): Promise<MappingP
       .orderBy(asc(expenseItems.sortOrder), asc(expenseItems.name)),
     db.select({ id: channels.id, name: channels.name }).from(channels).orderBy(asc(channels.id)),
     db
-      .select({ code: accounts.code, name: sql<string>`${accounts.name}::text`, type: accounts.type, isHeader: accounts.isHeader, isActive: accounts.isActive })
+      .select({ code: accounts.code, name: sql<string>`${accounts.name}::text`, type: accounts.type, isHeader: accounts.isHeader, isActive: accounts.isActive, systemKey: accounts.systemKey })
       .from(accounts)
       .orderBy(asc(accounts.code)),
+    tiktokAdjustmentTypes(db),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(postingIssues)
+      .where(and(isNull(postingIssues.resolvedAt), eq(postingIssues.issueCode, TIKTOK_ADJUSTMENT_UNMAPPED_ISSUE))),
   ]);
   const mapped = new Map(mappingRows.map((row) => [row.key, row.code]));
+  const adsAccount = mapped.get("expense.category.ads_tiktok") ?? null;
+  const seen = new Map(adjustmentTypes.map((row) => [row.type, row]));
+  for (const key of mapped.keys()) {
+    const type = tiktokAdjustmentTypeOfKey(key);
+    if (type && !seen.has(type)) seen.set(type, { type, count: 0, last: null });
+  }
+  const tiktokAdjustments: TikTokAdjustmentMappingRow[] = [...seen.values()]
+    .map((row) => {
+      const mappingKey = tiktokAdjustmentMappingKey(row.type);
+      return {
+        mappingKey,
+        label: row.type,
+        type: row.type,
+        accountCode: mapped.get(mappingKey) ?? null,
+        transactionCount: row.count,
+        lastStatementTime: row.last,
+        suggestedAccountCode: isTikTokAdsAdjustmentType(row.type) ? adsAccount : null,
+      };
+    })
+    .sort((a, b) => Number(a.accountCode !== null) - Number(b.accountCode !== null) || a.type.localeCompare(b.type));
   return {
     categories: categoryRows.map((category) => ({
       mappingKey: `expense.category.${category.code}`,
@@ -104,6 +181,8 @@ export async function getMappingPage(db: Database = defaultDb): Promise<MappingP
       label: channel.name,
       accountCode: mapped.get(`revenue.channel.${channel.id}`) ?? null,
     })),
+    tiktokAdjustments,
+    tiktokAdjustmentIssueCount: adjustmentIssues?.count ?? 0,
     accounts: accountRows,
   };
 }
@@ -126,8 +205,17 @@ async function assertKnownKey(db: Database, mappingKey: string): Promise<void> {
   } else if (family === "expense_item") {
     const id = mappingKey.slice(ITEM_PREFIX.length);
     exists = UUID.test(id) && (await db.select({ id: expenseItems.id }).from(expenseItems).where(eq(expenseItems.id, id)).limit(1)).length > 0;
-  } else if (family === "cash_method" || family === "midtrans_payout") {
+  } else if (family === "cash_method" || family === "midtrans_payout" || family === "tiktok_payout") {
     exists = (PAYMENT_METHOD_MAPPING_KEYS as readonly string[]).includes(mappingKey);
+  } else if (family === "tiktok_adjustment") {
+    // Only a type TikTok's statements actually carried (or one already mapped): the editor never
+    // invents a type.
+    const type = tiktokAdjustmentTypeOfKey(mappingKey);
+    exists =
+      type !== null &&
+      tiktokAdjustmentMappingKey(type) === mappingKey &&
+      ((await db.select({ id: tiktokStatementTransactions.transactionId }).from(tiktokStatementTransactions).where(and(eq(tiktokStatementTransactions.type, type), eq(tiktokStatementTransactions.kind, "adjustment"))).limit(1)).length > 0 ||
+        (await db.select({ key: accountMappings.mappingKey }).from(accountMappings).where(eq(accountMappings.mappingKey, mappingKey)).limit(1)).length > 0);
   } else if (family === "revenue_channel") {
     const id = mappingKey.slice("revenue.channel.".length) as ChannelId;
     exists = (await db.select({ id: channels.id }).from(channels).where(eq(channels.id, id)).limit(1)).length > 0;
@@ -142,7 +230,7 @@ export async function setAccountMapping(mappingKey: string, accountCode: string,
     // FOR SHARE: a concurrent deactivation or header switch of the target waits for this write (and
     // then sees the mapping and is refused), or this read waits for it and sees its result.
     const [target] = await tx
-      .select({ code: accounts.code, type: accounts.type, isHeader: accounts.isHeader, isActive: accounts.isActive })
+      .select({ code: accounts.code, type: accounts.type, isHeader: accounts.isHeader, isActive: accounts.isActive, systemKey: accounts.systemKey })
       .from(accounts)
       .where(eq(accounts.code, accountCode))
       .for("share");
@@ -175,7 +263,9 @@ export async function setAccountMapping(mappingKey: string, accountCode: string,
               ? "not_revenue"
               : /liability account/.test(message)
                 ? "not_liability"
-                : "not_postable";
+                : /seller balance/.test(message)
+                  ? "seller_balance"
+                  : "not_postable";
         throw new FieldError("accountCode", MAPPING_MESSAGES.targetProblem[problem]);
       }
       throw error;

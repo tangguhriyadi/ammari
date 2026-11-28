@@ -127,6 +127,7 @@ describe("getPeriodTotals", () => {
           // Only the counted checkout order's subsidy (Rp 12.000 quote, fully covered); the refunded
           // and chargeback ones are out with their omzet (docs/plans/growth.md §4.1).
           webShippingSubsidy: 12_000,
+          refundOnly: 0,
         },
       });
 
@@ -154,6 +155,7 @@ describe("getPeriodTotals", () => {
           labaSetelahBiayaPlatform: 0,
           platformFees: { marketplaceOrders: 0, ordersWithoutFees: 0, byChannel: [] },
           webShippingSubsidy: 0,
+          refundOnly: 0,
         },
       });
       // A refund that also covered the buyer's Rp 10.000 ongkir share: the goods amount is the floor.

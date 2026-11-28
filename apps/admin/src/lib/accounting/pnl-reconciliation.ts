@@ -4,7 +4,7 @@ import { resolveReportRange, type ReportRange } from "@ammari/accounting";
 import { businessExpenses, orderItems, orders, type AccountType } from "@ammari/db/schema";
 import { defaultDb, type Database } from "@/lib/db";
 import { dateRangeToTimeRange } from "@/lib/expenses/summary";
-import { countedOrderSql, lineHppSql, orderOmzetSql, orderPlatformFeeSql, orderWebShippingSubsidySql } from "@/lib/overview/revenue-sql";
+import { countedOrderSql, lineHppSql, orderOmzetSql, orderPlatformFeeSql, orderWebShippingSubsidySql, refundOnlyRowsSql } from "@/lib/overview/revenue-sql";
 import type { DateRange } from "./filters";
 import {
   COMPONENT_KEY_KIND,
@@ -24,7 +24,9 @@ import { IS_CLOSING_SQL, IS_OPENING_SQL } from "./trial-balance";
 // non-voided business_expenses by expense_date), per order and per expense, so each difference is
 // matched to its cause: revenue timing (order date vs ship date), refunds and returns, accrual vs
 // cash expenses, figures the management P&L does not have at all (stock adjustments, defects,
-// production variance, depreciation, MDR, PPh), and entries before the books started.
+// production variance, depreciation, MDR, PPh), and entries before the books started. Refund-only money
+// (TikTok T8, Q19) comes off the management omzet of the refund's order on the refund's date, exactly what
+// rule S7 books on 4-1301 Retur penjualan with the order's id, so it matches per order (no difference).
 
 export interface PnlReconciliation {
   range: ReportRange;
@@ -47,7 +49,7 @@ export async function getPnlReconciliation(requested: DateRange, db: Database = 
   const range = resolveReportRange(requested);
   const time = dateRangeToTimeRange(range, now);
 
-  const [accountRows, ledgerRows, orderRows, expenseRows] = await Promise.all([
+  const [accountRows, ledgerRows, orderRows, expenseRows, refundRows] = await Promise.all([
     db.execute(sql`select code, type, system_key, parent_code, is_header from accounts`) as unknown as Promise<
       { code: string; type: AccountType; system_key: string | null; parent_code: string | null; is_header: boolean }[]
     >,
@@ -77,6 +79,11 @@ export async function getPnlReconciliation(requested: DateRange, db: Database = 
       from ${businessExpenses} x
       where x.voided_at is null and x.expense_date >= ${range.from} and x.expense_date <= ${range.to}
     `) as unknown as Promise<{ id: string; expense_no: string; amount: string }[]>,
+    db.execute(sql`
+      select r.id::text as id, o.order_no, r.refund
+      from (${refundOnlyRowsSql(time.start.toISOString(), time.end.toISOString())}) r
+      join ${orders} o on o.id = r.id
+    `) as unknown as Promise<{ id: string; order_no: string; refund: string }[]>,
   ]);
 
   // Headers whose every system child is a Beban persediaan account (6-4000): a new sub-account there is too.
@@ -99,6 +106,10 @@ export async function getPnlReconciliation(requested: DateRange, db: Database = 
     put("cogs", row.id, num(row.hpp));
     put("platform_fees", row.id, num(row.platform_fee));
     put("shipping", row.id, num(row.shipping_subsidy));
+  }
+  for (const row of refundRows) {
+    labels[row.id] = row.order_no;
+    put("net_sales", row.id, -num(row.refund));
   }
   for (const row of expenseRows) {
     labels[row.id] = row.expense_no;

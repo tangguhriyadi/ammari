@@ -92,7 +92,8 @@ export async function recordMonthlyReportDownload(actorStaffUserId: string, repo
       fromMonth: report.params.fromMonth,
       toMonth: report.params.toMonth,
       expenseRows: report.expenseRows.length,
-      orderRows: report.orderRows.length,
+      // Refund-only rows (Q19) are not orders.
+      orderRows: report.orderRows.filter((row) => !row.refundOnly).length,
       ordersTruncated: report.ordersTruncated,
     },
   });

@@ -22,6 +22,13 @@ function optionsFor(mappingKey: string, accountCode: string | null, page: Mappin
   return options.map(({ code, name }) => ({ code, name }));
 }
 
+const DATE_FORMAT = new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Jakarta" });
+
+function adjustmentSublabel(count: number, last: Date | null): string {
+  if (count === 0) return "Tidak ada di laporan yang tersimpan";
+  return `${count} transaksi${last ? `, laporan terakhir ${DATE_FORMAT.format(last)}` : ""}`;
+}
+
 function Section({ id, title, description, children }: { id: string; title: string; description: string; children: ReactNode }) {
   return (
     <section aria-labelledby={id} className="mb-8">
@@ -39,17 +46,27 @@ export default async function MappingsPage() {
   const canManage = session.permissionKeys.includes("accounting.manage");
   const page = await getMappingPage();
   const unmappedCount = page.categories.filter((category) => category.accountCode === null).length;
+  const unmappedAdjustments = page.tiktokAdjustments.filter((row) => row.accountCode === null).length;
 
   return (
     <>
       <Breadcrumb items={rootCrumbs("/accounting/mappings")} />
       <PageHeader
         title="Pemetaan Akun"
-        description="Akun yang dipakai jurnal otomatis untuk setiap kategori biaya, cara bayar dan kanal penjualan. Perubahan berlaku pada posting berikutnya: jurnal yang terkena dibalik lalu dibukukan ulang."
+        description="Akun yang dipakai jurnal otomatis untuk setiap kategori biaya, cara bayar, pencairan, penyesuaian TikTok dan kanal penjualan. Perubahan berlaku pada posting berikutnya: jurnal yang terkena dibalik lalu dibukukan ulang."
       />
       {unmappedCount > 0 && (
         <p role="status" className="mb-6 rounded-lg border border-warning-700/30 bg-warning-50 p-4 text-base text-warning-700">
           {unmappedCount} kategori biaya belum dipetakan. Biaya di kategori itu belum bisa dibukukan.
+        </p>
+      )}
+      {unmappedAdjustments > 0 && (
+        <p role="status" className="mb-6 rounded-lg border border-warning-700/30 bg-warning-50 p-4 text-base text-warning-700">
+          {unmappedAdjustments} jenis penyesuaian TikTok belum dipetakan
+          {page.tiktokAdjustmentIssueCount > 0 ? ` (${page.tiktokAdjustmentIssueCount} transaksi menunggu)` : ""}.{" "}
+          <a href="#mapping-tiktok-adjustments" className="font-medium underline">
+            Petakan sekarang
+          </a>
         </p>
       )}
 
@@ -85,10 +102,36 @@ export default async function MappingsPage() {
         ))}
       </Section>
 
-      <Section id="mapping-methods" title="Cara bayar" description="Tunai ke Kas tunai, transfer dan kartu debit ke Bank utama. Hanya akun Kas & Bank yang bisa dipilih.">
+      <Section id="mapping-methods" title="Cara bayar dan pencairan" description="Tunai ke Kas tunai, transfer, kartu debit dan pencairan Midtrans atau TikTok ke Bank utama. Hanya akun Kas & Bank yang bisa dipilih.">
         {page.paymentMethods.map((row) => (
           <MappingRow key={row.mappingKey} mappingKey={row.mappingKey} label={row.label} accountCode={row.accountCode} options={optionsFor(row.mappingKey, row.accountCode, page)} canManage={canManage} />
         ))}
+      </Section>
+
+      <Section
+        id="mapping-tiktok-adjustments"
+        title="Penyesuaian TikTok Shop"
+        description="Setiap jenis penyesuaian di laporan TikTok (kompensasi, potongan, iklan yang dibayar dari saldo, dan lainnya) dipetakan ke satu akun. Jenis yang belum dipetakan belum dibukukan dan muncul di Perlu dicek. Iklan yang dibayar dari saldo disarankan ke akun iklan; jangan catat iklan yang sama lagi sebagai biaya."
+      >
+        {page.tiktokAdjustments.length === 0 ? (
+          <li className="py-3 text-sm text-neutral-600">Belum ada jenis penyesuaian dari laporan TikTok.</li>
+        ) : (
+          page.tiktokAdjustments.map((row) => {
+            const suggested = row.suggestedAccountCode ? page.accounts.find((account) => account.code === row.suggestedAccountCode) : undefined;
+            return (
+              <MappingRow
+                key={row.mappingKey}
+                mappingKey={row.mappingKey}
+                label={row.label}
+                sublabel={adjustmentSublabel(row.transactionCount, row.lastStatementTime)}
+                accountCode={row.accountCode}
+                options={optionsFor(row.mappingKey, row.accountCode, page)}
+                canManage={canManage}
+                suggestion={suggested ? { code: suggested.code, name: suggested.name } : null}
+              />
+            );
+          })
+        )}
       </Section>
 
       <Section id="mapping-channels" title="Penjualan per kanal" description="Akun pendapatan untuk penjualan setiap kanal.">

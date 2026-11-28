@@ -176,7 +176,13 @@ export async function OverviewKpiTiles({
       <div className={money && previousMoney ? FINANCE_GRID : GRID}>
         {money && previousMoney ? (
           <>
-            <KpiTile label="Omzet" testId="kpi-omzet" className={SALES_SPAN} value={<Money amount={money.omzet} />} delta={computeDelta(money.omzet, previousMoney.omzet)} comparison={comparison} />
+            <KpiTile label="Omzet" testId="kpi-omzet" className={SALES_SPAN} value={<Money amount={money.omzet} />} delta={computeDelta(money.omzet, previousMoney.omzet)} comparison={comparison}>
+              {money.refundOnly > 0 && (
+                <p className="text-sm text-neutral-600 tabular-nums" data-testid="kpi-omzet-refund-only">
+                  Sudah dikurangi refund tanpa retur barang {formatRupiah(money.refundOnly)}
+                </p>
+              )}
+            </KpiTile>
             <KpiTile label="Pesanan" testId="kpi-orders" className={SALES_SPAN} value={formatNumber(current.orders)} delta={computeDelta(current.orders, previous.orders)} comparison={comparison}>
               <p className="text-sm text-neutral-600 tabular-nums">{formatNumber(current.pcs)} pcs terjual</p>
             </KpiTile>

@@ -276,6 +276,11 @@ export const INITIAL_CAPITALIZATION_THRESHOLD = 1_000_000;
  * 0055, separate from DEFAULT_ACCOUNT_MAPPINGS (which migration-0049.test.ts pins to 0049's rows). */
 export const FIXED_ASSET_ACCOUNT_MAPPINGS: readonly AccountMappingSeed[] = [{ mappingKey: "fixed_asset.disposal_result", accountCode: "8-1102" }];
 
+/** TikTok Shop T8 (migration 0062, docs/plans/tiktok-shop-integration.md §3.6, Q17): M3 payouts go to Bank
+ * utama. A mapping so the accountant can point it at a sub-account. `tiktok.adjustment.<type>` keys have
+ * no default (Q8: every type is mapped by the accountant; unmapped = posting issue). */
+export const TIKTOK_ACCOUNT_MAPPINGS: readonly AccountMappingSeed[] = [{ mappingKey: "cash.tiktok_payout", accountCode: "1-1201" }];
+
 /** The register's default Akumulasi penyusutan per asset account (plan §3: one contra per class).
  * Only a preselection in the form; the asset row stores both accounts. */
 export const DEFAULT_ACCUMULATED_DEPRECIATION_ACCOUNT: Readonly<Record<string, string>> = {

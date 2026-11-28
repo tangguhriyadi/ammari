@@ -34,10 +34,13 @@ import {
 //
 // Session 11: before setting `closed`, the close posts the month's PPh final accrual and, for
 // December, the year-end closing journal (period-close-postings.ts), under the same exclusive lock.
-// The MDR "still an estimate" warning (D-8) stays dormant: it reads the `source` column (added in 0061,
-// shared with TikTok T7; T8 adds the TikTok estimate warning) on
+// TikTok T8 (Q9, the D-8 pattern): the close also warns, never blocks, while a TikTok order recognised in
+// the month (M1 on the Jakarta date of marketplace_shipped_at) still has estimated fees
+// (order_channel_fees.source = 'estimate', from Get Unsettled Transactions): the actuals replace them
+// later by the engine's reverse + repost, into the first open month once this one is closed (D-5, D-23).
+// The MDR "still an estimate" warning (D-8) stays dormant: it reads the same `source` column on
 // order_channel_fees (component payment_gateway_fee), which does not exist yet; add it to
-// periodWarnings with that feature.
+// periodWarnings with fee work A.
 //
 // Lock order: this closes ONE month per transaction (the year end is the close of December, one
 // month, so there is no multi-month close). A future multi-month close must take the months' locks
@@ -97,6 +100,30 @@ async function trialBalanceTotals(db: Database, month: string): Promise<{ debitT
   return { debitTotal: Number(row?.debit_total ?? 0), creditTotal: Number(row?.credit_total ?? 0) };
 }
 
+/** How many order numbers the estimate warning names before "dan N lainnya". */
+const ESTIMATE_WARNING_ORDER_SAMPLE = 5;
+
+/** TikTok orders recognised in `month` (Jakarta date of marketplace_shipped_at) whose fees are still
+ * estimates (Q9). Oldest ship time first. */
+export async function tiktokOrdersOnEstimatedFees(db: Database, month: string): Promise<{ count: number; orderNos: string[] }> {
+  const rows = (await db.execute(sql`
+    select o.order_no
+    from orders o
+    where o.channel_id = 'tiktok' and o.status in ('shipped', 'completed', 'returned')
+      and o.marketplace_shipped_at >= (${month}::date::timestamp at time zone 'Asia/Jakarta')
+      and o.marketplace_shipped_at < ((${month}::date + interval '1 month')::timestamp at time zone 'Asia/Jakarta')
+      and exists (select 1 from order_channel_fees f where f.order_id = o.id and f.source = 'estimate')
+    order by o.marketplace_shipped_at, o.order_no
+  `)) as unknown as { order_no: string }[];
+  return { count: rows.length, orderNos: rows.slice(0, ESTIMATE_WARNING_ORDER_SAMPLE).map((row) => row.order_no) };
+}
+
+export function estimatedFeesWarning(found: { count: number; orderNos: string[] }): string | null {
+  if (found.count === 0) return null;
+  const more = found.count - found.orderNos.length;
+  return `${found.count} pesanan TikTok di bulan ini masih memakai biaya perkiraan (${found.orderNos.join(", ")}${more > 0 ? ` dan ${more} lainnya` : ""}). Biaya sebenarnya menggantikannya setelah laporan TikTok cair; selisihnya masuk bulan pertama yang masih terbuka.`;
+}
+
 /** D-20: the PPh final setting in force for the month has ended (or there is none). D-22: January
  * 2027 has no opening journal yet (closing it would then need a reopen to enter one). */
 async function periodWarnings(db: Database, month: string): Promise<{ warnings: string[]; proposal: PphFinalProposal | null }> {
@@ -105,6 +132,8 @@ async function periodWarnings(db: Database, month: string): Promise<{ warnings: 
     const [opening] = await db.select({ id: journalEntries.id }).from(journalEntries).where(and(eq(journalEntries.kind, "opening"), isNull(journalEntries.reversedByEntryId))).limit(1);
     if (!opening) warnings.push("Saldo awal belum dibukukan. Bukukan saldo awal sebelum menutup Januari 2027.");
   }
+  const estimateWarning = estimatedFeesWarning(await tiktokOrdersOnEstimatedFees(db, month));
+  if (estimateWarning) warnings.push(estimateWarning);
   const proposal = await proposePphFinalFor(month, db);
   const taxWarning = proposal ? pphFinalWarning(proposal) : null;
   return { warnings: taxWarning ? [...warnings, taxWarning] : warnings, proposal };

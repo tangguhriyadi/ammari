@@ -37,6 +37,10 @@ export async function loadOrderSnapshots(db: Database): Promise<OrderSnapshot[]>
       shippedAt: orders.shippedAt,
       cancelledAt: orders.cancelledAt,
       returnedAt: orders.returnedAt,
+      // T8 (tiktok-shop-integration.md §5.1): the real ship and return times. Shopee's stay NULL
+      // until its own Session 5; the rule code and SALES_RULE_VERSION are unchanged.
+      marketplaceShippedAt: orders.marketplaceShippedAt,
+      marketplaceReturnedAt: orders.marketplaceReturnedAt,
     })
     .from(orders)
     // One id list from three index-served sources (a UNION, so the planner can semi-join instead of
@@ -52,7 +56,7 @@ export async function loadOrderSnapshots(db: Database): Promise<OrderSnapshot[]>
   if (rows.length === 0) return [];
 
   const byId = new Map<string, OrderSnapshot>(
-    rows.map((row) => [row.id, { ...row, marketplaceShippedAt: null, manualPayment: null, movements: [], payments: [], shipments: [], fees: [] }]),
+    rows.map((row) => [row.id, { ...row, manualPayment: null, movements: [], payments: [], shipments: [], fees: [] }]),
   );
 
   for (const ids of chunks([...byId.keys()])) {

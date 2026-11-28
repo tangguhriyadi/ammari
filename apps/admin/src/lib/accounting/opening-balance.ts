@@ -1,7 +1,7 @@
 import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { inReadCommitted } from "@ammari/accounting/ledger-write";
-import { journalLinesProblems, OFFICIAL_BOOKS_START, type JournalLineDraft } from "@ammari/accounting";
+import { journalLinesProblems, OFFICIAL_BOOKS_START, TRIAL_BOOKS_END, type JournalLineDraft } from "@ammari/accounting";
 import { accounts, journalEntries } from "@ammari/db/schema";
 import { ActionError, FieldError } from "@/lib/errors";
 import { defaultDb, writeAuditLog, type Database } from "@/lib/db";
@@ -9,6 +9,7 @@ import { todayInJakarta } from "@/lib/products/jakarta-date";
 import type { StoredPrivateFile } from "@/lib/supplier-payments/store-upload";
 import { MANUAL_JOURNAL_MESSAGES, MAX_LINE_AMOUNT, sideAmount, validateJournalLineRows, type ManualJournalLineInput } from "./manual-journal-input";
 import { insertStaffJournal, loadPostableAccountMap, mapJournalWriteError, OPENING_MESSAGES } from "./manual-journals";
+import { tiktokAmountsOwed } from "./tiktok-reconciliation";
 
 // Saldo awal (docs/plans/accounting.md §5.4, D-22, Session 4): ONE kind='opening' journal dated the
 // cut-over day 2027-01-01, holding the balances as of 31 Dec 2026 (the end of 2026-12-31 Jakarta,
@@ -354,11 +355,24 @@ export async function getActiveOpening(db: Database = defaultDb): Promise<Active
   return row ?? null;
 }
 
+const RUPIAH = new Intl.NumberFormat("id-ID");
+
+/** TikTok T8 (tiktok-shop-integration.md §5.4): the 1-1303 opening can be proposed from the stored
+ * TikTok finance data (unsettled estimates + statements settled but not paid out, as of 31 Dec 2026).
+ * Only a figure in the hint: the balance is still typed and confirmed by hand from Seller Center. */
+async function tiktokOpeningHint(db: Database): Promise<string | null> {
+  const owed = await tiktokAmountsOwed(db, TRIAL_BOOKS_END);
+  const total = owed.unsettled + owed.settledNotPaidOut;
+  if (total <= 0) return null;
+  return `Menurut data TikTok yang tersimpan: Rp${RUPIAH.format(total)} (belum cair Rp${RUPIAH.format(owed.unsettled)}, sudah cair belum ditarik Rp${RUPIAH.format(owed.settledNotPaidOut)}). Cocokkan dulu dengan Seller Center.`;
+}
+
 export async function getOpeningBalancePage(db: Database = defaultDb, now: Date = new Date()): Promise<OpeningBalancePage> {
-  const [proposals, system, activeOpening] = await Promise.all([proposeOpeningBalances(db), systemAccountNames(db), getActiveOpening(db)]);
+  const [proposals, system, activeOpening, tiktokHint] = await Promise.all([proposeOpeningBalances(db), systemAccountNames(db), getActiveOpening(db), tiktokOpeningHint(db)]);
   const typedAccounts = TYPED_ACCOUNTS.flatMap(({ systemKey, hint }) => {
     const found = system.get(systemKey);
-    return found ? [{ accountCode: found.code, accountName: found.name, hint }] : [];
+    const fullHint = systemKey === "seller_balance.tiktok" && tiktokHint ? `${hint} ${tiktokHint}` : hint;
+    return found ? [{ accountCode: found.code, accountName: found.name, hint: fullHint }] : [];
   });
   return { proposals, typedAccounts, activeOpening, canPost: todayInJakarta(now) >= OFFICIAL_BOOKS_START && activeOpening === null };
 }

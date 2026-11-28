@@ -1,5 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
-import { MARKETPLACE_CHANNEL_IDS, orderChannelFees, payments, type ChannelId, type OrderPaymentStatus, type OrderStatus } from "@ammari/db/schema";
+import { MARKETPLACE_CHANNEL_IDS, marketplaceRefunds, orderChannelFees, orders, payments, type ChannelId, type OrderPaymentStatus, type OrderStatus } from "@ammari/db/schema";
 
 // The ONE definition of omzet and laba kotor (docs/plans/dashboard-overview.md §1, owner decisions
 // D1, D6, D11). Every Ringkasan figure (tiles, target tracker, breakdowns) is built from these
@@ -87,4 +87,25 @@ export function platformFeeChannelListSql(): SQL {
 
 export function orderPlatformFeeMissingSql(): SQL {
   return sql`(o.channel_id in (${platformFeeChannelListSql()}) and not exists (select 1 from ${orderChannelFees} f where f.order_id = o.id))`;
+}
+
+// ---------- Refund-only money (docs/plans/tiktok-shop-integration.md §5.2, owner decision Q19) ----------
+
+/**
+ * CTE body: the refund-only refunds (marketplace_refunds, written by the TikTok sync, T6) refunded in
+ * `[startIso, endIso)`, one row per refund: `id` (the ORDER's id, so it joins like a counted order),
+ * `channel_id`, `refund` (> 0) and `refunded_at`. The buyer kept the goods, so the order keeps its status
+ * and its omzet on its own order date; the refunded amount comes off omzet on the Jakarta date of
+ * `refunded_at`, from the order's channel (Q19). This is what the ledger books as Retur penjualan (rule
+ * S7), so Ringkasan and Laba rugi agree. Exactly the orders S7 books: shipped or completed (an order since
+ * cancelled or returned has left omzet already, one never shipped is an S7 posting issue, so neither is
+ * subtracted here), and still counted (countedOrderSql). Several refunds of one order are several rows:
+ * aggregate per order where one row per order is needed.
+ */
+export function refundOnlyRowsSql(startIso: string, endIso: string): SQL {
+  return sql`select r.order_id as id, o.channel_id, r.amount::bigint as refund, r.refunded_at
+    from ${marketplaceRefunds} r
+    join ${orders} o on o.id = r.order_id
+    where r.kind = 'refund_only' and r.refunded_at >= ${startIso}::timestamptz and r.refunded_at < ${endIso}::timestamptz
+      and o.status in ('shipped', 'completed') and o.shipped_at is not null and ${countedOrderSql()}`;
 }

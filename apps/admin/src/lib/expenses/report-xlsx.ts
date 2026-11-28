@@ -102,7 +102,11 @@ function orderSheet(report: MonthlyReport): XLSX.WorkSheet {
     { omzet: 0, hpp: 0, fee: 0, subsidy: 0 },
   );
   const note = (row: MonthlyReport["orderRows"][number]): string | null => {
-    const parts = [row.linesWithoutCost > 0 ? "HPP belum lengkap" : null, row.feeMissing ? "Biaya platform belum ada" : null].filter(Boolean);
+    const parts = [
+      row.refundOnly ? "Refund tanpa retur barang (tanggal refund)" : null,
+      row.linesWithoutCost > 0 ? "HPP belum lengkap" : null,
+      row.feeMissing ? "Biaya platform belum ada" : null,
+    ].filter(Boolean);
     return parts.length > 0 ? parts.join(", ") : null;
   };
   const rows: Cell[][] = [

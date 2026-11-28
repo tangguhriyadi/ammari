@@ -78,6 +78,7 @@ function webOrder(overrides: Partial<OrderSnapshot> = {}): OrderSnapshot {
     cancelledAt: null,
     returnedAt: null,
     marketplaceShippedAt: null,
+    marketplaceReturnedAt: null,
     manualPayment: null,
     movements: [
       { id: "sm-1", type: "sale", sku: "HAURA-M", valueAmount: -87_917, createdAt: at("2026-12-03T02:00:01Z") },

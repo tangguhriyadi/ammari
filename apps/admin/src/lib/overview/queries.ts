@@ -15,6 +15,7 @@ import {
   orderPlatformFeeSql,
   orderWebShippingSubsidySql,
   platformFeeChannelListSql,
+  refundOnlyRowsSql,
 } from "./revenue-sql";
 
 // Ringkasan aggregations (docs/plans/dashboard-overview.md §1, §3, §4, §7). Every money figure is
@@ -54,6 +55,12 @@ function countedOrdersCte(range: TimeRange, canViewProfit: boolean, { withFees =
     where ${orderDateInRangeSql(range)} and ${countedOrderSql()}`;
 }
 
+/** CTE body: the range's refund-only refunds, one row each (revenue-sql.ts refundOnlyRowsSql, Q19). Dated
+ * by refunded_at, not by the order date: each comes off the omzet of the range it was refunded in. */
+function refundedCte(range: TimeRange): SQL {
+  return refundOnlyRowsSql(range.start.toISOString(), range.end.toISOString());
+}
+
 /** The counted lines joined to their variant and product, as a FROM clause (needs `counted`). */
 function typedLinesSql(): SQL {
   return sql`
@@ -64,21 +71,31 @@ function typedLinesSql(): SQL {
 }
 
 /**
- * CTEs `lines`, `shares`, `allocated` (needs `counted` with omzet): each counted order's omzet
- * (voucher and partial refund included) spread over its lines by their share of the order's
- * goods value (D6): floor for every line, and the order's last line (by id) takes the remainder,
- * so any grouping of `allocated` adds up to the omzet tile to the rupiah. An order whose lines are
- * all Rp 0 gives its whole omzet to its last line. `allocated` has one row per line: `sku`,
- * `product_id`, `product_type_code`, `qty`, `line_omzet`.
+ * CTEs `money_rows`, `lines`, `shares`, `allocated` (needs `counted` with omzet and `refunded`): each
+ * counted order's omzet (voucher and partial refund included) spread over its lines by their share of
+ * the order's goods value (D6): floor for every line, and the order's last line (by id) takes the
+ * remainder, so any grouping of `allocated` adds up to the omzet tile to the rupiah. An order whose
+ * lines are all Rp 0 gives its whole omzet to its last line. A refund-only amount of the range (Q19) is
+ * spread over its order's lines the same way, as a negative omzet with 0 pieces (the goods stayed
+ * sold). `allocated` has one row per line and money row: `sku`, `product_id`, `product_type_code`,
+ * `qty`, `line_omzet`.
  */
 function allocatedLinesCtes(): SQL {
-  return sql`lines as (
-      select oi.order_id, oi.sku, oi.qty, p.id as product_id, p.product_type_code, c.omzet,
+  return sql`money_rows as (
+      select c.id, c.omzet, false as is_refund from counted c
+      union all
+      select r.id, -sum(r.refund), true from refunded r group by r.id
+    ),
+    lines as (
+      select oi.order_id, m.is_refund, oi.sku, case when m.is_refund then 0 else oi.qty end as qty, p.id as product_id, p.product_type_code, m.omzet,
              oi.qty::numeric * oi.unit_price as gross,
-             sum(oi.qty::numeric * oi.unit_price) over by_order as order_gross,
-             row_number() over (partition by oi.order_id order by oi.id desc) = 1 as is_last
-      ${typedLinesSql()}
-      window by_order as (partition by oi.order_id)
+             sum(oi.qty::numeric * oi.unit_price) over by_row as order_gross,
+             row_number() over (partition by oi.order_id, m.is_refund order by oi.id desc) = 1 as is_last
+      from ${orderItems} oi
+      join money_rows m on m.id = oi.order_id
+      join ${productVariants} v on v.sku = oi.sku
+      join ${products} p on p.id = v.product_id
+      window by_row as (partition by oi.order_id, m.is_refund)
     ),
     shares as (
       select lines.*,
@@ -87,7 +104,7 @@ function allocatedLinesCtes(): SQL {
     ),
     allocated as (
       select sku, product_id, product_type_code, qty,
-             case when is_last then omzet - (sum(floor_share) over (partition by order_id) - floor_share) else floor_share end as line_omzet
+             case when is_last then omzet - (sum(floor_share) over (partition by order_id, is_refund) - floor_share) else floor_share end as line_omzet
       from shares
     )`;
 }
@@ -95,7 +112,10 @@ function allocatedLinesCtes(): SQL {
 // ---------- KPI tiles ----------
 
 export interface PeriodMoney {
+  /** After refund-only money refunded in the range (Q19): see `refundOnly`. */
   omzet: number;
+  /** Refund-only money (marketplace_refunds) refunded in the range, already taken off `omzet` (Q19). */
+  refundOnly: number;
   hpp: number;
   labaKotor: number;
   /** laba kotor / omzet; null without omzet. */
@@ -143,12 +163,14 @@ type PeriodTotalsRow = {
   lines_without_cost?: number;
   platform_fee?: string;
   web_shipping_subsidy?: string;
+  refund_only?: string;
   fee_channels?: { channel_id: string; channel_name: string; orders: number; orders_without_fees: number; platform_fee: string }[];
 };
 
 export async function getPeriodTotals(range: TimeRange, { canViewProfit }: ProfitOption, db: Database = defaultDb): Promise<PeriodTotals> {
   const [row] = await db.execute<PeriodTotalsRow>(sql`
     with counted as (${countedOrdersCte(range, canViewProfit, { withFees: true })}),
+    refunded as (${refundedCte(range)}),
     lines as (
       select sum(oi.qty)::bigint as pcs
         ${canViewProfit ? sql`, sum(${lineHppSql()})::bigint as hpp, count(*) filter (where oi.unit_cost = 0)::int as lines_without_cost` : sql``}
@@ -167,7 +189,8 @@ export async function getPeriodTotals(range: TimeRange, { canViewProfit }: Profi
            undone.returned_orders
            ${
              canViewProfit
-               ? sql`, (select coalesce(sum(counted.omzet), 0) from counted)::text as omzet,
+               ? sql`, ((select coalesce(sum(counted.omzet), 0) from counted) - (select coalesce(sum(refunded.refund), 0) from refunded))::text as omzet,
+                  (select coalesce(sum(refunded.refund), 0) from refunded)::text as refund_only,
                   coalesce(lines.hpp, 0)::text as hpp,
                   coalesce(lines.lines_without_cost, 0) as lines_without_cost,
                   (select coalesce(sum(counted.platform_fee), 0) from counted)::text as platform_fee,
@@ -206,6 +229,7 @@ export async function getPeriodTotals(range: TimeRange, { canViewProfit }: Profi
     ...totals,
     money: {
       omzet,
+      refundOnly: toAmount(row.refund_only),
       hpp,
       labaKotor,
       marginBps: omzet > 0 ? Math.round((labaKotor * 10_000) / omzet) : null,
@@ -238,6 +262,9 @@ export interface CountedOrderRow {
   /** A marketplace order without a single fee row (its fee is unknown, not 0). */
   feeMissing: boolean;
   webShippingSubsidy: number;
+  /** A refund-only row (Q19): the order's refund in the range as a negative omzet, dated by the
+   * refund (`orderDate` holds refunded_at). No HPP, fee or subsidy: the goods stayed sold. */
+  refundOnly: boolean;
 }
 
 type CountedOrderDbRow = {
@@ -251,14 +278,17 @@ type CountedOrderDbRow = {
   platform_fee: string;
   fee_missing: boolean;
   shipping_subsidy: string;
+  refund_only: boolean;
 };
 
 /** Every counted order of the range, oldest first, from the same CTE and fragments as
- * getPeriodTotals: the rows add up to its omzet, HPP, platform fee and subsidy exactly. At most
+ * getPeriodTotals, plus one row per refund-only refund of the range (Q19, negative omzet, dated by
+ * the refund): the rows add up to its omzet, HPP, platform fee and subsidy exactly. At most
  * `limit` rows (`truncated` says when more exist). Cost figures: finance.view_profit only. */
 export async function listCountedOrders(range: TimeRange, limit: number, db: Database = defaultDb): Promise<{ rows: CountedOrderRow[]; truncated: boolean }> {
   const rows = await db.execute<CountedOrderDbRow>(sql`
     with counted as (${countedOrdersCte(range, true, { withFees: true })}),
+    refunded as (${refundedCte(range)}),
     order_lines as (
       select oi.order_id, sum(${lineHppSql()})::bigint as hpp, count(*) filter (where oi.unit_cost = 0)::int as lines_without_cost
       from ${orderItems} oi
@@ -267,12 +297,18 @@ export async function listCountedOrders(range: TimeRange, limit: number, db: Dat
     )
     select o.order_no, o.order_date, c.channel_id, ${channelDisplayNameSql(sql`c.channel_id`, sql`ch.name`)} as channel_name,
            c.omzet::text as omzet, coalesce(ol.hpp, 0)::text as hpp, coalesce(ol.lines_without_cost, 0) as lines_without_cost,
-           c.platform_fee::text as platform_fee, c.fee_missing, c.shipping_subsidy::text as shipping_subsidy
+           c.platform_fee::text as platform_fee, c.fee_missing, c.shipping_subsidy::text as shipping_subsidy, false as refund_only
     from counted c
     join ${orders} o on o.id = c.id
     join ${channels} ch on ch.id = c.channel_id
     left join order_lines ol on ol.order_id = c.id
-    order by o.order_date, o.order_no
+    union all
+    select o.order_no, r.refunded_at, r.channel_id, ${channelDisplayNameSql(sql`r.channel_id`, sql`ch.name`)},
+           (-r.refund)::text, '0', 0, '0', false, '0', true
+    from refunded r
+    join ${orders} o on o.id = r.id
+    join ${channels} ch on ch.id = r.channel_id
+    order by 2, 1
     limit ${limit + 1}
   `);
   return {
@@ -287,6 +323,7 @@ export async function listCountedOrders(range: TimeRange, limit: number, db: Dat
       platformFee: toAmount(row.platform_fee),
       feeMissing: row.fee_missing,
       webShippingSubsidy: toAmount(row.shipping_subsidy),
+      refundOnly: row.refund_only,
     })),
     truncated: rows.length > limit,
   };
@@ -314,14 +351,33 @@ export async function getChannelBreakdown(range: TimeRange, { canViewProfit }: P
       from ${orderItems} oi
       join counted c on c.id = oi.order_id
       group by oi.order_id
-    )
-    select c.channel_id, ${channelDisplayNameSql(sql`c.channel_id`, sql`ch.name`)} as channel_name, count(*)::int as orders, coalesce(sum(order_pcs.pcs), 0)::text as pcs
-           ${canViewProfit ? sql`, sum(c.omzet)::text as omzet` : sql``}
-    from counted c
-    join ${channels} ch on ch.id = c.channel_id
-    left join order_pcs on order_pcs.order_id = c.id
-    group by c.channel_id, ch.name
-    order by ${canViewProfit ? sql`sum(c.omzet) desc,` : sql``} count(*) desc, c.channel_id
+    ),
+    by_channel as (
+      select c.channel_id, count(*)::int as orders, coalesce(sum(order_pcs.pcs), 0)::bigint as pcs
+             ${canViewProfit ? sql`, sum(c.omzet)::bigint as omzet` : sql``}
+      from counted c
+      left join order_pcs on order_pcs.order_id = c.id
+      group by c.channel_id
+    )${
+      canViewProfit
+        ? sql`,
+    refunded as (${refundedCte(range)}),
+    refunds_by_channel as (select channel_id, sum(refund)::bigint as refund from refunded group by channel_id),
+    channel_rows as (
+      -- Q19: a channel's refund-only money of the range comes off its omzet, even when it sold
+      -- nothing in the range (a row with 0 orders), so the rows still add up to the omzet tile.
+      select coalesce(b.channel_id, r.channel_id) as channel_id, coalesce(b.orders, 0) as orders, coalesce(b.pcs, 0) as pcs,
+             coalesce(b.omzet, 0) - coalesce(r.refund, 0) as omzet
+      from by_channel b full join refunds_by_channel r on r.channel_id = b.channel_id
+    )`
+        : sql`,
+    channel_rows as (select * from by_channel)`
+    }
+    select x.channel_id, ${channelDisplayNameSql(sql`x.channel_id`, sql`ch.name`)} as channel_name, x.orders, x.pcs::text as pcs
+           ${canViewProfit ? sql`, x.omzet::text as omzet` : sql``}
+    from channel_rows x
+    join ${channels} ch on ch.id = x.channel_id
+    order by ${canViewProfit ? sql`x.omzet desc,` : sql``} x.orders desc, x.channel_id
   `);
   return rows.map((row) => ({
     channelId: row.channel_id,
@@ -351,6 +407,7 @@ export async function getProductTypeBreakdown(
   const rows = canViewProfit
     ? await db.execute<ProductTypeRow>(sql`
         with counted as (${countedOrdersCte(range, true)}),
+        refunded as (${refundedCte(range)}),
         ${allocatedLinesCtes()}
         select t.code as product_type_code, t.name::text as product_type_name,
                sum(allocated.qty)::text as pcs, sum(allocated.line_omzet)::bigint::text as omzet
@@ -430,11 +487,15 @@ export async function getTopProducts(
   const byOmzet = canViewProfit && rank === "omzet";
   const lines = canViewProfit
     ? sql`with counted as (${countedOrdersCte(range, true)}),
+        refunded as (${refundedCte(range)}),
         ${allocatedLinesCtes()},
         variant_totals as (
+          -- A SKU with only refund-only money in the range (0 pieces, negative omzet, Q19) is not a
+          -- best seller: it stays out of this ranking (the totals and breakdowns still subtract it).
           select product_id, sku, sum(qty)::bigint as pcs, sum(line_omzet)::bigint as omzet
           from allocated
           group by product_id, sku
+          having sum(qty) > 0
         )`
     : sql`with counted as (${countedOrdersCte(range, false)}),
         variant_totals as (
@@ -515,6 +576,10 @@ export async function getSalesSeries(range: TimeRange, { canViewProfit, granular
     granularity === "day"
       ? sql`(o.order_date at time zone 'Asia/Jakarta')::date`
       : sql`date_trunc('month', o.order_date at time zone 'Asia/Jakarta')::date`;
+  const refundBucket =
+    granularity === "day"
+      ? sql`(r.refunded_at at time zone 'Asia/Jakarta')::date`
+      : sql`date_trunc('month', r.refunded_at at time zone 'Asia/Jakarta')::date`;
   const rows = await db.execute<SeriesRow>(sql`
     with counted as (
       select o.id, ${bucket} as bucket ${canViewProfit ? sql`, ${orderOmzetSql()} as omzet` : sql``}
@@ -526,13 +591,33 @@ export async function getSalesSeries(range: TimeRange, { canViewProfit, granular
       from ${orderItems} oi
       join counted c on c.id = oi.order_id
       group by oi.order_id
-    )
-    select c.bucket::text as bucket, count(*)::int as orders, coalesce(sum(order_pcs.pcs), 0)::text as pcs
-           ${canViewProfit ? sql`, sum(c.omzet)::text as omzet` : sql``}
-    from counted c
-    left join order_pcs on order_pcs.order_id = c.id
-    group by c.bucket
-    order by c.bucket
+    ),
+    by_bucket as (
+      select c.bucket, count(*)::int as orders, coalesce(sum(order_pcs.pcs), 0)::bigint as pcs
+             ${canViewProfit ? sql`, sum(c.omzet)::bigint as omzet` : sql``}
+      from counted c
+      left join order_pcs on order_pcs.order_id = c.id
+      group by c.bucket
+    )${
+      canViewProfit
+        ? sql`,
+    refunds_by_bucket as (
+      -- Q19: refund-only money comes off the omzet of the day / month it was refunded in.
+      select ${refundBucket} as bucket, sum(r.refund)::bigint as refund
+      from (${refundedCte(range)}) r
+      group by 1
+    ),
+    bucket_rows as (
+      select coalesce(b.bucket, r.bucket) as bucket, coalesce(b.orders, 0) as orders, coalesce(b.pcs, 0) as pcs, coalesce(b.omzet, 0) - coalesce(r.refund, 0) as omzet
+      from by_bucket b full join refunds_by_bucket r on r.bucket = b.bucket
+    )`
+        : sql`,
+    bucket_rows as (select * from by_bucket)`
+    }
+    select x.bucket::text as bucket, x.orders, x.pcs::text as pcs
+           ${canViewProfit ? sql`, x.omzet::text as omzet` : sql``}
+    from bucket_rows x
+    order by x.bucket
   `);
   return rows.map((row) => ({ key: row.bucket, orders: row.orders, pcs: toAmount(row.pcs), omzet: canViewProfit ? toAmount(row.omzet) : null }));
 }

@@ -12,6 +12,8 @@ import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { PostingStatusNotice } from "../_components/posting-status-notice";
 import { BiteshipCard, SalesChecks } from "./_components/sales-checks";
 import { CompletenessCheck, PnlCheck } from "./_components/statement-checks";
+import { TikTokChecks } from "./_components/tiktok-checks";
+import { getTikTokReconciliation } from "@/lib/accounting/tiktok-reconciliation";
 import { Amount, StatusBadge } from "./_components/status";
 
 // Rekonsiliasi (docs/plans/accounting.md §6.3, Sessions 7, 8 and 9): check 1 (persediaan bahan, barang
@@ -245,8 +247,9 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
   const rawBiteship = Array.isArray(raw.biteship) ? raw.biteship[0] : raw.biteship;
   const biteshipTyped = parseTypedBalance(rawBiteship);
   const biteshipInvalid = Boolean(rawBiteship?.trim()) && biteshipTyped === null;
-  const [report, pnl, completeness, postingState] = await Promise.all([
+  const [report, tiktok, pnl, completeness, postingState] = await Promise.all([
     getReconciliation(asOf, undefined, biteshipTyped),
+    getTikTokReconciliation(asOf),
     // Check 4 compares the month of the chosen date, up to that date (inside its set of books).
     getPnlReconciliation({ from: monthStartOf(asOf), to: asOf }),
     getPostingCompleteness(asOf),
@@ -326,6 +329,16 @@ export default async function ReconciliationPage({ searchParams }: { searchParam
           Per pesanan: saldo yang menurut catatan pesanan, pembayaran, dan pengiriman masih tersimpan di akun ini, dibandingkan dengan jurnal pesanan tersebut. Pesanan yang tidak cocok biasanya punya posting yang perlu dicek.
         </p>
         <SalesChecks checks={report.salesChecks} asOf={asOf} segmentStart={report.segmentStart} />
+      </section>
+
+      <section aria-labelledby="reconciliation-tiktok" className="mb-8 flex flex-col gap-3" data-testid="reconciliation-tiktok-section">
+        <h2 id="reconciliation-tiktok" className="text-lg font-semibold text-neutral-900">
+          TikTok Shop
+        </h2>
+        <p className="text-sm text-neutral-600">
+          Saldo Penjual TikTok dicocokkan dengan data keuangan dari TikTok: per pesanan, per laporan, per pencairan ke bank, dan seluruhnya.
+        </p>
+        <TikTokChecks check={tiktok} asOf={asOf} segmentStart={report.segmentStart} />
       </section>
 
       <section aria-labelledby="reconciliation-biteship-heading" className="mb-8 flex flex-col gap-3">
