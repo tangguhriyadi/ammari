@@ -46,9 +46,10 @@ function summary(overrides: Partial<TikTokSyncSummary> = {}): TikTokSyncSummary 
     inbox: { claimed: 0, processed: 0, ignored: 0, retried: 0, failed: 0, released: 0 },
     poll: { slices: 1, slicesDone: 1, pages: 1, orderIds: 0, caughtUp: true, windowEnd: null },
     orders: { fetched: 0, snapshotsInserted: 0, replays: 0, conflicts: 0, projectionsAdvanced: 0, missing: 0, invalid: 0, storeFailed: 0, autoMapped: 0 },
-    apply: { enabled: false, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 0, rechecked: 0, recheckIncomplete: false, notFound: 0, problems: [] },
+    apply: { enabled: false, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 0, rechecked: 0, recheckIncomplete: false, notFound: 0, waitingBackfill: 0, problems: [] },
     afterSales: afterSales(),
     finance: finance(),
+    backfill: { ran: false, id: null, state: null, orders: { slices: 0, pages: 0, stored: 0, sliceSeconds: null }, afterSales: { slices: 0, pages: 0 }, finance: { windows: 0, skipped: null }, stoppedBy: null },
     budgetExhausted: false,
     error: null,
     problems: [],
@@ -129,8 +130,8 @@ describe("POST /api/internal/tiktok/sync", () => {
       [summary({ error: { kind: "api", code: "api:12345" } }), 500],
       [summary({ connection: "reauth_required" }), 500],
       // T5: a held or busy apply is not a failure; an apply that threw is (retried every run).
-      [summary({ apply: { enabled: true, created: 0, updated: 0, unchanged: 0, held: 3, skipped: 0, busy: 1, failed: 0, rechecked: 4, recheckIncomplete: false, notFound: 0, problems: [] } }), 200],
-      [summary({ apply: { enabled: true, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 1, rechecked: 1, recheckIncomplete: false, notFound: 0, problems: [{ id: "o-1", kind: "failed", code: "sqlstate:23505" }] } }), 500],
+      [summary({ apply: { enabled: true, created: 0, updated: 0, unchanged: 0, held: 3, skipped: 0, busy: 1, failed: 0, rechecked: 4, recheckIncomplete: false, notFound: 0, waitingBackfill: 0, problems: [] } }), 200],
+      [summary({ apply: { enabled: true, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 1, rechecked: 1, recheckIncomplete: false, notFound: 0, waitingBackfill: 0, problems: [{ id: "o-1", kind: "failed", code: "sqlstate:23505" }] } }), 500],
       // T6: a return/cancellation apply that threw is a failure too; a busy one is not.
       [summary({ afterSales: afterSales({ busy: 1 }) }), 200],
       [summary({ afterSales: afterSales({ failed: 1, problems: [{ id: "return:r-1", kind: "failed", code: "sqlstate:23505" }] }) }), 500],

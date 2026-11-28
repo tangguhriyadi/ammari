@@ -170,6 +170,17 @@ function validateOrderItemsInput(items: readonly CreateOrderItemInput[]): void {
   }
 }
 
+/** The marketplace number as stored. A TikTok number typed with spaces, `#`, `.` or `-` around its
+ * digits is stored as TikTok's own digits (docs/plans/tiktok-shop-integration.md T9), so the unique
+ * key `(channel_id, channel_order_no)` refuses a second entry of an order the TikTok sync already
+ * created, however it was typed. Anything else is only trimmed. */
+export function normalizeChannelOrderNo(channelId: ChannelId, value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return null;
+  if (channelId === "tiktok" && /^[\s#.-]*\d[\d\s.-]*$/.test(trimmed)) return trimmed.replace(/[\s#.-]/g, "");
+  return trimmed;
+}
+
 export async function createOrder(input: CreateOrderInput, actorStaffUserId: string, db: Database = defaultDb, now: Date = new Date()) {
   validateOrderItemsInput(input.items);
   if (MARKETPLACE_CHANNEL_IDS.includes(input.channelId) && !input.channelOrderNo?.trim()) {
@@ -190,7 +201,7 @@ export async function createOrder(input: CreateOrderInput, actorStaffUserId: str
         .values({
           channelId: input.channelId,
           orderNo,
-          channelOrderNo: input.channelOrderNo?.trim() || null,
+          channelOrderNo: normalizeChannelOrderNo(input.channelId, input.channelOrderNo),
           status: input.status,
           customerId: input.customerId ?? null,
           buyerUsername: input.buyerUsername?.trim() || null,

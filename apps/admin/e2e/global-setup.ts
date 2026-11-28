@@ -411,6 +411,16 @@ export const E2E_TIKTOK_REKON_ORDER_ID = "579000000000000401";
 export const E2E_TIKTOK_REKON_ORDER_NO = "ORD-E2E-TT-REKON";
 export const E2E_TIKTOK_REKON_STATEMENT_ID = "7300000000000000401";
 export const E2E_TIKTOK_REKON_PAYOUT_ID = "7400000000000000401";
+// tiktok-backfill.spec.ts (docs/plans/tiktok-shop-integration.md T9): a backfill already read
+// (`fetched`), so the preview page has one hand-typed order to enrich (typed with a space, corrected
+// on apply), one TikTok order to create, and one hand-typed TikTok order TikTok never returned. Read
+// only: the spec never presses "Terapkan riwayat".
+export const E2E_TIKTOK_BF_ENRICH_ID = "579000000000000501";
+export const E2E_TIKTOK_BF_ENRICH_TYPED = "579000000 000000501";
+export const E2E_TIKTOK_BF_ENRICH_ORDER_NO = "ORD-E2E-TT-RIWAYAT";
+export const E2E_TIKTOK_BF_CREATE_ID = "579000000000000502";
+export const E2E_TIKTOK_BF_LONELY_NUMBER = "579000000000000599";
+export const E2E_TIKTOK_BF_LONELY_ORDER_NO = "ORD-E2E-TT-SALAH-KETIK";
 export const E2E_ACTIVITY_LOG_ADMIN_EMAIL = "activity-log-admin@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_OWNER_EMAIL = "activity-log-owner@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_SUPPLIER_NAME = "E2E Log Supplier Baru";
@@ -541,6 +551,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     tiktokStatementTransactions,
     tiktokPayouts,
     tiktokOrderFees,
+    tiktokBackfills,
+    tiktokSkuMappings,
+    TIKTOK_BACKFILL_FLOOR,
   } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
 
@@ -886,6 +899,64 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         appliedUpdateTime: updateTime,
         buyerMessage: E2E_TIKTOK_BUYER_MESSAGE,
       });
+    }
+
+    // T9: a fetched backfill (see E2E_TIKTOK_BF_ENRICH_ID). Its range is synthetic (inside December
+    // 2026, whatever today is) since the floor CHECK refuses anything before 1 Dec 2026.
+    {
+      const [tiktokAdmin] = await tx.select({ id: staffUsers.id }).from(staffUsers).where(eq(staffUsers.email, E2E_TIKTOK_ADMIN_EMAIL)).limit(1);
+      if (!tiktokAdmin) throw new Error("TikTok admin fixture missing");
+      const from = TIKTOK_BACKFILL_FLOOR;
+      const until = new Date(from.getTime() + 10 * 86_400_000);
+      const [backfill] = await tx
+        .insert(tiktokBackfills)
+        .values({
+          fromTime: from,
+          untilTime: until,
+          state: "fetched",
+          ordersDoneUntil: until,
+          returnsDoneUntil: until,
+          cancellationsDoneUntil: until,
+          statementsDoneUntil: until,
+          paymentsDoneUntil: until,
+          requestedByStaffUserId: tiktokAdmin.id,
+          requestedAt: until,
+          fetchedAt: until,
+        })
+        .returning({ id: tiktokBackfills.id });
+      if (!backfill) throw new Error("failed to seed the TikTok backfill");
+      const shippedAt = new Date(from.getTime() + 2 * 86_400_000);
+      const [typed] = await tx
+        .insert(orders)
+        .values({ channelId: "tiktok", orderNo: E2E_TIKTOK_BF_ENRICH_ORDER_NO, channelOrderNo: E2E_TIKTOK_BF_ENRICH_TYPED, status: "shipped", orderDate: from, subtotalAmount: 259_000, shippingAmount: 0, discountAmount: 0, totalAmount: 259_000, createdByStaffUserId: tiktokAdmin.id })
+        .returning({ id: orders.id });
+      await tx.insert(orderItems).values({ orderId: typed!.id, sku: E2E_RESERVATION_FREE_SKU, qty: 1, unitPrice: 259_000, unitCost: 100_000 });
+      await tx
+        .insert(orders)
+        .values({ channelId: "tiktok", orderNo: E2E_TIKTOK_BF_LONELY_ORDER_NO, channelOrderNo: E2E_TIKTOK_BF_LONELY_NUMBER, status: "shipped", orderDate: shippedAt, subtotalAmount: 259_000, shippingAmount: 0, discountAmount: 0, totalAmount: 259_000, createdByStaffUserId: tiktokAdmin.id });
+      for (const fixture of [
+        { id: E2E_TIKTOK_BF_ENRICH_ID, status: "COMPLETED" },
+        { id: E2E_TIKTOK_BF_CREATE_ID, status: "IN_TRANSIT" },
+      ]) {
+        const updateTime = new Date(shippedAt.getTime() + 3600_000);
+        const seconds = (date: Date) => Math.floor(date.getTime() / 1000);
+        const payload = {
+          id: fixture.id,
+          status: fixture.status,
+          create_time: seconds(from),
+          paid_time: seconds(from),
+          update_time: seconds(updateTime),
+          collection_time: seconds(shippedAt),
+          payment: { currency: "IDR", sub_total: "259000", seller_discount: "0", total_amount: "259000" },
+          line_items: [{ id: `${fixture.id}-li`, sku_id: `${fixture.id}-sku`, seller_sku: E2E_RESERVATION_FREE_SKU, product_name: "Gamis E2E TikTok", original_price: "259000" }],
+        };
+        await tx.insert(tiktokSkuMappings).values({ tiktokSkuId: `${fixture.id}-sku`, variantSku: E2E_RESERVATION_FREE_SKU, sellerSku: E2E_RESERVATION_FREE_SKU, source: "auto_seller_sku" });
+        const [snapshot] = await tx
+          .insert(tiktokOrderSnapshots)
+          .values({ tiktokOrderId: fixture.id, updateTime, contentSha256: "5".repeat(64), payload, source: "backfill" })
+          .returning({ id: tiktokOrderSnapshots.id });
+        await tx.insert(tiktokOrders).values({ tiktokOrderId: fixture.id, status: fixture.status, latestUpdateTime: updateTime, latestSnapshotId: snapshot!.id, paidTime: from, collectionTime: shippedAt, backfillId: backfill.id });
+      }
     }
 
     // T6: TikTok cancellations and returns (see E2E_TIKTOK_RETURN_SKU).

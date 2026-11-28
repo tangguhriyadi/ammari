@@ -38,4 +38,16 @@ export const TIKTOK_HELD_REASON_LABELS: Record<TikTokHeldReason, string> = {
   unknown_status: "Status TikTok tidak dikenal",
   money_format: "Jumlah uang bukan rupiah bulat",
   line_format: "Jumlah atau harga barang tidak bisa dibaca",
+  duplicate_in_admin: "Ada dua pesanan manual dengan nomor TikTok yang sama. Batalkan yang salah",
 };
+
+/** "Ambil riwayat" / "Terapkan riwayat" refusals (docs/plans/tiktok-shop-integration.md T9). */
+export const TIKTOK_BACKFILL_ERRORS = {
+  not_connected: "Hubungkan TikTok Shop dulu.",
+  already_open: "Riwayat sebelumnya belum selesai. Terapkan dulu riwayat itu sebelum mengambil lagi.",
+  invalid_date: "Tanggal tidak valid.",
+  before_floor: "Riwayat paling awal 1 Desember 2026, saat pembukuan dimulai.",
+  not_in_past: "Pilih tanggal paling lambat kemarin. Pesanan hari ini sudah dibaca otomatis.",
+  none: "Belum ada riwayat yang siap diterapkan.",
+  still_fetching: "Riwayat masih dibaca. Tunggu sampai selesai, lalu cek pratinjaunya.",
+} as const;

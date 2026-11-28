@@ -37,8 +37,14 @@ As of 2026-10-25 (marketplace import session 6).
   from before the checkout sessions (migration 0029) with the flag off.
 - Dev and prod deploy pipelines, backups, monitoring (`docs/deploy.md`, `docs/deploy-prod.md`).
 - Accounting ledger (§5.4; docs/plans/accounting.md): sessions 1 to 4 and 6 to 12 (migrations 0049 to 0056).
-  Session 5 (real marketplace ship dates) is blocked on real export headers; MDR posting waits for the Midtrans fee
-  feature.
+  Session 5 (real marketplace ship dates) is blocked on real export headers **for Shopee only** (TikTok gets them from
+  the API, below); MDR posting waits for the Midtrans fee feature.
+- **TikTok Shop API sync** (docs/plans/tiktok-shop-integration.md, T1 to T9, migrations 0057 to 0063; §5.2a): OAuth
+  connection with encrypted tokens, verified webhook inbox, order sync into admin orders and stock behind a kill switch
+  (off by default), returns and cancellations, finance (fees, statements, payouts), the accounting rules M1/M2 on
+  TikTok's `collection_time`, S7, M3, M5, and the history backfill from 1 Dec 2026 in enrich mode. Read only towards
+  TikTok (no write-back, no stock sync to TikTok yet). **Not live**: it waits for TikTok's app review and the T0 checks
+  on the development shop; the server steps are the plan's runbook (§14) and go-live checklist (§15).
 
 **Next:**
 
@@ -53,7 +59,7 @@ As of 2026-10-25 (marketplace import session 6).
   idempotent per marketplace order number), import history, the Marketplace block on the order page,
   Daftar SKU, and "Laba setelah biaya platform" on Ringkasan. **Shopee Simpan stays locked**
   (`SHOPEE_MAPPING_VERIFIED = false`) until a real Seller Center header is checked (plan O1, session
-  7); TikTok Shop is refused until its export is mapped (O3). The income (Penghasilan) export is a
+  7); the TikTok Shop file is refused (O3): TikTok orders come through the API sync instead (§5.2a). The income (Penghasilan) export is a
   later plan.
 - Overview dashboard (§6; docs/plans/dashboard-overview.md): sessions 1 to 5 done (omzet / laba
   kotor definitions and queries, `sales_goal`, migration 0039; "Target penjualan" on `/settings`;
@@ -700,6 +706,31 @@ available only from received stock (its `available` flag is `SUM(qty) > 0`).
 - `cost_assumptions` — dated by `effective_from`; see §7 for the initial row.
 - Defect disposal proceeds (`defect_movements.proceeds_amount`, Lelang) are not in the Overview
   metrics; the accounting ledger books them (rule A2: Dr Kas tunai / Cr 7-1101 Hasil lelang, §5.4).
+
+### 5.2a TikTok Shop integration (docs/plans/tiktok-shop-integration.md)
+
+- `tiktok_shop_connections` — one row per authorized shop (one `active` at most): `shop_cipher`, tokens **encrypted at
+  rest** (AES-256-GCM, `TIKTOK_TOKEN_ENC_KEY_V<n>`), scopes, health, and the kill switch `orders_apply_enabled`
+  (default false: the sync only reads and stores). `tiktok_oauth_states` (hash only, single use), `tiktok_sync_cursors`
+  (one per polled resource), `tiktok_webhook_events` (verified deliveries, deduped on `tts_notification_id`, 12-month
+  retention).
+- `tiktok_order_snapshots` (versioned, allowlisted copies, never buyer data) and `tiktok_orders` (forward-only
+  projection, `apply_state` / `held_reason`, `buyer_message` purged 30 days after COMPLETED/CANCELLED, and since 0063
+  `backfill_id`). `tiktok_sku_mappings`: one TikTok SKU = one Ammari variant.
+- A TikTok order reaches `orders` only through `packages/commerce/src/tiktok/apply.ts` (`transitionOrderStatus` and the
+  stock ledger), matched to a hand-typed order on `(tiktok, channel_order_no)`; since 0063 also on the number with
+  spaces, `#`, `.` or `-` removed, which is then corrected to TikTok's own. Never duplicated (unique key + `ON CONFLICT`).
+  `orders.marketplace_shipped_at` / `_completed_at` / `_returned_at` hold TikTok's dates (written once).
+- `tiktok_returns`, `marketplace_refunds` (refund-only money, status and stock untouched); stock of a return comes back
+  only at "Retur diterima".
+- Finance: `tiktok_finance_snapshots`, `tiktok_statements`, `tiktok_statement_transactions`,
+  `tiktok_unsettled_transactions`, `tiktok_order_fee_lines`, `tiktok_order_fees`, `tiktok_payouts`;
+  `order_channel_fees.source` (`estimate` | `actual`).
+- `tiktok_backfills` (0063) — one history read from 1 Dec 2026 at the earliest (CHECK), progress per resource, at most
+  one not confirmed. An order it stores first waits for "Terapkan riwayat" after its preview, and still needs the kill
+  switch on.
+- Cron: `POST /api/internal/tiktok/sync` every 5 minutes (apps/web, shared cron lock); webhook
+  `https://ammari.id/api/integrations/tiktok/webhook`; OAuth callback on admin. Permission `integrations.manage`.
 
 ### 5.3 Customers & vouchers
 

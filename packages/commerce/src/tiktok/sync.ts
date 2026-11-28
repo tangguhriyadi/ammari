@@ -23,7 +23,7 @@ import {
   type TikTokErrorKind,
   type TokenKeyring,
 } from "@ammari/tiktok-shop";
-import type { TikTokSnapshotSource } from "@ammari/db/schema";
+import type { TikTokBackfillState, TikTokSnapshotSource } from "@ammari/db/schema";
 import type { Database } from "../db";
 import { getTikTokConnectionView, loadTikTokCredentials, refreshTikTokToken, tiktokErrorCode } from "./connection";
 import { applyTikTokAfterSale, ingestTikTokAfterSale, listTikTokAfterSalesToApply, type ApplyTikTokAfterSaleResult } from "./after-sale";
@@ -38,9 +38,11 @@ import {
   storeTikTokStatementTransactions,
   storeTikTokUnsettledTransaction,
 } from "./finance";
-import { TIKTOK_FINANCE_REOPEN_MAX_MS, planTikTokFinanceWindows } from "./finance-windows";
+import { TIKTOK_FINANCE_REOPEN_MAX_MS, TIKTOK_FINANCE_SLICE_MS, planTikTokFinanceWindows } from "./finance-windows";
+import { advanceTikTokBackfill, loadFetchingTikTokBackfill, markTikTokBackfillFetched, recordTikTokBackfillRun, setTikTokBackfillSlice, type TikTokBackfillResource, type TikTokBackfillView } from "./backfill";
+import { nextTikTokBackfillSliceSeconds, planTikTokBackfillWindows } from "./backfill-windows";
 import { ingestTikTokOrder } from "./order-store";
-import { TIKTOK_POLL_LAG_MS, planTikTokPollWindows } from "./order-windows";
+import { TIKTOK_POLL_LAG_MS, TIKTOK_POLL_SLICE_MS, planTikTokPollWindows, type TikTokPollWindow } from "./order-windows";
 import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokConnectionEvents } from "./webhook";
 
 // The TikTok sync run (docs/plans/tiktok-shop-integration.md §4.1, §8.2, §8.3, §9; T4), called by
@@ -76,6 +78,12 @@ import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokCon
 // on its own cursor (`unsettled`, `statements`, `payments`), then order_channel_fees rebuilt for every
 // order touched (finance.ts). No posting rule or journal (T8). Nothing here logs: the route logs the
 // summary (codes only, never a body or a token).
+// T9 (docs/plans/tiktok-shop-integration.md §9.6): a backfill in `fetching` is read last, in what is left
+// of the budget, so packing and the live poll never wait for history: orders, returns and
+// cancellations by `update_time` slices, statements and payouts by their time, each resuming at its
+// last finished slice (`tiktok_backfills.*_done_until`). Orders are stored with source `backfill`; one
+// the backfill is the first to store is not applied until the owner confirms the backfill (apply.ts).
+// An order slice that does not finish within a run is halved for the next run (T4's known limit).
 
 export const TIKTOK_SYNC_BUDGET_MS = 150_000;
 /** The webhook's `after()` drain of one order. */
@@ -131,6 +139,8 @@ export interface TikTokApplyCounts {
   recheckIncomplete: boolean;
   /** Projection gone between store and apply (should never happen). */
   notFound: number;
+  /** T9: stored first by a backfill that is not confirmed yet (left alone until "Terapkan riwayat"). */
+  waitingBackfill: number;
   /** Up to 20 orders that failed (error class or SQLSTATE) or were busy (lock timeout, deadlock, an
    * order moved under the lock), so a repeating one can be named. Codes only, never values. */
   problems: { id: string; kind: "failed" | "busy" | "not_found"; code: string }[];
@@ -185,6 +195,19 @@ export interface TikTokFinanceCounts {
   problems: { id: string; kind: "invalid" | "busy" | "failed" | "store_failed"; code: string }[];
 }
 
+export interface TikTokBackfillCounts {
+  /** A backfill was being read and this run worked on it. */
+  ran: boolean;
+  id: string | null;
+  /** Its state after this run (`fetched` once everything is read); null when there is none. */
+  state: TikTokBackfillState | null;
+  orders: { slices: number; pages: number; stored: number; sliceSeconds: number | null };
+  afterSales: { slices: number; pages: number };
+  finance: { windows: number; skipped: "no_scope" | null };
+  /** What stopped it this run (a TikTok error code, `budget_exhausted`, or an incomplete slice). */
+  stoppedBy: string | null;
+}
+
 export interface TikTokSyncSummary {
   connection: "active" | "not_connected" | "reauth_required";
   connectionEvents: { processed: number; notApplied: number };
@@ -195,6 +218,7 @@ export interface TikTokSyncSummary {
   apply: TikTokApplyCounts;
   afterSales: TikTokAfterSaleCounts;
   finance: TikTokFinanceCounts;
+  backfill: TikTokBackfillCounts;
   budgetExhausted: boolean;
   /** What stopped the run: a TikTok error's kind and code, or `incomplete` (orders of a slice
    * not stored; the cursor stayed). Never a message or a body. */
@@ -208,7 +232,7 @@ function emptyCounts(): TikTokOrderCounts {
 }
 
 function emptyApplyCounts(): TikTokApplyCounts {
-  return { enabled: false, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 0, rechecked: 0, recheckIncomplete: false, notFound: 0, problems: [] };
+  return { enabled: false, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 0, rechecked: 0, recheckIncomplete: false, notFound: 0, waitingBackfill: 0, problems: [] };
 }
 
 function emptyAfterSaleCounts(): TikTokAfterSaleCounts {
@@ -231,6 +255,7 @@ function emptySummary(): TikTokSyncSummary {
     apply: emptyApplyCounts(),
     afterSales: emptyAfterSaleCounts(),
     finance: emptyFinanceCounts(),
+    backfill: { ran: false, id: null, state: null, orders: { slices: 0, pages: 0, stored: 0, sliceSeconds: null }, afterSales: { slices: 0, pages: 0 }, finance: { windows: 0, skipped: null }, stoppedBy: null },
     budgetExhausted: false,
     error: null,
     problems: [],
@@ -251,6 +276,8 @@ interface Session {
   afterSales: TikTokAfterSaleCounts;
   /** Orders stored by this run (fetched again only by the next run). */
   storedOrders: Set<string>;
+  /** T9: set while the backfill step runs; orders it stores first carry it (the gate). */
+  backfillId: string | null;
 }
 
 async function openSession(db: Database, deps: TikTokSyncDeps, clock: () => Date, deadline: number, summary: TikTokSyncSummary): Promise<Session | "not_connected" | "reauth_required"> {
@@ -263,7 +290,7 @@ async function openSession(db: Database, deps: TikTokSyncDeps, clock: () => Date
   }
   const { shopCipher, accessToken, tokenGeneration } = credentials.credentials;
   apply.enabled = await tiktokOrdersApplyEnabled(db);
-  return { db, deps, clock, deadline, shopCipher, accessToken, tokenGeneration, counts, apply, afterSales, storedOrders: new Set() };
+  return { db, deps, clock, deadline, shopCipher, accessToken, tokenGeneration, counts, apply, afterSales, storedOrders: new Set(), backfillId: null };
 }
 
 function onAuthError(session: Session, path: string): () => Promise<Secret> {
@@ -318,7 +345,7 @@ async function syncTikTokOrdersById(session: Session, ids: readonly string[], so
     const details = await getTikTokOrderDetails(session.deps.api, batch, shopCall(session, "/order/detail"));
     for (const order of details.orders) {
       try {
-        const result = await ingestTikTokOrder(session.db, order, source, session.clock());
+        const result = await ingestTikTokOrder(session.db, order, source, session.clock(), { backfillId: session.backfillId });
         outcome.stored.add(order.tiktokOrderId);
         session.storedOrders.add(order.tiktokOrderId);
         session.counts.fetched += 1;
@@ -383,6 +410,9 @@ function countApply(apply: TikTokApplyCounts, tiktokOrderId: string, result: App
     case "busy":
       apply.busy += 1;
       noteApplyProblem(apply, { id: tiktokOrderId, kind: "busy", code: result.code });
+      break;
+    case "waiting_backfill":
+      apply.waitingBackfill += 1;
       break;
   }
 }
@@ -602,6 +632,36 @@ async function advanceOrdersCursor(db: Database, windowEnd: Date, resource: Curs
   `);
 }
 
+/** Every page of one order search window, storing every order listed (Get Order Detail). Returns the
+ * ids that could not be stored; the caller holds its cursor when any. `done`: ids already stored in
+ * this run (pages overlap at their boundaries). */
+async function searchOrderWindow(session: Session, window: TikTokPollWindow, source: TikTokSnapshotSource, done: Set<string>, onPage: (fresh: number) => void): Promise<Map<string, TikTokOrderProblem>> {
+  const sliceProblems = new Map<string, TikTokOrderProblem>();
+  let pageToken: string | null = null;
+  const seenTokens = new Set<string>();
+  for (let page = 1; ; page += 1) {
+    if (!budgetLeft(session)) throw budgetError("/order/search");
+    const result = await searchTikTokOrders(session.deps.api, { updateTimeGe: window.start, updateTimeLt: window.end, pageToken, ...shopCall(session, "/order/search") });
+    session.counts.invalid += result.invalidIds;
+    if (result.invalidIds > 0) sliceProblems.set(`search:${window.start.toISOString()}`, "order_invalid");
+    const fresh = result.orderIds.filter((id) => !done.has(id));
+    onPage(fresh.length);
+    const outcome = newOutcome();
+    try {
+      await syncTikTokOrdersById(session, fresh, source, outcome);
+    } finally {
+      for (const id of outcome.stored) done.add(id);
+      for (const [id, problem] of outcome.problems) sliceProblems.set(id, problem);
+    }
+    if (!result.nextPageToken) return sliceProblems;
+    if (seenTokens.has(result.nextPageToken) || page >= TIKTOK_MAX_PAGES_PER_SLICE) {
+      throw new TikTokApiError({ kind: "invalid_response", path: "/order/search", httpStatus: null, code: null, requestId: null });
+    }
+    seenTokens.add(result.nextPageToken);
+    pageToken = result.nextPageToken;
+  }
+}
+
 async function pollOrders(session: Session, summary: TikTokSyncSummary): Promise<void> {
   const cursor = await readOrdersCursor(session.db, session.clock());
   summary.poll.windowEnd = cursor.windowEnd?.toISOString() ?? null;
@@ -613,31 +673,10 @@ async function pollOrders(session: Session, summary: TikTokSyncSummary): Promise
   for (const window of windows) {
     // Every id of the slice must be stored before the cursor may pass it (§8.3): an order listed
     // but missing, unusable or not storable holds the cursor, and the run reports it.
-    const sliceProblems = new Map<string, TikTokOrderProblem>();
-    let pageToken: string | null = null;
-    const seenTokens = new Set<string>();
-    for (let page = 1; ; page += 1) {
-      if (!budgetLeft(session)) throw budgetError("/order/search");
-      const result = await searchTikTokOrders(session.deps.api, { updateTimeGe: window.start, updateTimeLt: window.end, pageToken, ...shopCall(session, "/order/search") });
+    const sliceProblems = await searchOrderWindow(session, window, "poll", done, (fresh) => {
       summary.poll.pages += 1;
-      session.counts.invalid += result.invalidIds;
-      if (result.invalidIds > 0) sliceProblems.set(`search:${window.start.toISOString()}`, "order_invalid");
-      const fresh = result.orderIds.filter((id) => !done.has(id));
-      summary.poll.orderIds += fresh.length;
-      const outcome = newOutcome();
-      try {
-        await syncTikTokOrdersById(session, fresh, "poll", outcome);
-      } finally {
-        for (const id of outcome.stored) done.add(id);
-        for (const [id, problem] of outcome.problems) sliceProblems.set(id, problem);
-      }
-      if (!result.nextPageToken) break;
-      if (seenTokens.has(result.nextPageToken) || page >= TIKTOK_MAX_PAGES_PER_SLICE) {
-        throw new TikTokApiError({ kind: "invalid_response", path: "/order/search", httpStatus: null, code: null, requestId: null });
-      }
-      seenTokens.add(result.nextPageToken);
-      pageToken = result.nextPageToken;
-    }
+      summary.poll.orderIds += fresh;
+    });
     if (sliceProblems.size > 0) {
       summary.problems.push(...problemSample(sliceProblems));
       throw new SyncIncomplete([...sliceProblems.values()][0]!);
@@ -748,6 +787,31 @@ async function syncAfterSalesForOrders(session: Session, kind: TikTokAfterSaleKi
   }
 }
 
+/** Every page of one returns / cancellations search window, storing every request (and its order).
+ * Returns the TikTok order ids whose request or order could not be stored. */
+async function searchAfterSaleWindow(session: Session, summary: TikTokSyncSummary, kind: TikTokAfterSaleKind, window: TikTokPollWindow, source: TikTokSnapshotSource, onPage: () => void): Promise<Map<string, TikTokOrderProblem>> {
+  const sliceProblems = new Map<string, TikTokOrderProblem>();
+  let pageToken: string | null = null;
+  const seenTokens = new Set<string>();
+  for (let page = 1; ; page += 1) {
+    if (!budgetLeft(session)) throw budgetError("/return_refund/search");
+    const result = await searchTikTokAfterSales(session.deps.api, kind, { updateTimeGe: window.start, updateTimeLt: window.end, pageToken, ...shopCall(session, "/return_refund/search") });
+    onPage();
+    summary.afterSales.invalid += result.invalid;
+    if (result.invalid > 0) {
+      sliceProblems.set(`${kind}:${result.invalidIds[0] ?? window.start.toISOString()}`, "order_invalid");
+      noteAfterSaleProblem(summary.afterSales, { id: `${kind}:${result.invalidIds[0] ?? "search"}`, kind: "invalid", code: "invalid_record" });
+    }
+    for (const [id, problem] of await storeAfterSales(session, result.records, source)) sliceProblems.set(id, problem);
+    if (!result.nextPageToken) return sliceProblems;
+    if (seenTokens.has(result.nextPageToken) || page >= TIKTOK_MAX_PAGES_PER_SLICE) {
+      throw new TikTokApiError({ kind: "invalid_response", path: "/return_refund/search", httpStatus: null, code: null, requestId: null });
+    }
+    seenTokens.add(result.nextPageToken);
+    pageToken = result.nextPageToken;
+  }
+}
+
 /** The reconciliation poll for one kind (plan §9 step 5): the same window mechanics as orders
  * (order-windows.ts), on its own cursor. A slice whose requests or orders could not all be stored
  * holds the cursor (`incomplete`); the next run repeats it, and storing is idempotent. */
@@ -759,26 +823,9 @@ async function pollAfterSales(session: Session, summary: TikTokSyncSummary, kind
   const windows = planTikTokPollWindows(cursor, session.clock());
   poll.slices = windows.length;
   for (const window of windows) {
-    const sliceProblems = new Map<string, TikTokOrderProblem>();
-    let pageToken: string | null = null;
-    const seenTokens = new Set<string>();
-    for (let page = 1; ; page += 1) {
-      if (!budgetLeft(session)) throw budgetError("/return_refund/search");
-      const result = await searchTikTokAfterSales(session.deps.api, kind, { updateTimeGe: window.start, updateTimeLt: window.end, pageToken, ...shopCall(session, "/return_refund/search") });
+    const sliceProblems = await searchAfterSaleWindow(session, summary, kind, window, "poll", () => {
       poll.pages += 1;
-      summary.afterSales.invalid += result.invalid;
-      if (result.invalid > 0) {
-        sliceProblems.set(`${kind}:${result.invalidIds[0] ?? window.start.toISOString()}`, "order_invalid");
-        noteAfterSaleProblem(summary.afterSales, { id: `${kind}:${result.invalidIds[0] ?? "search"}`, kind: "invalid", code: "invalid_record" });
-      }
-      for (const [id, problem] of await storeAfterSales(session, result.records, "poll")) sliceProblems.set(id, problem);
-      if (!result.nextPageToken) break;
-      if (seenTokens.has(result.nextPageToken) || page >= TIKTOK_MAX_PAGES_PER_SLICE) {
-        throw new TikTokApiError({ kind: "invalid_response", path: "/return_refund/search", httpStatus: null, code: null, requestId: null });
-      }
-      seenTokens.add(result.nextPageToken);
-      pageToken = result.nextPageToken;
-    }
+    });
     if (sliceProblems.size > 0) {
       summary.problems.push(...problemSample(sliceProblems));
       throw new SyncIncomplete([...sliceProblems.values()][0]!);
@@ -1017,34 +1064,39 @@ async function fetchOrderFees(session: Session, summary: TikTokSyncSummary, touc
   }
 }
 
+/** One Get Payments window; true when something in it could not be stored (the cursor must stay). */
+async function pollPaymentWindow(session: Session, summary: TikTokSyncSummary, window: TikTokPollWindow): Promise<boolean> {
+  const counts = summary.finance;
+  let problems = 0;
+  await eachPage(
+    session,
+    "/finance/payments",
+    (pageToken) => getTikTokPayments(session.deps.api, { from: window.start, to: window.end, pageToken, ...shopCall(session, "/finance/payments") }),
+    async (page) => {
+      problems += page.invalid;
+      counts.invalid += page.invalid;
+      for (const id of page.invalidIds) noteFinanceProblem(counts, { id: `payment:${id}`, kind: "invalid", code: "invalid_record" });
+      for (const record of page.records) {
+        try {
+          await storeTikTokPayout(session.db, record, session.clock());
+          counts.payouts += 1;
+        } catch (error) {
+          problems += 1;
+          noteFinanceProblem(counts, { id: `payment:${record.paymentId}`, kind: "store_failed", code: applyErrorCode(error) });
+        }
+      }
+    },
+  );
+  return problems > 0;
+}
+
 /** Get Payments by `create_time` (+ reopen for payouts not final yet). */
 async function pollPayments(session: Session, summary: TikTokSyncSummary): Promise<void> {
-  const counts = summary.finance;
   const cursor = await readOrdersCursor(session.db, session.clock(), "payments");
   const windows = planTikTokFinanceWindows(cursor, session.clock(), await reopenFrom(session.db, "payments", session.clock()));
   let held = false;
   for (const window of windows) {
-    let problems = 0;
-    await eachPage(
-      session,
-      "/finance/payments",
-      (pageToken) => getTikTokPayments(session.deps.api, { from: window.start, to: window.end, pageToken, ...shopCall(session, "/finance/payments") }),
-      async (page) => {
-        problems += page.invalid;
-        counts.invalid += page.invalid;
-        for (const id of page.invalidIds) noteFinanceProblem(counts, { id: `payment:${id}`, kind: "invalid", code: "invalid_record" });
-        for (const record of page.records) {
-          try {
-            await storeTikTokPayout(session.db, record, session.clock());
-            counts.payouts += 1;
-          } catch (error) {
-            problems += 1;
-            noteFinanceProblem(counts, { id: `payment:${record.paymentId}`, kind: "store_failed", code: applyErrorCode(error) });
-          }
-        }
-      },
-    );
-    if (problems > 0) held = true;
+    if (await pollPaymentWindow(session, summary, window)) held = true;
     else if (!held) await advanceOrdersCursor(session.db, window.end, "payments");
   }
   if (held) throw new SyncIncomplete("finance_invalid");
@@ -1070,6 +1122,133 @@ async function rebuildFees(session: Session, summary: TikTokSyncSummary, touched
     } catch (error) {
       counts.failed += 1;
       noteFinanceProblem(counts, { id: `order:${tiktokOrderId}`, kind: "failed", code: applyErrorCode(error) });
+    }
+  }
+}
+
+// ---- Backfill (T9) ---------------------------------------------------------------------------
+
+/** One resource of the backfill: its slices in order, each stored completely before its progress moves
+ * (resumable). `fetchWindow` returns true when the slice had something it could not store. */
+async function backfillResource(
+  session: Session,
+  backfill: TikTokBackfillView,
+  resource: TikTokBackfillResource,
+  doneUntil: Date | null,
+  sliceSeconds: number,
+  fetchWindow: (window: TikTokPollWindow) => Promise<boolean>,
+): Promise<void> {
+  for (const window of planTikTokBackfillWindows({ from: backfill.fromTime, until: backfill.untilTime, doneUntil, sliceSeconds })) {
+    if (await fetchWindow(window)) throw new SyncIncomplete(resource === "statements" || resource === "payments" ? "finance_invalid" : "order_invalid");
+    await advanceTikTokBackfill(session.db, backfill.id, resource, window.end);
+  }
+}
+
+/** Orders: like the live poll, but the slice size adapts (T4's known limit). A slice that started and
+ * ran out of budget is halved for the next run; one that finished quickly lets the size grow back. */
+async function backfillOrders(session: Session, summary: TikTokSyncSummary, backfill: TikTokBackfillView, budgetMs: number): Promise<void> {
+  const counts = summary.backfill.orders;
+  let slice = backfill.ordersSliceSeconds;
+  let doneUntil = backfill.ordersDoneUntil;
+  const done = new Set<string>();
+  counts.sliceSeconds = slice;
+  for (;;) {
+    const [window] = planTikTokBackfillWindows({ from: backfill.fromTime, until: backfill.untilTime, doneUntil, sliceSeconds: slice });
+    if (!window) return;
+    const started = session.clock().getTime();
+    let pages = 0;
+    const storedBefore = session.counts.fetched;
+    let problems: Map<string, TikTokOrderProblem>;
+    try {
+      problems = await searchOrderWindow(session, window, "backfill", done, () => {
+        pages += 1;
+        counts.pages += 1;
+      });
+    } catch (error) {
+      // Halved only when the slice had a real share of the run: a run that reached the backfill with a
+      // few seconds left says nothing about the slice's size.
+      if (error instanceof TikTokApiError && error.kind === "budget_exhausted" && pages > 0 && budgetMs * 2 >= TIKTOK_SYNC_BUDGET_MS) {
+        slice = nextTikTokBackfillSliceSeconds(slice, { finished: false, elapsedMs: session.clock().getTime() - started, budgetMs });
+        counts.sliceSeconds = slice;
+        await setTikTokBackfillSlice(session.db, backfill.id, slice);
+      }
+      throw error;
+    } finally {
+      counts.stored += session.counts.fetched - storedBefore;
+    }
+    counts.slices += 1;
+    if (problems.size > 0) {
+      summary.problems.push(...problemSample(problems));
+      throw new SyncIncomplete([...problems.values()][0]!);
+    }
+    await advanceTikTokBackfill(session.db, backfill.id, "orders", window.end);
+    doneUntil = window.end;
+    const grown = nextTikTokBackfillSliceSeconds(slice, { finished: true, elapsedMs: session.clock().getTime() - started, budgetMs: TIKTOK_SYNC_BUDGET_MS });
+    if (grown !== slice) {
+      slice = grown;
+      counts.sliceSeconds = slice;
+      await setTikTokBackfillSlice(session.db, backfill.id, slice);
+    }
+  }
+}
+
+/** Plan T9: reads the backfill in `fetching` with what is left of the run. Throws a TikTokApiError
+ * (the run's own handling) or SyncIncomplete (a slice that could not be stored; its progress stays). */
+async function runTikTokBackfill(session: Session, summary: TikTokSyncSummary): Promise<void> {
+  const backfill = await loadFetchingTikTokBackfill(session.db);
+  if (!backfill) return;
+  const counts = summary.backfill;
+  counts.ran = true;
+  counts.id = backfill.id;
+  counts.state = backfill.state;
+  const budgetMs = Math.max(0, session.deadline - session.clock().getTime());
+  session.backfillId = backfill.id;
+  let stoppedBy: string | null = null;
+  try {
+    await backfillOrders(session, summary, backfill, budgetMs);
+    for (const kind of ["return", "cancellation"] as const) {
+      const resource = kind === "return" ? "returns" : "cancellations";
+      await backfillResource(session, backfill, resource, kind === "return" ? backfill.returnsDoneUntil : backfill.cancellationsDoneUntil, TIKTOK_POLL_SLICE_MS / 1000, async (window) => {
+        counts.afterSales.slices += 1;
+        const problems = await searchAfterSaleWindow(session, summary, kind, window, "backfill", () => {
+          counts.afterSales.pages += 1;
+        });
+        if (problems.size > 0) summary.problems.push(...problemSample(problems));
+        return problems.size > 0;
+      });
+    }
+    const view = await getTikTokConnectionView(session.db);
+    if (!view?.grantedScopes.includes(TIKTOK_FINANCE_SCOPE)) {
+      // Never marked done without reading: the history's statements and payouts would be lost for good
+      // once confirmed. The backfill waits in `fetching` (code `finance_no_scope`, a warning every run)
+      // until the scope is granted (reconnect), runbook §14 step 9.
+      counts.finance.skipped = "no_scope";
+      stoppedBy = "finance_no_scope";
+      return;
+    } else {
+      const touched = new Set<string>();
+      await backfillResource(session, backfill, "statements", backfill.statementsDoneUntil, TIKTOK_FINANCE_SLICE_MS / 1000, async (window) => {
+        counts.finance.windows += 1;
+        return pollStatementWindow(session, summary, touched, window);
+      });
+      await backfillResource(session, backfill, "payments", backfill.paymentsDoneUntil, TIKTOK_FINANCE_SLICE_MS / 1000, async (window) => {
+        counts.finance.windows += 1;
+        return pollPaymentWindow(session, summary, window);
+      });
+      // The SKU-level fees of the orders these statements name are fetched by the live finance step
+      // (pending transactions, oldest first), and written once each order is linked.
+    }
+    if (await markTikTokBackfillFetched(session.db, backfill.id, session.clock())) counts.state = "fetched";
+  } catch (error) {
+    stoppedBy = error instanceof SyncIncomplete ? error.code : error instanceof TikTokApiError ? (error.kind === "budget_exhausted" ? "budget_exhausted" : tiktokErrorCode(error)) : "failed";
+    throw error;
+  } finally {
+    session.backfillId = null;
+    counts.stoppedBy = stoppedBy;
+    try {
+      await recordTikTokBackfillRun(session.db, backfill.id, session.clock(), stoppedBy, { keepError: stoppedBy === "budget_exhausted" });
+    } catch {
+      // Bookkeeping only: never masks the run's own outcome (the next run records it again).
     }
   }
 }
@@ -1185,6 +1364,18 @@ export async function runTikTokSync(db: Database, deps: TikTokSyncDeps, options:
           noteFinanceProblem(summary.finance, { id: "rebuild", kind: "failed", code: applyErrorCode(error) });
         }
       }
+    }
+    // 7. The backfill (T9), with what is left of the budget. An incomplete slice is loud like any
+    // other (route 500 → ALERT) but holds only the backfill's own progress.
+    try {
+      await runTikTokBackfill(session, summary);
+    } catch (error) {
+      // Running out of budget is how the backfill normally ends a run (it takes what is left): not a
+      // warning and not the connection's last error; it resumes next run.
+      if (error instanceof TikTokApiError && error.kind === "budget_exhausted") {
+        // counted in summary.backfill.stoppedBy
+      } else if (error instanceof SyncIncomplete) incomplete ??= error;
+      else throw error;
     }
     if (incomplete) {
       const code = (incomplete as SyncIncomplete).code;

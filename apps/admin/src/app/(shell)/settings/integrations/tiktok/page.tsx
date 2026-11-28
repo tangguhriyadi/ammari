@@ -1,15 +1,17 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { Badge, Breadcrumb, Card, PageHeader, type BadgeVariant } from "@ammari/ui";
-import { formatDateTime, formatNumber } from "@ammari/ui/lib";
-import { tiktokConnectionBanner } from "@ammari/commerce/tiktok";
-import type { TikTokConnectionStatus } from "@ammari/db/schema";
+import { formatDate, formatDateTime, formatNumber } from "@ammari/ui/lib";
+import { getTikTokBackfillView, tiktokConnectionBanner } from "@ammari/commerce/tiktok";
+import { ACCOUNTING_TRIAL_MONTH, type TikTokBackfillState, type TikTokConnectionStatus } from "@ammari/db/schema";
+import { defaultDb } from "@/lib/db";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { getTikTokRuntime, TIKTOK_INTEGRATION_PATH, TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
 import { TIKTOK_CONNECT_ERRORS, TIKTOK_CONNECTED_MESSAGE, TIKTOK_HELD_REASON_LABELS, TIKTOK_RECONNECTED_MESSAGE, isTikTokConnectErrorCode } from "@/lib/integrations/tiktok-messages";
 import { getTikTokIntegrationPageData } from "@/lib/integrations/tiktok-queries";
 import { rootCrumbs } from "@/lib/nav/breadcrumb";
 import { TikTokConnectionActions } from "./_components/tiktok-connection-actions";
+import { TikTokBackfillActions } from "./_components/tiktok-backfill-actions";
 import { TikTokConnectionBanner } from "./_components/tiktok-connection-banner";
 import { TikTokOrdersApplyToggle } from "./_components/tiktok-orders-apply-toggle";
 
@@ -23,6 +25,17 @@ const STATUS: Record<TikTokConnectionStatus, { label: string; variant: BadgeVari
   deauthorized: { label: "Izin dicabut penjual", variant: "danger" },
   disconnected: { label: "Diputuskan", variant: "neutral" },
 };
+
+const BACKFILL_STATE: Record<TikTokBackfillState, { label: string; variant: BadgeVariant }> = {
+  fetching: { label: "Sedang dibaca", variant: "warning" },
+  fetched: { label: "Siap dipratinjau", variant: "success" },
+  confirmed: { label: "Sudah diterapkan", variant: "neutral" },
+};
+
+/** Yesterday in Asia/Jakarta, "YYYY-MM-DD": the latest day a backfill may start from. */
+function jakartaYesterday(now: Date): string {
+  return new Date(now.getTime() + 7 * 3600_000 - 86_400_000).toISOString().slice(0, 10);
+}
 
 const TOPIC_LABELS: Record<number, string> = {
   1: "Status pesanan",
@@ -72,7 +85,7 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
   await requirePermission(TIKTOK_PERMISSION);
   const search = await searchParams;
   const runtime = getTikTokRuntime({ requireServiceId: true });
-  const { connection, connectedByName, webhookCounts, ordersCursor, failedEvents, tiktokOrderCount, unmappedSkuCount, appliedCount, heldByReason } = await getTikTokIntegrationPageData();
+  const [{ connection, connectedByName, webhookCounts, ordersCursor, failedEvents, tiktokOrderCount, unmappedSkuCount, appliedCount, heldByReason }, backfill] = await Promise.all([getTikTokIntegrationPageData(), getTikTokBackfillView(defaultDb)]);
   const now = new Date();
   const banner = tiktokConnectionBanner(connection, now);
 
@@ -222,6 +235,38 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
               <Link href={`${TIKTOK_INTEGRATION_PATH}/finance`} className="text-sm font-medium text-brand hover:underline sm:ml-4">
                 Lihat keuangan TikTok
               </Link>
+            </div>
+          </Section>
+        )}
+
+        {connection && (
+          <Section id="tiktok-backfill-heading" title="Riwayat sejak awal pembukuan">
+            <div className="flex flex-col gap-2" data-testid="tiktok-backfill">
+              <p className="text-sm text-neutral-600">
+                Membaca pesanan, retur, laporan keuangan, dan pencairan TikTok sejak 1 Desember 2026 (paling awal). Pesanan yang sudah dicatat manual dicocokkan dengan nomor TikTok-nya dan dilengkapi, tidak dibuat dua kali. Tidak ada yang berubah sebelum pratinjaunya dicek dan Terapkan riwayat ditekan.
+              </p>
+              {backfill ? (
+                <dl className="divide-y divide-neutral-100">
+                  <Row label="Status">
+                    <Badge variant={BACKFILL_STATE[backfill.state].variant}>{BACKFILL_STATE[backfill.state].label}</Badge>
+                  </Row>
+                  <Row label="Rentang">
+                    {formatDate(backfill.fromTime)} sampai {when(backfill.untilTime)}
+                  </Row>
+                  <Row label="Pesanan terbaca sampai">{backfill.ordersDoneUntil && backfill.ordersDoneUntil.getTime() >= backfill.untilTime.getTime() ? "Selesai" : when(backfill.ordersDoneUntil, "Belum mulai")}</Row>
+                  {backfill.lastErrorCode && <Row label="Kesalahan terakhir">{backfill.lastErrorCode}</Row>}
+                </dl>
+              ) : (
+                <p className="text-sm text-neutral-700">Riwayat belum diambil.</p>
+              )}
+              {backfill && (
+                <Link href={`${TIKTOK_INTEGRATION_PATH}/backfill`} className="inline-flex min-h-11 items-center self-start text-sm font-medium text-brand hover:underline">
+                  Lihat pratinjau riwayat
+                </Link>
+              )}
+              {(!backfill || backfill.state === "confirmed") && (
+                <TikTokBackfillActions mode={{ kind: "start", defaultDate: ACCOUNTING_TRIAL_MONTH, minDate: ACCOUNTING_TRIAL_MONTH, maxDate: jakartaYesterday(now) }} disabled={connection.status !== "active"} />
+              )}
             </div>
           </Section>
         )}

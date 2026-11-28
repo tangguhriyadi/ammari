@@ -52,10 +52,14 @@ function iso(date: Date | null): string | null {
   return date ? date.toISOString() : null;
 }
 
-export async function ingestTikTokOrder(db: Database, order: TikTokOrderProjection, source: TikTokSnapshotSource, now: Date = new Date()): Promise<IngestTikTokOrderResult> {
+/** `backfillId` (T9): the backfill storing this order. Set on the projection only when the backfill is
+ * the first to store the order (the gate: apply.ts waits for "Terapkan riwayat"). A later live store
+ * (poll, webhook) never lifts it: nothing the preview lists changes before the owner confirms. */
+export async function ingestTikTokOrder(db: Database, order: TikTokOrderProjection, source: TikTokSnapshotSource, now: Date = new Date(), options: { backfillId?: string | null } = {}): Promise<IngestTikTokOrderResult> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`tiktok-order:${order.tiktokOrderId}`}))`);
     const updateTime = order.updateTime.toISOString();
+    const backfillId = source === "backfill" ? (options.backfillId ?? null) : null;
 
     const inserted = await tx.execute<{ id: string }>(sql`
       insert into tiktok_order_snapshots (tiktok_order_id, update_time, content_sha256, payload, source, kind, fetched_at)
@@ -82,11 +86,12 @@ export async function ingestTikTokOrder(db: Database, order: TikTokOrderProjecti
     const projected = await tx.execute<{ created: boolean }>(sql`
       insert into tiktok_orders as t (
         tiktok_order_id, status, latest_update_time, latest_snapshot_id, paid_time, collection_time, delivery_time, cancel_time,
-        is_on_hold_order, rts_sla_time, buyer_message, buyer_message_purge_after, first_seen_at
+        is_on_hold_order, rts_sla_time, buyer_message, buyer_message_purge_after, first_seen_at, backfill_id
       ) values (
         ${order.tiktokOrderId}, ${order.status}, ${updateTime}::timestamptz, ${snapshotId}::uuid, ${iso(order.paidTime)}::timestamptz,
         ${iso(order.collectionTime)}::timestamptz, ${iso(order.deliveryTime)}::timestamptz, ${iso(order.cancelTime)}::timestamptz,
-        ${order.isOnHoldOrder}, ${iso(order.rtsSlaTime)}::timestamptz, ${firstMessage}, ${iso(purgeAfter)}::timestamptz, ${now.toISOString()}::timestamptz
+        ${order.isOnHoldOrder}, ${iso(order.rtsSlaTime)}::timestamptz, ${firstMessage}, ${iso(purgeAfter)}::timestamptz, ${now.toISOString()}::timestamptz,
+        ${backfillId}::uuid
       )
       on conflict (tiktok_order_id) do update set
         status = excluded.status,

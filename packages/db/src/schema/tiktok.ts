@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { bigint, boolean, check, customType, index, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { productVariants } from "./catalog";
 import { checkArraySubset, checkIn, createdAtOnly, timestamps } from "./columns";
+import { ACCOUNTING_TRIAL_MONTH } from "./constants";
 import { orders } from "./orders";
 import { staffUsers } from "./rbac";
 
@@ -178,7 +179,9 @@ export type TikTokApplyState = (typeof TIKTOK_APPLY_STATES)[number];
 
 /** `line_format` (migration 0059, T5): a line quantity that is not a positive whole number, or one
  * variant at two prices in one order (it cannot be one order line). */
-export const TIKTOK_HELD_REASONS = ["unknown_sku", "short_stock", "lines_differ", "final_in_admin", "partial_shipping", "partial_refund", "unknown_status", "money_format", "line_format"] as const;
+/** `duplicate_in_admin` (migration 0063, T9): more than one hand-typed TikTok order carries this
+ * number once spaces, `#`, `.` and `-` are ignored, so the sync cannot tell which one it is. */
+export const TIKTOK_HELD_REASONS = ["unknown_sku", "short_stock", "lines_differ", "final_in_admin", "partial_shipping", "partial_refund", "unknown_status", "money_format", "line_format", "duplicate_in_admin"] as const;
 export type TikTokHeldReason = (typeof TIKTOK_HELD_REASONS)[number];
 
 /** Things the sync saw that it never resolves on its own (plan §3.3, §6): the same `update_time`
@@ -255,6 +258,11 @@ export const tiktokOrders = pgTable(
     buyerMessagePurgeAfter: timestamp("buyer_message_purge_after", { withTimezone: true, mode: "date" }),
     reviewFlags: text("review_flags").array().notNull().default(sql`'{}'::text[]`),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    // T9 (migration 0063): set when the backfill was the first to store this order. Such an order is
+    // not applied until the owner confirms that backfill after its preview ("Terapkan riwayat"); a
+    // live store (poll, webhook) of the same order clears it, since the live sync would have applied
+    // it anyway.
+    backfillId: uuid("backfill_id").references((): AnyPgColumn => tiktokBackfills.id, { onDelete: "restrict" }),
     ...timestamps(),
   },
   (table) => [
@@ -268,6 +276,7 @@ export const tiktokOrders = pgTable(
     index("tiktok_orders_latest_snapshot_id_idx").on(table.latestSnapshotId),
     // The retention job's purge.
     index("tiktok_orders_buyer_message_purge_idx").on(table.buyerMessagePurgeAfter).where(sql`${table.buyerMessage} is not null`),
+    index("tiktok_orders_backfill_id_idx").on(table.backfillId).where(sql`${table.backfillId} is not null`),
   ],
 );
 
@@ -632,5 +641,67 @@ export const tiktokPayouts = pgTable(
     check("tiktok_payouts_last4_check", sql`${table.bankAccountLast4} is null or ${table.bankAccountLast4} ~ '^[0-9]{4}$'`),
     index("tiktok_payouts_paid_time_idx").on(table.paidTime),
     index("tiktok_payouts_latest_snapshot_id_idx").on(table.latestSnapshotId),
+  ],
+);
+
+// ---- Backfill (plan T9, migration 0063) --------------------------------------------------------
+
+/** `fetching`: the cron reads history slice by slice; `fetched`: everything is stored, the preview is
+ * ready; `confirmed`: the owner pressed "Terapkan riwayat", so the orders it stored may be applied
+ * (still only while the T5 kill switch is on). */
+export const TIKTOK_BACKFILL_STATES = ["fetching", "fetched", "confirmed"] as const;
+export type TikTokBackfillState = (typeof TIKTOK_BACKFILL_STATES)[number];
+
+/** A backfill never reaches before the books start: the December 2026 trial month (D-22), Jakarta
+ * midnight. Nothing before it is posted, so nothing before it is fetched. */
+export const TIKTOK_BACKFILL_FLOOR = new Date(`${ACCOUNTING_TRIAL_MONTH}T00:00:00+07:00`);
+/** Order slices start at 6 hours (the live poll's) and halve, down to one minute, when one does not
+ * finish within a run (the T4 known limit). */
+export const TIKTOK_BACKFILL_MAX_SLICE_SECONDS = 6 * 3600;
+export const TIKTOK_BACKFILL_MIN_SLICE_SECONDS = 60;
+
+/** One history read of TikTok orders, returns, cancellations, statements and payouts over
+ * `[from_time, until_time)` (plan T9). At most one is not confirmed at a time. Progress is kept per
+ * resource, so a run that stops (budget, error) resumes at the last finished slice. */
+export const tiktokBackfills = pgTable(
+  "tiktok_backfills",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    fromTime: timestamp("from_time", { withTimezone: true, mode: "date" }).notNull(),
+    untilTime: timestamp("until_time", { withTimezone: true, mode: "date" }).notNull(),
+    state: text("state", { enum: TIKTOK_BACKFILL_STATES }).notNull().default("fetching"),
+    ordersDoneUntil: timestamp("orders_done_until", { withTimezone: true, mode: "date" }),
+    returnsDoneUntil: timestamp("returns_done_until", { withTimezone: true, mode: "date" }),
+    cancellationsDoneUntil: timestamp("cancellations_done_until", { withTimezone: true, mode: "date" }),
+    statementsDoneUntil: timestamp("statements_done_until", { withTimezone: true, mode: "date" }),
+    paymentsDoneUntil: timestamp("payments_done_until", { withTimezone: true, mode: "date" }),
+    ordersSliceSeconds: integer("orders_slice_seconds").notNull().default(TIKTOK_BACKFILL_MAX_SLICE_SECONDS),
+    requestedByStaffUserId: uuid("requested_by_staff_user_id")
+      .notNull()
+      .references(() => staffUsers.id, { onDelete: "restrict" }),
+    requestedAt: timestamp("requested_at", { withTimezone: true, mode: "date" }).notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }),
+    confirmedByStaffUserId: uuid("confirmed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true, mode: "date" }),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true, mode: "date" }),
+    // Codes only, never a response body.
+    lastErrorCode: text("last_error_code"),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_backfills_state_check", checkIn(table.state, TIKTOK_BACKFILL_STATES)),
+    check("tiktok_backfills_from_floor_check", sql`${table.fromTime} >= ${sql.raw(`'${TIKTOK_BACKFILL_FLOOR.toISOString()}'::timestamptz`)}`),
+    check("tiktok_backfills_range_check", sql`${table.untilTime} > ${table.fromTime}`),
+    check(
+      "tiktok_backfills_slice_check",
+      sql`${table.ordersSliceSeconds} between ${sql.raw(String(TIKTOK_BACKFILL_MIN_SLICE_SECONDS))} and ${sql.raw(String(TIKTOK_BACKFILL_MAX_SLICE_SECONDS))}`,
+    ),
+    check("tiktok_backfills_fetched_check", sql`(${table.state} = 'fetching') = (${table.fetchedAt} is null)`),
+    check("tiktok_backfills_confirmed_check", sql`(${table.state} = 'confirmed') = (${table.confirmedAt} is not null and ${table.confirmedByStaffUserId} is not null)`),
+    check("tiktok_backfills_last_error_code_check", sql`${table.lastErrorCode} is null or char_length(${table.lastErrorCode}) <= 64`),
+    // One backfill at a time: a second can start only once the previous one is confirmed.
+    uniqueIndex("tiktok_backfills_one_open").on(sql`(true)`).where(sql`${table.state} <> 'confirmed'`),
+    index("tiktok_backfills_requested_by_idx").on(table.requestedByStaffUserId),
+    index("tiktok_backfills_confirmed_by_idx").on(table.confirmedByStaffUserId),
   ],
 );

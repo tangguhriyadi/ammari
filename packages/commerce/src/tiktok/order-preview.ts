@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import type { TikTokApplyState, TikTokHeldReason, TikTokOrderReviewFlag } from "@ammari/db/schema";
 import { TikTokMoneyFormatError, parseRupiah, type AllowlistedObject } from "@ammari/tiktok-shop";
 import type { Database } from "../db";
+import { TIKTOK_ORDER_NO_SEPARATORS_SQL } from "./backfill";
 import { tiktokSnapshotLines } from "./order-store";
 
 // The T4 dry run (docs/plans/tiktok-shop-integration.md §10 T4: "Akan dibuat / ditahan"): what T5
@@ -151,7 +152,11 @@ export async function listTikTokOrderPreviews(db: Database, limit = TIKTOK_ORDER
   }>(sql`
     select o.tiktok_order_id, o.status, o.latest_update_time, o.paid_time, o.rts_sla_time,
            o.buyer_message is not null as has_buyer_message, o.review_flags, s.payload,
-           exists (select 1 from orders a where a.channel_id = 'tiktok' and a.channel_order_no = o.tiktok_order_id) as in_admin,
+           -- T9: also a hand-typed number with separators (apply.ts matches and corrects it).
+           exists (
+             select 1 from orders a where a.channel_id = 'tiktok'
+               and (a.channel_order_no = o.tiktok_order_id or (o.tiktok_order_id ~ '^[0-9]+$' and regexp_replace(a.channel_order_no, ${TIKTOK_ORDER_NO_SEPARATORS_SQL}, '', 'g') = o.tiktok_order_id))
+           ) as in_admin,
            o.apply_state, o.held_reason, o.order_id, ao.order_no
     from tiktok_orders o
     join tiktok_order_snapshots s on s.id = o.latest_snapshot_id

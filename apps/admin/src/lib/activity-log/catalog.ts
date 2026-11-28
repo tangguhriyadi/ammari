@@ -533,6 +533,17 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       tiktok_return_update: { label: "Retur atau pembatalan TikTok diperbarui" },
     },
   },
+  // docs/plans/tiktok-shop-integration.md T9: the backfill from 1 Dec 2026 (packages/commerce/src/
+  // tiktok/backfill.ts). Start and confirm name the staff member; "fetched" is the cron (no actor).
+  tiktok_backfill: {
+    label: "Riwayat TikTok Shop",
+    area: "settings",
+    actions: {
+      tiktok_backfill_start: { label: "Pengambilan riwayat TikTok dimulai" },
+      tiktok_backfill_fetched: { label: "Riwayat TikTok selesai dibaca (siap dipratinjau)" },
+      tiktok_backfill_confirm: { label: "Riwayat TikTok diterapkan ke pesanan" },
+    },
+  },
   tiktok_sku_mapping: {
     label: "Pemetaan SKU TikTok",
     area: "settings",

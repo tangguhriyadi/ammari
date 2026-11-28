@@ -1,11 +1,13 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
-import { auditLog, marketplaceRefunds, orders, productVariants, stockMovements, tiktokOrderSnapshots, tiktokOrders, tiktokReturns, tiktokShopConnections, tiktokSkuMappings, tiktokSyncCursors, tiktokWebhookEvents } from "@ammari/db/schema";
+import { auditLog, marketplaceRefunds, orderItems, orders, productVariants, stockMovements, tiktokBackfills, tiktokOrderSnapshots, tiktokOrders, tiktokReturns, tiktokShopConnections, tiktokSkuMappings, tiktokSyncCursors, tiktokWebhookEvents } from "@ammari/db/schema";
 import { insertOrder, insertProductVariant, insertStaffUser } from "@ammari/db/test-fixtures";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { Secret, createTikTokClient, projectTikTokOrder, type FetchLike, type TikTokAuthClient, type TikTokOrderProjection, type TikTokTokenSet, type TokenKeyring } from "@ammari/tiktok-shop";
 import { purgeTikTokBuyerMessages } from "../maintenance/retention";
-import { setTikTokOrdersApply } from "./apply";
+import { applyTikTokOrder, setTikTokOrdersApply } from "./apply";
+import { confirmTikTokBackfill, getTikTokBackfillPreview, getTikTokBackfillView, startTikTokBackfill } from "./backfill";
+import { createOrder, transitionOrderStatus } from "../orders/lifecycle";
 import { saveTikTokConnection } from "./connection";
 import { listTikTokOrderPreviews } from "./order-preview";
 import { ingestTikTokOrder } from "./order-store";
@@ -140,6 +142,10 @@ function fakeTikTok(clock: { ms: number }): FakeTikTok {
         );
         return ok({ [isReturn ? "return_orders" : "cancellations"]: matching, next_page_token: "" });
       }
+      // T9: empty finance lists, for tests whose connection holds seller.finance.info.
+      if (url.pathname === "/finance/202507/orders/unsettled") return ok({ transactions: [], next_page_token: "" });
+      if (url.pathname === "/finance/202309/statements") return ok({ statements: [], next_page_token: "" });
+      if (url.pathname === "/finance/202309/payments") return ok({ payments: [], next_page_token: "" });
       if (url.pathname === "/order/202507/orders") {
         const ids = (url.searchParams.get("ids") ?? "").split(",");
         fake.detailCalls.push(ids);
@@ -903,6 +909,328 @@ describe("runTikTokSync: cancellations and returns (T6)", () => {
       expect(order?.needsAttention).toEqual(expect.arrayContaining(["marketplace_return_pending", "tiktok_return_response_due"]));
       const events = await tx.select().from(tiktokWebhookEvents).where(inArray(tiktokWebhookEvents.id, ids));
       expect(events.every((event) => event.status === "processed")).toBe(true);
+    });
+  });
+});
+
+// ---- T9: backfill in enrich mode --------------------------------------------------------------
+
+describe("T9 backfill", () => {
+  // December: a backfill never reaches before 1 Dec 2026 (TIKTOK_BACKFILL_FLOOR).
+  const BNOW = new Date("2026-12-10T03:00:00.000Z");
+  const DEC2 = new Date("2026-12-02T03:00:00.000Z");
+  let next = 0;
+  const tiktokId = () => `5779${String(Date.now()).slice(-8)}${String((next += 1)).padStart(6, "0")}`;
+
+  async function connectAt(db: TestDatabase, scopes = ["seller.order.info", "seller.finance.info"]): Promise<string> {
+    const staff = await insertStaffUser(db);
+    const result = await saveTikTokConnection(db, {
+      tokens: { ...tokens(), accessTokenExpiresAt: new Date(BNOW.getTime() + 7 * DAY), refreshTokenExpiresAt: new Date(BNOW.getTime() + 60 * DAY), grantedScopes: scopes },
+      shop: { shopId: SHOP_ID, shopCipher: "ROW_cipher", shopName: "Ammari", region: "ID", sellerType: "LOCAL" },
+      staffUserId: staff.id,
+      keyring: KEYRING,
+      now: new Date(BNOW.getTime() - DAY),
+    });
+    if (!result.ok) throw new Error(result.reason);
+    // The live poll started yesterday: everything older is history for the backfill.
+    await setCursor(db, new Date(BNOW.getTime() - 30 * MIN));
+    return staff.id;
+  }
+
+  /** A mapped, stocked variant and a TikTok order on it (COMPLETED, shipped on `shippedAt`). */
+  async function sold(tx: TestDatabase, id: string, updateTime: Date, extra: Record<string, unknown> = {}) {
+    const { variant } = await insertProductVariant(tx);
+    await tx.insert(tiktokSkuMappings).values({ tiktokSkuId: `sku-${id}`, variantSku: variant.sku, source: "auto_seller_sku", sellerSku: variant.sku });
+    await tx.insert(stockMovements).values({ sku: variant.sku, qty: 3, valueAmount: 300_000, type: "production", refType: "manual" });
+    const raw = {
+      ...rawOrder(id, updateTime, { status: "COMPLETED", paid_time: seconds(updateTime) - 3 * DAY / 1000, collection_time: seconds(updateTime) - 2 * DAY / 1000, create_time: seconds(updateTime) - 3 * DAY / 1000 }),
+      payment: { currency: "IDR", sub_total: "259000", seller_discount: "0", total_amount: "259000" },
+      line_items: [{ id: `${id}-li`, sku_id: `sku-${id}`, seller_sku: variant.sku, product_name: "Gamis", original_price: "259000" }],
+      ...extra,
+    };
+    return { sku: variant.sku, raw };
+  }
+
+  /** A hand-typed TikTok order. Typed before T9, a number keeps its separators: written as typed. */
+  async function handTyped(tx: TestDatabase, staffId: string, channelOrderNo: string, sku: string) {
+    const created = (await createOrder({ channelId: "tiktok", channelOrderNo: `LEGACY-${crypto.randomUUID()}`, orderDate: "2026-12-01", items: [{ sku, qty: 1, unitPrice: 259_000 }], discountAmount: 0, shippingAmount: 0, status: "to_ship" }, staffId, tx))!;
+    const [row] = await tx.update(orders).set({ channelOrderNo }).where(eq(orders.id, created.id)).returning();
+    return row!;
+  }
+
+  async function movementCount(tx: TestDatabase, orderId: string) {
+    const items = await tx.select({ id: orderItems.id }).from(orderItems).where(eq(orderItems.orderId, orderId));
+    const rows = await tx.select().from(stockMovements).where(and(eq(stockMovements.refType, "order_item"), inArray(stockMovements.refId, items.map((item) => item.id))));
+    return rows.length;
+  }
+
+  async function runUntilFetched(tx: TestDatabase, fake: FakeTikTok, runs = 5) {
+    for (let run = 0; run < runs; run += 1) {
+      const summary = await runTikTokSync(tx, deps(fake));
+      if (summary.backfill.state === "fetched") return summary;
+      fake.clock.ms += 5 * MIN;
+    }
+    throw new Error("backfill did not finish");
+  }
+
+  test("start: never before 1 Dec 2026, never today, one at a time, only while connected; audited with the staff member", async () => {
+    await withRollback(async (tx) => {
+      const staff = await insertStaffUser(tx);
+      expect(await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staff.id, now: BNOW })).toEqual({ ok: false, reason: "not_connected" });
+      const staffId = await connectAt(tx);
+      expect(await startTikTokBackfill(tx, { fromDate: "2026-11-30", staffUserId: staffId, now: BNOW })).toEqual({ ok: false, reason: "before_floor" });
+      expect(await startTikTokBackfill(tx, { fromDate: "2026-12-10", staffUserId: staffId, now: BNOW })).toEqual({ ok: false, reason: "not_in_past" });
+      const started = await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staffId, now: BNOW });
+      expect(started).toMatchObject({ ok: true });
+      expect(await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staffId, now: BNOW })).toEqual({ ok: false, reason: "already_open" });
+      const view = await getTikTokBackfillView(tx);
+      expect(view).toMatchObject({ state: "fetching", fromTime: new Date("2026-11-30T17:00:00.000Z"), untilTime: new Date(BNOW.getTime() - TIKTOK_POLL_LAG_MS) });
+      const audits = await tx.select().from(auditLog).where(and(eq(auditLog.action, "tiktok_backfill_start"), eq(auditLog.actorStaffUserId, staffId)));
+      expect(audits).toHaveLength(1);
+      // The database refuses a range before the books start, whatever the caller.
+      await expect(tx.transaction((sp) => sp.insert(tiktokBackfills).values({ fromTime: new Date("2026-11-30T16:59:59.000Z"), untilTime: BNOW, requestedByStaffUserId: staffId, requestedAt: BNOW, state: "confirmed", fetchedAt: BNOW, confirmedAt: BNOW, confirmedByStaffUserId: staffId }))).rejects.toThrow();
+    });
+  });
+
+  test("the cron reads history into the backfill's own progress (live cursor untouched), stores it as backfill and gated; done → fetched, audited; a re-run reads nothing", async () => {
+    await withRollback(async (tx) => {
+      const staffId = await connectAt(tx);
+      const clock = { ms: BNOW.getTime() };
+      const fake = fakeTikTok(clock);
+      const id = tiktokId();
+      const { raw } = await sold(tx, id, DEC2);
+      fake.orders.set(id, raw);
+      await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staffId, now: BNOW });
+      const liveBefore = (await cursor(tx))!.windowEnd;
+
+      const summary = await runUntilFetched(tx, fake);
+      expect(summary.backfill.orders.stored).toBeGreaterThanOrEqual(1);
+      const row = await projection(tx, id);
+      expect(row?.backfillId).toBe((await getTikTokBackfillView(tx))!.id);
+      const [snapshot] = await tx.select().from(tiktokOrderSnapshots).where(eq(tiktokOrderSnapshots.tiktokOrderId, id));
+      expect(snapshot?.source).toBe("backfill");
+      // Every backfill search stays inside [1 Dec 00:00 WIB, until).
+      const floor = seconds(new Date("2026-11-30T17:00:00.000Z"));
+      expect(fake.searches.every((search) => search.ge >= floor - 300)).toBe(true);
+      // The live poll's cursor is its own: the backfill never moves it back.
+      expect((await cursor(tx))!.windowEnd!.getTime()).toBeGreaterThanOrEqual(liveBefore!.getTime());
+      expect(await tx.select().from(auditLog).where(eq(auditLog.action, "tiktok_backfill_fetched"))).toHaveLength(1);
+
+      fake.searches.length = 0;
+      fake.detailCalls.length = 0;
+      clock.ms += 5 * MIN;
+      const again = await runTikTokSync(tx, deps(fake));
+      expect(again.backfill.ran).toBe(false);
+      expect(fake.searches.every((search) => search.ge >= seconds(BNOW) - 3600)).toBe(true);
+    });
+  });
+
+  test("enrich: with applying on, matched hand-typed orders (also typed with spaces or #) wait for Terapkan riwayat; then linked, dated, moved forward, no duplicate and no extra stock movement; a missing one is created; a re-run writes nothing", async () => {
+    await withRollback(async (tx) => {
+      const staffId = await connectAt(tx);
+      await setTikTokOrdersApply(tx, { enabled: true, staffUserId: staffId });
+      const clock = { ms: BNOW.getTime() };
+      const fake = fakeTikTok(clock);
+      const exact = tiktokId();
+      const spaced = tiktokId();
+      const missing = tiktokId();
+      const a = await sold(tx, exact, DEC2);
+      const b = await sold(tx, spaced, DEC2);
+      const c = await sold(tx, missing, DEC2);
+      for (const [id, raw] of [[exact, a.raw], [spaced, b.raw], [missing, c.raw]] as const) fake.orders.set(id, raw);
+      const typedExact = await handTyped(tx, staffId, exact, a.sku);
+      const typedSpaced = await handTyped(tx, staffId, `#${spaced.slice(0, 6)} ${spaced.slice(6, 12)}-${spaced.slice(12)}`, b.sku);
+      const movementsBefore = [await movementCount(tx, typedExact.id), await movementCount(tx, typedSpaced.id)];
+
+      await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staffId, now: BNOW });
+      const fetched = await runUntilFetched(tx, fake);
+      // Gated: nothing reached admin yet, although applying is on.
+      expect(fetched.apply.created).toBe(0);
+      expect((await tx.select().from(orders).where(eq(orders.id, typedExact.id)))[0]).toMatchObject({ status: "to_ship", marketplaceShippedAt: null });
+      expect(await tx.select().from(orders).where(eq(orders.channelOrderNo, missing))).toHaveLength(0);
+      expect(await applyTikTokOrder(tx, exact, { now: new Date(clock.ms), source: "recheck" })).toEqual({ kind: "waiting_backfill" });
+
+      expect(await confirmTikTokBackfill(tx, { staffUserId: staffId, now: new Date(clock.ms) })).toEqual({ ok: true, changed: true });
+      expect(await tx.select().from(auditLog).where(and(eq(auditLog.action, "tiktok_backfill_confirm"), eq(auditLog.actorStaffUserId, staffId)))).toHaveLength(1);
+      clock.ms += 5 * MIN;
+      const applied = await runTikTokSync(tx, deps(fake));
+      expect(applied.apply).toMatchObject({ created: 1, updated: 2, failed: 0 });
+
+      for (const [typed, id] of [[typedExact, exact], [typedSpaced, spaced]] as const) {
+        const [order] = await tx.select().from(orders).where(eq(orders.id, typed.id));
+        expect(order).toMatchObject({ status: "completed", channelOrderNo: id, marketplaceShippedAt: new Date((seconds(DEC2) - 2 * 86_400) * 1000), channelStatus: "COMPLETED" });
+        expect((await projection(tx, id))?.orderId).toBe(typed.id);
+        expect(await tx.select().from(orders).where(and(eq(orders.channelId, "tiktok"), eq(orders.channelOrderNo, id)))).toHaveLength(1);
+      }
+      expect([await movementCount(tx, typedExact.id), await movementCount(tx, typedSpaced.id)]).toEqual(movementsBefore);
+      const [audit] = await tx.select().from(auditLog).where(and(eq(auditLog.action, "tiktok_update"), eq(auditLog.entityId, typedSpaced.id)));
+      expect(audit?.before).toMatchObject({ channelOrderNo: typedSpaced.channelOrderNo });
+      expect(audit?.after).toMatchObject({ channelOrderNo: spaced, source: "recheck" });
+      expect(await tx.select().from(orders).where(and(eq(orders.channelId, "tiktok"), eq(orders.channelOrderNo, missing)))).toHaveLength(1);
+
+      clock.ms += 5 * MIN;
+      const replay = await runTikTokSync(tx, deps(fake));
+      expect(replay.apply).toMatchObject({ created: 0, updated: 0 });
+      expect(await confirmTikTokBackfill(tx, { staffUserId: staffId, now: new Date(clock.ms) })).toEqual({ ok: false, reason: "none" });
+    });
+  });
+
+  test("two hand-typed orders with the same number (separators ignored) are held duplicate_in_admin and left untouched", async () => {
+    await withRollback(async (tx) => {
+      const staffId = await connectAt(tx);
+      const id = tiktokId();
+      const { raw, sku } = await sold(tx, id, DEC2);
+      await tx.insert(stockMovements).values({ sku, qty: 3, valueAmount: 300_000, type: "production", refType: "manual" });
+      const one = await handTyped(tx, staffId, `${id} `.replace(/^(\d{4})/, "$1 "), sku);
+      const two = await handTyped(tx, staffId, `#${id}`, sku);
+      await ingestTikTokOrder(tx, project(raw), "poll", BNOW);
+      expect(await applyTikTokOrder(tx, id, { now: BNOW, source: "poll" })).toMatchObject({ kind: "held", reason: "duplicate_in_admin" });
+      for (const typed of [one, two]) expect((await tx.select().from(orders).where(eq(orders.id, typed.id)))[0]).toMatchObject({ status: "to_ship", channelOrderNo: typed.channelOrderNo });
+      expect(await tx.select().from(orders).where(and(eq(orders.channelId, "tiktok"), eq(orders.channelOrderNo, id)))).toHaveLength(0);
+
+      // Staff cancel the wrong one: the other is matched (and its number corrected).
+      await transitionOrderStatus(two.id, "cancelled", staffId, tx);
+      await tx.execute(sql`update tiktok_orders set updated_at = updated_at - interval '1 hour' where tiktok_order_id = ${id}`);
+      expect(await applyTikTokOrder(tx, id, { now: BNOW, source: "recheck" })).toMatchObject({ kind: "updated", orderId: one.id });
+      expect((await tx.select().from(orders).where(eq(orders.id, one.id)))[0]).toMatchObject({ channelOrderNo: id, status: "completed" });
+    });
+  });
+
+  test("a live update of an order the backfill stored first keeps it waiting for Terapkan riwayat; then its newest version applies", async () => {
+    await withRollback(async (tx) => {
+      const staffId = await connectAt(tx);
+      await setTikTokOrdersApply(tx, { enabled: true, staffUserId: staffId });
+      const clock = { ms: BNOW.getTime() };
+      const fake = fakeTikTok(clock);
+      const id = tiktokId();
+      const { raw } = await sold(tx, id, DEC2, { status: "AWAITING_SHIPMENT", collection_time: undefined });
+      fake.orders.set(id, raw);
+      await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staffId, now: BNOW });
+      await runUntilFetched(tx, fake);
+      // TikTok ships it now: the live poll stores the new version, but the preview still holds it back.
+      const shippedAt = new Date(clock.ms - 5 * MIN);
+      fake.orders.set(id, { ...raw, status: "IN_TRANSIT", update_time: seconds(shippedAt), collection_time: seconds(shippedAt) });
+      clock.ms += 5 * MIN;
+      const live = await runTikTokSync(tx, deps(fake));
+      expect(live.apply.created).toBe(0);
+      expect((await projection(tx, id))).toMatchObject({ status: "IN_TRANSIT", backfillId: expect.any(String) });
+      expect(await tx.select().from(orders).where(eq(orders.channelOrderNo, id))).toHaveLength(0);
+      await confirmTikTokBackfill(tx, { staffUserId: staffId, now: new Date(clock.ms) });
+      clock.ms += 5 * MIN;
+      expect((await runTikTokSync(tx, deps(fake))).apply.created).toBe(1);
+      expect((await tx.select().from(orders).where(eq(orders.channelOrderNo, id)))[0]?.status).toBe("shipped");
+    });
+  });
+
+  test("hand entry of a TikTok number with spaces or # is stored as TikTok's digits, so an order the sync created is never typed in twice", async () => {
+    await withRollback(async (tx) => {
+      const staffId = await connectAt(tx);
+      const id = tiktokId();
+      const { raw, sku } = await sold(tx, id, DEC2);
+      await ingestTikTokOrder(tx, project(raw), "poll", BNOW);
+      expect(await applyTikTokOrder(tx, id, { now: BNOW, source: "poll" })).toMatchObject({ kind: "created" });
+      await expect(createOrder({ channelId: "tiktok", channelOrderNo: `#${id.slice(0, 5)} ${id.slice(5)}`, orderDate: "2026-12-01", items: [{ sku, qty: 1, unitPrice: 1 }], discountAmount: 0, shippingAmount: 0, status: "awaiting_payment" }, staffId, tx)).rejects.toThrow(/sudah tercatat/);
+      // Other channels and a number with letters are only trimmed.
+      const typed = await createOrder({ channelId: "tiktok", channelOrderNo: " TT-123 ", orderDate: "2026-12-01", items: [{ sku, qty: 1, unitPrice: 1 }], discountAmount: 0, shippingAmount: 0, status: "awaiting_payment" }, staffId, tx);
+      expect(typed?.channelOrderNo).toBe("TT-123");
+    });
+  });
+
+  test("without the finance scope the backfill never marks statements and payouts done: it waits (finance_no_scope)", async () => {
+    await withRollback(async (tx) => {
+      const staffId = await connectAt(tx, ["seller.order.info"]);
+      const clock = { ms: BNOW.getTime() };
+      const fake = fakeTikTok(clock);
+      await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staffId, now: BNOW });
+      const summary = await runTikTokSync(tx, deps(fake));
+      expect(summary.backfill).toMatchObject({ ran: true, state: "fetching", stoppedBy: "finance_no_scope", finance: { skipped: "no_scope" } });
+      const view = await getTikTokBackfillView(tx);
+      expect(view).toMatchObject({ state: "fetching", statementsDoneUntil: null, paymentsDoneUntil: null, lastErrorCode: "finance_no_scope" });
+      expect(view?.ordersDoneUntil?.getTime()).toBe(view?.untilTime.getTime());
+    });
+  });
+
+  test("a history slice that does not finish within its run is halved and repeated; the progress is kept, and the backfill finishes", async () => {
+    await withRollback(async (tx) => {
+      const staffId = await connectAt(tx);
+      const clock = { ms: BNOW.getTime() };
+      const fake = fakeTikTok(clock);
+      // Many orders in the first six hours of 1 Dec, every request costs 4 s of the 150-s budget.
+      const first = new Date("2026-11-30T18:00:00.000Z");
+      for (let i = 0; i < 24; i += 1) {
+        const id = tiktokId();
+        fake.orders.set(id, { ...rawOrder(id, new Date(first.getTime() + i * 5 * MIN)), status: "CANCELLED" });
+      }
+      fake.msPerRequest = 4000;
+      await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staffId, now: BNOW });
+      const one = await runTikTokSync(tx, deps(fake));
+      expect(one.backfill).toMatchObject({ ran: true, state: "fetching" });
+      const view = await getTikTokBackfillView(tx);
+      expect(view?.ordersSliceSeconds).toBeLessThan(6 * 3600);
+      expect(view?.ordersDoneUntil?.getTime() ?? 0).toBeLessThanOrEqual(new Date("2026-11-30T23:00:00.000Z").getTime());
+      let state = one.backfill.state;
+      for (let run = 0; run < 40 && state !== "fetched"; run += 1) {
+        clock.ms += 5 * MIN;
+        state = (await runTikTokSync(tx, deps(fake))).backfill.state;
+      }
+      expect(state).toBe("fetched");
+      expect(await tx.select().from(tiktokOrders)).toHaveLength(24);
+    });
+  });
+
+  test("Terapkan riwayat is refused while history is still read; with applying off nothing reaches admin after it", async () => {
+    await withRollback(async (tx) => {
+      const staffId = await connectAt(tx);
+      const clock = { ms: BNOW.getTime() };
+      const fake = fakeTikTok(clock);
+      const id = tiktokId();
+      const { raw } = await sold(tx, id, DEC2);
+      fake.orders.set(id, raw);
+      await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staffId, now: BNOW });
+      expect(await confirmTikTokBackfill(tx, { staffUserId: staffId, now: BNOW })).toEqual({ ok: false, reason: "still_fetching" });
+      await runUntilFetched(tx, fake);
+      expect(await confirmTikTokBackfill(tx, { staffUserId: staffId, now: new Date(clock.ms) })).toEqual({ ok: true, changed: true });
+      clock.ms += 5 * MIN;
+      const off = await runTikTokSync(tx, deps(fake));
+      expect(off.apply).toMatchObject({ enabled: false, created: 0 });
+      expect(await tx.select().from(orders).where(eq(orders.channelOrderNo, id))).toHaveLength(0);
+    });
+  });
+
+  test("the preview: enrich (with what is filled), create (and shipped before the books start), held, skipped, and hand-typed orders TikTok did not return", async () => {
+    await withRollback(async (tx) => {
+      const staffId = await connectAt(tx);
+      const clock = { ms: BNOW.getTime() };
+      const fake = fakeTikTok(clock);
+      const enrich = tiktokId();
+      const create = tiktokId();
+      const early = tiktokId();
+      const held = tiktokId();
+      const skipped = tiktokId();
+      const e = await sold(tx, enrich, DEC2);
+      // Shipped on 3 Dec: inside the books.
+      const c = await sold(tx, create, new Date("2026-12-05T03:00:00.000Z"));
+      // Paid and shipped in November, completed on 2 Dec: inside the window, shipped before the books start.
+      const ea = await sold(tx, early, DEC2, { collection_time: seconds(new Date("2026-11-29T03:00:00.000Z")) });
+      const h = await sold(tx, held, DEC2, { line_items: [{ id: `${held}-li`, sku_id: "sku-unmapped", seller_sku: "NOPE", original_price: "259000" }] });
+      const s = await sold(tx, skipped, DEC2, { status: "CANCELLED", cancel_time: seconds(DEC2) });
+      for (const [id, raw] of [[enrich, e.raw], [create, c.raw], [early, ea.raw], [held, h.raw], [skipped, s.raw]] as const) fake.orders.set(id, raw);
+      const typed = await handTyped(tx, staffId, enrich, e.sku);
+      const lonely = await handTyped(tx, staffId, "577900000000999999", c.sku);
+      await startTikTokBackfill(tx, { fromDate: "2026-12-01", staffUserId: staffId, now: BNOW });
+      await runUntilFetched(tx, fake);
+
+      const preview = await getTikTokBackfillPreview(tx, new Date(clock.ms));
+      expect(preview?.counts).toEqual({ enrich: 1, create: 2, held: 1, skip: 1, notInTikTok: 1 });
+      const enriched = preview!.enrich.find((row) => row.tiktokOrderId === enrich);
+      expect(enriched).toMatchObject({ orderId: typed.id, orderNo: typed.orderNo, statusFrom: "to_ship", statusTo: "completed", fillsShippedAt: true });
+      expect(preview!.create.find((row) => row.tiktokOrderId === early)).toMatchObject({ shippedBeforeBooks: true });
+      expect(preview!.create.find((row) => row.tiktokOrderId === create)).toMatchObject({ shippedBeforeBooks: false });
+      expect(preview!.held).toEqual([expect.objectContaining({ tiktokOrderId: held, reason: "unknown_sku" })]);
+      expect(preview!.skip).toEqual([expect.objectContaining({ tiktokOrderId: skipped, reason: "cancelled" })]);
+      expect(preview!.notInTikTok).toEqual([expect.objectContaining({ orderId: lonely.id, channelOrderNo: "577900000000999999" })]);
+      // Read only: nothing was written to admin.
+      expect((await tx.select().from(orders).where(eq(orders.id, typed.id)))[0]?.status).toBe("to_ship");
     });
   });
 });

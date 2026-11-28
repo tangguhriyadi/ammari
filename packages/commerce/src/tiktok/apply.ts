@@ -3,10 +3,11 @@ import { and, eq, sql, type SQL } from "drizzle-orm";
 import { orderItems, orders, type OrderAttentionFlag, type OrderStatus, type TikTokHeldReason, type TikTokOrderReviewFlag, type TikTokSnapshotSource } from "@ammari/db/schema";
 import type { AllowlistedObject } from "@ammari/tiktok-shop";
 import { defaultDb, writeAuditLog, type Database, type Tx } from "../db";
-import { ActionError, FieldError, isPostgresErrorCode } from "../errors";
+import { ActionError, FieldError, isPostgresConstraintViolation, isPostgresErrorCode } from "../errors";
 import { decrementStockForOrderItems, transitionOrderStatus } from "../orders/lifecycle";
 import { generateOrderNumber } from "../orders/order-number";
 import { decideTikTokOrder, tiktokPackingState, type TikTokDecision, type TikTokEffects, type TikTokNewOrder } from "./apply-rules";
+import { TIKTOK_ORDER_NO_SEPARATORS_SQL } from "./backfill";
 import { tiktokSnapshotLines } from "./order-store";
 
 // Applying a TikTok order to admin orders and stock (docs/plans/tiktok-shop-integration.md §4.2, T5).
@@ -27,6 +28,13 @@ import { tiktokSnapshotLines } from "./order-store";
 //   5. every status move goes through `transitionOrderStatus` (actor NULL: the system), every other
 //      change is a conditional UPDATE. The marketplace dates are written once (`coalesce`).
 //
+// T9 (backfill, enrich mode): an order the backfill was the first to store waits until the owner
+// confirms that backfill (`waiting_backfill`, nothing written). A hand-typed order is matched on the
+// exact number first, else on the number with spaces, `#`, `.` and `-` removed (only for an all-digit
+// TikTok id); such a match corrects the typed number to TikTok's, so every later match and the T8
+// reconciliation find it. Two hand-typed orders behind one number are held `duplicate_in_admin` (one of
+// them cancelled by staff settles it).
+//
 // The caller (sync.ts) checks the kill switch (`orders_apply_enabled`) before calling this.
 
 const ROW_LOCK_TIMEOUT = "10s";
@@ -38,6 +46,8 @@ export type ApplyTikTokOrderResult =
   | { kind: "held"; reason: TikTokHeldReason; detail: string | null }
   | { kind: "skipped"; reason: "unpaid" | "cancelled" }
   | { kind: "not_found" }
+  /** T9: the backfill stored it first and is not confirmed yet ("Terapkan riwayat"). Nothing written. */
+  | { kind: "waiting_backfill" }
   /** A row lock timed out, a deadlock, or the admin order moved under us: nothing was written;
    * the next pass retries. */
   | { kind: "busy"; code: string };
@@ -81,6 +91,8 @@ interface LockedProjection {
   applied_update_time: Date | null;
   review_flags: TikTokOrderReviewFlag[];
   payload: AllowlistedObject;
+  /** T9: stored first by a backfill that is not confirmed yet. */
+  waiting_backfill: boolean;
 }
 
 function toDate(value: Date | string | null): Date | null {
@@ -90,7 +102,8 @@ function toDate(value: Date | string | null): Date | null {
 async function lockProjection(tx: Tx, tiktokOrderId: string): Promise<LockedProjection | null> {
   const rows = await tx.execute<Record<string, unknown>>(sql`
     select t.tiktok_order_id, t.order_id, t.status, t.latest_update_time, t.paid_time, t.collection_time, t.cancel_time,
-           t.is_on_hold_order, t.apply_state, t.held_reason, t.applied_update_time, t.review_flags, s.payload
+           t.is_on_hold_order, t.apply_state, t.held_reason, t.applied_update_time, t.review_flags, s.payload,
+           (t.backfill_id is not null and not exists (select 1 from tiktok_backfills b where b.id = t.backfill_id and b.state = 'confirmed')) as waiting_backfill
     from tiktok_orders t join tiktok_order_snapshots s on s.id = t.latest_snapshot_id
     where t.tiktok_order_id = ${tiktokOrderId}
     for update of t
@@ -111,26 +124,55 @@ async function lockProjection(tx: Tx, tiktokOrderId: string): Promise<LockedProj
     applied_update_time: toDate(row.applied_update_time as string | null),
     review_flags: (row.review_flags as TikTokOrderReviewFlag[]) ?? [],
     payload: row.payload as AllowlistedObject,
+    waiting_backfill: row.waiting_backfill === true,
   };
 }
 
-async function lockAdminOrder(tx: Tx, projection: LockedProjection) {
-  const where = projection.order_id ? eq(orders.id, projection.order_id) : and(eq(orders.channelId, "tiktok"), eq(orders.channelOrderNo, projection.tiktok_order_id));
-  const [order] = await tx
-    .select({
-      id: orders.id,
-      status: orders.status,
-      needsAttention: orders.needsAttention,
-      marketplaceShippedAt: orders.marketplaceShippedAt,
-      marketplaceCompletedAt: orders.marketplaceCompletedAt,
-      marketplaceReturnedAt: orders.marketplaceReturnedAt,
-      channelStatus: orders.channelStatus,
-    })
+const ADMIN_ORDER_COLUMNS = {
+  id: orders.id,
+  orderNo: orders.orderNo,
+  channelOrderNo: orders.channelOrderNo,
+  status: orders.status,
+  needsAttention: orders.needsAttention,
+  marketplaceShippedAt: orders.marketplaceShippedAt,
+  marketplaceCompletedAt: orders.marketplaceCompletedAt,
+  marketplaceReturnedAt: orders.marketplaceReturnedAt,
+  channelStatus: orders.channelStatus,
+};
+
+type LockedAdminOrder = { id: string; orderNo: string; channelOrderNo: string | null; status: OrderStatus; needsAttention: OrderAttentionFlag[]; marketplaceShippedAt: Date | null; marketplaceCompletedAt: Date | null; marketplaceReturnedAt: Date | null; channelStatus: string | null };
+
+/** The admin order this TikTok order belongs to, locked: its link, else the exact number, else (T9) a
+ * hand-typed number that differs only by separators, not linked to another TikTok order. `ambiguous`:
+ * two such orders (the sync never picks one). */
+async function lockAdminOrder(tx: Tx, projection: LockedProjection): Promise<{ order: LockedAdminOrder | null; ambiguous: string[] }> {
+  if (projection.order_id) {
+    const [order] = await tx.select(ADMIN_ORDER_COLUMNS).from(orders).where(eq(orders.id, projection.order_id)).for("update").limit(1);
+    return { order: order ?? null, ambiguous: [] };
+  }
+  const [exact] = await tx
+    .select(ADMIN_ORDER_COLUMNS)
     .from(orders)
-    .where(where)
+    .where(and(eq(orders.channelId, "tiktok"), eq(orders.channelOrderNo, projection.tiktok_order_id)))
     .for("update")
     .limit(1);
-  return order ?? null;
+  if (exact) return { order: exact, ambiguous: [] };
+  if (!/^\d+$/.test(projection.tiktok_order_id)) return { order: null, ambiguous: [] };
+  const separators = TIKTOK_ORDER_NO_SEPARATORS_SQL;
+  const loose = await tx
+    .select(ADMIN_ORDER_COLUMNS)
+    .from(orders)
+    .where(
+      sql`${orders.channelId} = 'tiktok' and regexp_replace(${orders.channelOrderNo}, ${separators}, '', 'g') = ${projection.tiktok_order_id}
+        and not exists (select 1 from tiktok_orders t where t.order_id = ${orders.id})`,
+    )
+    .orderBy(orders.orderNo)
+    .for("update")
+    .limit(10);
+  // Two spellings of one number: one cancelled by staff (the fix the preview suggests) leaves the other.
+  const pool = loose.length > 1 ? loose.filter((order) => order.status !== "cancelled") : loose;
+  if (pool.length > 1 || (pool.length === 0 && loose.length > 1)) return { order: null, ambiguous: loose.map((order) => order.orderNo) };
+  return { order: pool[0] ?? null, ambiguous: [] };
 }
 
 async function activeMappings(tx: Tx, payload: AllowlistedObject): Promise<Map<string, string>> {
@@ -315,7 +357,13 @@ async function commit(tx: Tx, tiktokOrderId: string, options: Required<ApplyTikT
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`tiktok-order:${tiktokOrderId}`}))`);
   const projection = await lockProjection(tx, tiktokOrderId);
   if (!projection) return { kind: "not_found" };
-  const admin = await lockAdminOrder(tx, projection);
+  if (projection.waiting_backfill) return { kind: "waiting_backfill" };
+  const located = await lockAdminOrder(tx, projection);
+  if (located.ambiguous.length > 0) {
+    await recordState(tx, projection, "held", "duplicate_in_admin", located.ambiguous.join(", ").slice(0, 200), source, now);
+    return { kind: "held", reason: "duplicate_in_admin", detail: located.ambiguous.join(", ") };
+  }
+  const admin = located.order;
 
   const sameVersion = projection.applied_update_time !== null && projection.applied_update_time.getTime() === projection.latest_update_time.getTime();
   if (sameVersion && projection.apply_state === "applied" && admin) {
@@ -405,18 +453,25 @@ async function commit(tx: Tx, tiktokOrderId: string, options: Required<ApplyTikT
       }
 
       const orderId = admin!.id;
+      // A hand-typed number with separators becomes TikTok's own (conditional: never over a change).
+      // Only a first (loose) match: a linked order's number is never touched again.
+      const renamed = projection.order_id === null && admin!.channelOrderNo !== tiktokOrderId;
+      if (renamed) {
+        const fixed = await sp.execute(sql`update orders set channel_order_no = ${tiktokOrderId} where id = ${orderId}::uuid and channel_order_no is not distinct from ${admin!.channelOrderNo} returning id`);
+        if (fixed.length === 0) throw new ApplyDrift("order_number_moved");
+      }
       for (const to of decision.transitions) await step(sp, orderId, to);
       const change = await applyEffects(sp, orderId, decision.effects, projection.status, now);
       const linked = projection.order_id !== orderId;
       const reviewAdded = await markApplied(sp, projection, orderId, decision.effects.reviewFlags);
-      const changed = decision.transitions.length > 0 || !sameFlags(change.flagsBefore, change.flagsAfter) || Object.keys(change.datesWritten).length > 0 || linked || reviewAdded.length > 0 || change.channelStatusChanged;
+      const changed = decision.transitions.length > 0 || !sameFlags(change.flagsBefore, change.flagsAfter) || Object.keys(change.datesWritten).length > 0 || linked || reviewAdded.length > 0 || change.channelStatusChanged || renamed;
       if (changed) {
         await writeAuditLog(sp, {
           actorStaffUserId: null,
           action: "tiktok_update",
           entityType: "order",
           entityId: orderId,
-          before: { status: admin!.status, needsAttention: change.flagsBefore, channelStatus: admin!.channelStatus },
+          before: { status: admin!.status, needsAttention: change.flagsBefore, channelStatus: admin!.channelStatus, ...(renamed ? { channelOrderNo: admin!.channelOrderNo } : {}) },
           after: {
             source,
             tiktokOrderId,
@@ -425,6 +480,7 @@ async function commit(tx: Tx, tiktokOrderId: string, options: Required<ApplyTikT
             needsAttention: change.flagsAfter,
             ...change.datesWritten,
             ...(linked ? { matchedHandTypedOrder: projection.order_id === null } : {}),
+            ...(renamed ? { channelOrderNo: tiktokOrderId } : {}),
             reviewFlags: reviewAdded,
           },
         });
@@ -453,6 +509,10 @@ export async function applyTikTokOrder(db: Database, tiktokOrderId: string, opti
     // 55P03 lock_not_available (lock_timeout), 40P01 deadlock_detected: rolled back, try again.
     if (isPostgresErrorCode(error, "55P03")) return { kind: "busy", code: "lock_timeout" };
     if (isPostgresErrorCode(error, "40P01")) return { kind: "busy", code: "deadlock" };
+    // 23505: the corrected number (T9) or a new order's number already exists: a hand entry landed
+    // meanwhile. Rolled back; the next pass matches it.
+    // Only that key: any other unique violation is not a race and is thrown (route 500, ALERT).
+    if (isPostgresConstraintViolation(error, "23505", ["orders_channel_id_channel_order_no_key"])) return { kind: "busy", code: "order_exists" };
     throw error;
   }
 }
@@ -471,11 +531,13 @@ export async function listTikTokOrdersToApply(db: Database, now: Date = new Date
   const rows = await db.execute<{ tiktok_order_id: string }>(sql`
     select t.tiktok_order_id from tiktok_orders t
     left join orders o on o.id = t.order_id
-    where t.apply_state is null
+    -- T9: an order the backfill stored first waits for "Terapkan riwayat".
+    where (t.backfill_id is null or exists (select 1 from tiktok_backfills b where b.id = t.backfill_id and b.state = 'confirmed'))
+      and (t.apply_state is null
        or (t.apply_state = 'held' and t.updated_at <= ${heldBefore}::timestamptz)
        or (t.apply_state <> 'held' and (t.applied_update_time is null or t.applied_update_time < t.latest_update_time))
        -- Any status: a TikTok hold left on an order staff shipped meanwhile is cleared too.
-       or 'tiktok_on_hold' = any(o.needs_attention)
+       or 'tiktok_on_hold' = any(o.needs_attention))
     order by (t.apply_state = 'held') nulls first,
              case when t.apply_state = 'held' then null else t.latest_update_time end asc,
              t.latest_update_time desc, t.tiktok_order_id

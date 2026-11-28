@@ -4,6 +4,7 @@ import { orderChannelFees, tiktokOrders, tiktokPayouts, tiktokStatements, tiktok
 import { insertOrder, insertStaffUser } from "@ammari/db/test-fixtures";
 import { withRollback, type TestDatabase } from "@ammari/db/test-utils";
 import { Secret, createTikTokClient, projectTikTokOrder, type FetchLike, type TikTokAuthClient, type TikTokTokenSet, type TokenKeyring } from "@ammari/tiktok-shop";
+import { getTikTokBackfillView, startTikTokBackfill } from "./backfill";
 import { saveTikTokConnection } from "./connection";
 import { ingestTikTokOrder } from "./order-store";
 import { TIKTOK_FINANCE_EVERY_MS, runTikTokSync } from "./sync";
@@ -245,6 +246,45 @@ describe("finance in the sync run", () => {
         { component: "admin_fee", amount: 9000, source: "actual" },
         { component: "platform_commission", amount: 15000, source: "actual" },
       ]);
+    });
+  });
+});
+
+describe("T9 backfill: statements and payouts", () => {
+  test("history older than the live finance window (7 days) is read by the backfill from 1 Dec, and the backfill becomes fetched", async () => {
+    await withRollback(async (db) => {
+      const later = new Date("2026-12-20T03:00:00.000Z");
+      const staff = await insertStaffUser(db);
+      const tokens: TikTokTokenSet = {
+        accessToken: new Secret("ROW_access_t9"),
+        accessTokenExpiresAt: new Date(later.getTime() + 7 * DAY),
+        refreshToken: new Secret("ROW_refresh_t9"),
+        refreshTokenExpiresAt: new Date(later.getTime() + 60 * DAY),
+        grantedScopes: ["seller.order.info", "seller.finance.info"],
+        sellerName: "Ammari",
+        sellerBaseRegion: "ID",
+      };
+      const saved = await saveTikTokConnection(db, { tokens, shop: { shopId: SHOP_ID, shopCipher: "ROW_cipher", shopName: "Ammari", region: "ID", sellerType: "LOCAL" }, staffUserId: staff.id, keyring: KEYRING, now: new Date(later.getTime() - DAY) });
+      if (!saved.ok) throw new Error(saved.reason);
+      // The live polls already caught up: their windows cover only recent days.
+      for (const resource of ["orders", "returns", "cancellations", "statements", "payments", "unsettled"] as const) {
+        await db.insert(tiktokSyncCursors).values({ resource, windowEnd: new Date(later.getTime() - 3600_000) });
+      }
+      const fake = fakeTikTok();
+      fake.clock.ms = later.getTime();
+      const statementTime = seconds(new Date("2026-12-02T10:00:00.000Z"));
+      fake.statements = [{ id: STATEMENT_ID, statement_time: statementTime, currency: "IDR", settlement_amount: "-20000", payment_status: "PAID", payment_id: "7400000000000009001" }];
+      fake.transactions.set(STATEMENT_ID, [{ id: "7500000000000009002", type: "GMV_PAYMENT_FOR_ADS", settlement_amount: "-20000", adjustment_amount: "-20000" }]);
+      fake.payments = [{ id: "7400000000000009001", create_time: statementTime + 3600, paid_time: statementTime + 7200, status: "PAID", amount: { value: "-20000", currency: "IDR" }, bank_account: "*****1234" }];
+
+      expect(await startTikTokBackfill(db, { fromDate: "2026-12-01", staffUserId: staff.id, now: later })).toMatchObject({ ok: true });
+      const summary = await runTikTokSync(db, deps(fake));
+      expect(summary.error).toBeNull();
+      expect(summary.backfill).toMatchObject({ ran: true, state: "fetched", finance: { skipped: null } });
+      expect(await db.select().from(tiktokStatements).where(eq(tiktokStatements.statementId, STATEMENT_ID))).toHaveLength(1);
+      expect(await db.select().from(tiktokPayouts)).toHaveLength(1);
+      const view = await getTikTokBackfillView(db);
+      expect(view?.statementsDoneUntil?.getTime()).toBe(view?.untilTime.getTime());
     });
   });
 });

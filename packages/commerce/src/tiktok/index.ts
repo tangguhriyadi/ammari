@@ -4,7 +4,7 @@ import "server-only";
 // tokens (T2), the webhook inbox (T3), the order read side: snapshots, projection, SKU mapping, the
 // sync run and its dry-run preview (T4), applying orders to admin orders and stock behind the kill
 // switch (T5), cancellations and returns (T6), and the finance read side: statements, estimates, fee
-// lines into order_channel_fees, payouts (T7).
+// lines into order_channel_fees, payouts (T7), and the backfill from 1 Dec 2026 in enrich mode (T9).
 
 export {
   consumeTikTokOAuthState,
@@ -47,6 +47,21 @@ export {
   type AfterSaleDecideInput,
   type AfterSaleDecision,
 } from "./after-sale-rules";
+export {
+  TIKTOK_BACKFILL_PREVIEW_LIMIT,
+  confirmTikTokBackfill,
+  getTikTokBackfillPreview,
+  getTikTokBackfillView,
+  normalizeTikTokOrderNo,
+  startTikTokBackfill,
+  type ConfirmTikTokBackfillResult,
+  type StartTikTokBackfillResult,
+  type TikTokBackfillCreateRow,
+  type TikTokBackfillEnrichRow,
+  type TikTokBackfillPreview,
+  type TikTokBackfillView,
+} from "./backfill";
+export { tiktokBackfillRange } from "./backfill-windows";
 export {
   applyTikTokOrder,
   listTikTokOrdersToApply,

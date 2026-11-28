@@ -6,7 +6,8 @@ read side in dry run, migration 0058, build notes §9.1); **T5 built** 27 Nov 20
 behind a kill switch that is off by default, migration 0059, build notes §9.2); **T6 built** 28 Nov 2026
 (cancellations and returns, read only, migration 0060, build notes §9.3); **T7 built** 28 Nov 2026 (finance
 read side, migration 0061, build notes §9.4); **T8 built** 28 Nov 2026 (accounting, migration 0062, build
-notes §9.5). T9 not started. T6 took migration 0060, so T7 is now **0061** and T8 **0062** (renumbered below).
+notes §9.5); **T9 built** 28 Nov 2026 (backfill in enrich mode, migration 0063, build notes §9.6, runbook §14,
+go-live checklist §15). **All sessions built; nothing is live** until the owner runs §14 and §15. T6 took migration 0060, so T7 is now **0061** and T8 **0062** (renumbered below).
 Every session below needs its own `/plan` approval first (CLAUDE.md Workflow 1). **Owner decisions of
 27 Nov 2026 are recorded in §12** and folded into the sections and sessions they affect. Q1, Q3, Q6 and
 Q13 are verified in T0 on the development shop.
@@ -1104,6 +1105,96 @@ T2 built the connection; nothing reaches TikTok until the owner sets these. Valu
   transaction's own date is the statement's `statement_time`; an adjustment's `settlement_amount` is its effect on
   the balance (positive = to the seller); the unsettled estimate's transaction id equals the later statement's.
 
+### 9.6 T9 build notes (28 Nov 2026)
+
+- **What "enrich mode" is, as built.** The backfill does not have its own apply path: it reads history
+  into the same snapshots and projection as the live sync (source `backfill`), and T5's
+  `applyTikTokOrder` does the rest, so a hand-typed order is matched on its TikTok number and gets its
+  link (`tiktok_orders.order_id`), `channel_status`, `marketplace_shipped_at = collection_time` (and
+  `_completed_at`), its status moved forward through `transitionOrderStatus`, and later its fees (T7,
+  once linked). No second order (unique key + `ON CONFLICT`), no stock movement beyond what a status
+  step itself does (to_ship → shipped → completed moves none). A TikTok order not in admin is created
+  as in T5 (stock leaves).
+- **Separator-tolerant match (new, so hand-typed orders are not duplicated):** a hand-typed number that
+  differs from TikTok's only by spaces, `#`, `.` or `-` (all-digit TikTok ids only) is matched too, and
+  its `channel_order_no` is corrected to TikTok's (conditional UPDATE, audited in `tiktok_update`
+  `before/after.channelOrderNo`), so T8's reconciliation (which matches on the number) finds it. Two such
+  orders → held **`duplicate_in_admin`** (new held reason, 0063); staff cancel the wrong one and the other
+  is matched on the next re-check. The T4 dry-run page (`order-preview.ts`) uses the same match. A number
+  with a wrong digit is not matched: that is what the preview's "tidak ditemukan di TikTok" list is for.
+- **Order of things (the dry run first), enforced in code:** "Ambil riwayat" (Integrasi page, a day ≥
+  1 Dec 2026, default 1 Dec, at most yesterday) → the cron reads `[from, now − 2 min at the request)` →
+  `fetched` → "Pratinjau riwayat TikTok" (`/settings/integrations/tiktok/backfill`) → "Terapkan riwayat".
+  An order the backfill is the **first** to store gets `tiktok_orders.backfill_id`; `applyTikTokOrder`
+  returns `waiting_backfill` (nothing written) and the re-check skips it until that backfill is
+  `confirmed`, **even while the kill switch is on**. After confirming, the kill switch still decides:
+  off → nothing is applied. A later live store of the same order (poll or webhook) keeps the mark:
+  its newer version is stored, and applied after "Terapkan riwayat", so nothing the preview lists
+  changes before the owner confirms. Orders the live poll stored before the backfill are never marked.
+- **Preview** (`getTikTokBackfillPreview`, read only, the commit's own `decideTikTokOrder`): Dilengkapi
+  (order, status from → to, what is filled: TikTok ship date, completion date, corrected number), Dibuat
+  baru (with a warning badge when TikTok's `collection_time` is before 1 Dec 2026), Ditahan (reason),
+  Dilewati, and **Pesanan manual yang tidak ditemukan di TikTok** (hand-typed TikTok orders dated in the
+  range whose number TikTok never returned, usually a typo). Stock is not checked in the preview; a
+  create the ledger refuses is held `short_stock` when applied. Lists show the first 200 of each. Phone
+  and desktop layouts; e2e `tiktok-backfill.spec.ts` at 390/1280.
+- **Accounting cut-over:** a backfill never starts before 1 Dec 2026 00:00 WIB (the trial month, D-22;
+  `TIKTOK_BACKFILL_FLOOR` from `ACCOUNTING_TRIAL_MONTH`, also a CHECK in 0063). Nothing is posted by the
+  backfill: the engine posts M1/M2 on `collection_time` on its own run, and its cut-over filter skips
+  anything dated before the trial month. **Not decided by code (ambiguity, owner's call):** an order
+  TikTok shipped in November that was never typed by hand and that the window lists (it changed on or
+  after 1 Dec, e.g. completed) is still **created** if confirmed: stock leaves now (right for the stock
+  count), but its sale is before the books, so in the trial books S1 lands in December with no M1 (a
+  1-1505 residue in December only; the official 1 Jan opening is proposed from orders at to_ship, so the
+  official books are not affected). The preview marks each such order; cancel it in admin after
+  applying, or leave it, before "Terapkan riwayat".
+- **Resumable, idempotent, time-budgeted:** the backfill is step 7 of the cron run, after the live steps,
+  with what is left of the 150-s budget (running out is normal, not a warning, and not the connection's
+  last error). Progress per resource (`orders/returns/cancellations/statements/payments_done_until`)
+  moves only after a slice is fully stored; a slice with something unstorable holds its progress and
+  answers `incomplete` (route 500 → ALERT after 3), like the live polls. Storing and applying are
+  idempotent, so a repeated slice writes nothing new. Returns/cancellations in 6-h slices, statements
+  and payouts in 31-day windows (only with `seller.finance.info`). **Without `seller.finance.info` the backfill never marks statements and payouts
+  done**: it waits in `fetching` with `finance_no_scope` (a cron warning every run) until the scope is
+  granted, so the history's finance is never lost silently. The SKU-level fees of those statements are fetched by the live finance step
+  (pending transactions, oldest first) and written once each order is linked. `fetched` is audited
+  without an actor (`tiktok_backfill_fetched`).
+- **T4 known limit, as far as backfill needs:** backfill order slices start at 6 h and **halve** (down to
+  1 min) when a slice that started does not finish in its run, and grow back only after a slice finished
+  within a quarter of the budget (`nextTikTokBackfillSliceSeconds`; `orders_slice_seconds`). A repeated
+  slice re-reads its pages (no cross-run skip); halving guarantees it ends. The live poll's 6-h slices are
+  unchanged (live traffic per 6 h is small).
+- **Migration 0063:** `tiktok_backfills` (state CHECK `fetching|fetched|confirmed` with paired
+  fetched/confirmed columns, floor CHECK, slice CHECK, at most one not confirmed: partial unique index on
+  `(true)`, start is `INSERT ... ON CONFLICT DO NOTHING`), `tiktok_orders.backfill_id` (nullable FK,
+  partial index), held_reason CHECK + `duplicate_in_admin`, `set_updated_at` trigger, `lock_timeout 5s`.
+  Expand only. **Rollback note:** the previous release ignores `backfill_id`, so after a rollback with
+  applying on, orders a backfill stored but nobody confirmed **would be applied** by the old re-check.
+  Turn "Hentikan penerapan pesanan" on before rolling back past 0063 if a backfill is not confirmed.
+- **Audit (Log Aktivitas, entity "Riwayat TikTok Shop"):** `tiktok_backfill_start`, `tiktok_backfill_fetched`,
+  `tiktok_backfill_confirm` (with how many orders were released); every order change is the usual
+  `tiktok_create` / `tiktok_update` / `tiktok_hold` with `source` `backfill` or `recheck`.
+- **`/orders/new` warning (Q16):** already built in T5 (`TIKTOK_ENTRY_NOTICE`); T9 adds its e2e at 390/1280
+  (warning shown for TikTok, saving not blocked).
+- **Review fixes (code review, 28 Nov 2026):** the gate is never lifted by a live store (it was, before
+  the preview was confirmed); a missing finance scope holds the backfill instead of marking finance done;
+  hand entry stores a TikTok number typed with spaces, `#`, `.` or `-` as TikTok's digits
+  (`normalizeChannelOrderNo` in `createOrder`), so the unique key refuses a second entry of an order the
+  sync already created; the number correction runs only on a first (loose) match, never on a linked
+  order; only `orders_channel_id_channel_order_no_key` maps to `busy` (any other unique violation is
+  thrown, route 500); an order slice is halved only when the backfill had at least half of the run's
+  budget, and a run that only ran out of budget keeps the previous error code; a backfill held for the
+  scope or starved of budget is a warning in the cron log; the preview's match rule is the commit's
+  (all-digit ids only, no admin order already linked); the date picker cannot submit a day outside
+  1 Dec 2026 to yesterday.
+- **Known limits, left as they are:** one backfill at a time and no cancel or skip (a backfill stuck on a
+  permanently bad record holds and alerts until it is fixed; start a new one only after confirming the
+  previous one); returns, cancellations and finance slices do not adapt their size (few per day);
+  the separator-tolerant lookup and the preview scan TikTok orders with `regexp_replace` and no
+  expression index, and the preview reads every gated order's payload (fine at Ammari's volume, a few
+  thousand); orders typed by hand before T9 keep their separators until the sync corrects them; orders TikTok's search does not reach (Q13) are
+  simply not found (they show up as "tidak ditemukan di TikTok" if typed by hand); Shopee is untouched.
+
 ---
 
 ## 10. Sessions
@@ -1125,7 +1216,7 @@ migration is read before it is committed. Test DBs are `ammari_e2e`/scratch data
 | **T6** | Cancellations and returns: polls + topics 11/12; refund recorded at `RETURN_OR_REFUND_REQUEST_COMPLETE` with `marketplace_returned_at`; **return with goods and failed delivery wait for physical receipt** (Q11; Q18) via "Retur diterima" → `returned`; **refund-only → `marketplace_refunds` row**, no status or stock change (Q10); pre-ship → `cancelled`; pending flag and 48-h deadline list (responses stay in Seller Center, Q15); partial return with goods → `marketplace_partial_return`. | **0060** (`tiktok_returns`, built; §9.3) | Unit: return/cancellation state → decision. DB: failed delivery → flags, stock unchanged until "Retur diterima", then exact-negation return movements and flags cleared; "Retur diterima" refused without the flag and for staff without `orders.manage`; a refund in transit on a COMPLETED order → the matching path (refund-only → refund row; with goods → waits for receipt); refund-only → one refund row, **no stock movement**, status unchanged; a replayed refund → still one row (unique); repeated return snapshots → idempotent. e2e: Perlu dicek deadline list and "Retur diterima" at 390/1280. |
 | **T7** | (**built**, §9.4) Finance read side (TDD, money): 0061 tables; unsettled transactions → `estimate` fee lines (Q9); statements + transactions + per-order SKU-level fees → `actual`; payouts; aggregation into `order_channel_fees` by the §5.3 fee-type table, rows filled from the fee types seen on the development shop and reviewed once by the accountant. | **0061** | Unit: `parseRupiah` on real response shapes (non-integer → `money_format`, never rounded); fee-type table complete for every type in the fixtures, and only `seller_shipping_subsidy` outside the 6-1201 components; an unknown type → held, not `other`. DB: estimate then actual → the actual replaces it with one upsert per component; no estimate yet → no fee rows (never zero); statement re-fetch → idempotent; Σ transactions = settlement per statement; payout ↔ statements link. |
 | **T8** | Accounting: loader reads the new columns (no `SALES_RULE_VERSION` bump); new rules S7 `marketplace_refund`, M3 `tiktok_payout` (→ Bank utama, Q17) and M5 `tiktok_adjustment`; 0062 mapping key `cash.tiktok_payout`; Pemetaan Akun lists unmapped TikTok adjustment types (Q8, ads → 6-1101 suggested); close warning for estimated TikTok fees (Q9); **Ringkasan / `revenue-sql.ts` subtract refund-only amounts** (Q19) and check 4 maps S7 to that component; Rekonsiliasi "TikTok Shop" checks (a)-(d) plus the M4/M5 ads pair list; opening 1-1303 proposal; accounting.md updated (Session 5 split, §9, §13). | **0062** | Unit: M1 dated by Jakarta `collection_time` (23:30 UTC → next Jakarta day); M2 on the same date, discount on 4-1201 (Q7); estimate → actual into a closed month → first open month; S7 Dr 4-1301 / Cr 1-1303 on `refunded_at` with no HPP line; S7 held while M1 is an issue; S4 dated `marketplace_returned_at`, S2 dated by the receipt movement; M3 Dr 1-1201 / Cr 1-1303; M5 unmapped → issue, mapped ads type → 6-1101. DB: **existing journals unchanged** after the loader change (a run on a fixture DB with posted journals → zero new rows); a TikTok order through paid → shipped → completed → settled → paid out leaves 1-1303 at 0 for that order; refund-only order → 1-1303 at 0 after settlement, 1-1505/HPP unchanged; Ringkasan revenue for the refund's month is lower by the refund amount and **check 4 shows no difference** (the existing `getExpenseSummary().net` equality test extended with a refund-only fixture). e2e: Rekonsiliasi TikTok section and Pemetaan Akun adjustment types at 390/1280. |
-| **T9** | Cut-over and backfill: backfill orders, returns and finance from `backfill_from` (proposal 1 Dec 2026, limited by what T0 found for Q13) in "enrich" mode (fills `marketplace_shipped_at` and fees on orders that already exist, moves status forward, creates missing ones); **a warning only** on `/orders/new` when channel `tiktok` is picked while TikTok is connected (decided, Q16: never blocked; "Pesanan TikTok masuk otomatis dari TikTok Shop. Buat manual hanya jika pesanan ini tidak muncul."); runbook (connect, webhook URL in Kelola Webhook, env vars incl. `TIKTOK_SERVICE_ID`, Access bypass, alerts, reconnect, key rotation, disconnect); SPEC §5.x updated. | none | DB: backfill over orders already in admin → no duplicate orders and no stock movements, dates filled; a re-run → no-op. e2e: the `/orders/new` warning shows for `tiktok` and does not block saving, at 390/1280. Runbook dry-run on dev with the stubbed TikTok. |
+| **T9** | (**built**, §9.6; runbook §14, checklist §15) Cut-over and backfill: backfill orders, returns and finance from `backfill_from` (proposal 1 Dec 2026, limited by what T0 found for Q13) in "enrich" mode (fills `marketplace_shipped_at` and fees on orders that already exist, moves status forward, creates missing ones); **a warning only** on `/orders/new` when channel `tiktok` is picked while TikTok is connected (decided, Q16: never blocked; "Pesanan TikTok masuk otomatis dari TikTok Shop. Buat manual hanya jika pesanan ini tidak muncul."); runbook (connect, webhook URL in Kelola Webhook, env vars incl. `TIKTOK_SERVICE_ID`, Access bypass, alerts, reconnect, key rotation, disconnect); SPEC §5.x updated. | **0063** (built; `tiktok_backfills`, `tiktok_orders.backfill_id`, held reason `duplicate_in_admin`) | DB: backfill over orders already in admin → no duplicate orders and no stock movements, dates filled; a re-run → no-op. e2e: the `/orders/new` warning shows for `tiktok` and does not block saving, at 390/1280. Runbook dry-run on dev with the stubbed TikTok. |
 
 Order: T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9. T5 must not start before T4 has run in dry-run
 against the development shop for at least a few days, so the T0 checks (Q1, Q13) are confirmed by real
@@ -1187,6 +1278,9 @@ Nothing is guessed.
 
 ### 12.2 Still open
 
+- **T9 ambiguity (owner's call, §9.6):** whether a TikTok order shipped before 1 Dec 2026 that the backfill
+  would create (never typed by hand) should be kept or cancelled after applying. The preview marks each one.
+
 - **T0 verification results** for Q1 (which ON_HOLD flow, and the gate on real orders), Q3 (what the
   Draf app and dev can do), Q6 (amounts are whole numbers) and Q13 (backfill reach, `collection_time`
   per fulfilment type). They are recorded here when known. The code already handles both outcomes
@@ -1206,3 +1300,148 @@ Nothing is guessed.
 - 1-1303 Saldo Penjual TikTok reconciles per order, per statement and per payout on the Rekonsiliasi
   page.
 - No token, secret, signature or buyer data is in the database in plaintext or in any log.
+
+---
+
+## 14. Runbook: going live (owner, in order)
+
+Everything below runs on a server or in a TikTok console, so the owner runs it; an agent never connects to
+dev or prod (CLAUDE.md). Values come from `~/ammari-secrets` and are never echoed, pasted into a chat or put on
+a command line (§7.1). Each step lists how to check it and how to undo it. Dev first (`ammari.my.id`,
+`/opt/ammari`), then prod (`ammari.id`, `/opt/ammari-prod`). Where dev cannot be used (Q3: the redirect URL is
+the prod admin host), the step says so.
+
+1. **Deploy T1 to T9 (migrations 0057 to 0063).** Dev: push `dev` (auto-deploy). Prod: fast-forward `main`,
+   run "Deploy (prod)" (docs/deploy-prod.md §1 to §2).
+   - Check: the deploy log says `Migrations applied successfully`; Pengaturan > Integrasi TikTok Shop opens and
+     says "Belum terhubung" with the "not configured" notice listing the missing variable names.
+   - Undo: "Deploy (prod)" with the previous `sha` and `skip_migrate` ticked. Every migration is expand-only;
+     the previous release ignores the new tables. See §9.6's rollback note if a backfill is open.
+2. **Token encryption key**, on the owner's Mac, once: `(umask 077; openssl rand -base64 32 > ~/ammari-secrets/tiktok-token-enc-key-v1)`.
+   - Check: `test -s ~/ammari-secrets/tiktok-token-enc-key-v1 && echo ok` (prints only `ok`); the file is
+     mode 600; it is in the secrets backup.
+   - Undo: none needed. Losing it later means reconnecting (§7.4 step 1).
+3. **Env vars, admin and web** (§7.4 steps 2 and 3; names in `deploy*/env/*.env.example`). admin.env:
+   `TIKTOK_APP_KEY`, `TIKTOK_APP_SECRET`, `TIKTOK_SERVICE_ID` (the Partner Center app ID, Q4),
+   `TIKTOK_TOKEN_ENC_KEY_V1`, `TIKTOK_TOKEN_ENC_KEY_CURRENT=1`. web.env: the same minus `TIKTOK_SERVICE_ID`, the
+   **same key**. Dev: `/opt/ammari/set-env-var.sh env/admin.env NAME < file` (and `env/web.env`). Prod:
+   `deploy/set-env-var.sh` into `~/ammari-secrets/prod-admin.env` / `prod-web.env`, then
+   `deploy-prod/upload-prod-env.sh`. Restart admin and web.
+   - Check: the Integrasi page no longer shows the "not configured" notice; within 5 minutes
+     `docker compose logs --tail 50 cron` shows the TikTok call answering 200 `skipped: not_connected` (no
+     longer the 503 `not configured` ERROR line).
+   - Undo: remove the variables and restart: the webhook answers 503 and the cron logs `not configured`
+     (fails closed, nothing else changes).
+4. **Kelola Webhook** (Partner Center > the app > Kelola Webhook, Q5): `https://ammari.id/api/integrations/tiktok/webhook`
+   (dev only if T0 shows the Draf app can point at dev: `https://ammari.my.id/api/integrations/tiktok/webhook`,
+   plus the dev Cloudflare Access bypass for exactly that path, §7.5 step 4).
+   - Check: after the first connect (step 6), the Integrasi page shows "Webhook terakhir" and the web log has
+     `[tiktok] webhook` lines with `result: stored`. A run of `bad_signature` means the App Secret in web.env is
+     not the one in Partner Center.
+   - Undo: clear the URL in Kelola Webhook. The reconciliation poll alone still finds every order (≤ 5 min).
+5. **Cron check.** Nothing to change: `cron.sh` already calls `/api/internal/tiktok/sync` every 5 minutes.
+   - Check: `docker compose logs --tail 50 cron` (dev `/opt/ammari`, prod `/opt/ammari-prod`) shows the TikTok
+     call every 5 minutes; no `ALERT` line. An `ALERT` after 3 failures in a row is what monitoring watches.
+   - Undo: not needed (without a connection the call is a no-op).
+6. **First connect** (prod admin only, the registered redirect, Q3): Integrasi > **Hubungkan TikTok Shop**, approve
+   in TikTok with the shop owner's account.
+   - Check: "Terhubung", the shop name and id, the six scopes under "Izin yang diberikan" (Keuangan must be
+     there for M2/M3), "Token akses berlaku sampai" about 7 days ahead; Log Aktivitas has "TikTok Shop
+     dihubungkan"; within 5 minutes "Sinkronisasi terakhir berhasil" is set and Pesanan TikTok fills (dry run).
+     If the page shows `kode: invalid_response`, stop: the token response's field names differ (§7.4 step 5).
+   - Undo: **Putuskan** (wipes the tokens, stops the sync), and remove the app in Seller Center.
+7. **Dry run for a few days (kill switch off).** Map every SKU on Pemetaan SKU TikTok until "SKU TikTok belum
+   dipetakan" is 0; read Pesanan TikTok ("Akan dibuat / dicocokkan / ditahan"); do the T0 checks of §15 on these
+   real orders.
+   - Check: no order or stock changed (Log Aktivitas has no `tiktok_create`); held reasons understood.
+   - Undo: nothing to undo.
+8. **Turn on the kill switch:** Integrasi > **Mulai terapkan pesanan** (only after §15 part A is done).
+   - Check: within 5 minutes new paid TikTok orders appear in Pesanan with stock out and the "Tunggu TikTok"
+     badge until the gate passes; Log Aktivitas "Pesanan masuk dari TikTok Shop"; `/packing?channel=tiktok` shows
+     them packable once the gate passes; hand-typed orders with the same number are matched (no duplicates:
+     `/orders?q=<TikTok number>` shows one order).
+   - Undo: **Hentikan penerapan pesanan** (immediate; orders already created stay, nothing more changes). An order
+     created wrongly is cancelled by hand (stock returns through the ledger).
+9. **Backfill from 1 Dec 2026** (after step 6; it needs the Keuangan scope, else it waits with
+   `finance_no_scope`; with or without the kill switch):
+   Integrasi > Riwayat sejak awal pembukuan > date **1 Des 2026** (or the earliest day T0 found TikTok's search
+   reaches, Q13) > **Ambil riwayat**.
+   - Check: the status goes from "Sedang dibaca" to "Siap dipratinjau" (each cron run reads a part; "Pesanan
+     terbaca sampai" moves forward); Log Aktivitas "Pengambilan riwayat TikTok dimulai" then "Riwayat TikTok
+     selesai dibaca". A `Kesalahan terakhir` that stays the same over several runs, or an `ALERT` in the cron log,
+     means a slice cannot be stored: read the cron log line (ids and codes only).
+   - Undo: nothing has changed yet; the read data is only snapshots. (There is no cancel: a stuck backfill stays
+     `fetching` until the cause is fixed.)
+10. **Review the preview, then apply the backfill:** Pratinjau riwayat TikTok. Before pressing anything:
+    every "Pesanan manual yang tidak ditemukan di TikTok" checked against "Pesanan baru" (a typo means a future
+    duplicate: cancel the hand-typed one); every "Ditahan" understood (map SKUs, cancel one of a
+    `duplicate_in_admin` pair); each "Dikirim sebelum 1 Des 2026" badge decided (§12.2). Then **Terapkan riwayat**.
+    - Check: Log Aktivitas "Riwayat TikTok diterapkan ke pesanan"; with the kill switch on, the next runs apply
+      at most 200 per run ("Hasil sejauh ini" on the preview counts Masuk admin / Ditahan); the enriched orders
+      show "Terakhir diperbarui dari TikTok Shop" and their TikTok ship date; Akuntansi > Perlu dicek shows no
+      `marketplace_ship_date_missing` for TikTok orders shipped since 1 Dec after the next posting run (15 min);
+      the stock of matched orders did not move again.
+    - Undo: **Hentikan penerapan pesanan** stops further applying at once. What was applied stays; wrong orders
+      are cancelled by hand. A posted journal follows the order (reverse + repost by the engine).
+11. **Reconnect and alerts, ongoing.** The admin home and Integrasi show a banner when the refresh token nears its
+    end (topic 7) or the connection needs reconnecting: press **Hubungkan ulang** (same as step 6, nothing is lost).
+    A sync that stops working shows as `ALERT` in the cron log and as an old "Sinkronisasi terakhir berhasil" on
+    Integrasi (there is no banner for a stale poll yet; §8.3 planned one, not built).
+    Deauthorization in Seller Center (topic 6) wipes the tokens and stops the sync: reconnect to resume.
+12. **Key rotation (when needed):** §7.4 step 6.
+13. **Disconnect (if ever):** Integrasi > Putuskan; remove the app in Seller Center; clear Kelola Webhook; set
+    the kill switch off first if you plan to reconnect later (it is kept on the row).
+
+---
+
+## 15. TikTok go-live checklist
+
+**A. T0 checks on the development shop (before step 8 of §14), recorded in §12.2 with the date:**
+
+1. **Field names:** a few real orders on Pesanan TikTok show line items, prices, status and times (a misnamed
+   field shows as "Ditahan: Jumlah uang bukan rupiah bulat" or a missing SKU); the order allowlist
+   (`packages/tiktok-shop/src/orders.ts`), return/cancellation names (`after-sale-rules.ts`, list keys
+   `return_orders` / `cancellations`) and finance list keys match what TikTok sends. Whether line items carry
+   `quantity` (code counts 1 piece per line without it) and whether `payment.seller_discount` is the seller's
+   total discount.
+2. **ON_HOLD flow (Q1):** which one Indonesia uses (an `ON_HOLD` status, or `AWAITING_SHIPMENT` with
+   `is_on_hold_order`), and a few real orders against the packing gate.
+3. **Amount format (Q6):** amounts arrive as whole-rupiah strings (nothing held `money_format`).
+4. **Cost sign:** a fee is TikTok's negative amount (`TIKTOK_FEE_COST_SIGN`); otherwise every order's fees hold
+   `fee_negative` on Keuangan TikTok.
+5. **Fee and adjustment type names:** every fee type on the first real statements is in
+   `TIKTOK_FEE_TYPE_COMPONENTS` (none held `fee_type_unmapped`); the adjustment types are listed under Pemetaan
+   Akun > Penyesuaian TikTok Shop.
+6. **Payout status:** `PAID` is final, `FAILED` too; a payout's statements add up to it on Keuangan TikTok.
+7. **`collection_time` (Q13):** set for every fulfilment type used (an IN_TRANSIT order without it keeps
+   `marketplace_ship_date_missing`), and how far back order search reaches (sets the backfill date of §14
+   step 9).
+8. Also: TikTok's auth-error codes (pass them as `authErrorCodes`), whether the unsettled estimate's
+   transaction id equals the statement's, and whether an adjustment's `settlement_amount` is its effect on
+   the balance.
+
+**B. Accountant review (before the first month close that contains TikTok):**
+
+1. The fee table `TIKTOK_FEE_TYPE_COMPONENTS` (fee type → M2 component, all on 6-1201 except
+   `seller_shipping_subsidy` on 6-1202), including the types deliberately left out (taxes, return shipping).
+2. Every adjustment type in Pemetaan Akun > Penyesuaian TikTok Shop mapped (ads paid from the balance → 6-1101
+   Iklan, Q8); no `tiktok_adjustment_unmapped` left in Perlu dicek.
+3. `cash.tiktok_payout` → 1-1201 Bank utama (Q17) and the Rekonsiliasi "TikTok Shop" section (a)-(d) for December.
+
+**C. Prod steps:** §14 steps 1 to 10 on prod, in order, then:
+
+1. A week of December with the kill switch on: Rekonsiliasi TikTok Shop weekly (accounting.md §13 step 6).
+2. 31 Dec: the Saldo awal hint for Saldo Penjual TikTok (from the stored data) checked against the Seller
+   Center balance and typed in the wizard (accounting.md §13 step 7).
+3. January closes with no `marketplace_ship_date_missing` for TikTok and no estimated-fee warning left for
+   orders already settled.
+
+**D. Still pending after go-live (not blockers):**
+
+- **Stock sync to TikTok** (Ammari stock → TikTok listings): a later phase with its own plan; it needs a product
+  write scope (§1, Q15).
+- **Write-back to TikTok** (accepting/rejecting returns, arranging shipments, labels): out of phase 1 (Q15);
+  labels and return responses stay in Seller Center.
+- **Shopee Session 5** (real Shopee ship dates, accounting.md §8): still blocked on a real Shopee export header;
+  every Shopee order shipped from 1 Dec stays `marketplace_ship_date_missing` until then.
+- Admin "Sinkronkan sekarang" is not built (the cron runs every 5 minutes).
