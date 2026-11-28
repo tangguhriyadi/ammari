@@ -6,10 +6,11 @@ import { getTikTokBackfillPreview, getTikTokConnectionView, type TikTokBackfillV
 import type { TikTokApplyState, TikTokBackfillState } from "@ammari/db/schema";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { defaultDb } from "@/lib/db";
-import { TIKTOK_INTEGRATION_PATH, TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
+import { TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
 import { TIKTOK_HELD_REASON_LABELS } from "@/lib/integrations/tiktok-messages";
 import { ORDER_STATUS_LABELS } from "@/lib/orders/status-labels";
-import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { integrationCrumbs } from "@/lib/integrations/breadcrumb";
+import { TIKTOK_TAB } from "@/lib/integrations/tabs";
 import { TikTokBackfillActions } from "../_components/tiktok-backfill-actions";
 
 // Pratinjau riwayat TikTok (docs/plans/tiktok-shop-integration.md T9): the dry run of the backfill.
@@ -145,7 +146,7 @@ export default async function TikTokBackfillPage() {
 
   return (
     <>
-      <Breadcrumb items={[...rootCrumbs(TIKTOK_INTEGRATION_PATH), { label: "Pratinjau riwayat" }]} />
+      <Breadcrumb items={[...integrationCrumbs(TIKTOK_TAB), { label: "Pratinjau riwayat" }]} />
       <PageHeader title="Pratinjau riwayat TikTok" description="Apa yang terjadi pada pesanan TikTok sejak awal pembukuan saat riwayat diterapkan. Belum ada yang berubah sebelum Terapkan riwayat ditekan." />
       {!preview ? (
         <EmptyState title="Riwayat belum diambil" description="Mulai dari halaman Integrasi TikTok Shop dengan tombol Ambil riwayat." />

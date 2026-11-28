@@ -47,7 +47,7 @@ for (const viewport of VIEWPORTS) {
     test("connect, reconnect, a refused code, disconnect, and every change in Log Aktivitas", async ({ page }) => {
       await loginAs(page, E2E_TIKTOK_ADMIN_EMAIL);
       await page.goto(PAGE);
-      await expect(page.getByRole("heading", { level: 1, name: "Integrasi TikTok Shop" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Integrasi" })).toBeVisible();
       const section = connection(page);
       // The previous viewport's run ends disconnected; the very first run starts unconnected.
       await expect(section.getByText(/^(Belum terhubung|Diputuskan)$/)).toBeVisible();
@@ -74,8 +74,11 @@ for (const viewport of VIEWPORTS) {
       }
       await expect(page.getByRole("region", { name: "Kesehatan sinkronisasi" }).getByText("Webhook gagal")).toBeVisible();
 
-      // Hubungkan ulang: same shop, new tokens.
+      // Hubungkan ulang: same shop, new tokens. The first connect may already show the same
+      // "terhubung ulang" message, so wait for the new document, or its reload lands mid-click below.
+      const reloaded = page.waitForEvent("load");
       await section.getByRole("button", { name: "Hubungkan ulang" }).click();
+      await reloaded;
       await expect(page.getByText("TikTok Shop terhubung ulang. Token baru sudah disimpan.")).toBeVisible();
 
       // The T5 kill switch: off by default; turned on and off again (each after confirming), so the
@@ -135,7 +138,7 @@ for (const viewport of VIEWPORTS) {
       await loginAs(page, E2E_TIKTOK_NO_ACCESS_EMAIL);
       await page.goto("/settings");
       await expect(page.getByRole("heading", { level: 1, name: "Pengaturan" })).toBeVisible();
-      await expect(page.getByRole("link", { name: "Integrasi TikTok" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "Integrasi", exact: true })).toHaveCount(0);
       await page.goto(PAGE);
       await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();
       const callback = await page.request.get(`/api/integrations/tiktok/callback?code=${FAKE_GOOD_CODE}&state=${"A".repeat(43)}`, { maxRedirects: 0 });

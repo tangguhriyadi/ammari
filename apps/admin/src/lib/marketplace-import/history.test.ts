@@ -5,7 +5,7 @@ import { insertFabricColor, insertProductVariant, insertStaffUser } from "@ammar
 import { productVariants, stockMovements } from "@ammari/db/schema";
 import { shopeeRows, xlsxBytes } from "../../../test/marketplace-fixtures";
 import { commitImport } from "./commit";
-import { getImportBatchDetail, listImportBatches } from "./history";
+import { getImportBatchDetail, getLastImportBatch, listImportBatches } from "./history";
 import { parseMarketplaceFile } from "./parse-file";
 import { planImport } from "./plan";
 
@@ -57,6 +57,10 @@ describe("import history", () => {
       expect(moneyChanges.length).toBeGreaterThan(0);
       expect(moneyChanges.every((change) => "before" in change && change.before === null && change.after === null)).toBe(true);
       expect(hidden?.newOmzetAmount).toBeNull();
+
+      expect(await getLastImportBatch("shopee", tx)).toMatchObject({ id: second, channelName: "Shopee", counts: { create: 0, update: 1 }, newOmzetAmount: null });
+      // Another channel never gets Shopee's batch; no import yet is null.
+      expect(await getLastImportBatch("tiktok", tx)).toBeNull();
 
       expect(await getImportBatchDetail(randomUUID(), { canViewProfit: true }, tx)).toBeNull();
     });

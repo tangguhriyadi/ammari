@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Badge, Breadcrumb, Card, PageHeader, type BadgeVariant } from "@ammari/ui";
+import { Badge, Card, type BadgeVariant } from "@ammari/ui";
 import { formatDate, formatDateTime, formatNumber } from "@ammari/ui/lib";
 import { getTikTokBackfillView, tiktokConnectionBanner } from "@ammari/commerce/tiktok";
 import { ACCOUNTING_TRIAL_MONTH, type TikTokBackfillState, type TikTokConnectionStatus } from "@ammari/db/schema";
@@ -9,13 +9,15 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { getTikTokRuntime, TIKTOK_INTEGRATION_PATH, TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
 import { TIKTOK_CONNECT_ERRORS, TIKTOK_CONNECTED_MESSAGE, TIKTOK_HELD_REASON_LABELS, TIKTOK_RECONNECTED_MESSAGE, isTikTokConnectErrorCode } from "@/lib/integrations/tiktok-messages";
 import { getTikTokIntegrationPageData } from "@/lib/integrations/tiktok-queries";
-import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { TIKTOK_TAB } from "@/lib/integrations/tabs";
+import { IntegrationHeader } from "../_components/integration-header";
+import { TikTokSubTabs } from "./_components/tiktok-sub-tabs";
 import { TikTokConnectionActions } from "./_components/tiktok-connection-actions";
 import { TikTokBackfillActions } from "./_components/tiktok-backfill-actions";
 import { TikTokConnectionBanner } from "./_components/tiktok-connection-banner";
 import { TikTokOrdersApplyToggle } from "./_components/tiktok-orders-apply-toggle";
 
-// Pengaturan > Integrasi TikTok Shop (docs/plans/tiktok-shop-integration.md §3.1, §7.3, T2): status,
+// Administrasi > Integrasi > TikTok Shop (docs/plans/tiktok-shop-integration.md §3.1, §7.3, T2): status,
 // shop, granted scopes, token expiry, health, and Hubungkan / Hubungkan ulang / Putuskan.
 // integrations.manage on the server. No token or cipher is read for this page.
 
@@ -53,6 +55,7 @@ const SCOPE_LABELS: Record<string, string> = {
   "seller.shop.info": "Info toko",
   "seller.logistics": "Pengiriman",
   "seller.product.basic": "Produk",
+  "seller.authorization.info": "Informasi resmi toko",
 };
 
 function when(date: Date | null, empty = "Belum ada"): string {
@@ -82,7 +85,7 @@ function Section({ id, title, children }: { id: string; title: string; children:
 }
 
 export default async function TikTokIntegrationPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  await requirePermission(TIKTOK_PERMISSION);
+  const session = await requirePermission(TIKTOK_PERMISSION);
   const search = await searchParams;
   const runtime = getTikTokRuntime({ requireServiceId: true });
   const [{ connection, connectedByName, webhookCounts, ordersCursor, failedEvents, tiktokOrderCount, unmappedSkuCount, appliedCount, heldByReason }, backfill] = await Promise.all([getTikTokIntegrationPageData(), getTikTokBackfillView(defaultDb)]);
@@ -96,8 +99,8 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
 
   return (
     <>
-      <Breadcrumb items={rootCrumbs(TIKTOK_INTEGRATION_PATH)} />
-      <PageHeader title="Integrasi TikTok Shop" description="Hubungkan toko TikTok agar pesanan, retur, dan pencairan dana masuk otomatis ke admin." />
+      <IntegrationHeader session={session} tab={TIKTOK_TAB} description="Hubungkan toko TikTok agar pesanan, retur, dan pencairan dana masuk otomatis ke admin." />
+      <TikTokSubTabs active="Koneksi" />
       <div className="flex max-w-3xl flex-col gap-6">
         {connected && (
           <p role="status" className="rounded-lg border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">
@@ -229,7 +232,7 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
               <Link href={`${TIKTOK_INTEGRATION_PATH}/orders`} className="text-sm font-medium text-brand hover:underline">
                 Lihat pesanan TikTok
               </Link>
-              <Link href={`${TIKTOK_INTEGRATION_PATH}/sku-mappings`} className="text-sm font-medium text-brand hover:underline sm:ml-4">
+              <Link href={`${TIKTOK_INTEGRATION_PATH}/sku`} className="text-sm font-medium text-brand hover:underline sm:ml-4">
                 Buka Pemetaan SKU TikTok
               </Link>
               <Link href={`${TIKTOK_INTEGRATION_PATH}/finance`} className="text-sm font-medium text-brand hover:underline sm:ml-4">

@@ -366,6 +366,11 @@ export const E2E_CONTENT_ADMIN_EMAIL = "content-admin@e2e.ammari.test";
 export const E2E_TIKTOK_ADMIN_EMAIL = "tiktok-admin@e2e.ammari.test";
 export const E2E_TIKTOK_NO_ACCESS_EMAIL = "tiktok-no-access@e2e.ammari.test";
 const E2E_TIKTOK_NO_ACCESS_ROLE_KEY = "e2e_tiktok_settings_only";
+// integrations.spec.ts: one role per Integrasi tab, each seeing only its own.
+export const E2E_INTEGRATIONS_ONLY_EMAIL = "integrations-only@e2e.ammari.test";
+export const E2E_INTEGRATIONS_IMPORT_EMAIL = "integrations-import@e2e.ammari.test";
+const E2E_INTEGRATIONS_ONLY_ROLE_KEY = "e2e_integrations_only";
+const E2E_INTEGRATIONS_IMPORT_ROLE_KEY = "e2e_integrations_import_only";
 // tiktok-sku-mappings.spec.ts (docs/plans/tiktok-shop-integration.md T4): one stored TikTok order
 // (snapshot + projection, as the sync would leave it) whose only line has a TikTok SKU with no
 // mapping, and the Ammari variant the spec maps it to (E2E_RESERVATION_FREE_SKU, seeded below).
@@ -722,6 +727,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await ensureStaffFixture(E2E_TIKTOK_ADMIN_EMAIL, "E2E TikTok Super Admin", SUPER_ADMIN_ROLE_KEY);
   await ensureLimitedRole(E2E_TIKTOK_NO_ACCESS_ROLE_KEY, ["settings.manage", "finance.view_profit"]);
   await ensureStaffFixture(E2E_TIKTOK_NO_ACCESS_EMAIL, "E2E TikTok Tanpa Akses", E2E_TIKTOK_NO_ACCESS_ROLE_KEY);
+  await ensureLimitedRole(E2E_INTEGRATIONS_ONLY_ROLE_KEY, ["integrations.manage"]);
+  await ensureStaffFixture(E2E_INTEGRATIONS_ONLY_EMAIL, "E2E Integrasi TikTok", E2E_INTEGRATIONS_ONLY_ROLE_KEY);
+  await ensureLimitedRole(E2E_INTEGRATIONS_IMPORT_ROLE_KEY, ["orders.import"]);
+  await ensureStaffFixture(E2E_INTEGRATIONS_IMPORT_EMAIL, "E2E Integrasi Shopee", E2E_INTEGRATIONS_IMPORT_ROLE_KEY);
   {
     // ammari_e2e is TRUNCATEd above on every run, so these rows are always fresh and inside the
     // page's default last-7-days range.

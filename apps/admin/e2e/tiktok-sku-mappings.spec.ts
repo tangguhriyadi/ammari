@@ -13,7 +13,7 @@ const VIEWPORTS = [
   { name: "1280", width: 1280, height: 800 },
 ] as const;
 
-const PAGE = "/settings/integrations/tiktok/sku-mappings";
+const PAGE = "/settings/integrations/tiktok/sku";
 const PREVIEW = "/settings/integrations/tiktok/orders";
 
 /** The layout the viewport shows: phone cards below md, the table from md up. */
@@ -44,7 +44,7 @@ for (const viewport of VIEWPORTS) {
       await expect(previewRow.getByText(`SKU belum dipetakan: ${E2E_TIKTOK_SKU_ID}`)).toBeVisible();
 
       await page.goto(PAGE);
-      await expect(page.getByRole("heading", { level: 1, name: "Pemetaan SKU TikTok" })).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Bagian TikTok Shop" }).getByRole("link", { name: "Pemetaan SKU" })).toHaveAttribute("aria-current", "true");
       const unmapped = section(page, /^Belum dipetakan/);
       const unknownRow = rows(page, desktop).filter({ hasText: E2E_TIKTOK_SKU_ID });
       await expect(unmapped.getByText(E2E_TIKTOK_SELLER_SKU).filter({ visible: true })).toBeVisible();
@@ -87,7 +87,7 @@ for (const viewport of VIEWPORTS) {
       await loginAs(page, E2E_TIKTOK_NO_ACCESS_EMAIL);
       await page.goto("/settings");
       await expect(page.getByRole("heading", { level: 1, name: "Pengaturan" })).toBeVisible();
-      await expect(page.getByRole("link", { name: "Pemetaan SKU TikTok" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "Integrasi", exact: true })).toHaveCount(0);
       for (const path of [PAGE, PREVIEW]) {
         await page.goto(path);
         await expect(page.getByRole("heading", { name: "Akses ditolak" })).toBeVisible();

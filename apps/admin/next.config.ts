@@ -35,6 +35,8 @@ const nextConfig: NextConfig = {
       { source: "/pengaturan", destination: "/settings", permanent: true },
       { source: "/peran-staf", destination: "/roles-staff", permanent: true },
       { source: "/log-aktivitas", destination: "/activity-log", permanent: true },
+      // Pemetaan SKU TikTok moved inside the TikTok Shop tab of Integrasi.
+      { source: "/settings/integrations/tiktok/sku-mappings", destination: "/settings/integrations/tiktok/sku", permanent: true },
     ];
   },
   // The admin is never indexable, on dev or prod, so this is static config (no DEPLOY_ENV

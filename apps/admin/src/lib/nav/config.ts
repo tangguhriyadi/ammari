@@ -39,6 +39,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import type { PermissionKey } from "@ammari/db/rbac";
+import { INTEGRATION_PERMISSIONS } from "../integrations/tabs";
 
 export interface NavItem {
   label: string;
@@ -374,21 +375,13 @@ export const NAV_ITEMS: readonly NavItem[] = [
     mobilePrimary: false,
   },
   {
-    // docs/plans/tiktok-shop-integration.md T2: connect, reconnect and disconnect TikTok Shop.
-    label: "Integrasi TikTok",
-    href: "/settings/integrations/tiktok",
+    // One page with a tab per marketplace (lib/integrations/tabs.ts). Shown to anyone who may see
+    // at least one tab: each tab's page still checks its own permission.
+    label: "Integrasi",
+    href: "/settings/integrations",
     icon: Plug,
     group: "Administrasi",
-    permissionKeys: ["integrations.manage"],
-    mobilePrimary: false,
-  },
-  {
-    // docs/plans/tiktok-shop-integration.md T4 (§3.3, Q12): one TikTok SKU = one Ammari variant.
-    label: "Pemetaan SKU TikTok",
-    href: "/settings/integrations/tiktok/sku-mappings",
-    icon: Shuffle,
-    group: "Administrasi",
-    permissionKeys: ["integrations.manage"],
+    permissionKeys: INTEGRATION_PERMISSIONS,
     mobilePrimary: false,
   },
   {

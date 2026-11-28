@@ -7,7 +7,8 @@ import { requirePermission } from "@/lib/auth/require-permission";
 import { defaultDb } from "@/lib/db";
 import { TIKTOK_INTEGRATION_PATH, TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
 import { TIKTOK_HELD_REASON_LABELS } from "@/lib/integrations/tiktok-messages";
-import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { integrationCrumbs } from "@/lib/integrations/breadcrumb";
+import { TIKTOK_TAB } from "@/lib/integrations/tabs";
 
 // Pesanan TikTok (docs/plans/tiktok-shop-integration.md §10 T4/T5): each stored TikTok order with what
 // the sync did with it (masuk admin, ditahan with the reason, dilewati) once applying is on, else the
@@ -113,7 +114,7 @@ export default async function TikTokOrderPreviewPage() {
 
   return (
     <>
-      <Breadcrumb items={[...rootCrumbs(TIKTOK_INTEGRATION_PATH), { label: "Pesanan TikTok" }]} />
+      <Breadcrumb items={[...integrationCrumbs(TIKTOK_TAB), { label: "Pesanan TikTok" }]} />
       <PageHeader
         title="Pesanan TikTok"
         description="Pesanan TikTok yang sudah dibaca, dan apakah sudah masuk admin, ditahan, atau dilewati. Selama penerapan belum dimulai, halaman ini menunjukkan apa yang akan terjadi."
@@ -134,7 +135,7 @@ export default async function TikTokOrderPreviewPage() {
         </dl>
         <p className="text-sm text-neutral-600">
           Menampilkan {formatNumber(preview.rows.length)} dari {formatNumber(preview.total)} pesanan TikTok yang terakhir berubah. SKU yang belum dipetakan diselesaikan di{" "}
-          <Link href={`${TIKTOK_INTEGRATION_PATH}/sku-mappings`} className="font-medium text-brand hover:underline">
+          <Link href={`${TIKTOK_INTEGRATION_PATH}/sku`} className="font-medium text-brand hover:underline">
             Pemetaan SKU TikTok
           </Link>
           .

@@ -1,9 +1,10 @@
-import { Breadcrumb, PageHeader } from "@ammari/ui";
 import { listTikTokSkuMappings, listUnmappedTikTokSkus } from "@ammari/commerce/tiktok";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { defaultDb } from "@/lib/db";
 import { TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
-import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { TIKTOK_TAB } from "@/lib/integrations/tabs";
+import { IntegrationHeader } from "../../_components/integration-header";
+import { TikTokSubTabs } from "../_components/tiktok-sub-tabs";
 import { TikTokSkuMappingLists } from "./_components/tiktok-sku-mapping-lists";
 
 // Pemetaan SKU TikTok (docs/plans/tiktok-shop-integration.md §3.3, decided Q12; T4): TikTok SKUs seen
@@ -11,12 +12,17 @@ import { TikTokSkuMappingLists } from "./_components/tiktok-sku-mapping-lists";
 // server.
 
 export default async function TikTokSkuMappingsPage() {
-  await requirePermission(TIKTOK_PERMISSION);
+  const session = await requirePermission(TIKTOK_PERMISSION);
   const [unmapped, mappings] = await Promise.all([listUnmappedTikTokSkus(defaultDb), listTikTokSkuMappings(defaultDb)]);
   return (
     <>
-      <Breadcrumb items={rootCrumbs("/settings/integrations/tiktok/sku-mappings")} />
-      <PageHeader title="Pemetaan SKU TikTok" description="Hubungkan setiap SKU di TikTok Shop ke satu varian Ammari, supaya pesanan TikTok bisa masuk ke admin." />
+      <IntegrationHeader
+        session={session}
+        tab={TIKTOK_TAB}
+        crumb={{ label: "Pemetaan SKU" }}
+        description="Pemetaan SKU: hubungkan setiap SKU di TikTok Shop ke satu varian Ammari, supaya pesanan TikTok bisa masuk ke admin."
+      />
+      <TikTokSubTabs active="Pemetaan SKU" />
       <TikTokSkuMappingLists unmapped={unmapped} mappings={mappings} />
     </>
   );

@@ -1,6 +1,6 @@
 import "server-only";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { channels, importBatches, importBatchOrders, orders, staffUsers, type OrderStatus } from "@ammari/db/schema";
+import { channels, importBatches, importBatchOrders, orders, staffUsers, type ChannelId, type OrderStatus } from "@ammari/db/schema";
 import { channelDisplayNameSql } from "@/lib/orders/channel-label";
 import { defaultDb, type Database } from "@/lib/db";
 
@@ -105,6 +105,19 @@ export async function listImportBatches(options: { canViewProfit: boolean }, db:
     .orderBy(desc(importBatches.committedAt))
     .limit(IMPORT_HISTORY_LIMIT);
   return rows.map((row) => toRow(row, options.canViewProfit));
+}
+
+/** The newest committed order import of one channel, or null (Integrasi > Shopee). No money. */
+export async function getLastImportBatch(channelId: ChannelId, db: Database = defaultDb): Promise<ImportBatchRow | null> {
+  const [row] = await db
+    .select(batchColumns)
+    .from(importBatches)
+    .innerJoin(channels, eq(channels.id, importBatches.channelId))
+    .innerJoin(staffUsers, eq(staffUsers.id, importBatches.uploadedBy))
+    .where(and(committedOrderBatch, eq(importBatches.channelId, channelId)))
+    .orderBy(desc(importBatches.committedAt))
+    .limit(1);
+  return row ? toRow(row, false) : null;
 }
 
 export interface ImportBatchOrderRow {

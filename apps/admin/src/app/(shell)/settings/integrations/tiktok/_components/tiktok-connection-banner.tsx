@@ -30,7 +30,7 @@ export function TikTokConnectionBanner({ banner, linkToSettings }: { banner: Tik
       </p>
       {linkToSettings && (
         <Link href="/settings/integrations/tiktok" className="shrink-0 font-medium underline underline-offset-2">
-          Buka Integrasi TikTok
+          Buka Integrasi TikTok Shop
         </Link>
       )}
     </div>

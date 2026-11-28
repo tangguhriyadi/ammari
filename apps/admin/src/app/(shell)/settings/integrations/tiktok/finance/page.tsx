@@ -6,9 +6,10 @@ import type { TikTokFinanceHeldReason, TikTokOrderFeeHeldReason } from "@ammari/
 import { getTikTokConnectionView, TIKTOK_FINANCE_SCOPE } from "@ammari/commerce/tiktok";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { defaultDb } from "@/lib/db";
-import { TIKTOK_INTEGRATION_PATH, TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
+import { TIKTOK_PERMISSION } from "@/lib/integrations/tiktok";
 import { getTikTokFinancePageData, type TikTokFinancePageData } from "@/lib/integrations/tiktok-finance-queries";
-import { rootCrumbs } from "@/lib/nav/breadcrumb";
+import { integrationCrumbs } from "@/lib/integrations/breadcrumb";
+import { TIKTOK_TAB } from "@/lib/integrations/tabs";
 
 // Keuangan TikTok (docs/plans/tiktok-shop-integration.md §3.5, §5.3, T7): what the finance sync read
 // from TikTok (statements, payouts, estimated and actual fees) and what it held for a person. Read
@@ -98,7 +99,7 @@ export default async function TikTokFinancePage() {
 
   return (
     <>
-      <Breadcrumb items={[...rootCrumbs(TIKTOK_INTEGRATION_PATH), { label: "Keuangan TikTok" }]} />
+      <Breadcrumb items={[...integrationCrumbs(TIKTOK_TAB), { label: "Keuangan TikTok" }]} />
       <PageHeader
         title="Keuangan TikTok"
         description="Laporan penyelesaian, pencairan dana, dan biaya per pesanan yang dibaca dari TikTok Shop. Biaya perkiraan diganti biaya aktual saat TikTok menyelesaikan pesanan."
