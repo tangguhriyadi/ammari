@@ -34,6 +34,10 @@ function afterSales(overrides: Partial<TikTokSyncSummary["afterSales"]> = {}): T
   return { poll: { return: poll, cancellation: poll }, fetched: 0, snapshotsInserted: 0, replays: 0, conflicts: 0, invalid: 0, storeFailed: 0, applied: 0, unchanged: 0, refundsRecorded: 0, busy: 0, failed: 0, notFound: 0, rechecked: 0, recheckIncomplete: false, problems: [], ...overrides };
 }
 
+function finance(overrides: Partial<TikTokSyncSummary["finance"]> = {}): TikTokSyncSummary["finance"] {
+  return { skipped: "not_due", unsettled: 0, statements: 0, statementTransactions: 0, statementsHeld: 0, orderFetches: 0, orderFeesHeld: 0, orderFeesMissing: 0, payouts: 0, feesWritten: 0, feesUnchanged: 0, feesHeld: 0, feesWaiting: 0, busy: 0, failed: 0, invalid: 0, problems: [], ...overrides };
+}
+
 function summary(overrides: Partial<TikTokSyncSummary> = {}): TikTokSyncSummary {
   return {
     connection: "active",
@@ -44,6 +48,7 @@ function summary(overrides: Partial<TikTokSyncSummary> = {}): TikTokSyncSummary 
     orders: { fetched: 0, snapshotsInserted: 0, replays: 0, conflicts: 0, projectionsAdvanced: 0, missing: 0, invalid: 0, storeFailed: 0, autoMapped: 0 },
     apply: { enabled: false, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 0, rechecked: 0, recheckIncomplete: false, notFound: 0, problems: [] },
     afterSales: afterSales(),
+    finance: finance(),
     budgetExhausted: false,
     error: null,
     problems: [],
@@ -130,6 +135,10 @@ describe("POST /api/internal/tiktok/sync", () => {
       [summary({ afterSales: afterSales({ busy: 1 }) }), 200],
       [summary({ afterSales: afterSales({ failed: 1, problems: [{ id: "return:r-1", kind: "failed", code: "sqlstate:23505" }] }) }), 500],
       [summary({ error: { kind: "incomplete", code: "order_missing" }, problems: [{ id: "o-1", problem: "order_missing" }] }), 500],
+      // T7: held fees or a held statement need a look but are not failures; a fee fetch or rebuild that failed is.
+      [summary({ finance: finance({ skipped: null, feesHeld: 2, statementsHeld: 1 }) }), 200],
+      [summary({ finance: finance({ skipped: null, failed: 1, problems: [{ id: "order:576653688135258178", kind: "failed", code: "api:36009999" }] }) }), 500],
+      [summary({ error: { kind: "incomplete", code: "finance_invalid" } }), 500],
     ];
     for (const [value, status] of cases) {
       await inRollback(async () => {

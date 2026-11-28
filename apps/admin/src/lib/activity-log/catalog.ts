@@ -65,6 +65,10 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       // docs/plans/tiktok-shop-integration.md T6 (packages/commerce/src/tiktok/after-sale.ts).
       tiktok_return_update: { label: "Retur atau pembatalan TikTok diperbarui" },
       tiktok_refund_record: { label: "Pengembalian dana TikTok dicatat (barang tetap di pembeli)" },
+      // docs/plans/tiktok-shop-integration.md T7 (packages/commerce/src/tiktok/finance.ts): the order's
+      // marketplace fees written from TikTok (estimate, then actual), or held for a person.
+      tiktok_fees_update: { label: "Biaya TikTok pesanan diperbarui" },
+      tiktok_fees_hold: { label: "Biaya TikTok pesanan ditahan" },
       marketplace_return_received: { label: "Retur diterima, stok dikembalikan" },
       cancel_checkout_order: { label: "Pesanan toko online dibatalkan", area: "payments" },
       record_refund: { label: "Pengembalian dana dicatat", area: "payments" },

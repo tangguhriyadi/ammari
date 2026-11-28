@@ -18,6 +18,7 @@ import {
 import { checkArraySubset, checkIn, citext, timestamps, createdAtOnly } from "./columns";
 import {
   CHANNEL_FEE_COMPONENTS,
+  CHANNEL_FEE_SOURCES,
   CHANNEL_IDS,
   EXPENSE_CATEGORIES,
   IMPORT_BATCH_ORDER_ACTIONS,
@@ -374,6 +375,10 @@ export const orderChannelFees = pgTable(
     amount: bigint("amount", { mode: "number" }).notNull(),
     // The import that last wrote this amount.
     importBatchId: uuid("import_batch_id").references(() => importBatches.id, { onDelete: "restrict" }),
+    // Migration 0061: `estimate` until the channel's actual fee replaces it (TikTok Q9; the Midtrans
+    // MDR fee work A/B, D-8, shares this column). Every row written before 0061, and every Shopee
+    // import row, is `actual`: the export file's fee is what the channel charged.
+    source: text("source", { enum: CHANNEL_FEE_SOURCES }).notNull().default("actual"),
     ...timestamps(),
   },
   (table) => [
@@ -382,6 +387,7 @@ export const orderChannelFees = pgTable(
     index("order_channel_fees_import_batch_id_idx").on(table.importBatchId),
     check("order_channel_fees_component_check", checkIn(table.component, CHANNEL_FEE_COMPONENTS)),
     check("order_channel_fees_amount_check", sql`${table.amount} >= 0`),
+    check("order_channel_fees_source_check", checkIn(table.source, CHANNEL_FEE_SOURCES)),
   ],
 );
 

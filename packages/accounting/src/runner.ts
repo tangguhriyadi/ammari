@@ -189,7 +189,8 @@ export function fixedAssetSource(options: { now?: Date; rule?: PostingRule<Fixed
  * R1-R5 (batch payments included, Session 8), A1 and A2, and the sales chain (Session 9: S1-S6,
  * W1, W3, W4, W9, W10, M1, M2) and the fixed asset register (Session 11: acquisition, depreciation,
  * disposal). W2/W5 (rules/midtrans.ts) stay out until fee work A+B exists: today no
- * order_channel_fees row has the `payment_gateway_fee` component or a `source` column, and nothing
+ * order_channel_fees row has the `payment_gateway_fee` component (the `source` column exists since 0061,
+ * written by TikTok T7 for marketplace fees; M2 does not read it), and nothing
  * writes order_settlements, so there is nothing for them to read. Each posting key is emitted by exactly one
  * source. The production chain runs after the purchase chain, so a batch's consumption (R1) is
  * booked after the receipts that brought the material in, within the same run. The supplier_payment

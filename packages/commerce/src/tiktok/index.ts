@@ -3,7 +3,8 @@ import "server-only";
 // TikTok Shop write paths (docs/plans/tiktok-shop-integration.md §2): the connection, OAuth state and
 // tokens (T2), the webhook inbox (T3), the order read side: snapshots, projection, SKU mapping, the
 // sync run and its dry-run preview (T4), applying orders to admin orders and stock behind the kill
-// switch (T5), cancellations and returns (T6). T7 adds finance here.
+// switch (T5), cancellations and returns (T6), and the finance read side: statements, estimates, fee
+// lines into order_channel_fees, payouts (T7).
 
 export {
   consumeTikTokOAuthState,
@@ -68,6 +69,33 @@ export {
 } from "./apply-rules";
 export { FAKE_TIKTOK_GOOD_CODE, FAKE_TIKTOK_SHOP } from "./fake";
 export {
+  getTikTokPayoutStatementLinks,
+  listTikTokOrderFeesToRebuild,
+  listTikTokOrdersWithPendingFees,
+  rebuildTikTokOrderFees,
+  storeTikTokOrderTransactions,
+  storeTikTokPayout,
+  storeTikTokStatement,
+  storeTikTokStatementTransactions,
+  storeTikTokUnsettledTransaction,
+  type RebuildTikTokOrderFeesResult,
+  type TikTokPayoutStatementLink,
+} from "./finance";
+export {
+  TIKTOK_FEE_COST_SIGN,
+  TIKTOK_FEE_TYPE_COMPONENTS,
+  TIKTOK_ORDER_TRANSACTION_TYPES,
+  checkTikTokStatementSum,
+  checkTikTokTransactionFeeSums,
+  decideTikTokOrderFees,
+  tiktokFeeComponent,
+  tiktokFeeKey,
+  type TikTokFeeComponents,
+  type TikTokFeeEvidence,
+  type TikTokOrderFeeDecision,
+} from "./finance-rules";
+export { TIKTOK_FINANCE_INITIAL_LOOKBACK_MS, TIKTOK_FINANCE_MIN_LOOKBACK_MS, TIKTOK_FINANCE_REOPEN_MAX_MS, TIKTOK_FINANCE_SLICE_MS, planTikTokFinanceWindows } from "./finance-windows";
+export {
   TIKTOK_ORDER_PREVIEW_LIMIT,
   TIKTOK_ORDER_STATUSES,
   listTikTokOrderPreviews,
@@ -106,6 +134,8 @@ export {
   type UnmappedTikTokSku,
 } from "./sku-mappings";
 export {
+  TIKTOK_FINANCE_EVERY_MS,
+  TIKTOK_FINANCE_SCOPE,
   TIKTOK_SYNC_BUDGET_MS,
   TIKTOK_WEBHOOK_DRAIN_BUDGET_MS,
   drainTikTokWebhookOrderEvent,
@@ -113,6 +143,7 @@ export {
   type DrainTikTokWebhookEventResult,
   type TikTokAfterSaleCounts,
   type TikTokApplyCounts,
+  type TikTokFinanceCounts,
   type TikTokSyncDeps,
   type TikTokSyncSummary,
 } from "./sync";

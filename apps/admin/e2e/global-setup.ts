@@ -394,6 +394,14 @@ export const E2E_TIKTOK_RETURN_390_ORDER_NO = "ORD-E2E-TT-RETUR-390";
 export const E2E_TIKTOK_RETURN_1280_ORDER_NO = "ORD-E2E-TT-RETUR-1280";
 export const E2E_TIKTOK_REQUEST_ORDER_NO = "ORD-E2E-TT-MINTA";
 export const E2E_TIKTOK_REQUEST_ORDER_ID = "579000000000000201";
+// tiktok-finance.spec.ts (docs/plans/tiktok-shop-integration.md T7): one TikTok order applied to admin
+// whose fees the sync held (a fee type not in the fee table), one statement whose two transactions
+// add up to its settlement, and the payout that paid it. Read only, so both viewports share them.
+export const E2E_TIKTOK_FEE_ORDER_ID = "579000000000000301";
+export const E2E_TIKTOK_FEE_ORDER_NO = "ORD-E2E-TT-BIAYA";
+export const E2E_TIKTOK_UNMAPPED_FEE_TYPE = "fee.e2e_new_fee_amount";
+export const E2E_TIKTOK_STATEMENT_ID = "7300000000000000301";
+export const E2E_TIKTOK_ADJUSTMENT_TYPE = "GMV_PAYMENT_FOR_ADS";
 export const E2E_ACTIVITY_LOG_ADMIN_EMAIL = "activity-log-admin@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_OWNER_EMAIL = "activity-log-owner@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_SUPPLIER_NAME = "E2E Log Supplier Baru";
@@ -519,6 +527,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     tiktokOrderSnapshots,
     tiktokOrders,
     tiktokReturns,
+    tiktokFinanceSnapshots,
+    tiktokStatements,
+    tiktokStatementTransactions,
+    tiktokPayouts,
+    tiktokOrderFees,
   } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
 
@@ -937,6 +950,43 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
           appliedUpdateTime: updateTime,
         });
       }
+    }
+
+    // T7: Keuangan TikTok (see E2E_TIKTOK_FEE_ORDER_ID).
+    {
+      const tx = db;
+      const shippedAt = new Date(Date.now() - 4 * 86_400_000);
+      const [order] = await tx
+        .insert(orders)
+        .values({ channelId: "tiktok", orderNo: E2E_TIKTOK_FEE_ORDER_NO, channelOrderNo: E2E_TIKTOK_FEE_ORDER_ID, status: "shipped", orderDate: shippedAt, shippedAt, marketplaceShippedAt: shippedAt, subtotalAmount: 249_000, shippingAmount: 0, discountAmount: 0, totalAmount: 249_000, channelStatus: "IN_TRANSIT", channelSyncedAt: new Date() })
+        .returning({ id: orders.id });
+      const [orderSnapshot] = await tx
+        .insert(tiktokOrderSnapshots)
+        .values({ tiktokOrderId: E2E_TIKTOK_FEE_ORDER_ID, updateTime: shippedAt, contentSha256: "7".repeat(64), payload: { id: E2E_TIKTOK_FEE_ORDER_ID }, source: "poll" })
+        .returning({ id: tiktokOrderSnapshots.id });
+      await tx.insert(tiktokOrders).values({ tiktokOrderId: E2E_TIKTOK_FEE_ORDER_ID, orderId: order!.id, status: "IN_TRANSIT", latestUpdateTime: shippedAt, latestSnapshotId: orderSnapshot!.id, applyState: "applied", appliedUpdateTime: shippedAt });
+      await tx.insert(tiktokOrderFees).values({ tiktokOrderId: E2E_TIKTOK_FEE_ORDER_ID, orderId: order!.id, state: "held", heldReason: "fee_type_unmapped", source: "actual", unmappedTypes: [E2E_TIKTOK_UNMAPPED_FEE_TYPE] });
+
+      const statementSha = "8".repeat(64);
+      const snap = async (kind: "statement" | "statement_transaction" | "payment", externalId: string, sha: string) =>
+        (await tx.insert(tiktokFinanceSnapshots).values({ kind, externalId, contentSha256: sha, payload: { id: externalId } }).returning({ id: tiktokFinanceSnapshots.id }))[0]!.id;
+      const fetchedAt = new Date();
+      await tx.insert(tiktokStatements).values({
+        statementId: E2E_TIKTOK_STATEMENT_ID,
+        statementTime: new Date(Date.now() - 2 * 86_400_000),
+        currency: "IDR",
+        settlementAmount: 205_000,
+        paymentStatus: "PAID",
+        paymentId: "7400000000000000301",
+        transactionsCompleteSha256: statementSha,
+        latestSnapshotId: await snap("statement", E2E_TIKTOK_STATEMENT_ID, statementSha),
+        fetchedAt,
+      });
+      await tx.insert(tiktokStatementTransactions).values([
+        { transactionId: "7500000000000000301", statementId: E2E_TIKTOK_STATEMENT_ID, type: "ORDER", kind: "order", tiktokOrderId: E2E_TIKTOK_FEE_ORDER_ID, settlementAmount: 225_000, feeTaxAmount: -24_000, feesState: "complete", contentSha256: "9".repeat(64), latestSnapshotId: await snap("statement_transaction", "7500000000000000301", "9".repeat(64)), fetchedAt },
+        { transactionId: "7500000000000000302", statementId: E2E_TIKTOK_STATEMENT_ID, type: E2E_TIKTOK_ADJUSTMENT_TYPE, kind: "adjustment", settlementAmount: -20_000, adjustmentAmount: -20_000, contentSha256: "a".repeat(64), latestSnapshotId: await snap("statement_transaction", "7500000000000000302", "a".repeat(64)), fetchedAt },
+      ]);
+      await tx.insert(tiktokPayouts).values({ paymentId: "7400000000000000301", amount: 205_000, currency: "IDR", status: "PAID", paidTime: new Date(Date.now() - 86_400_000), bankAccountLast4: "4321", contentSha256: "b".repeat(64), latestSnapshotId: await snap("payment", "7400000000000000301", "b".repeat(64)), fetchedAt });
     }
 
     const now = Date.now();

@@ -219,6 +219,9 @@ export default async function TikTokIntegrationPage({ searchParams }: { searchPa
               <Link href={`${TIKTOK_INTEGRATION_PATH}/sku-mappings`} className="text-sm font-medium text-brand hover:underline sm:ml-4">
                 Buka Pemetaan SKU TikTok
               </Link>
+              <Link href={`${TIKTOK_INTEGRATION_PATH}/finance`} className="text-sm font-medium text-brand hover:underline sm:ml-4">
+                Lihat keuangan TikTok
+              </Link>
             </div>
           </Section>
         )}

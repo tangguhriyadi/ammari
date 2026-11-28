@@ -22,7 +22,19 @@ export const TIKTOK_ENDPOINTS = {
   searchCancellations: "/return_refund/202309/cancellations/search",
   /** GET, SKU-level fees for one order. */
   orderStatementTransactions: (orderId: string) => `/finance/202501/orders/${encodeURIComponent(orderId)}/statement_transactions`,
+  // T7 finance, read only (Q15). Versions as documented by TikTok, checked on the development shop
+  // in T0 like the other paths; a change is one line here.
+  /** GET, by `statement_time` window, `page_size` 1-100. */
+  statements: "/finance/202309/statements",
+  /** GET, every transaction (order, refund, adjustment) of one statement. */
+  statementTransactions: (statementId: string) => `/finance/202501/statements/${encodeURIComponent(statementId)}/statement_transactions`,
+  /** GET, estimated settlement of orders not settled yet (they are not in the statement APIs, §0). */
+  unsettledTransactions: "/finance/202507/orders/unsettled",
+  /** GET, payouts to the seller's bank, by `create_time` window. */
+  payments: "/finance/202309/payments",
 } as const;
+
+export const FINANCE_MAX_PAGE_SIZE = 100;
 
 export const TIKTOK_AUTH_ENDPOINTS = {
   tokenGet: "/api/v2/token/get",

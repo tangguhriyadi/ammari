@@ -357,6 +357,11 @@ export const CHANNEL_FEE_COMPONENTS = [
 ] as const;
 export type ChannelFeeComponent = (typeof CHANNEL_FEE_COMPONENTS)[number];
 
+/** `order_channel_fees.source` (migration 0061): an estimate is replaced by the actual fee once the
+ * channel settles (TikTok Q9; Midtrans MDR D-8). */
+export const CHANNEL_FEE_SOURCES = ["estimate", "actual"] as const;
+export type ChannelFeeSource = (typeof CHANNEL_FEE_SOURCES)[number];
+
 /** Backs only the CHECK of the never-used `expenses` table (migration 0000). Not the "Iklan &
  * Biaya" categories: those are expense_categories rows (migration 0048). Kept until a contract migration
  * drops that table (docs/plans/growth.md Q2, awaiting owner confirmation). */

@@ -7,7 +7,8 @@ import { mappedAccount, resolveOrIssue, systemAccount, type PostingContext, type
 // Session 9 against snapshots shaped like fee work A/B (a post-launch feature, not in the repo yet):
 // A writes one order_channel_fees row of component `payment_gateway_fee` with `source` estimate |
 // actual per paid checkout order; B overwrites it with the actual fee and fills order_settlements.
-// Neither the component nor the `source` column exists yet, so these rules are not in
+// The `source` column exists since migration 0061 (shared with TikTok T7, which writes estimate |
+// actual for its marketplace fees); the component does not yet, so these rules are not in
 // defaultPostingSources(); Session 11 adds their loaders once A+B are deployed.
 //
 //   W2 (order_channel_fee, id, mdr), the order's paid_at: Dr 6-1203 Biaya payment gateway / Cr 1-1301

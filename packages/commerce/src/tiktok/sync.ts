@@ -5,6 +5,13 @@ import {
   Secret,
   TikTokApiError,
   getTikTokOrderDetails,
+  getTikTokOrderTransactions,
+  getTikTokPayments,
+  getTikTokStatementTransactions,
+  getTikTokStatements,
+  getTikTokUnsettledTransactions,
+  type TikTokStatementProjection,
+  type TikTokStatementTransactionProjection,
   SEARCH_AFTER_SALES_MAX_ORDER_IDS,
   isTikTokOrderId,
   searchTikTokAfterSales,
@@ -21,8 +28,19 @@ import type { Database } from "../db";
 import { getTikTokConnectionView, loadTikTokCredentials, refreshTikTokToken, tiktokErrorCode } from "./connection";
 import { applyTikTokAfterSale, ingestTikTokAfterSale, listTikTokAfterSalesToApply, type ApplyTikTokAfterSaleResult } from "./after-sale";
 import { applyTikTokOrder, listTikTokOrdersToApply, tiktokOrdersApplyEnabled, type ApplyTikTokOrderResult } from "./apply";
+import {
+  listTikTokOrderFeesToRebuild,
+  listTikTokOrdersWithPendingFees,
+  rebuildTikTokOrderFees,
+  storeTikTokOrderTransactions,
+  storeTikTokPayout,
+  storeTikTokStatement,
+  storeTikTokStatementTransactions,
+  storeTikTokUnsettledTransaction,
+} from "./finance";
+import { TIKTOK_FINANCE_REOPEN_MAX_MS, planTikTokFinanceWindows } from "./finance-windows";
 import { ingestTikTokOrder } from "./order-store";
-import { planTikTokPollWindows } from "./order-windows";
+import { TIKTOK_POLL_LAG_MS, planTikTokPollWindows } from "./order-windows";
 import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokConnectionEvents } from "./webhook";
 
 // The TikTok sync run (docs/plans/tiktok-shop-integration.md §4.1, §8.2, §8.3, §9; T4), called by
@@ -51,8 +69,13 @@ import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokCon
 // and fetched by order id when topic 12 / 11 arrives. Each request's order is fetched first (its
 // status path may cancel it), then the request is stored (after-sale.ts) and, with the kill switch
 // on, applied. The re-check retries requests not applied yet and clears a passed response deadline.
-// T7 adds finance. Nothing here logs: the route logs the summary (codes only, never a body or a
-// token).
+// T7 (docs/plans/tiktok-shop-integration.md §3.5, §5.3, §9 step 6): finance, read only, at most every
+// 30 minutes (the cron runs every 5, "every 6th run") and only when `seller.finance.info` was granted:
+// Get Unsettled Transactions (estimates), Get Statements by `statement_time` + Get Transactions by
+// Statement (actuals, Σ = settlement), Get Transactions by Order for SKU-level fees, Get Payments, each
+// on its own cursor (`unsettled`, `statements`, `payments`), then order_channel_fees rebuilt for every
+// order touched (finance.ts). No posting rule or journal (T8). Nothing here logs: the route logs the
+// summary (codes only, never a body or a token).
 
 export const TIKTOK_SYNC_BUDGET_MS = 150_000;
 /** The webhook's `after()` drain of one order. */
@@ -136,6 +159,32 @@ export interface TikTokAfterSaleCounts {
   problems: { id: string; kind: "failed" | "busy" | "not_found" | "store_failed" | "invalid"; code: string }[];
 }
 
+export interface TikTokFinanceCounts {
+  /** Why finance did not run this time; null when it ran. */
+  skipped: "not_due" | "no_scope" | null;
+  unsettled: number;
+  statements: number;
+  statementTransactions: number;
+  /** Statements whose transactions do not add up or cannot be read (visible, re-checked). */
+  statementsHeld: number;
+  orderFetches: number;
+  /** Order transactions whose SKU lines did not add up or could not be read. */
+  orderFeesHeld: number;
+  /** Settled order transactions TikTok did not return in Get Transactions by Order (still pending). */
+  orderFeesMissing: number;
+  payouts: number;
+  /** order_channel_fees rebuilds: written (changed), unchanged, held, waiting for the admin order. */
+  feesWritten: number;
+  feesUnchanged: number;
+  feesHeld: number;
+  feesWaiting: number;
+  busy: number;
+  failed: number;
+  /** Records without a usable id or type, statement or order fetches that failed: ids and codes only. */
+  invalid: number;
+  problems: { id: string; kind: "invalid" | "busy" | "failed" | "store_failed"; code: string }[];
+}
+
 export interface TikTokSyncSummary {
   connection: "active" | "not_connected" | "reauth_required";
   connectionEvents: { processed: number; notApplied: number };
@@ -145,6 +194,7 @@ export interface TikTokSyncSummary {
   orders: TikTokOrderCounts;
   apply: TikTokApplyCounts;
   afterSales: TikTokAfterSaleCounts;
+  finance: TikTokFinanceCounts;
   budgetExhausted: boolean;
   /** What stopped the run: a TikTok error's kind and code, or `incomplete` (orders of a slice
    * not stored; the cursor stayed). Never a message or a body. */
@@ -166,6 +216,10 @@ function emptyAfterSaleCounts(): TikTokAfterSaleCounts {
   return { poll: { return: poll(), cancellation: poll() }, fetched: 0, snapshotsInserted: 0, replays: 0, conflicts: 0, invalid: 0, storeFailed: 0, applied: 0, unchanged: 0, refundsRecorded: 0, busy: 0, failed: 0, notFound: 0, rechecked: 0, recheckIncomplete: false, problems: [] };
 }
 
+function emptyFinanceCounts(): TikTokFinanceCounts {
+  return { skipped: "not_due", unsettled: 0, statements: 0, statementTransactions: 0, statementsHeld: 0, orderFetches: 0, orderFeesHeld: 0, orderFeesMissing: 0, payouts: 0, feesWritten: 0, feesUnchanged: 0, feesHeld: 0, feesWaiting: 0, busy: 0, failed: 0, invalid: 0, problems: [] };
+}
+
 function emptySummary(): TikTokSyncSummary {
   return {
     connection: "not_connected",
@@ -176,6 +230,7 @@ function emptySummary(): TikTokSyncSummary {
     orders: emptyCounts(),
     apply: emptyApplyCounts(),
     afterSales: emptyAfterSaleCounts(),
+    finance: emptyFinanceCounts(),
     budgetExhausted: false,
     error: null,
     problems: [],
@@ -522,13 +577,13 @@ async function drainOrderEvents(session: Session, summary: TikTokSyncSummary, op
 
 /** A slice had orders that could not be stored: the cursor stays, the run reports the code. */
 class SyncIncomplete extends Error {
-  constructor(readonly code: TikTokOrderProblem) {
+  constructor(readonly code: TikTokOrderProblem | "finance_invalid") {
     super(`tiktok sync incomplete: ${code}`);
     this.name = "SyncIncomplete";
   }
 }
 
-type CursorResource = "orders" | "returns" | "cancellations";
+type CursorResource = "orders" | "returns" | "cancellations" | "unsettled" | "statements" | "payments";
 
 async function readOrdersCursor(db: Database, now: Date, resource: CursorResource = "orders"): Promise<{ windowEnd: Date | null; backfillFrom: Date | null }> {
   const [row] = await db.execute<{ window_end: string | Date | null; backfill_from: string | Date | null }>(sql`
@@ -752,6 +807,273 @@ async function recheckStoredAfterSales(session: Session, budgetMs: number): Prom
   }
 }
 
+// ---- Finance (T7) ---------------------------------------------------------------------------
+
+/** Finance runs at most every 30 minutes (plan §9 step 6: every 6th run of the 5-minute cron). */
+export const TIKTOK_FINANCE_EVERY_MS = 30 * 60_000;
+/** Unsettled transactions are a current list; it is read over this span of order creation time. */
+export const TIKTOK_UNSETTLED_LOOKBACK_MS = 90 * 86_400_000;
+export const TIKTOK_FINANCE_SCOPE = "seller.finance.info";
+/** Order fee fetches (one TikTok call per order) per run. */
+export const TIKTOK_ORDER_FEE_FETCHES_PER_RUN = 100;
+
+function noteFinanceProblem(counts: TikTokFinanceCounts, problem: TikTokFinanceCounts["problems"][number]): void {
+  if (counts.problems.length < APPLY_PROBLEM_SAMPLE) counts.problems.push(problem);
+}
+
+async function financeSkip(session: Session): Promise<TikTokFinanceCounts["skipped"]> {
+  const view = await getTikTokConnectionView(session.db);
+  // Without the finance scope every call would fail (plan §11): M2/M3 then stay manual, visibly.
+  if (!view?.grantedScopes.includes(TIKTOK_FINANCE_SCOPE)) return "no_scope";
+  const [row] = await session.db.execute<{ last_run_at: string | Date | null }>(sql`select last_run_at from tiktok_sync_cursors where resource = 'statements'`);
+  const lastRun = row?.last_run_at ? new Date(row.last_run_at).getTime() : null;
+  return lastRun !== null && session.clock().getTime() - lastRun < TIKTOK_FINANCE_EVERY_MS ? "not_due" : null;
+}
+
+/** Every page of one finance list, stopping on a repeated token like the other polls. */
+async function eachPage<T>(session: Session, path: string, fetchPage: (pageToken: string | null) => Promise<{ records: T[]; invalid: number; invalidIds: string[]; nextPageToken: string | null }>, onPage: (page: { records: T[]; invalid: number; invalidIds: string[] }) => Promise<void>): Promise<void> {
+  let pageToken: string | null = null;
+  const seenTokens = new Set<string>();
+  for (let page = 1; ; page += 1) {
+    if (!budgetLeft(session)) throw budgetError(path);
+    const result = await fetchPage(pageToken);
+    await onPage(result);
+    if (!result.nextPageToken) return;
+    if (seenTokens.has(result.nextPageToken) || page >= TIKTOK_MAX_PAGES_PER_SLICE) throw new TikTokApiError({ kind: "invalid_response", path, httpStatus: null, code: null, requestId: null });
+    seenTokens.add(result.nextPageToken);
+    pageToken = result.nextPageToken;
+  }
+}
+
+/** Get Unsettled Transactions over the last 90 days of order creation: estimates (Q9). An entry
+ * without an id or type holds the cursor (`incomplete`); the rest is stored. */
+async function pollUnsettled(session: Session, summary: TikTokSyncSummary, touched: Set<string>): Promise<void> {
+  const counts = summary.finance;
+  await readOrdersCursor(session.db, session.clock(), "unsettled");
+  const to = new Date(Math.floor((session.clock().getTime() - TIKTOK_POLL_LAG_MS) / 1000) * 1000);
+  const from = new Date(to.getTime() - TIKTOK_UNSETTLED_LOOKBACK_MS);
+  let invalid = 0;
+  await eachPage(
+    session,
+    "/finance/unsettled",
+    (pageToken) => getTikTokUnsettledTransactions(session.deps.api, { from, to, pageToken, ...shopCall(session, "/finance/unsettled") }),
+    async (page) => {
+      invalid += page.invalid;
+      for (const id of page.invalidIds) noteFinanceProblem(counts, { id: `unsettled:${id}`, kind: "invalid", code: "invalid_record" });
+      for (const record of page.records) {
+        try {
+          const result = await storeTikTokUnsettledTransaction(session.db, record, session.clock());
+          counts.unsettled += 1;
+          if (result.tiktokOrderId) touched.add(result.tiktokOrderId);
+        } catch (error) {
+          invalid += 1;
+          noteFinanceProblem(counts, { id: `unsettled:${record.transactionId}`, kind: "store_failed", code: applyErrorCode(error) });
+        }
+      }
+    },
+  );
+  counts.invalid += invalid;
+  if (invalid > 0) throw new SyncIncomplete("finance_invalid");
+  await advanceOrdersCursor(session.db, to, "unsettled");
+}
+
+/** The oldest stored record of a resource that may still change (plan §8.3 reopen). */
+async function reopenFrom(db: Database, resource: "statements" | "payments", now: Date): Promise<Date | null> {
+  const floor = new Date(now.getTime() - TIKTOK_FINANCE_REOPEN_MAX_MS).toISOString();
+  const [row] =
+    resource === "statements"
+      ? await db.execute<{ at: string | Date | null }>(sql`
+          select min(statement_time) as at from tiktok_statements
+          where statement_time >= ${floor}::timestamptz
+            and (payment_status is distinct from 'PAID' or held_reason is not null or transactions_complete_sha256 is null)`)
+      : await db.execute<{ at: string | Date | null }>(sql`
+          select min(create_time) as at from tiktok_payouts
+          where create_time >= ${floor}::timestamptz and (status is null or status not in ('PAID', 'FAILED') or held_reason is not null)`);
+  return row?.at ? new Date(row.at) : null;
+}
+
+/** Get Statements by `statement_time` (+ reopen), then every statement's transactions when its content
+ * is new or not complete, then the SKU-level fees of the orders they name. */
+async function pollStatements(session: Session, summary: TikTokSyncSummary, touched: Set<string>): Promise<void> {
+  const counts = summary.finance;
+  const cursor = await readOrdersCursor(session.db, session.clock(), "statements");
+  const windows = planTikTokFinanceWindows(cursor, session.clock(), await reopenFrom(session.db, "statements", session.clock()));
+  // A window with a problem holds the cursor where it is, but the later windows are still read and
+  // stored (one bad statement never stops newer ones), and the order fees are fetched in any case.
+  let held = false;
+  try {
+    for (const window of windows) {
+      if (await pollStatementWindow(session, summary, touched, window)) held = true;
+      else if (!held) await advanceOrdersCursor(session.db, window.end, "statements");
+    }
+  } finally {
+    await fetchOrderFees(session, summary, touched);
+  }
+  if (held) throw new SyncIncomplete("finance_invalid");
+}
+
+/** One statement window; true when something in it could not be stored (the cursor must stay). */
+async function pollStatementWindow(session: Session, summary: TikTokSyncSummary, touched: Set<string>, window: { start: Date; end: Date }): Promise<boolean> {
+  const counts = summary.finance;
+  {
+    let problems = 0;
+    const needing: TikTokStatementProjection[] = [];
+    await eachPage(
+      session,
+      "/finance/statements",
+      (pageToken) => getTikTokStatements(session.deps.api, { from: window.start, to: window.end, pageToken, ...shopCall(session, "/finance/statements") }),
+      async (page) => {
+        problems += page.invalid;
+        counts.invalid += page.invalid;
+        for (const id of page.invalidIds) noteFinanceProblem(counts, { id: `statement:${id}`, kind: "invalid", code: "invalid_record" });
+        for (const record of page.records) {
+          try {
+            const result = await storeTikTokStatement(session.db, record, session.clock());
+            counts.statements += 1;
+            if (record.problem !== null) counts.statementsHeld += 1;
+            if (result.needsTransactions) needing.push(record);
+          } catch (error) {
+            problems += 1;
+            noteFinanceProblem(counts, { id: `statement:${record.statementId}`, kind: "store_failed", code: applyErrorCode(error) });
+          }
+        }
+      },
+    );
+    for (const statement of needing) {
+      const records: TikTokStatementTransactionProjection[] = [];
+      let invalid = 0;
+      try {
+        await eachPage(
+          session,
+          "/finance/statement_transactions",
+          (pageToken) => getTikTokStatementTransactions(session.deps.api, statement.statementId, { pageToken, ...shopCall(session, "/finance/statement_transactions") }),
+          async (page) => {
+            records.push(...page.records);
+            invalid += page.invalid;
+            for (const id of page.invalidIds) noteFinanceProblem(counts, { id: `transaction:${id}`, kind: "invalid", code: "invalid_record" });
+          },
+        );
+      } catch (error) {
+        // One statement TikTok refuses must not stop the others (like an order's fees): named, the
+        // window held, retried next run. A rate limit, an outage, the budget or auth stop the run.
+        if (!(error instanceof TikTokApiError) || (error.kind !== "api" && error.kind !== "invalid_response")) throw error;
+        counts.failed += 1;
+        noteFinanceProblem(counts, { id: `statement:${statement.statementId}`, kind: "failed", code: tiktokErrorCode(error) });
+        problems += 1;
+        continue;
+      }
+      counts.invalid += invalid;
+      try {
+        const stored = await storeTikTokStatementTransactions(session.db, statement, records, session.clock(), invalid);
+        counts.statementTransactions += stored.inserted;
+        // A transaction TikTok sent without an id cannot be counted: the statement cannot add up.
+        if (!stored.complete || invalid > 0) counts.statementsHeld += 1;
+        for (const id of stored.tiktokOrderIds) touched.add(id);
+      } catch (error) {
+        problems += 1;
+        noteFinanceProblem(counts, { id: `statement:${statement.statementId}`, kind: "store_failed", code: applyErrorCode(error) });
+      }
+      if (invalid > 0) problems += 1;
+    }
+    return problems > 0;
+  }
+}
+
+/** Get Transactions by Order for orders whose settled transactions have no SKU lines yet (oldest
+ * first, at most 100 per run; the rest waits for the next run). */
+async function fetchOrderFees(session: Session, summary: TikTokSyncSummary, touched: Set<string>): Promise<void> {
+  const counts = summary.finance;
+  for (const tiktokOrderId of await listTikTokOrdersWithPendingFees(session.db, TIKTOK_ORDER_FEE_FETCHES_PER_RUN)) {
+    if (!budgetLeft(session)) throw budgetError("/finance/order_transactions");
+    let projection;
+    try {
+      projection = await getTikTokOrderTransactions(session.deps.api, tiktokOrderId, shopCall(session, "/finance/order_transactions"));
+    } catch (error) {
+      // One order TikTok refuses (an `api` code, an answer not in the expected shape) must not stop
+      // every other order's fees: it stays pending, is named, and is retried next run. A rate limit,
+      // an outage, the budget or an auth failure stops the run as everywhere else.
+      if (!(error instanceof TikTokApiError) || (error.kind !== "api" && error.kind !== "invalid_response")) throw error;
+      counts.failed += 1;
+      noteFinanceProblem(counts, { id: `order:${tiktokOrderId}`, kind: "failed", code: tiktokErrorCode(error) });
+      continue;
+    }
+    counts.orderFetches += 1;
+    if (projection.invalid > 0) {
+      counts.invalid += projection.invalid;
+      noteFinanceProblem(counts, { id: `order:${tiktokOrderId}`, kind: "invalid", code: "invalid_record" });
+    }
+    try {
+      const stored = await storeTikTokOrderTransactions(session.db, projection, session.clock());
+      counts.orderFeesHeld += stored.held;
+      if (stored.missing > 0) {
+        counts.orderFeesMissing += stored.missing;
+        noteFinanceProblem(counts, { id: `order:${tiktokOrderId}`, kind: "invalid", code: "transaction_missing" });
+      }
+      touched.add(tiktokOrderId);
+    } catch (error) {
+      noteFinanceProblem(counts, { id: `order:${tiktokOrderId}`, kind: "store_failed", code: applyErrorCode(error) });
+      counts.failed += 1;
+    }
+  }
+}
+
+/** Get Payments by `create_time` (+ reopen for payouts not final yet). */
+async function pollPayments(session: Session, summary: TikTokSyncSummary): Promise<void> {
+  const counts = summary.finance;
+  const cursor = await readOrdersCursor(session.db, session.clock(), "payments");
+  const windows = planTikTokFinanceWindows(cursor, session.clock(), await reopenFrom(session.db, "payments", session.clock()));
+  let held = false;
+  for (const window of windows) {
+    let problems = 0;
+    await eachPage(
+      session,
+      "/finance/payments",
+      (pageToken) => getTikTokPayments(session.deps.api, { from: window.start, to: window.end, pageToken, ...shopCall(session, "/finance/payments") }),
+      async (page) => {
+        problems += page.invalid;
+        counts.invalid += page.invalid;
+        for (const id of page.invalidIds) noteFinanceProblem(counts, { id: `payment:${id}`, kind: "invalid", code: "invalid_record" });
+        for (const record of page.records) {
+          try {
+            await storeTikTokPayout(session.db, record, session.clock());
+            counts.payouts += 1;
+          } catch (error) {
+            problems += 1;
+            noteFinanceProblem(counts, { id: `payment:${record.paymentId}`, kind: "store_failed", code: applyErrorCode(error) });
+          }
+        }
+      },
+    );
+    if (problems > 0) held = true;
+    else if (!held) await advanceOrdersCursor(session.db, window.end, "payments");
+  }
+  if (held) throw new SyncIncomplete("finance_invalid");
+}
+
+/** order_channel_fees for every order touched this run, plus the ones waiting for their admin order
+ * or held (no TikTok call). One failure never stops the others. */
+async function rebuildFees(session: Session, summary: TikTokSyncSummary, touched: Set<string>): Promise<void> {
+  const counts = summary.finance;
+  const ids = new Set([...touched, ...(await listTikTokOrderFeesToRebuild(session.db))]);
+  for (const tiktokOrderId of ids) {
+    try {
+      const result = await rebuildTikTokOrderFees(session.db, tiktokOrderId, { now: session.clock() });
+      if (result.kind === "applied") {
+        if (result.changed) counts.feesWritten += 1;
+        else counts.feesUnchanged += 1;
+      } else if (result.kind === "held") counts.feesHeld += 1;
+      else if (result.kind === "waiting_order") counts.feesWaiting += 1;
+      else if (result.kind === "busy") {
+        counts.busy += 1;
+        noteFinanceProblem(counts, { id: `order:${tiktokOrderId}`, kind: "busy", code: result.code });
+      }
+    } catch (error) {
+      counts.failed += 1;
+      noteFinanceProblem(counts, { id: `order:${tiktokOrderId}`, kind: "failed", code: applyErrorCode(error) });
+    }
+  }
+}
+
 // ---- Health on the connection and the cursor -------------------------------------------------
 
 /** Best effort, like T3's "last webhook": a row a token refresh holds is skipped, never waited for. */
@@ -845,6 +1167,25 @@ export async function runTikTokSync(db: Database, deps: TikTokSyncDeps, options:
     await poll("orders", () => pollOrders(session, summary));
     await poll("returns", () => pollAfterSales(session, summary, "return"));
     await poll("cancellations", () => pollAfterSales(session, summary, "cancellation"));
+    // 6. Finance (T7), every 30 minutes; the fee rebuild runs after the three polls, also when one
+    // was held, so what was stored is applied.
+    summary.finance.skipped = await financeSkip(session);
+    if (summary.finance.skipped === null) {
+      const touched = new Set<string>();
+      try {
+        await poll("unsettled", () => pollUnsettled(session, summary, touched));
+        await poll("statements", () => pollStatements(session, summary, touched));
+        await poll("payments", () => pollPayments(session, summary));
+      } finally {
+        // Never masks the poll's own error: a failure here is counted (route 500), not thrown.
+        try {
+          await rebuildFees(session, summary, touched);
+        } catch (error) {
+          summary.finance.failed += 1;
+          noteFinanceProblem(summary.finance, { id: "rebuild", kind: "failed", code: applyErrorCode(error) });
+        }
+      }
+    }
     if (incomplete) {
       const code = (incomplete as SyncIncomplete).code;
       summary.error = { kind: "incomplete", code };

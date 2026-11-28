@@ -86,7 +86,10 @@ repo; a separate feature, not part of this ledger plan):
   `payment_gateway_fee`** with **`source = estimate`** is written, computed on the payment's
   `gross_amount` (buyer-paid shipping included). Idempotent; backfilled from
   `payments.payment_type` for orders already paid. (Needs a CHECK widen for the component and a new
-  nullable/defaulted `source` column on `order_channel_fees` — that feature's own migration.)
+  nullable/defaulted `source` column on `order_channel_fees` — that feature's own migration.
+  **Update 28 Nov 2026:** the `source` column (`estimate | actual`, default `actual`) shipped in
+  migration 0061 with TikTok T7, which uses it for TikTok's estimated and actual fees (Q9); fee work A
+  reuses it and adds only the component.)
 - **B — actual.** Import of the Midtrans transaction/settlement CSV on `/import`, matching its
   `order_id` to `payments.provider_order_id`: overwrites the estimate with the actual fee
   (`source = actual`) and fills `order_settlements` (gross, fee, net, `settled_at`). An order whose
@@ -933,7 +936,7 @@ A's `source` column and lands with Session 11.
   month, matching the monthly setoran (approved); a rate ending mid-month proposes nothing for that month (approved); a group's
   lifetime edit applies only to assets saved or moved to it afterwards (approved); PPh final is never negative (changed, above).
 - **W2/W5 and check 3a stay OFF; the MDR "still an estimate" close warning stays dormant (D-8).** Fee work A/B is not built: no
-  `payment_gateway_fee` component in `CHANNEL_FEE_COMPONENTS`, no `source` column on `order_channel_fees`, and nothing writes
+  `payment_gateway_fee` component in `CHANNEL_FEE_COMPONENTS` (the `source` column on `order_channel_fees` exists since 0061, TikTok T7), and nothing writes
   `order_settlements`. Turn them on (add `mdrRule`/`midtransSettlementRule` loaders to `defaultPostingSources`, the warning to
   `periodWarnings`) in the fee-work feature.
 - PT conversion (D-24) is not in this session's scope (§5.8: multi-entity out of scope).

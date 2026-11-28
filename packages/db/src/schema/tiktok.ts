@@ -392,3 +392,245 @@ export const tiktokReturns = pgTable(
     index("tiktok_returns_response_due_idx").on(table.responseDueAt).where(sql`${table.responseDueAt} is not null`),
   ],
 );
+
+// ---- Finance: statements, transactions, estimates, fees, payouts (plan §3.5, T7, migration 0061) ---
+
+/** What a finance snapshot holds. Finance records have no `update_time`: a version is its content. */
+export const TIKTOK_FINANCE_SNAPSHOT_KINDS = ["statement", "statement_transaction", "order_transactions", "unsettled_transaction", "payment"] as const;
+export type TikTokFinanceSnapshotKind = (typeof TIKTOK_FINANCE_SNAPSHOT_KINDS)[number];
+
+/** Why a finance record's money was not taken (never rounded, never defaulted, Q6). */
+export const TIKTOK_FINANCE_HELD_REASONS = ["money_format", "currency", "sum_mismatch"] as const;
+export type TikTokFinanceHeldReason = (typeof TIKTOK_FINANCE_HELD_REASONS)[number];
+
+/** Where an order's fees come from (Q9): Get Unsettled Transactions, then the statements. */
+export const TIKTOK_FEE_SOURCES = ["estimate", "actual"] as const;
+export type TikTokFeeSource = (typeof TIKTOK_FEE_SOURCES)[number];
+
+export const TIKTOK_FEE_GROUPS = ["fee", "tax", "shipping"] as const;
+export type TikTokFeeGroupName = (typeof TIKTOK_FEE_GROUPS)[number];
+
+/** A settled order transaction's SKU-level fee lines (Get Transactions by Order). */
+export const TIKTOK_TRANSACTION_FEE_STATES = ["pending", "complete", "held"] as const;
+export type TikTokTransactionFeeState = (typeof TIKTOK_TRANSACTION_FEE_STATES)[number];
+
+/** What the sync last made of an order's fees (commerce/tiktok/finance-rules.ts). */
+export const TIKTOK_ORDER_FEE_STATES = ["applied", "held", "waiting_order"] as const;
+export type TikTokOrderFeeState = (typeof TIKTOK_ORDER_FEE_STATES)[number];
+
+export const TIKTOK_ORDER_FEE_HELD_REASONS = ["fee_type_unmapped", "fee_negative", "fee_sum_mismatch", "money_format", "not_tiktok_order"] as const;
+export type TikTokOrderFeeHeldReason = (typeof TIKTOK_ORDER_FEE_HELD_REASONS)[number];
+
+const financeSnapshotRef = () => uuid("latest_snapshot_id").notNull().references((): AnyPgColumn => tiktokFinanceSnapshots.id, { onDelete: "restrict" });
+
+/** Versioned, allowlisted copies of every finance record (plan §3.5, §6). A re-fetch of the same
+ * content is a no-op (the unique key); changed content is a new row, so nothing settled is ever
+ * lost. Kept as long as the records they belong to. */
+export const tiktokFinanceSnapshots = pgTable(
+  "tiktok_finance_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: text("kind", { enum: TIKTOK_FINANCE_SNAPSHOT_KINDS }).notNull(),
+    // The statement, transaction or payment id (the TikTok order id for `order_transactions`).
+    externalId: text("external_id").notNull(),
+    contentSha256: text("content_sha256").notNull(),
+    payload: jsonb("payload").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("tiktok_finance_snapshots_kind_check", checkIn(table.kind, TIKTOK_FINANCE_SNAPSHOT_KINDS)),
+    check("tiktok_finance_snapshots_sha_check", sql`${table.contentSha256} ~ '^[0-9a-f]{64}$'`),
+    check("tiktok_finance_snapshots_external_id_check", sql`char_length(${table.externalId}) between 1 and 128`),
+    unique("tiktok_finance_snapshots_version_key").on(table.kind, table.externalId, table.contentSha256),
+  ],
+);
+
+/** One row per TikTok statement (plan §3.5). Amounts NULL while held (money not whole rupiah, not
+ * IDR, or its transactions do not add up to its settlement). */
+export const tiktokStatements = pgTable(
+  "tiktok_statements",
+  {
+    statementId: text("statement_id").primaryKey(),
+    statementTime: timestamp("statement_time", { withTimezone: true, mode: "date" }).notNull(),
+    currency: text("currency"),
+    settlementAmount: bigint("settlement_amount", { mode: "number" }),
+    revenueAmount: bigint("revenue_amount", { mode: "number" }),
+    feeAmount: bigint("fee_amount", { mode: "number" }),
+    adjustmentAmount: bigint("adjustment_amount", { mode: "number" }),
+    shippingCostAmount: bigint("shipping_cost_amount", { mode: "number" }),
+    // Raw (`PAID`, `PROCESSING`, ...). A statement not PAID yet is fetched again.
+    paymentStatus: text("payment_status"),
+    // The payout that paid it (tiktok_payouts.payment_id). No FK: the payout can arrive later.
+    paymentId: text("payment_id"),
+    heldReason: text("held_reason", { enum: TIKTOK_FINANCE_HELD_REASONS }),
+    // Set once every transaction of this content version is stored and adds up.
+    transactionsCompleteSha256: text("transactions_complete_sha256"),
+    latestSnapshotId: financeSnapshotRef(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull(),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_statements_held_reason_check", sql`${table.heldReason} is null or ${checkIn(table.heldReason, TIKTOK_FINANCE_HELD_REASONS)}`),
+    // Money is taken only in IDR (plan §3.5); a statement in another currency is held, never stored as rupiah.
+    check("tiktok_statements_currency_check", sql`${table.heldReason} is not null or (${table.currency} = 'IDR' and ${table.settlementAmount} is not null)`),
+    check("tiktok_statements_id_check", sql`char_length(${table.statementId}) between 1 and 128`),
+    index("tiktok_statements_statement_time_idx").on(table.statementTime),
+    index("tiktok_statements_payment_id_idx").on(table.paymentId),
+    index("tiktok_statements_latest_snapshot_id_idx").on(table.latestSnapshotId),
+  ],
+);
+
+/** Every transaction of a statement (plan §3.5): orders, refunds and adjustments, `type` as TikTok
+ * sends it (T8 maps adjustment types in Pemetaan Akun, Q8; nothing is dropped or guessed here). */
+export const tiktokStatementTransactions = pgTable(
+  "tiktok_statement_transactions",
+  {
+    transactionId: text("transaction_id").primaryKey(),
+    statementId: text("statement_id")
+      .notNull()
+      .references(() => tiktokStatements.statementId, { onDelete: "restrict" }),
+    type: text("type").notNull(),
+    // `order` for TikTok's ORDER/REFUND types (they carry the order's fees), `adjustment` otherwise.
+    kind: text("kind", { enum: ["order", "adjustment"] }).notNull(),
+    tiktokOrderId: text("tiktok_order_id"),
+    settlementAmount: bigint("settlement_amount", { mode: "number" }),
+    revenueAmount: bigint("revenue_amount", { mode: "number" }),
+    feeTaxAmount: bigint("fee_tax_amount", { mode: "number" }),
+    shippingCostAmount: bigint("shipping_cost_amount", { mode: "number" }),
+    adjustmentAmount: bigint("adjustment_amount", { mode: "number" }),
+    heldReason: text("held_reason", { enum: TIKTOK_FINANCE_HELD_REASONS }),
+    // Order transactions only: whether the SKU-level fee lines are stored and add up.
+    feesState: text("fees_state", { enum: TIKTOK_TRANSACTION_FEE_STATES }),
+    feesHeldReason: text("fees_held_reason", { enum: TIKTOK_ORDER_FEE_HELD_REASONS }),
+    contentSha256: text("content_sha256").notNull(),
+    latestSnapshotId: financeSnapshotRef(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull(),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_statement_transactions_kind_check", sql`${table.kind} in ('order', 'adjustment')`),
+    check("tiktok_statement_transactions_type_check", sql`char_length(${table.type}) between 1 and 64`),
+    check("tiktok_statement_transactions_held_reason_check", sql`${table.heldReason} is null or ${checkIn(table.heldReason, TIKTOK_FINANCE_HELD_REASONS)}`),
+    check("tiktok_statement_transactions_money_check", sql`${table.heldReason} is not null or ${table.settlementAmount} is not null`),
+    check("tiktok_statement_transactions_fees_state_check", sql`${table.feesState} is null or ${checkIn(table.feesState, TIKTOK_TRANSACTION_FEE_STATES)}`),
+    check("tiktok_statement_transactions_fees_held_check", sql`(${table.feesState} is not distinct from 'held') = (${table.feesHeldReason} is not null)`),
+    // Only an order transaction (with its order) has fee lines to fetch.
+    check("tiktok_statement_transactions_fees_kind_check", sql`${table.feesState} is null or (${table.kind} = 'order' and ${table.tiktokOrderId} is not null)`),
+    index("tiktok_statement_transactions_statement_id_idx").on(table.statementId),
+    index("tiktok_statement_transactions_tiktok_order_id_idx").on(table.tiktokOrderId),
+    index("tiktok_statement_transactions_type_idx").on(table.type),
+    index("tiktok_statement_transactions_latest_snapshot_id_idx").on(table.latestSnapshotId),
+  ],
+);
+
+/** Get Unsettled Transactions (plan §5.3, Q9): the estimate for orders not settled yet. A row is kept
+ * after it leaves TikTok's list (`last_seen_at` stops moving); the statements' actual replaces it. */
+export const tiktokUnsettledTransactions = pgTable(
+  "tiktok_unsettled_transactions",
+  {
+    transactionId: text("transaction_id").primaryKey(),
+    type: text("type").notNull(),
+    tiktokOrderId: text("tiktok_order_id"),
+    estSettlementAmount: bigint("est_settlement_amount", { mode: "number" }),
+    estRevenueAmount: bigint("est_revenue_amount", { mode: "number" }),
+    estFeeTaxAmount: bigint("est_fee_tax_amount", { mode: "number" }),
+    estShippingCostAmount: bigint("est_shipping_cost_amount", { mode: "number" }),
+    heldReason: text("held_reason", { enum: TIKTOK_FINANCE_HELD_REASONS }),
+    contentSha256: text("content_sha256").notNull(),
+    latestSnapshotId: financeSnapshotRef(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "date" }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "date" }).notNull(),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_unsettled_transactions_type_check", sql`char_length(${table.type}) between 1 and 64`),
+    check("tiktok_unsettled_transactions_held_reason_check", sql`${table.heldReason} is null or ${checkIn(table.heldReason, TIKTOK_FINANCE_HELD_REASONS)}`),
+    index("tiktok_unsettled_transactions_tiktok_order_id_idx").on(table.tiktokOrderId),
+    index("tiktok_unsettled_transactions_latest_snapshot_id_idx").on(table.latestSnapshotId),
+  ],
+);
+
+/** The raw fee grain (plan §3.5): one signed amount per transaction × SKU × TikTok fee type, by
+ * TikTok's own type names, as `estimate` (unsettled) or `actual` (statement transactions by order).
+ * Estimates stay when the actual arrives (history); order_channel_fees takes actual over estimate. */
+export const tiktokOrderFeeLines = pgTable(
+  "tiktok_order_fee_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tiktokOrderId: text("tiktok_order_id").notNull(),
+    source: text("source", { enum: TIKTOK_FEE_SOURCES }).notNull(),
+    transactionId: text("transaction_id").notNull(),
+    // "" for an order-level line (an estimate has no SKU split).
+    tiktokSkuId: text("tiktok_sku_id").notNull().default(""),
+    feeGroup: text("fee_group", { enum: TIKTOK_FEE_GROUPS }).notNull(),
+    feeType: text("fee_type").notNull(),
+    // Signed, as TikTok reports it (a cost is negative).
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull(),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_order_fee_lines_source_check", checkIn(table.source, TIKTOK_FEE_SOURCES)),
+    check("tiktok_order_fee_lines_group_check", checkIn(table.feeGroup, TIKTOK_FEE_GROUPS)),
+    check("tiktok_order_fee_lines_type_check", sql`char_length(${table.feeType}) between 1 and 160`),
+    unique("tiktok_order_fee_lines_grain_key").on(table.source, table.transactionId, table.tiktokSkuId, table.feeGroup, table.feeType),
+    index("tiktok_order_fee_lines_tiktok_order_id_idx").on(table.tiktokOrderId, table.source),
+  ],
+);
+
+/** What the sync last wrote to order_channel_fees for a TikTok order, or why it held them. */
+export const tiktokOrderFees = pgTable(
+  "tiktok_order_fees",
+  {
+    tiktokOrderId: text("tiktok_order_id").primaryKey(),
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "restrict" }),
+    state: text("state", { enum: TIKTOK_ORDER_FEE_STATES }).notNull(),
+    heldReason: text("held_reason", { enum: TIKTOK_ORDER_FEE_HELD_REASONS }),
+    // The source of the lines last considered; `applied_source` is what order_channel_fees holds.
+    source: text("source", { enum: TIKTOK_FEE_SOURCES }),
+    appliedSource: text("applied_source", { enum: TIKTOK_FEE_SOURCES }),
+    // TikTok fee type names with no row in the fee table (shown for the accountant's review).
+    unmappedTypes: text("unmapped_types").array().notNull().default(sql`'{}'::text[]`),
+    // The components last written, `{ component: amount }`.
+    appliedComponents: jsonb("applied_components"),
+    appliedAt: timestamp("applied_at", { withTimezone: true, mode: "date" }),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_order_fees_state_check", checkIn(table.state, TIKTOK_ORDER_FEE_STATES)),
+    check("tiktok_order_fees_held_reason_check", sql`${table.heldReason} is null or ${checkIn(table.heldReason, TIKTOK_ORDER_FEE_HELD_REASONS)}`),
+    check("tiktok_order_fees_held_pair_check", sql`(${table.state} = 'held') = (${table.heldReason} is not null)`),
+    check("tiktok_order_fees_source_check", sql`${table.source} is null or ${checkIn(table.source, TIKTOK_FEE_SOURCES)}`),
+    check("tiktok_order_fees_applied_source_check", sql`${table.appliedSource} is null or ${checkIn(table.appliedSource, TIKTOK_FEE_SOURCES)}`),
+    index("tiktok_order_fees_order_id_idx").on(table.orderId),
+    index("tiktok_order_fees_state_idx").on(table.state),
+  ],
+);
+
+/** Payouts to the seller's bank (Get Payments, plan §3.5). Linked to their statements through
+ * `tiktok_statements.payment_id`. No account number: its last four digits only. */
+export const tiktokPayouts = pgTable(
+  "tiktok_payouts",
+  {
+    paymentId: text("payment_id").primaryKey(),
+    amount: bigint("amount", { mode: "number" }),
+    currency: text("currency"),
+    status: text("status"),
+    createTime: timestamp("create_time", { withTimezone: true, mode: "date" }),
+    paidTime: timestamp("paid_time", { withTimezone: true, mode: "date" }),
+    bankAccountLast4: text("bank_account_last4"),
+    heldReason: text("held_reason", { enum: TIKTOK_FINANCE_HELD_REASONS }),
+    contentSha256: text("content_sha256").notNull(),
+    latestSnapshotId: financeSnapshotRef(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull(),
+    ...timestamps(),
+  },
+  (table) => [
+    check("tiktok_payouts_held_reason_check", sql`${table.heldReason} is null or ${checkIn(table.heldReason, TIKTOK_FINANCE_HELD_REASONS)}`),
+    check("tiktok_payouts_money_check", sql`${table.heldReason} is not null or (${table.currency} = 'IDR' and ${table.amount} is not null)`),
+    check("tiktok_payouts_last4_check", sql`${table.bankAccountLast4} is null or ${table.bankAccountLast4} ~ '^[0-9]{4}$'`),
+    index("tiktok_payouts_paid_time_idx").on(table.paidTime),
+    index("tiktok_payouts_latest_snapshot_id_idx").on(table.latestSnapshotId),
+  ],
+);

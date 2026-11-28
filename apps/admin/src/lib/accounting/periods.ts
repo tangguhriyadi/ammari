@@ -34,7 +34,8 @@ import {
 //
 // Session 11: before setting `closed`, the close posts the month's PPh final accrual and, for
 // December, the year-end closing journal (period-close-postings.ts), under the same exclusive lock.
-// The MDR "still an estimate" warning (D-8) stays dormant: it reads fee work A's `source` column on
+// The MDR "still an estimate" warning (D-8) stays dormant: it reads the `source` column (added in 0061,
+// shared with TikTok T7; T8 adds the TikTok estimate warning) on
 // order_channel_fees (component payment_gateway_fee), which does not exist yet; add it to
 // periodWarnings with that feature.
 //
