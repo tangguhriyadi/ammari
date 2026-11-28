@@ -32,7 +32,14 @@ export const TIKTOK_ENDPOINTS = {
   unsettledTransactions: "/finance/202507/orders/unsettled",
   /** GET, payouts to the seller's bank, by `create_time` window. */
   payments: "/finance/202309/payments",
+  // Stock sync (docs/plans/tiktok-stock-sync.md S1), read only. Versions are assumptions A1/A2 (T0).
+  /** POST, `page_size` 1-100, every status (an empty filter). */
+  searchProducts: "/product/202309/products/search",
+  /** GET, the seller's warehouses (Ammari's own one is a domestic sales warehouse). */
+  warehouses: "/logistics/202309/warehouses",
 } as const;
+
+export const SEARCH_PRODUCTS_MAX_PAGE_SIZE = 100;
 
 export const FINANCE_MAX_PAGE_SIZE = 100;
 

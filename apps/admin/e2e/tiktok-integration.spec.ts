@@ -57,7 +57,11 @@ for (const viewport of VIEWPORTS) {
       const seen = await stubAuthorize(page, FAKE_GOOD_CODE);
       await section.getByRole("button", { name: "Hubungkan TikTok Shop" }).click();
       // The same shop disconnected by the previous viewport's run comes back as a reconnect.
-      await expect(page.getByText(/^TikTok Shop terhubung(\.| ulang\. Token baru sudah disimpan\.)$/)).toBeVisible();
+      const firstConnect = page.getByText(/^TikTok Shop terhubung(\.| ulang\. Token baru sudah disimpan\.)$/);
+      await expect(firstConnect).toBeVisible();
+      // global-setup.ts seeds the fake shop's row disconnected (tiktok-stock-sync.spec.ts's listings hang
+      // off it), so this first connect is a reconnect unless the shop was never connected.
+      const brandNew = (await firstConnect.textContent()) === "TikTok Shop terhubung.";
       const authorize = new URL(seen[0]!);
       expect(authorize.searchParams.get("service_id")).toBe(FAKE_SERVICE_ID);
       expect(authorize.searchParams.get("state")).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -124,7 +128,7 @@ for (const viewport of VIEWPORTS) {
       // Log Aktivitas, area Pengaturan.
       await page.goto("/activity-log?area=settings");
       for (const label of [
-        "TikTok Shop dihubungkan",
+        ...(brandNew ? ["TikTok Shop dihubungkan"] : []),
         "TikTok Shop dihubungkan ulang",
         "TikTok Shop diputuskan",
         "Pesanan TikTok mulai diterapkan ke pesanan dan stok",

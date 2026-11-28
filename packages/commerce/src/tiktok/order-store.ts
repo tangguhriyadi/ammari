@@ -140,7 +140,7 @@ export function normalizeTikTokSellerSku(value: unknown): string | null {
   return sku.length > 0 && sku.length <= 128 ? sku : null;
 }
 
-interface SnapshotLine {
+export interface SnapshotLine {
   skuId: string;
   productId: string | null;
   sellerSku: string | null;
@@ -171,9 +171,15 @@ export function tiktokSnapshotLines(payload: AllowlistedObject): SnapshotLine[] 
  * mapped. An existing row, active or not, is never touched (ON CONFLICT DO NOTHING): a person's
  * mapping or removal wins. Each new row is audited (`tiktok_sku_auto_map`, no actor). */
 export async function autoMapTikTokSkus(tx: Tx, payload: AllowlistedObject): Promise<string[]> {
+  return autoMapTikTokSkuLines(tx, tiktokSnapshotLines(payload));
+}
+
+/** The same exact auto-map for SKUs seen elsewhere than on an order (the stock sync's listing read,
+ * docs/plans/tiktok-stock-sync.md R6): one rule for both, one mapping table. */
+export async function autoMapTikTokSkuLines(tx: Tx, lines: readonly SnapshotLine[]): Promise<string[]> {
   const mapped: string[] = [];
   const seen = new Set<string>();
-  for (const line of tiktokSnapshotLines(payload)) {
+  for (const line of lines) {
     if (seen.has(line.skuId)) continue;
     seen.add(line.skuId);
     const normalized = normalizeTikTokSellerSku(line.sellerSku);

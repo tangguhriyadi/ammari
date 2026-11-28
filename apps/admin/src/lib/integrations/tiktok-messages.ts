@@ -1,4 +1,5 @@
-import type { TikTokHeldReason } from "@ammari/db/schema";
+import type { TikTokHeldReason, TikTokListingHoldReason } from "@ammari/db/schema";
+import type { TikTokTargetHoldReason } from "@ammari/commerce/tiktok";
 
 // What the Integrasi TikTok Shop page says after a connect attempt (docs/plans/tiktok-shop-integration.md
 // §7.3 step 3): an Indonesian message plus the short error code, never TikTok's raw answer. Shared
@@ -51,3 +52,16 @@ export const TIKTOK_BACKFILL_ERRORS = {
   none: "Belum ada riwayat yang siap diterapkan.",
   still_fetching: "Riwayat masih dibaca. Tunggu sampai selesai, lalu cek pratinjaunya.",
 } as const;
+
+/** Why a TikTok listing SKU is not sent (Sinkron stok, docs/plans/tiktok-stock-sync.md §2). */
+export const TIKTOK_STOCK_HOLD_LABELS: Record<TikTokListingHoldReason | TikTokTargetHoldReason, string> = {
+  unmapped: "SKU penjual tidak cocok dengan SKU Ammari. Tidak disentuh",
+  status_not_updatable: "Status produk di TikTok tidak bisa diubah stoknya",
+  warehouse_unclear: "Gudang tidak jelas (bukan tepat satu gudang Ammari)",
+  quantity_unreadable: "Stok TikTok tidak terbaca",
+  variant_on_several_listings: "Varian ini ada di lebih dari satu listing TikTok",
+  product_too_many_skus: "Produk punya lebih dari 100 SKU",
+  not_listed: "Tidak ada lagi di TikTok",
+  tiktok_order_unclear: "Ada pesanan TikTok ditahan yang jumlahnya tidak terbaca",
+  invalid_input: "Data stok tidak terbaca",
+};

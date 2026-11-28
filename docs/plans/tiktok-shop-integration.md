@@ -1486,8 +1486,9 @@ the prod admin host), the step says so.
 
 **D. Still pending after go-live (not blockers):**
 
-- **Stock sync to TikTok** (Ammari stock → TikTok listings): a later phase with its own plan; it needs a product
-  write scope (§1, Q15).
+- **Stock sync to TikTok** (Ammari stock → TikTok listings): its own plan, `docs/plans/tiktok-stock-sync.md`
+  (S1 built 28 Nov 2026: listing read + preview + switch, migration 0064; S2, the push, planned). The product
+  write scope `seller.product.write` was granted on prod on 28 Nov 2026.
 - **Write-back to TikTok** (accepting/rejecting returns, arranging shipments, labels): out of phase 1 (Q15);
   labels and return responses stay in Seller Center.
 - **Shopee Session 5** (real Shopee ship dates, accounting.md §8): still blocked on a real Shopee export header;

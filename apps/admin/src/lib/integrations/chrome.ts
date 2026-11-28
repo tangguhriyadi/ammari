@@ -3,6 +3,8 @@ import { integrationCrumbs } from "./breadcrumb";
 import { INTEGRATIONS_PATH, SHOPEE_TAB, TIKTOK_TAB, type IntegrationTab } from "./tabs";
 
 export const TIKTOK_SKU_PATH = `${TIKTOK_TAB.href}/sku`;
+/** Sinkron stok (docs/plans/tiktok-stock-sync.md S1): the preview and the stock switch. */
+export const TIKTOK_STOCK_PATH = `${TIKTOK_TAB.href}/stock`;
 
 export interface IntegrationChrome {
   tab: IntegrationTab | null;
@@ -22,6 +24,13 @@ export function integrationChrome(pathname: string): IntegrationChrome | null {
       tab: TIKTOK_TAB,
       crumbs: [...integrationCrumbs(TIKTOK_TAB), { label: "Pemetaan SKU" }],
       description: "Pemetaan SKU: hubungkan setiap SKU di TikTok Shop ke satu varian Ammari, supaya pesanan TikTok bisa masuk ke admin.",
+    };
+  }
+  if (pathname === TIKTOK_STOCK_PATH) {
+    return {
+      tab: TIKTOK_TAB,
+      crumbs: [...integrationCrumbs(TIKTOK_TAB), { label: "Sinkron stok" }],
+      description: "Sinkron stok: stok Ammari dikirim ke TikTok Shop (Ammari jadi acuan). Cek pratinjau per SKU sebelum menyalakannya.",
     };
   }
   if (pathname === SHOPEE_TAB.href) {

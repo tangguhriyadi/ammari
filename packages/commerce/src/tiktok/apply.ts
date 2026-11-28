@@ -560,8 +560,8 @@ export async function setTikTokOrdersApply(db: Database, input: { enabled: boole
     // Turning it on needs an active connection; turning it off works on the current connection
     // whatever its state (a reconnect keeps the row, and with it the switch), so a lost connection
     // never leaves applying on with no way to stop it.
-    const rows = await tx.execute<{ id: string; orders_apply_enabled: boolean }>(sql`
-      select id, orders_apply_enabled from tiktok_shop_connections
+    const rows = await tx.execute<{ id: string; orders_apply_enabled: boolean; stock_sync_enabled: boolean }>(sql`
+      select id, orders_apply_enabled, stock_sync_enabled from tiktok_shop_connections
       where ${input.enabled ? sql`status = 'active'` : sql`status = 'active' or orders_apply_enabled`}
       order by case when status = 'active' then 0 else 1 end, updated_at desc
       limit 1 for update
@@ -583,6 +583,18 @@ export async function setTikTokOrdersApply(db: Database, input: { enabled: boole
       before: { ordersApplyEnabled: row.orders_apply_enabled },
       after: { ordersApplyEnabled: input.enabled },
     });
+    // Rule R1 (docs/plans/tiktok-stock-sync.md): the trigger of migration 0064 turned the stock switch
+    // off in the same row write; the audit says so, so Log Aktivitas shows why it went off.
+    if (!input.enabled && row.stock_sync_enabled) {
+      await writeAuditLog(tx, {
+        actorStaffUserId: input.staffUserId,
+        action: "tiktok_stock_sync_disable",
+        entityType: "tiktok_shop_connection",
+        entityId: row.id,
+        before: { stockSyncEnabled: true },
+        after: { stockSyncEnabled: false, reason: "orders_apply_disabled" },
+      });
+    }
     return { ok: true, changed: true };
   });
 }

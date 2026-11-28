@@ -32,6 +32,7 @@ export {
   SEARCH_AFTER_SALES_MAX_ORDER_IDS,
   SEARCH_AFTER_SALES_MAX_PAGE_SIZE,
   SEARCH_ORDERS_MAX_PAGE_SIZE,
+  SEARCH_PRODUCTS_MAX_PAGE_SIZE,
   TIKTOK_API_BASE_URL,
   TIKTOK_AUTH_BASE_URL,
   TIKTOK_AUTHORIZE_URL,
@@ -95,6 +96,18 @@ export {
   type TikTokTransactionAmounts,
   type TikTokUnsettledProjection,
 } from "./finance";
+export {
+  TIKTOK_PRODUCT_TITLE_MAX_CHARS,
+  getTikTokWarehouses,
+  ownTikTokWarehouseIds,
+  searchTikTokProducts,
+  type SearchTikTokProductsInput,
+  type SearchTikTokProductsPage,
+  type TikTokInventoryEntry,
+  type TikTokListingProductRecord,
+  type TikTokListingSkuRecord,
+  type TikTokWarehouse,
+} from "./products";
 export { TikTokMoneyFormatError, parseRupiah, type ParseRupiahOptions } from "./rupiah";
 export { Secret } from "./secret";
 export { getAuthorizedShops, type TikTokAuthorizedShop } from "./shops";

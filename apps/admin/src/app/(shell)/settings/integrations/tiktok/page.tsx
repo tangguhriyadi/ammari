@@ -52,6 +52,8 @@ const SCOPE_LABELS: Record<string, string> = {
   "seller.shop.info": "Info toko",
   "seller.logistics": "Pengiriman",
   "seller.product.basic": "Produk",
+  // Stock sync (docs/plans/tiktok-stock-sync.md): Update Inventory needs it.
+  "seller.product.write": "Modifikasi produk",
   "seller.authorization.info": "Informasi resmi toko",
 };
 

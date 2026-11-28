@@ -517,6 +517,9 @@ export const AUDIT_CATALOG: Record<string, EntityTypeEntry> = {
       tiktok_expiry_warning: { label: "Izin TikTok Shop akan berakhir" },
       tiktok_apply_enable: { label: "Pesanan TikTok mulai diterapkan ke pesanan dan stok" },
       tiktok_apply_disable: { label: "Pesanan TikTok berhenti diterapkan (hanya pratinjau)" },
+      // docs/plans/tiktok-stock-sync.md: the stock switch (also turned off with "Hentikan penerapan pesanan").
+      tiktok_stock_sync_enable: { label: "Sinkron stok TikTok diaktifkan" },
+      tiktok_stock_sync_disable: { label: "Sinkron stok TikTok dihentikan" },
     },
   },
   // docs/plans/tiktok-shop-integration.md T4: Pemetaan SKU TikTok. The auto-map has no actor

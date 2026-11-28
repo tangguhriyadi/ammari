@@ -2,12 +2,13 @@
 
 import { usePathname } from "next/navigation";
 import { Tabs } from "@ammari/ui";
-import { TIKTOK_SKU_PATH } from "@/lib/integrations/chrome";
+import { TIKTOK_SKU_PATH, TIKTOK_STOCK_PATH } from "@/lib/integrations/chrome";
 import { TIKTOK_TAB } from "@/lib/integrations/tabs";
 
 const SUB_TABS = [
   { label: "Koneksi", href: TIKTOK_TAB.href },
   { label: "Pemetaan SKU", href: TIKTOK_SKU_PATH },
+  { label: "Sinkron stok", href: TIKTOK_STOCK_PATH },
 ];
 
 /** Inside the TikTok Shop tab. Shown whether or not a connection exists, so Pemetaan SKU is always

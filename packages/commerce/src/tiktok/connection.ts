@@ -547,6 +547,9 @@ export interface TikTokConnectionView {
   /** The T5 kill switch: whether orders are applied to admin orders and stock. */
   ordersApplyEnabled: boolean;
   ordersApplyChangedAt: Date | null;
+  /** "Sinkronkan stok ke TikTok" (docs/plans/tiktok-stock-sync.md, migration 0064). */
+  stockSyncEnabled: boolean;
+  stockSyncChangedAt: Date | null;
 }
 
 /** The current connection: the active or reauth-required one, else the most recently changed. No
@@ -575,6 +578,8 @@ export async function getTikTokConnectionView(db: Database): Promise<TikTokConne
       lastErrorAt: c.lastErrorAt,
       ordersApplyEnabled: c.ordersApplyEnabled,
       ordersApplyChangedAt: c.ordersApplyChangedAt,
+      stockSyncEnabled: c.stockSyncEnabled,
+      stockSyncChangedAt: c.stockSyncChangedAt,
     })
     .from(c)
     .orderBy(sql`case when ${c.status} in ('active', 'reauth_required') then 0 else 1 end`, desc(c.updatedAt))

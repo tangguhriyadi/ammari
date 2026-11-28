@@ -449,6 +449,13 @@
       "when": 1795835113135,
       "tag": "0063_tiktok_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1795870900156,
+      "tag": "0064_tiktok_stock_sync",
+      "breakpoints": true
     }
   ]
 }

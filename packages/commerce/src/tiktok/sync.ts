@@ -10,6 +10,9 @@ import {
   getTikTokStatementTransactions,
   getTikTokStatements,
   getTikTokUnsettledTransactions,
+  getTikTokWarehouses,
+  ownTikTokWarehouseIds,
+  searchTikTokProducts,
   type TikTokStatementProjection,
   type TikTokStatementTransactionProjection,
   SEARCH_AFTER_SALES_MAX_ORDER_IDS,
@@ -42,6 +45,7 @@ import { TIKTOK_FINANCE_REOPEN_MAX_MS, TIKTOK_FINANCE_SLICE_MS, planTikTokFinanc
 import { advanceTikTokBackfill, loadFetchingTikTokBackfill, markTikTokBackfillFetched, recordTikTokBackfillRun, setTikTokBackfillSlice, type TikTokBackfillResource, type TikTokBackfillView } from "./backfill";
 import { nextTikTokBackfillSliceSeconds, planTikTokBackfillWindows } from "./backfill-windows";
 import { ingestTikTokOrder } from "./order-store";
+import { finishTikTokListingPass, storeTikTokListingProduct } from "./stock-sync";
 import { TIKTOK_POLL_LAG_MS, TIKTOK_POLL_SLICE_MS, planTikTokPollWindows, type TikTokPollWindow } from "./order-windows";
 import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokConnectionEvents } from "./webhook";
 
@@ -84,6 +88,10 @@ import { TIKTOK_WEBHOOK_MAX_ATTEMPTS, TIKTOK_WEBHOOK_TOPICS, processDueTikTokCon
 // last finished slice (`tiktok_backfills.*_done_until`). Orders are stored with source `backfill`; one
 // the backfill is the first to store is not applied until the owner confirms the backfill (apply.ts).
 // An order slice that does not finish within a run is halved for the next run (T4's known limit).
+// Stock sync S1 (docs/plans/tiktok-stock-sync.md §4): every 15 minutes, after finance and before the
+// backfill, with at most a quarter of the budget, the listing read pass: Get Warehouse List, then every
+// page of Search Products, each product stored (tiktok_listing_skus) with its classification and the
+// exact auto-map. Only a complete pass marks unseen SKUs `not_listed`. READ ONLY: nothing is pushed.
 
 export const TIKTOK_SYNC_BUDGET_MS = 150_000;
 /** The webhook's `after()` drain of one order. */
@@ -195,6 +203,24 @@ export interface TikTokFinanceCounts {
   problems: { id: string; kind: "invalid" | "busy" | "failed" | "store_failed"; code: string }[];
 }
 
+export interface TikTokListingCounts {
+  /** Why the read pass did not run this time; null when it ran. */
+  skipped: "not_due" | "no_scope" | null;
+  /** Every page was read and stored (only then are unseen SKUs marked `not_listed`). */
+  complete: boolean;
+  /** What stopped an incomplete pass: `budget_exhausted`, `listings_invalid`, a TikTok code. */
+  stoppedBy: string | null;
+  pages: number;
+  products: number;
+  skus: number;
+  autoMapped: number;
+  /** Product, SKU or warehouse entries without a usable id (the pass is then incomplete). */
+  invalid: number;
+  ownWarehouses: number;
+  notListed: number;
+  severalListings: number;
+}
+
 export interface TikTokBackfillCounts {
   /** A backfill was being read and this run worked on it. */
   ran: boolean;
@@ -218,6 +244,7 @@ export interface TikTokSyncSummary {
   apply: TikTokApplyCounts;
   afterSales: TikTokAfterSaleCounts;
   finance: TikTokFinanceCounts;
+  listings: TikTokListingCounts;
   backfill: TikTokBackfillCounts;
   budgetExhausted: boolean;
   /** What stopped the run: a TikTok error's kind and code, or `incomplete` (orders of a slice
@@ -255,6 +282,7 @@ function emptySummary(): TikTokSyncSummary {
     apply: emptyApplyCounts(),
     afterSales: emptyAfterSaleCounts(),
     finance: emptyFinanceCounts(),
+    listings: { skipped: "not_due", complete: false, stoppedBy: null, pages: 0, products: 0, skus: 0, autoMapped: 0, invalid: 0, ownWarehouses: 0, notListed: 0, severalListings: 0 },
     backfill: { ran: false, id: null, state: null, orders: { slices: 0, pages: 0, stored: 0, sliceSeconds: null }, afterSales: { slices: 0, pages: 0 }, finance: { windows: 0, skipped: null }, stoppedBy: null },
     budgetExhausted: false,
     error: null,
@@ -268,6 +296,7 @@ interface Session {
   deps: TikTokSyncDeps;
   clock: () => Date;
   deadline: number;
+  connectionId: string;
   shopCipher: string;
   accessToken: Secret;
   tokenGeneration: number;
@@ -288,9 +317,9 @@ async function openSession(db: Database, deps: TikTokSyncDeps, clock: () => Date
     const view = await getTikTokConnectionView(db);
     return view?.status === "reauth_required" ? "reauth_required" : "not_connected";
   }
-  const { shopCipher, accessToken, tokenGeneration } = credentials.credentials;
+  const { connectionId, shopCipher, accessToken, tokenGeneration } = credentials.credentials;
   apply.enabled = await tiktokOrdersApplyEnabled(db);
-  return { db, deps, clock, deadline, shopCipher, accessToken, tokenGeneration, counts, apply, afterSales, storedOrders: new Set(), backfillId: null };
+  return { db, deps, clock, deadline, connectionId, shopCipher, accessToken, tokenGeneration, counts, apply, afterSales, storedOrders: new Set(), backfillId: null };
 }
 
 function onAuthError(session: Session, path: string): () => Promise<Secret> {
@@ -607,13 +636,13 @@ async function drainOrderEvents(session: Session, summary: TikTokSyncSummary, op
 
 /** A slice had orders that could not be stored: the cursor stays, the run reports the code. */
 class SyncIncomplete extends Error {
-  constructor(readonly code: TikTokOrderProblem | "finance_invalid") {
+  constructor(readonly code: TikTokOrderProblem | "finance_invalid" | "listings_invalid") {
     super(`tiktok sync incomplete: ${code}`);
     this.name = "SyncIncomplete";
   }
 }
 
-type CursorResource = "orders" | "returns" | "cancellations" | "unsettled" | "statements" | "payments";
+type CursorResource = "orders" | "returns" | "cancellations" | "unsettled" | "statements" | "payments" | "products";
 
 async function readOrdersCursor(db: Database, now: Date, resource: CursorResource = "orders"): Promise<{ windowEnd: Date | null; backfillFrom: Date | null }> {
   const [row] = await db.execute<{ window_end: string | Date | null; backfill_from: string | Date | null }>(sql`
@@ -1253,6 +1282,72 @@ async function runTikTokBackfill(session: Session, summary: TikTokSyncSummary): 
   }
 }
 
+// ---- Listings for the stock sync (S1, read only) ----------------------------------------------
+
+/** The listing read pass runs at most every 15 minutes (docs/plans/tiktok-stock-sync.md §4). */
+export const TIKTOK_LISTINGS_EVERY_MS = 15 * 60_000;
+/** Search Products needs the product read scope; Get Warehouse List the logistics one. */
+export const TIKTOK_LISTINGS_SCOPES = ["seller.product.basic", "seller.logistics"] as const;
+
+async function listingsSkip(session: Session): Promise<TikTokListingCounts["skipped"]> {
+  const view = await getTikTokConnectionView(session.db);
+  if (!TIKTOK_LISTINGS_SCOPES.every((scope) => view?.grantedScopes.includes(scope))) return "no_scope";
+  const [row] = await session.db.execute<{ last_ok_at: string | Date | null }>(sql`select last_ok_at from tiktok_sync_cursors where resource = 'products'`);
+  const lastOk = row?.last_ok_at ? new Date(row.last_ok_at).getTime() : null;
+  return lastOk !== null && session.clock().getTime() - lastOk < TIKTOK_LISTINGS_EVERY_MS ? "not_due" : null;
+}
+
+/** One read pass (plan §4). Rows are stored product by product; only a pass that read every page with
+ * no unusable entry marks unseen SKUs `not_listed` and sets several-listing holds (R7, R9). An unusable
+ * entry → `incomplete` (listings_invalid). Running out of this step's budget stops quietly: the next run
+ * reads again (the cursor's `last_ok_at` did not move). */
+async function readTikTokListings(session: Session, summary: TikTokSyncSummary): Promise<void> {
+  const counts = summary.listings;
+  const passStart = new Date(Math.floor(session.clock().getTime() / 1000) * 1000);
+  await readOrdersCursor(session.db, passStart, "products");
+  const warehouses = await getTikTokWarehouses(session.deps.api, shopCall(session, "/logistics/warehouses"));
+  const own = ownTikTokWarehouseIds(warehouses.warehouses);
+  counts.ownWarehouses = own.size;
+  counts.invalid += warehouses.invalid;
+  let pageToken: string | null = null;
+  const seenTokens = new Set<string>();
+  let entries = 0;
+  let totalCount: number | null = null;
+  const refused = (detail: string) => new TikTokApiError({ kind: "invalid_response", path: "/product/search", httpStatus: null, code: null, requestId: null, detail });
+  for (;;) {
+    if (!budgetLeft(session)) throw budgetError("/product/search");
+    const page = await searchTikTokProducts(session.deps.api, { pageToken, ...shopCall(session, "/product/search") });
+    counts.pages += 1;
+    counts.invalid += page.invalid;
+    entries += page.entries;
+    totalCount = page.totalCount ?? totalCount;
+    for (const product of page.products) {
+      counts.invalid += product.invalidSkus;
+      const stored = await storeTikTokListingProduct(session.db, { connectionId: session.connectionId, product, ownWarehouses: own, readAt: passStart });
+      counts.products += 1;
+      counts.skus += stored.skus;
+      counts.autoMapped += stored.autoMapped.length;
+    }
+    if (!page.nextPageToken) break;
+    if (seenTokens.has(page.nextPageToken)) throw refused("page_token_repeated");
+    if (counts.pages >= TIKTOK_MAX_PAGES_PER_SLICE) throw refused("too_many_pages");
+    seenTokens.add(page.nextPageToken);
+    pageToken = page.nextPageToken;
+  }
+  // The last page came without a token: if TikTok said how many products there are, every one of them
+  // must have been seen, or a missing/renamed token ended the read early (its SKUs would be not_listed).
+  if (totalCount !== null && entries !== totalCount) throw refused("count_mismatch");
+  // An entry without a usable id could be a real SKU: never mark anything not_listed on such a pass.
+  if (counts.invalid > 0) {
+    counts.stoppedBy = "listings_invalid";
+    throw new SyncIncomplete("listings_invalid");
+  }
+  const finished = await finishTikTokListingPass(session.db, { connectionId: session.connectionId, passStart });
+  counts.notListed = finished.notListed;
+  counts.severalListings = finished.severalListings;
+  counts.complete = true;
+}
+
 // ---- Health on the connection and the cursor -------------------------------------------------
 
 /** Best effort, like T3's "last webhook": a row a token refresh holds is skipped, never waited for. */
@@ -1363,6 +1458,35 @@ export async function runTikTokSync(db: Database, deps: TikTokSyncDeps, options:
           summary.finance.failed += 1;
           noteFinanceProblem(summary.finance, { id: "rebuild", kind: "failed", code: applyErrorCode(error) });
         }
+      }
+    }
+    // 6b. The listing read pass for the stock sync (S1, read only), every 15 minutes, at most a
+    // quarter of the budget. Running out of that share is not an error: the next run reads again.
+    summary.listings.skipped = await listingsSkip(session);
+    if (summary.listings.skipped === null) {
+      const fullDeadline = session.deadline;
+      session.deadline = Math.min(fullDeadline, clock().getTime() + Math.floor((options.budgetMs ?? TIKTOK_SYNC_BUDGET_MS) / 4));
+      try {
+        await poll("products", async () => {
+          try {
+            await readTikTokListings(session, summary);
+          } catch (error) {
+            // A refused or unreadable answer (an endpoint version, a renamed key, A1/A2) holds only the
+            // listing cursor, loudly (route 500 → ALERT), so the backfill below still runs. A rate limit,
+            // an outage or an auth failure stops the run like every other step.
+            if (!(error instanceof TikTokApiError && (error.kind === "api" || error.kind === "invalid_response"))) throw error;
+            summary.listings.stoppedBy = error.detail ? `${tiktokErrorCode(error)}:${error.detail}`.slice(0, 64) : tiktokErrorCode(error);
+            throw new SyncIncomplete("listings_invalid");
+          }
+        });
+      } catch (error) {
+        if (!(error instanceof TikTokApiError && error.kind === "budget_exhausted" && clock().getTime() < fullDeadline)) throw error;
+        current = null;
+        summary.listings.stoppedBy = "budget_exhausted";
+        // Visible on Sinkron stok (the cursor's last error) and in the cron log (route "needs a look").
+        await db.execute(sql`update tiktok_sync_cursors set last_error_code = 'budget_exhausted', updated_at = now() where resource = 'products'`);
+      } finally {
+        session.deadline = fullDeadline;
       }
     }
     // 7. The backfill (T9), with what is left of the budget. An incomplete slice is loud like any

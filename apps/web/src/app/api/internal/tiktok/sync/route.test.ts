@@ -49,6 +49,7 @@ function summary(overrides: Partial<TikTokSyncSummary> = {}): TikTokSyncSummary 
     apply: { enabled: false, created: 0, updated: 0, unchanged: 0, held: 0, skipped: 0, busy: 0, failed: 0, rechecked: 0, recheckIncomplete: false, notFound: 0, waitingBackfill: 0, problems: [] },
     afterSales: afterSales(),
     finance: finance(),
+    listings: { skipped: "not_due", complete: false, stoppedBy: null, pages: 0, products: 0, skus: 0, autoMapped: 0, invalid: 0, ownWarehouses: 0, notListed: 0, severalListings: 0 },
     backfill: { ran: false, id: null, state: null, orders: { slices: 0, pages: 0, stored: 0, sliceSeconds: null }, afterSales: { slices: 0, pages: 0 }, finance: { windows: 0, skipped: null }, stoppedBy: null },
     budgetExhausted: false,
     error: null,
@@ -155,6 +156,27 @@ describe("POST /api/internal/tiktok/sync", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ skipped: "not_connected" });
     });
+  });
+
+  test("stock sync S1: a listing read without its scope or that stopped early warns (200); a failed one is 500", async () => {
+    const warns = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const listings = (overrides: Partial<TikTokSyncSummary["listings"]>): TikTokSyncSummary["listings"] => ({ skipped: null, complete: true, stoppedBy: null, pages: 1, products: 1, skus: 1, autoMapped: 0, invalid: 0, ownWarehouses: 1, notListed: 0, severalListings: 0, ...overrides });
+    for (const [value, status, warned] of [
+      [summary({ listings: listings({}) }), 200, false],
+      [summary({ listings: listings({ skipped: "no_scope", complete: false }) }), 200, true],
+      [summary({ listings: listings({ complete: false, stoppedBy: "budget_exhausted" }) }), 200, true],
+      [summary({ listings: listings({ ownWarehouses: 0 }) }), 200, true],
+      [summary({ listings: listings({ complete: false, stoppedBy: "listings_invalid" }), error: { kind: "incomplete", code: "listings_invalid" } }), 500, false],
+    ] as [TikTokSyncSummary, number, boolean][]) {
+      warns.mockClear();
+      await inRollback(async () => {
+        runTikTokSyncMock.mockResolvedValueOnce(value);
+        expect((await call()).status).toBe(status);
+      });
+      if (warned) expect(JSON.stringify(warns.mock.calls)).toContain("needs a look");
+      else if (status === 200) expect(warns).not.toHaveBeenCalled();
+    }
   });
 
   test("a run that throws answers 500 without the error text", async () => {

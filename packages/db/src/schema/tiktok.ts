@@ -22,7 +22,9 @@ export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
 export const TIKTOK_CONNECTION_STATUSES = ["active", "reauth_required", "deauthorized", "disconnected"] as const;
 export type TikTokConnectionStatus = (typeof TIKTOK_CONNECTION_STATUSES)[number];
 
-export const TIKTOK_SYNC_RESOURCES = ["orders", "returns", "cancellations", "statements", "payments", "unsettled"] as const;
+/** `products` (migration 0064, stock sync S1): the listing read pass (Search Products), its
+ * `last_run_at` / `last_ok_at` / `last_error_code` only; it has no window. */
+export const TIKTOK_SYNC_RESOURCES = ["orders", "returns", "cancellations", "statements", "payments", "unsettled", "products"] as const;
 export type TikTokSyncResource = (typeof TIKTOK_SYNC_RESOURCES)[number];
 
 export const TIKTOK_WEBHOOK_EVENT_STATUSES = ["pending", "processed", "ignored", "failed"] as const;
@@ -72,6 +74,13 @@ export const tiktokShopConnections = pgTable(
     ordersApplyEnabled: boolean("orders_apply_enabled").notNull().default(false),
     ordersApplyChangedAt: timestamp("orders_apply_changed_at", { withTimezone: true, mode: "date" }),
     ordersApplyChangedByStaffUserId: uuid("orders_apply_changed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
+    // "Sinkronkan stok ke TikTok" (docs/plans/tiktok-stock-sync.md, migration 0064): off by default.
+    // ON only while orders_apply_enabled is ON (CHECK below), and a trigger turns it OFF whenever
+    // orders_apply_enabled goes OFF (rule R1), so no code path, including an older release after a
+    // rollback, can leave stock pushing while TikTok sales do not reduce Ammari stock.
+    stockSyncEnabled: boolean("stock_sync_enabled").notNull().default(false),
+    stockSyncChangedAt: timestamp("stock_sync_changed_at", { withTimezone: true, mode: "date" }),
+    stockSyncChangedByStaffUserId: uuid("stock_sync_changed_by_staff_user_id").references(() => staffUsers.id, { onDelete: "restrict" }),
     ...timestamps(),
   },
   (table) => [
@@ -89,6 +98,8 @@ export const tiktokShopConnections = pgTable(
     uniqueIndex("tiktok_shop_connections_one_active").on(table.status).where(sql`${table.status} = 'active'`),
     index("tiktok_shop_connections_connected_by_idx").on(table.connectedByStaffUserId),
     index("tiktok_shop_connections_orders_apply_changed_by_idx").on(table.ordersApplyChangedByStaffUserId),
+    check("tiktok_shop_connections_stock_sync_needs_orders_check", sql`not ${table.stockSyncEnabled} or ${table.ordersApplyEnabled}`),
+    index("tiktok_shop_connections_stock_sync_changed_by_idx").on(table.stockSyncChangedByStaffUserId),
   ],
 );
 
@@ -703,5 +714,72 @@ export const tiktokBackfills = pgTable(
     uniqueIndex("tiktok_backfills_one_open").on(sql`(true)`).where(sql`${table.state} <> 'confirmed'`),
     index("tiktok_backfills_requested_by_idx").on(table.requestedByStaffUserId),
     index("tiktok_backfills_confirmed_by_idx").on(table.confirmedByStaffUserId),
+  ],
+);
+
+// ---- Stock sync: TikTok listings (docs/plans/tiktok-stock-sync.md §3, S1, migration 0064) ---------
+
+/** Why a listing SKU is never pushed (plan §2 R4-R10). NULL = pushable as far as the listing goes. */
+export const TIKTOK_LISTING_HOLD_REASONS = [
+  "unmapped",
+  "status_not_updatable",
+  "warehouse_unclear",
+  "quantity_unreadable",
+  "variant_on_several_listings",
+  "product_too_many_skus",
+  "not_listed",
+] as const;
+export type TikTokListingHoldReason = (typeof TIKTOK_LISTING_HOLD_REASONS)[number];
+
+/** TikTok's per SKU and warehouse maximum. */
+export const TIKTOK_LISTING_MAX_QUANTITY = 999_999;
+
+/** One row per TikTok SKU of the connected shop, as the last read pass saw it (Search Products), plus
+ * what S2 last pushed. The read never touches the `last_pushed_*` / `last_push_error_*` columns. */
+export const tiktokListingSkus = pgTable(
+  "tiktok_listing_skus",
+  {
+    connectionId: uuid("connection_id")
+      .notNull()
+      .references(() => tiktokShopConnections.id, { onDelete: "restrict" }),
+    tiktokSkuId: text("tiktok_sku_id").notNull(),
+    tiktokProductId: text("tiktok_product_id").notNull(),
+    // Raw (ACTIVATE, SELLER_DEACTIVATED, ...): kept so a status hold says which one.
+    productStatus: text("product_status").notNull(),
+    productTitle: text("product_title"),
+    skuLabel: text("sku_label"),
+    // As typed in TikTok.
+    sellerSku: text("seller_sku"),
+    // The variant the active tiktok_sku_mappings row names; NULL = unmapped. Set null on a variant's
+    // deletion (the next read recomputes), so this table never blocks deleting a variant.
+    variantSku: text("variant_sku").references(() => productVariants.sku, { onDelete: "set null" }),
+    // Ammari's one (non-FBT) warehouse for this SKU and TikTok's quantity there; NULL when unclear.
+    warehouseId: text("warehouse_id"),
+    tiktokQuantity: integer("tiktok_quantity"),
+    // The start of the read pass that last saw this SKU.
+    readAt: timestamp("read_at", { withTimezone: true, mode: "date" }).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    holdReason: text("hold_reason", { enum: TIKTOK_LISTING_HOLD_REASONS }),
+    // S2 (the push). Codes only, never a response body.
+    lastPushedQuantity: integer("last_pushed_quantity"),
+    lastPushedAt: timestamp("last_pushed_at", { withTimezone: true, mode: "date" }),
+    lastPushErrorCode: text("last_push_error_code"),
+    lastPushErrorAt: timestamp("last_push_error_at", { withTimezone: true, mode: "date" }),
+    ...timestamps(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.connectionId, table.tiktokSkuId] }),
+    check("tiktok_listing_skus_hold_reason_check", sql`${table.holdReason} is null or ${checkIn(table.holdReason, TIKTOK_LISTING_HOLD_REASONS)}`),
+    check("tiktok_listing_skus_sku_id_check", sql`char_length(${table.tiktokSkuId}) between 1 and 128`),
+    check("tiktok_listing_skus_product_id_check", sql`char_length(${table.tiktokProductId}) between 1 and 128`),
+    check("tiktok_listing_skus_status_check", sql`char_length(${table.productStatus}) between 1 and 64`),
+    check("tiktok_listing_skus_text_check", sql`(${table.productTitle} is null or char_length(${table.productTitle}) <= 255) and (${table.skuLabel} is null or char_length(${table.skuLabel}) <= 255) and (${table.sellerSku} is null or char_length(${table.sellerSku}) <= 128) and (${table.warehouseId} is null or char_length(${table.warehouseId}) <= 128)`),
+    check("tiktok_listing_skus_quantity_check", sql`${table.tiktokQuantity} is null or ${table.tiktokQuantity} between 0 and ${sql.raw(String(TIKTOK_LISTING_MAX_QUANTITY))}`),
+    check("tiktok_listing_skus_pushed_check", sql`(${table.lastPushedQuantity} is null) = (${table.lastPushedAt} is null) and (${table.lastPushedQuantity} is null or ${table.lastPushedQuantity} between 0 and ${sql.raw(String(TIKTOK_LISTING_MAX_QUANTITY))})`),
+    check("tiktok_listing_skus_push_error_check", sql`(${table.lastPushErrorCode} is null) = (${table.lastPushErrorAt} is null) and (${table.lastPushErrorCode} is null or char_length(${table.lastPushErrorCode}) <= 64)`),
+    // S2: which listings a changed variant feeds; also the several-listings check (R7).
+    index("tiktok_listing_skus_variant_sku_idx").on(table.variantSku).where(sql`${table.variantSku} is not null`),
+    // S2: one Update Inventory call per product.
+    index("tiktok_listing_skus_product_idx").on(table.connectionId, table.tiktokProductId),
   ],
 );

@@ -426,6 +426,15 @@ export const E2E_TIKTOK_BF_ENRICH_ORDER_NO = "ORD-E2E-TT-RIWAYAT";
 export const E2E_TIKTOK_BF_CREATE_ID = "579000000000000502";
 export const E2E_TIKTOK_BF_LONELY_NUMBER = "579000000000000599";
 export const E2E_TIKTOK_BF_LONELY_ORDER_NO = "ORD-E2E-TT-SALAH-KETIK";
+// tiktok-stock-sync.spec.ts (docs/plans/tiktok-stock-sync.md S1): listings a read pass would have stored,
+// under a disconnected connection row for the fake shop (the spec's connect reuses that row in place, as a
+// reconnect), on their own variant (7 pieces, nothing else moves it): one that would change (TikTok 2 → 7),
+// one held (product status not updatable), one unmapped (never touched).
+export const E2E_TIKTOK_STOCK_SKU = "E2E-STOK-TT-M";
+export const E2E_TIKTOK_STOCK_CHANGE_SKU_ID = "1729000000000000951";
+export const E2E_TIKTOK_STOCK_HELD_SKU_ID = "1729000000000000952";
+export const E2E_TIKTOK_STOCK_UNMAPPED_SKU_ID = "1729000000000000953";
+export const E2E_TIKTOK_STOCK_UNMAPPED_SELLER_SKU = "E2E-TT-STOK-LAIN";
 export const E2E_ACTIVITY_LOG_ADMIN_EMAIL = "activity-log-admin@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_OWNER_EMAIL = "activity-log-owner@e2e.ammari.test";
 export const E2E_ACTIVITY_LOG_SUPPLIER_NAME = "E2E Log Supplier Baru";
@@ -558,6 +567,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     tiktokOrderFees,
     tiktokBackfills,
     tiktokSkuMappings,
+    tiktokShopConnections,
+    tiktokListingSkus,
     TIKTOK_BACKFILL_FLOOR,
   } = await import("@ammari/db/schema");
   const { OWNER_ROLE_KEY, SUPER_ADMIN_ROLE_KEY } = await import("@ammari/db/rbac");
@@ -966,6 +977,33 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
           .returning({ id: tiktokOrderSnapshots.id });
         await tx.insert(tiktokOrders).values({ tiktokOrderId: fixture.id, status: fixture.status, latestUpdateTime: updateTime, latestSnapshotId: snapshot!.id, paidTime: from, collectionTime: shippedAt, backfillId: backfill.id });
       }
+    }
+
+    // Stock sync S1 (see E2E_TIKTOK_STOCK_SKU). Shop id and cipher are the fake's (commerce/tiktok/fake.ts).
+    {
+      const [stockFabric] = await tx.insert(fabrics).values({ name: "E2E Stok TikTok Fabric" }).returning({ id: fabrics.id });
+      const [stockColor] = await tx.insert(fabricColors).values({ fabricId: stockFabric!.id, name: "Hitam" }).returning({ id: fabricColors.id });
+      const [stockProduct] = await tx
+        .insert(products)
+        .values({ name: "E2E Gamis Stok TikTok", code: "E2ESTOKTT", slug: "e2e-gamis-stok-tiktok", fabricId: stockFabric!.id, closure: "front_zip", sizeMode: "sized", basePrice: 259_000 })
+        .returning({ id: products.id, closure: products.closure });
+      await tx.insert(productVariants).values({ productId: stockProduct!.id, fabricId: stockFabric!.id, fabricColorId: stockColor!.id, closure: stockProduct!.closure, sku: E2E_TIKTOK_STOCK_SKU, size: "M" });
+      await tx.insert(stockMovements).values({ sku: E2E_TIKTOK_STOCK_SKU, qty: 7, valueAmount: 700_000, type: "production", refType: "manual" });
+      const [connection] = await tx
+        .insert(tiktokShopConnections)
+        .values({ shopId: "7000000000000000001", shopCipher: "ROW_e2e_cipher", shopName: "Ammari E2E", region: "ID", status: "disconnected", tokenKeyVersion: 1, connectedAt: new Date() })
+        .returning({ id: tiktokShopConnections.id });
+      await tx.insert(tiktokSkuMappings).values([
+        { tiktokSkuId: E2E_TIKTOK_STOCK_CHANGE_SKU_ID, tiktokProductId: "1729000000000000950", sellerSku: E2E_TIKTOK_STOCK_SKU, variantSku: E2E_TIKTOK_STOCK_SKU, source: "auto_seller_sku" },
+        { tiktokSkuId: E2E_TIKTOK_STOCK_HELD_SKU_ID, tiktokProductId: "1729000000000000960", sellerSku: E2E_TIKTOK_STOCK_SKU, variantSku: E2E_TIKTOK_STOCK_SKU, source: "auto_seller_sku" },
+      ]);
+      const readAt = new Date();
+      const listing = { connectionId: connection!.id, readAt, warehouseId: "7000000000000000777" };
+      await tx.insert(tiktokListingSkus).values([
+        { ...listing, tiktokSkuId: E2E_TIKTOK_STOCK_CHANGE_SKU_ID, tiktokProductId: "1729000000000000950", productStatus: "ACTIVATE", productTitle: "Gamis Stok TikTok", skuLabel: "Hitam · M", sellerSku: E2E_TIKTOK_STOCK_SKU, variantSku: E2E_TIKTOK_STOCK_SKU, tiktokQuantity: 2 },
+        { ...listing, tiktokSkuId: E2E_TIKTOK_STOCK_HELD_SKU_ID, tiktokProductId: "1729000000000000960", productStatus: "PLATFORM_DEACTIVATED", productTitle: "Gamis Stok Lama", skuLabel: "Hitam · M", sellerSku: E2E_TIKTOK_STOCK_SKU, variantSku: E2E_TIKTOK_STOCK_SKU, tiktokQuantity: 1, holdReason: "status_not_updatable" },
+        { ...listing, tiktokSkuId: E2E_TIKTOK_STOCK_UNMAPPED_SKU_ID, tiktokProductId: "1729000000000000970", productStatus: "ACTIVATE", productTitle: "Gamis Lain", skuLabel: null, sellerSku: E2E_TIKTOK_STOCK_UNMAPPED_SELLER_SKU, variantSku: null, tiktokQuantity: 5, holdReason: "unmapped" },
+      ]);
     }
 
     // T6: TikTok cancellations and returns (see E2E_TIKTOK_RETURN_SKU).

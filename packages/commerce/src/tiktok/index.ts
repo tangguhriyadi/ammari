@@ -63,6 +63,27 @@ export {
 } from "./backfill";
 export { tiktokBackfillRange } from "./backfill-windows";
 export {
+  TIKTOK_MAX_SKUS_PER_PRODUCT,
+  TIKTOK_STOCK_PREVIEW_LIMIT,
+  finishTikTokListingPass,
+  getTikTokStockSyncPreview,
+  setTikTokStockSync,
+  storeTikTokListingProduct,
+  tiktokStockSyncEnabled,
+  type SetTikTokStockSyncResult,
+  type TikTokStockPreview,
+  type TikTokStockPreviewRow,
+  type TikTokStockPreviewState,
+} from "./stock-sync";
+export {
+  TIKTOK_MAX_STOCK_QUANTITY,
+  TIKTOK_STOCK_UPDATABLE_STATUSES,
+  classifyTikTokListingSku,
+  computeTikTokTargetQuantity,
+  tiktokHeldOrderQuantities,
+  type TikTokTargetHoldReason,
+} from "./stock-sync-rules";
+export {
   applyTikTokOrder,
   listTikTokOrdersToApply,
   setTikTokOrdersApply,

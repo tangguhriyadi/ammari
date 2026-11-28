@@ -2,7 +2,7 @@
 
 import { buildAuthorizeUrl } from "@ammari/tiktok-shop";
 import { z } from "zod";
-import { confirmTikTokBackfill, createTikTokOAuthState, disconnectTikTokShop, setTikTokOrdersApply, startTikTokBackfill } from "@ammari/commerce/tiktok";
+import { confirmTikTokBackfill, createTikTokOAuthState, disconnectTikTokShop, setTikTokOrdersApply, setTikTokStockSync, startTikTokBackfill } from "@ammari/commerce/tiktok";
 import { requirePermission } from "@/lib/auth/require-permission";
 import { runAction, type ActionResult } from "@/lib/action-result";
 import { revalidateAdmin, revalidateOverview } from "@/lib/admin-revalidate";
@@ -56,6 +56,24 @@ export async function setTikTokOrdersApplyAction(input: z.input<typeof ordersApp
     if (!result.ok) throw new ActionError("Hubungkan TikTok Shop dulu.");
     revalidateAdmin("/settings", "/orders", "/packing");
     revalidateOverview();
+    return { changed: result.changed };
+  });
+}
+
+const stockSyncSchema = z.object({ enabled: z.boolean() });
+
+/** "Sinkronkan stok ke TikTok" / "Hentikan sinkron stok" (docs/plans/tiktok-stock-sync.md R1, S1).
+ * integrations.manage on the server; audited (`tiktok_stock_sync_enable` / `_disable`). ON is refused
+ * while "Mulai terapkan pesanan" is OFF (also by the database). S1 only stores the flag: nothing is
+ * pushed to TikTok until S2. */
+export async function setTikTokStockSyncAction(input: z.input<typeof stockSyncSchema>): Promise<ActionResult<{ changed: boolean }>> {
+  const session = await requirePermission(TIKTOK_PERMISSION);
+  const parsed = stockSyncSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Input tidak valid." };
+  return runAction(async () => {
+    const result = await setTikTokStockSync(defaultDb, { enabled: parsed.data.enabled, staffUserId: session.staffUser.id });
+    if (!result.ok) throw new ActionError(result.reason === "orders_apply_off" ? "Aktifkan Mulai terapkan pesanan dulu." : "Hubungkan TikTok Shop dulu.");
+    revalidateAdmin("/settings");
     return { changed: result.changed };
   });
 }

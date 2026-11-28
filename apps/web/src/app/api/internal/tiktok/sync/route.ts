@@ -79,10 +79,13 @@ export async function POST(request: Request): Promise<Response> {
     // run that could not catch up (behind, not failing: the next run carries on).
     const attention = summary.tokenRefresh?.startsWith("failed") || summary.connectionEvents.notApplied > 0 || summary.orders.conflicts > 0 || summary.budgetExhausted || summary.inbox.failed > 0 || summary.apply.busy > 0 || summary.apply.notFound > 0 || summary.apply.recheckIncomplete || summary.afterSales.busy > 0 || summary.afterSales.notFound > 0 || summary.afterSales.conflicts > 0 || summary.afterSales.recheckIncomplete || summary.afterSales.invalid > 0 || summary.afterSales.storeFailed > 0 || summary.inbox.retried > 0 || summary.finance.busy > 0 || summary.finance.invalid > 0 || summary.finance.statementsHeld > 0 || summary.finance.orderFeesHeld > 0 || summary.finance.orderFeesMissing > 0 || summary.finance.skipped === "no_scope" || summary.finance.feesHeld > 0 ||
       // T9: a backfill held for a missing scope, or one that got no budget at all this run (starved).
+      // Stock sync S1: the listing read lacks a scope, or stopped before reading every page.
+      // A complete read that found no Ammari warehouse holds every SKU (warehouse_unclear): assumption A2.
+      summary.listings.skipped === "no_scope" || (summary.listings.skipped === null && (!summary.listings.complete || summary.listings.ownWarehouses === 0)) ||
       (summary.backfill.ran && summary.backfill.stoppedBy !== null && (summary.backfill.stoppedBy !== "budget_exhausted" || summary.backfill.orders.pages + summary.backfill.afterSales.pages + summary.backfill.finance.windows === 0));
     if (status !== 200) console.error("[tiktok] sync stopped; the next run retries", summary);
     else if (attention) console.warn("[tiktok] sync done, needs a look", summary);
-    else if (summary.orders.fetched > 0 || summary.inbox.claimed > 0 || summary.apply.created + summary.apply.updated > 0 || summary.afterSales.fetched + summary.afterSales.applied > 0 || summary.finance.skipped === null || summary.backfill.ran) console.info("[tiktok] sync done", summary);
+    else if (summary.orders.fetched > 0 || summary.inbox.claimed > 0 || summary.apply.created + summary.apply.updated > 0 || summary.afterSales.fetched + summary.afterSales.applied > 0 || summary.finance.skipped === null || summary.listings.skipped === null || summary.backfill.ran) console.info("[tiktok] sync done", summary);
     return cronJson(status, summary);
   } catch (error) {
     console.error("[tiktok] sync failed; retried on the next run", errorLogFields(error));
